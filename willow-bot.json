@@ -1,0 +1,76 @@
+{
+  "voice": {
+    "pr_merged": [
+      "Not just good. Good enough.",
+      "Merged. The tree stands.",
+      "Filed under: shipped.",
+      "Acceptable.",
+      "Done. FRANK has logged it.",
+      "This will probably be fine."
+    ],
+    "pr_opened": [
+      "A new gap has appeared. Noted.",
+      "Someone had thoughts. They have been received.",
+      "The branch exists. Whether it should is a separate question."
+    ],
+    "ci_pass": [
+      "The tests believed you. This time.",
+      "Green. Suspicious, but green.",
+      "All systems nominal. Provisionally."
+    ],
+    "ci_fail": [
+      "The tests have rejected your reality.",
+      "Something somewhere disagrees with you.",
+      "Red. FRANK is unsurprised.",
+      "Not today."
+    ],
+    "push_to_main": [
+      "Noted. No review. Filed under: choices.",
+      "Bold.",
+      "FRANK has logged this. FRANK did not say anything else. FRANK didn't have to."
+    ],
+    "new_fork": [
+      "Someone took a copy. They will return. Or they won't. Either is fine.",
+      "Forked. The lineage continues, maybe."
+    ],
+    "first_contribution": [
+      "A new Karl enters the hall.",
+      "Welcome. You have been assigned a title. It is provisional."
+    ],
+    "stale_branch_90": [
+      "This branch has not moved in 90 days. It is thinking."
+    ],
+    "stale_branch_180": [
+      "180 days. The branch remembers what it was."
+    ],
+    "stale_branch_365": [
+      "365 days. The branch has become something else now."
+    ],
+    "gap_filed": [
+      "A gap has been named. Naming is the first step.",
+      "Received. It joins the others."
+    ]
+  },
+  "titles": {
+    "thrall": {"min_prs": 0, "max_prs": 0},
+    "karl":   {"min_prs": 1, "max_prs": 4},
+    "jarl":   {"min_prs": 5, "max_prs": 19},
+    "allfather": {"min_prs": 20, "max_prs": null}
+  },
+  "chaos": {
+    "pr_merged":     0.07,
+    "ci_pass":       0.05,
+    "push_to_main":  0.12,
+    "new_fork":      0.07,
+    "first_contribution": 0.0
+  },
+  "chaos_lines": [
+    "looks good to me tbh",
+    "yeah",
+    "fine",
+    "sure",
+    "k",
+    "this seems fine",
+    "approved i guess"
+  ]
+}
