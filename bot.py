@@ -23,13 +23,13 @@ log = logging.getLogger("willow-bot")
 
 app = FastAPI(title="willow-bot", docs_url=None, redoc_url=None)
 
-_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").encode()
+_SECRET_RAW = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+if not _SECRET_RAW:
+    raise RuntimeError("GITHUB_WEBHOOK_SECRET must be set — refusing to start without signature verification")
+_SECRET = _SECRET_RAW.encode()
 
 
 def _verify_signature(body: bytes, sig_header: str) -> bool:
-    if not _SECRET:
-        log.warning("GITHUB_WEBHOOK_SECRET not set — skipping signature verification")
-        return True
     if not sig_header or not sig_header.startswith("sha256="):
         return False
     expected = "sha256=" + hmac.new(_SECRET, body, hashlib.sha256).hexdigest()

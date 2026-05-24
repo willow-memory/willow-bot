@@ -1,0 +1,6 @@
+# willow-bot runtime dependencies
+# Install: pip install -r requirements.txt
+fastapi==0.135.1
+uvicorn==0.42.0
+PyJWT==2.10.1
+requests==2.32.3
