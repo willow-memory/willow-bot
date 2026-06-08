@@ -3,9 +3,9 @@ bot.py — Willow GitHub bot entry point.
 b17: WBBT1  ΔΣ=42
 
 Lightweight FastAPI webhook receiver. Runs on Sean's machine.
-GitHub App sends events here via cloudflared tunnel.
+GitHub App sends events here through Pangolin or another external tunnel.
 
-Run: uvicorn bot:app --host 0.0.0.0 --port 9000
+Run: uvicorn bot:app --host 127.0.0.1 --port 9000
 """
 import hashlib
 import hmac
@@ -59,6 +59,7 @@ async def webhook(
     return {"ok": True}
 
 
+@app.get("/")
 @app.get("/health")
 def health():
     return {"status": "ok", "frank_mode": bool(os.getenv("FRANK_MODE"))}

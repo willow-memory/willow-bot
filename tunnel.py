@@ -1,99 +1,72 @@
 """
-tunnel.py — cloudflared tunnel lifecycle for willow-bot.
+tunnel.py — external tunnel preflight for willow-bot.
 b17: WBTUN1  ΔΣ=42
 
-Starts a named cloudflared tunnel in a subprocess.
-Named tunnel survives reboots and keeps a stable URL.
-Requires: cloudflared installed, `willow-bot` tunnel pre-created via:
-    cloudflared tunnel create willow-bot
-    cloudflared tunnel route dns willow-bot bot.yourdomain.com
+willow-bot serves GitHub webhooks on a local HTTP port. The public route is
+owned by the operator (Pangolin/Newt/Gerbil, reverse proxy, or another tunnel),
+not by this process.
 """
+from __future__ import annotations
+
 import logging
 import os
-import shutil
-import signal
-import subprocess
-import threading
-from pathlib import Path
+import socket
+from urllib.parse import urlparse
 
 log = logging.getLogger("willow-bot.tunnel")
 
-_TUNNEL_NAME = os.getenv("CLOUDFLARE_TUNNEL_NAME", "willow-bot")
-_BOT_PORT    = int(os.getenv("BOT_PORT", "9000"))
-_CONFIG_PATH = Path.home() / ".cloudflared" / "config.yml"
-
-_proc: subprocess.Popen | None = None
-_lock = threading.Lock()
+_BOT_HOST = os.getenv("BOT_HOST", "127.0.0.1")
+_BOT_PORT = int(os.getenv("BOT_PORT", "9000"))
+_PUBLIC_URL = os.getenv("WEBHOOK_PUBLIC_URL", "").rstrip("/")
 
 
-def _write_config() -> None:
-    """Write cloudflared config.yml pointing at the local bot port."""
-    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CONFIG_PATH.write_text(f"""tunnel: {_TUNNEL_NAME}
-credentials-file: {Path.home() / '.cloudflared' / (_TUNNEL_NAME + '.json')}
+def local_url() -> str:
+    """Return the local URL that Pangolin or another ingress should target."""
+    return f"http://{_BOT_HOST}:{_BOT_PORT}"
 
-ingress:
-  - service: http://localhost:{_BOT_PORT}
-""")
-    log.info("cloudflared config written to %s", _CONFIG_PATH)
+
+def webhook_url() -> str:
+    """Return the configured public GitHub webhook URL, if known."""
+    if not _PUBLIC_URL:
+        return ""
+    parsed = urlparse(_PUBLIC_URL)
+    if parsed.path.endswith("/webhook"):
+        return _PUBLIC_URL
+    return f"{_PUBLIC_URL}/webhook"
+
+
+def _local_port_listening() -> bool:
+    try:
+        with socket.create_connection((_BOT_HOST, _BOT_PORT), timeout=0.25):
+            return True
+    except OSError:
+        return False
 
 
 def start() -> bool:
-    """Start the cloudflared tunnel subprocess. Returns True if started."""
-    global _proc
-    with _lock:
-        if _proc and _proc.poll() is None:
-            log.info("tunnel already running (pid %s)", _proc.pid)
-            return True
+    """Validate external tunnel configuration.
 
-        cloudflared = shutil.which("cloudflared")
-        if not cloudflared:
-            log.error("cloudflared not found on PATH — tunnel not started")
-            return False
-
-        _write_config()
-
-        try:
-            _proc = subprocess.Popen(
-                [cloudflared, "tunnel", "--config", str(_CONFIG_PATH), "run"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            log.info("cloudflared tunnel started (pid %s)", _proc.pid)
-
-            # Log stderr in background so errors surface
-            def _log_stderr():
-                for line in _proc.stderr:
-                    line = line.strip()
-                    if line:
-                        log.info("[cloudflared] %s", line)
-
-            threading.Thread(target=_log_stderr, daemon=True).start()
-            return True
-        except Exception as e:
-            log.error("failed to start cloudflared: %s", e)
-            return False
+    The tunnel is intentionally managed outside willow-bot. For Pangolin, create
+    a resource that forwards the public webhook hostname to `local_url()`.
+    """
+    if not _PUBLIC_URL:
+        log.error("WEBHOOK_PUBLIC_URL is not set; configure Pangolin to forward to %s", local_url())
+        return False
+    log.info("external tunnel expected: %s -> %s", webhook_url(), local_url())
+    return True
 
 
 def stop() -> None:
-    """Gracefully stop the tunnel subprocess."""
-    global _proc
-    with _lock:
-        if _proc and _proc.poll() is None:
-            _proc.send_signal(signal.SIGTERM)
-            try:
-                _proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                _proc.kill()
-            log.info("cloudflared tunnel stopped")
-        _proc = None
+    """No-op: external tunnel lifecycle is managed outside willow-bot."""
+    log.info("external tunnel lifecycle is operator-managed; nothing to stop")
 
 
 def status() -> dict:
-    """Return tunnel process status."""
-    with _lock:
-        if _proc is None:
-            return {"running": False, "pid": None}
-        alive = _proc.poll() is None
-        return {"running": alive, "pid": _proc.pid if alive else None}
+    """Return webhook ingress configuration and local listener status."""
+    return {
+        "managed_by": "external",
+        "local_url": local_url(),
+        "webhook_url": webhook_url(),
+        "configured": bool(_PUBLIC_URL),
+        "local_listening": _local_port_listening(),
+    }
