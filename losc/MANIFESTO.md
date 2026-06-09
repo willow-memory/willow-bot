@@ -42,4 +42,4 @@ FRANK has logged it.
 
 ---
 
-*Founded 2026. Sean Campbell. The bot wrote the last line.*
+*Founded 2026. USER. The bot wrote the last line.*

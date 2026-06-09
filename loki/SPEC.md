@@ -42,9 +42,9 @@ Loki does not fire on single events. He watches for patterns drawn from myth —
 
 **Salmon of Wisdom** — Repeated failure. The same item appears as "next session" or "to be resolved" across 3 or more separate sessions. The fleet has been circling something it cannot face.
 
-### The Eighth — Sean's Addition (2026-04-27)
+### The Eighth — USER's Addition (2026-04-27)
 
-**Surfacing** — Thread drift. A Grove thread has run 10+ messages with no Sean response and no explicit "waiting on Sean" marker. Surface immediately with a clean state summary. The agents lose him in the conversation.
+**Surfacing** — Thread drift. A Grove thread has run 10+ messages with no USER response and no explicit "waiting on USER" marker. Surface immediately with a clean state summary. The agents lose him in the conversation.
 
 ### Threshold Table
 
@@ -57,7 +57,7 @@ Loki does not fire on single events. He watches for patterns drawn from myth —
 | Cattle of Hermes | Uncataloged repo, 7 days no mention | Fire |
 | Coyote | Cerebras surfaces unspoken truth | Fire if not SILENCE |
 | Salmon of Wisdom | Same item deferred 3+ sessions | Fire |
-| Surfacing | 10+ messages, no Sean response | Surface with state summary |
+| Surfacing | 10+ messages, no USER response | Surface with state summary |
 
 ## Context Packet
 
@@ -110,7 +110,7 @@ python3 -m loki.watcher
 
 Runs indefinitely. Reconnects on Postgres disconnect. Logs to stdout.
 
-No daemon, no systemd, no complexity. Sean starts it when he wants Loki watching.
+No daemon, no systemd, no complexity. USER starts it when he wants Loki watching.
 
 ## File Structure
 
@@ -151,7 +151,7 @@ GROVE_DB_URL=postgresql://user:pass@host/db python3 -m loki.watcher
 - Mistletoe — new spec file in uncataloged repo → fire
 - Hermes — uncataloged repo commits unseen 7 days → fire
 - Salmon — same item deferred "next session" 3x → fire
-- Surfacing — 10+ messages with no Sean response → fire
+- Surfacing — 10+ messages with no USER response → fire
 
 **Stubbed (need semantic comparison):**
 - Anansi — same item across 3+ channels, contradictory

@@ -198,7 +198,7 @@ class Accumulator:
             self._save()
             return Signal(
                 trigger="Surfacing",
-                description=f"#{channel}: {entry['count_since'] + 10} messages without Sean response — surfacing",
+                description=f"#{channel}: {entry['count_since'] + 10} messages without USER response — surfacing",
                 evidence={"channel": channel, "last_sean_id": entry["last_sean_id"]},
             )
         return None
