@@ -38,15 +38,7 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
     repo = payload.get("repository", {}).get("full_name", "")
     login = pr.get("user", {}).get("login", "")
 
-    if action == "opened":
-        if quips.is_first_contribution(login):
-            msg = quips.pick("first_contribution", login)
-        else:
-            msg = quips.pick("pr_opened", login)
-        if msg:
-            post(repo, pr.get("number"), msg)
-
-    elif action == "closed" and pr.get("merged"):
+    if action == "closed" and pr.get("merged"):
         quips.record_merge(login)
         msg = quips.pick("pr_merged", login)
         if msg:

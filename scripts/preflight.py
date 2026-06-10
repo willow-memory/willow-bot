@@ -43,6 +43,50 @@ def main() -> int:
         _fail("GITHUB_WEBHOOK_SECRET", "must match the GitHub App webhook secret")
         failures += 1
 
+    # Roundtrip HMAC check against the local listener — catches secret mismatches
+    # before GitHub's delivery would produce a 401.
+    if webhook_secret:
+        import hashlib
+        import hmac as _hmac
+        import urllib.request
+        import json as _json
+
+        _tunnel = None
+        try:
+            import tunnel as _tunnel_mod
+            _tunnel = _tunnel_mod.status()
+        except Exception:
+            pass
+
+        local_url = (_tunnel or {}).get("local_url") or "http://127.0.0.1:9000"
+        probe_body = _json.dumps({"action": "preflight-probe"}).encode()
+        sig = "sha256=" + _hmac.new(
+            webhook_secret.encode(), probe_body, hashlib.sha256
+        ).hexdigest()
+        try:
+            req = urllib.request.Request(
+                f"{local_url}/webhook",
+                data=probe_body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-GitHub-Event": "ping",
+                    "X-Hub-Signature-256": sig,
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    _ok("webhook HMAC roundtrip", "local signature accepted")
+                else:
+                    _warn("webhook HMAC roundtrip", f"unexpected status {resp.status}")
+        except Exception as exc:
+            code = getattr(getattr(exc, "code", None), "__str__", lambda: str(exc))()
+            if "401" in str(exc):
+                _fail("webhook HMAC roundtrip", "401 — secret in .env does not match running service; restart willow-bot")
+                failures += 1
+            else:
+                _warn("webhook HMAC roundtrip", f"could not reach local listener: {exc}")
+
     key_path = Path(
         os.getenv(
             "GITHUB_APP_PRIVATE_KEY_PATH",
