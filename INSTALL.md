@@ -62,6 +62,33 @@ Webhook events:
 - `check_run`
 - `create`
 - `issues`
+- `issue_comment` (upstream desk inbox)
+- `installation` / `installation_repositories` (catalog refresh when repos change)
+
+## Fleet bridge (local integration)
+
+Verified webhooks fan out into local queues under `$WILLOW_HOME`:
+
+| Event | Local action |
+|-------|----------------|
+| `pull_request`, `issues`, `issue_comment`, `check_run` | `upstream_steward/webhook_inbox/*.json` |
+| `push` to `main`/`master` (local clone exists) | `gitsync/trigger-<owner>-<repo>.flag` |
+| all events | `willow-bot/event-log.jsonl` audit trail |
+
+Map App installations to local clones:
+
+```bash
+set -a && . ./.env && set +a
+python scripts/repo_map.py
+python scripts/list_installations.py
+```
+
+Sync hook secret after rotation:
+
+```bash
+python scripts/sync_webhook_secret.py
+systemctl --user restart willow-bot
+```
 
 ## Preflight
 

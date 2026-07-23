@@ -6,6 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=%h/github/willow-bot/.env
 WorkingDirectory=%h/github/willow-bot
 ExecStart=%h/github/willow-bot/.venv/bin/uvicorn bot:app --host ${BOT_HOST} --port ${BOT_PORT}

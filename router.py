@@ -6,6 +6,7 @@ import logging
 from typing import Callable
 
 import quips
+from integrations import fleet_bridge
 
 log = logging.getLogger("willow-bot.router")
 
@@ -18,6 +19,11 @@ def route(event: str, payload: dict, post: Callable[[str, str], None]) -> None:
     payload: parsed JSON body
     post:    callable(repo_full_name, comment_body) — posts a comment or status
     """
+    try:
+        fleet_bridge.handle(event, payload)
+    except Exception:
+        log.exception("fleet_bridge failed for event %s", event)
+
     handlers = {
         "pull_request":  _handle_pull_request,
         "push":          _handle_push,
