@@ -75,15 +75,24 @@ class Accumulator:
 
     # ── Mistletoe — new spec file on disk ─────────────────────────────────────
 
-    def check_mistletoe(self, new_spec_path: str, disk_repos: list[str], catalog_ids: set[str]) -> Optional[Signal]:
-        """Fire only on spec files not seen before in uncataloged repos."""
+    def check_mistletoe(self, new_spec_path: str, catalog,
+                        manifest_app_id: Optional[str] = None,
+                        github_root: str = "/home/sean-campbell/github") -> Optional[Signal]:
+        """Fire only on spec files not seen before in uncataloged app repos.
+
+        ``catalog`` is a :class:`loki.catalog.CatalogIndex`; the repo is
+        resolved through its full crosswalk (id / repository basename /
+        ``safe-app-`` prefix / manifest ``app_id``) rather than raw string
+        membership, so a cataloged app whose repo dir differs from its id
+        (``safe-app-grove`` -> ``grove``) is no longer mistaken for missing.
+        """
         if new_spec_path in self._state["seen_specs"]:
             return None
 
         path = Path(new_spec_path)
-        # Repo name is the top-level dir under /home/sean-campbell/github/
+        # Repo name is the top-level dir under the github root.
         try:
-            repo_name = path.relative_to("/home/sean-campbell/github").parts[0]
+            repo_name = path.relative_to(github_root).parts[0]
         except ValueError:
             return None
 
@@ -91,7 +100,7 @@ class Accumulator:
         self._state["seen_specs"].append(new_spec_path)
         self._save()
 
-        if repo_name not in catalog_ids:
+        if not catalog.is_cataloged(repo_name, manifest_app_id):
             return Signal(
                 trigger="Mistletoe",
                 description=f"New spec file in uncataloged repo: {repo_name}",
@@ -99,12 +108,60 @@ class Accumulator:
             )
         return None
 
+    # ── Mistletoe (semantic) — spec DESCRIBES a thing that already exists ─────
+
+    def check_mistletoe_semantic(self, new_spec_path: str, spec_text: str, index) -> Optional[Signal]:
+        """Semantic complement to :meth:`check_mistletoe`.
+
+        Where ``check_mistletoe`` fires on a pure catalog-membership miss (the
+        spec's *repo name* is uncataloged), this fires on the real blind spot
+        from SPEC.md — a new spec whose CONTENT describes a capability the fleet
+        already built. ``spec_text`` (typically ``semantic.spec_summary(path)``)
+        is resolved against ``index`` (a :class:`loki.semantic.ExistenceIndex`);
+        if a sealed thing matches at/above the index's threshold, Loki fires.
+
+        Dedups via the same ``seen_specs`` state as ``check_mistletoe``, so a
+        spec is only ever raised once across the two complementary checks.
+        Returns ``None`` (and marks the spec seen) when the content is novel.
+        """
+        if new_spec_path in self._state["seen_specs"]:
+            return None
+
+        # Mark as seen regardless — a spec is raised at most once.
+        self._state["seen_specs"].append(new_spec_path)
+        self._save()
+
+        if not spec_text or not spec_text.strip():
+            return None
+
+        result = index.resolve_existing(spec_text)
+        if not result.get("exists"):
+            return None
+
+        canonical = result["canonical"]
+        return Signal(
+            trigger="Mistletoe",
+            description=f"Spec describes an existing thing: {canonical}",
+            evidence={
+                "spec_path": new_spec_path,
+                "matched_canonical": canonical,
+                "confidence": result["confidence"],
+                "provenance": result["provenance"],
+            },
+        )
+
     # ── Cattle of Hermes — uncataloged repo with new commits ──────────────────
 
-    def check_hermes(self, repo_path: str, catalog_ids: set[str], last_commit_ts: float) -> Optional[Signal]:
-        """Fire if uncataloged repo has new commits and hasn't been mentioned in 7 days."""
+    def check_hermes(self, repo_path: str, catalog, last_commit_ts: float,
+                     manifest_app_id: Optional[str] = None) -> Optional[Signal]:
+        """Fire if uncataloged repo has new commits and hasn't been mentioned in 7 days.
+
+        ``catalog`` is a :class:`loki.catalog.CatalogIndex`. Callers should only
+        pass repos that declare themselves SAFE apps (``has_manifest``); infra
+        repos have no manifest and must not be treated as missing catalog apps.
+        """
         repo_name = Path(repo_path).name
-        if repo_name in catalog_ids:
+        if catalog.is_cataloged(repo_name, manifest_app_id):
             return None
 
         now = time.time()

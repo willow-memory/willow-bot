@@ -5,3 +5,7 @@ uvicorn==0.42.0
 PyJWT==2.10.1
 cryptography>=44.0.0
 requests==2.32.3
+# Nestor — verified-match engine behind Loki's semantic Mistletoe (loki/semantic.py).
+# stdlib-only (difflib); no network / no Postgres at import.
+# TODO: repin to a tag/commit on main after the Nestor branch merges.
+nestor @ git+https://github.com/rudi193-cmd/Nestor@claude/new-ledger-piece-e3vxvn

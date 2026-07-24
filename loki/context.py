@@ -2,7 +2,6 @@
 context.py — Build context packets for Cerebras. Target: under 2000 tokens.
 b17: LOKI3
 """
-import json
 import logging
 import subprocess
 from pathlib import Path
@@ -10,6 +9,7 @@ from pathlib import Path
 import psycopg2
 
 from loki.accumulator import Signal
+from loki import catalog as catalog_mod
 from loki import poster
 
 log = logging.getLogger("loki.context")
@@ -42,17 +42,23 @@ def _recent_messages(channel: str, limit: int = 20) -> list[dict]:
 
 
 def _disk_uncataloged() -> list[str]:
-    try:
-        catalog = json.loads(_CATALOG_PATH.read_text())
-        catalog_ids = {a["id"] for a in catalog.get("apps", [])}
-    except Exception:
-        catalog_ids = set()
+    """Repos that declare themselves SAFE apps but aren't in the catalog.
+
+    Gated on ``has_manifest`` so infra repos (willow-mcp, willow-bot, ...) —
+    which are not store apps — never show up as "uncataloged", and resolved
+    through the :class:`~loki.catalog.CatalogIndex` crosswalk so an app whose
+    repo dir differs from its id (safe-app-grove -> grove) isn't listed.
+    """
+    catalog = catalog_mod.CatalogIndex.load(_CATALOG_PATH)
 
     result = []
     for entry in sorted(_GITHUB_ROOT.iterdir()):
         if not entry.is_dir() or entry.name.startswith("."):
             continue
-        if entry.name not in catalog_ids:
+        if not catalog_mod.has_manifest(entry):
+            continue
+        app_id = catalog_mod.read_manifest_app_id(entry)
+        if not catalog.is_cataloged(entry.name, app_id):
             last_commit = _last_commit_date(entry)
             result.append(f"{entry.name} (last commit: {last_commit})")
     return result

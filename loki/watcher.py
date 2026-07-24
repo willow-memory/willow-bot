@@ -16,7 +16,9 @@ import psycopg2
 import psycopg2.extensions
 
 from loki import cerebras, context, poster
+from loki import catalog as catalog_mod
 from loki.accumulator import Accumulator, Signal
+from loki.semantic import ExistenceIndex, spec_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,13 +41,23 @@ def _dsn() -> str:
     return dsn
 
 
-def _load_catalog_ids() -> set[str]:
+def _load_catalog() -> "catalog_mod.CatalogIndex":
+    return catalog_mod.CatalogIndex.load(_CATALOG_PATH)
+
+
+def _build_existence_index() -> ExistenceIndex:
+    """Seal the catalog into a fresh ExistenceIndex for semantic Mistletoe.
+
+    Rebuilt each disk scan so newly cataloged apps (e.g. willow-grove) are
+    guarded without a restart. Sealing failures degrade to an empty index —
+    semantic Mistletoe then simply never fires, rather than crashing the loop.
+    """
+    idx = ExistenceIndex()
     try:
-        data = json.loads(_CATALOG_PATH.read_text())
-        return {a["id"] for a in data.get("apps", [])}
+        idx.build_from_catalog(str(_CATALOG_PATH))
     except Exception as e:
-        log.warning("Could not load catalog: %s", e)
-        return set()
+        log.warning("Could not build existence index: %s", e)
+    return idx
 
 
 _SKIP_REPOS = frozenset({
@@ -58,9 +70,9 @@ def _is_git_repo(path: Path) -> bool:
     return (path / ".git").is_dir()
 
 
-def _scan_disk(accumulator: Accumulator, catalog_ids: set[str]) -> list[Signal]:
+def _scan_disk(accumulator: Accumulator, catalog: "catalog_mod.CatalogIndex",
+               existence_index: ExistenceIndex) -> list[Signal]:
     signals = []
-    disk_repos = []
     for entry in sorted(_GITHUB_ROOT.iterdir()):
         if not entry.is_dir() or entry.name.startswith("."):
             continue
@@ -68,11 +80,21 @@ def _scan_disk(accumulator: Accumulator, catalog_ids: set[str]) -> list[Signal]:
             continue
         if not _is_git_repo(entry):
             continue  # skip plain directories like textual, node_modules, etc.
-        disk_repos.append(entry.name)
 
-        # Mistletoe: new spec file?
+        app_id = catalog_mod.read_manifest_app_id(entry)
+        is_app = catalog_mod.has_manifest(entry)
+        cataloged = catalog.is_cataloged(entry.name, app_id)
+
         for spec_file in entry.rglob("*spec*.md"):
-            sig = accumulator.check_mistletoe(str(spec_file), disk_repos, catalog_ids)
+            if is_app and not cataloged:
+                # Structural Mistletoe: an app repo that isn't in the catalog.
+                sig = accumulator.check_mistletoe(str(spec_file), catalog, app_id)
+            else:
+                # Semantic Mistletoe: does this spec re-describe an existing
+                # capability? Runs on cataloged apps AND infra repos — the real
+                # "designing what already exists" blind spot lives there.
+                text = spec_summary(str(spec_file))
+                sig = accumulator.check_mistletoe_semantic(str(spec_file), text, existence_index)
             if sig:
                 signals.append(sig)
                 break  # one signal per repo per scan
@@ -80,14 +102,21 @@ def _scan_disk(accumulator: Accumulator, catalog_ids: set[str]) -> list[Signal]:
     return signals
 
 
-def _scan_git(accumulator: Accumulator, catalog_ids: set[str]) -> list[Signal]:
+def _scan_git(accumulator: Accumulator, catalog: "catalog_mod.CatalogIndex") -> list[Signal]:
     signals = []
     for entry in sorted(_GITHUB_ROOT.iterdir()):
         if not entry.is_dir() or entry.name.startswith("."):
             continue
-        if entry.name in catalog_ids:
+        if entry.name in _SKIP_REPOS:
             continue
-        # Hermes: new commits in uncataloged repo?
+        # Hermes is about *apps* missing from the store — infra repos (no
+        # safe-app-manifest.json) are not catalog gaps and never fire.
+        if not catalog_mod.has_manifest(entry):
+            continue
+        app_id = catalog_mod.read_manifest_app_id(entry)
+        if catalog.is_cataloged(entry.name, app_id):
+            continue
+        # Hermes: new commits in uncataloged app repo?
         try:
             out = subprocess.check_output(
                 ["git", "-C", str(entry), "log", "-1", "--format=%ct"],
@@ -98,7 +127,7 @@ def _scan_git(accumulator: Accumulator, catalog_ids: set[str]) -> list[Signal]:
         except Exception:
             continue
 
-        sig = accumulator.check_hermes(str(entry), catalog_ids, ts)
+        sig = accumulator.check_hermes(str(entry), catalog, ts, app_id)
         if sig:
             signals.append(sig)
     return signals
@@ -240,8 +269,9 @@ def run():
 
         # Disk scan every 15 minutes
         if now - last_disk_scan >= _DISK_SCAN_INTERVAL:
-            catalog_ids = _load_catalog_ids()
-            signals = _scan_disk(accumulator, catalog_ids)
+            catalog = _load_catalog()
+            existence_index = _build_existence_index()
+            signals = _scan_disk(accumulator, catalog, existence_index)
             active_ch = poster.active_channel()
             for sig in signals:
                 _fire(sig, active_ch)
@@ -249,8 +279,8 @@ def run():
 
         # Git scan every 30 minutes
         if now - last_git_scan >= _GIT_SCAN_INTERVAL:
-            catalog_ids = _load_catalog_ids()
-            signals = _scan_git(accumulator, catalog_ids)
+            catalog = _load_catalog()
+            signals = _scan_git(accumulator, catalog)
             active_ch = poster.active_channel()
             for sig in signals:
                 _fire(sig, active_ch)
