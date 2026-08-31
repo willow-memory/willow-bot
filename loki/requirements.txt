@@ -2,5 +2,7 @@ psycopg2-binary
 httpx
 cryptography
 # Nestor — verified-match engine for semantic Mistletoe (semantic.py).
-# TODO: repin to a tag/commit on main after the Nestor branch merges.
-nestor @ git+https://github.com/rudi193-cmd/Nestor@master
+# Repointed 2026-08-31: the repo moved to Die-Namic-Systems. The old URL only
+# resolved through GitHub's transfer redirect, so this was one redirect lapse
+# away from failing at install rather than at runtime.
+nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master
