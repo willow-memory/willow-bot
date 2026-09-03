@@ -18,7 +18,9 @@ log = logging.getLogger("willow-bot.github_app")
 _APP_ID = os.getenv("GITHUB_APP_ID", "")
 _KEY_PATH = Path(os.getenv("GITHUB_APP_PRIVATE_KEY_PATH",
                             Path.home() / ".willow" / "secrets" / "willow-bot.pem"))
-_BOT_LOGIN = os.getenv("GITHUB_BOT_LOGIN", "willow-bot[bot]")
+# No GITHUB_BOT_LOGIN. The bot has been renamed twice and a login string was
+# wrong on both sides of each rename; nothing here ever read the value. Where
+# a bot must be recognised, match on `user.type == "Bot"` (BOT-INVENTORY.md).
 
 _installation_token_cache: dict[int, tuple[str, float]] = {}
 

@@ -72,9 +72,16 @@ def _handle_check_run(payload: dict, post: Callable) -> None:
     if action == "completed":
         if conclusion == "success":
             msg = quips.pick("ci_pass")
-        elif conclusion in ("failure", "timed_out"):
+        elif conclusion in ("failure", "timed_out", "startup_failure"):
             msg = quips.pick("ci_fail")
         else:
+            # cancelled / skipped / stale / neutral / action_required: not a
+            # pass and not a fail, and not silence either. A recorded negative
+            # is not an absence; a run that never reached a verdict leaves a
+            # line (the bridge already filed the item — this is the voice's
+            # half of the same rule).
+            log.info("[%s] CI %s (%s): could not run to a verdict",
+                     repo, conclusion or "no conclusion", check.get("name", "?"))
             return
         if msg:
             log.info("[%s] CI %s: %s", repo, conclusion, msg)

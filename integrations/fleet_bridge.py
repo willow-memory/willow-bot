@@ -23,6 +23,15 @@ from pathlib import Path
 log = logging.getLogger("willow-bot.fleet_bridge")
 
 _WILLOW_HOME = Path(os.environ.get("WILLOW_HOME", Path.home() / "github" / ".willow"))
+if "WILLOW_HOME" not in os.environ:
+    # The fallback is the pre-2026-08-10 layout and on a current box it is a
+    # decoy path one level above the fleet's home. Say so once at import
+    # rather than filing an inbox nothing reads; the fix is the env var in the
+    # unit file, not a new default here (the real home moved once already).
+    log_boot = logging.getLogger("willow-bot.fleet_bridge")
+    log_boot.warning("WILLOW_HOME unset; fleet_bridge falls back to %s, which is the "
+                     "pre-move layout — set WILLOW_HOME in the unit's EnvironmentFile",
+                     _WILLOW_HOME)
 _GITHUB_ROOT = Path(os.environ.get("GITHUB_ROOT", Path.home() / "github"))
 _EVENT_LOG = _WILLOW_HOME / "willow-bot" / "event-log.jsonl"
 _INBOX = _WILLOW_HOME / "upstream_steward" / "webhook_inbox"
@@ -109,6 +118,12 @@ def _repo(payload: dict) -> str:
     return (payload.get("repository") or {}).get("full_name", "")
 
 
+def _sender_type(payload: dict) -> str:
+    """`sender.type` as GitHub asserts it ("Bot" / "User" / "Organization"),
+    or "" when the payload carries none. Never the login."""
+    return str((payload.get("sender") or {}).get("type") or "")
+
+
 def handle(event: str, payload: dict) -> None:
     """Fan-out a verified webhook into local fleet queues."""
     repo = _repo(payload)
@@ -182,16 +197,36 @@ def handle(event: str, payload: dict) -> None:
     if event == "check_run":
         check = payload.get("check_run") or {}
         if payload.get("action") == "completed":
+            # Keyed on the CHECK id, not the PR number. A PR runs several
+            # checks (Tests, CodeQL, Release Please...) and each completes as
+            # its own event; keyed on the PR, the first to finish was filed and
+            # every later one hit the skip-on-exists in _queue_upstream and
+            # vanished — a PR with four workflows left one item. The check id
+            # is unique per run and stable across redeliveries, so the dedup
+            # still holds where it should (the same completion twice) and
+            # nowhere it should not.
             prs = check.get("pull_requests") or []
-            pr_number = prs[0].get("number") if prs else check.get("id", 0)
+            pr_number = prs[0].get("number") if prs else None
             _queue_upstream(
                 {
                     **base,
-                    "work_id": _work_id(repo, "check", pr_number),
+                    "work_id": _work_id(repo, "check", check.get("id", 0)),
                     "kind": "check_run",
+                    "check_id": check.get("id"),
+                    # The sha is what a consumer keys on (the Forge's deposit
+                    # asks "how did CI go for <repo>@<sha>?"); a PR number is
+                    # a convenience and absent on a check with no PR.
+                    "head_sha": check.get("head_sha"),
+                    "pr_number": pr_number,
+                    "status": check.get("status"),
                     "conclusion": check.get("conclusion"),
                     "name": check.get("name"),
                     "html_url": check.get("html_url"),
+                    # An actor is a type, never a login (BOT-INVENTORY.md
+                    # match-bot-by-type-not-login): GitHub asserts `sender.type`
+                    # about the credential; a login survives a rename by being
+                    # wrong.
+                    "sender_type": _sender_type(payload),
                     "lane_hint": "webhook",
                 }
             )
