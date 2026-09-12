@@ -11,8 +11,8 @@ Kart worker heartbeat until proven on the bot — do not wire dew into steward y
 cd ~/github/workshop/willow-bot   # or future willow-memory/willow-bot
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-# optional Grove Loki semantic path:
-# .venv/bin/pip install -e '.[loki]'
+# optional Grove Loki semantic path (Nestor — not on PyPI as a URL dep):
+#   .venv/bin/pip install "nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master"
 ```
 
 Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `inbox` | `scan`).

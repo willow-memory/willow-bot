@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [0.1.1] — 2026-09-12
+
+### Fixed
+
+- Drop git URL from optional deps so PyPI accepts the upload; document Nestor
+  install for Grove Loki separately.
+
 ## [0.1.0] — 2026-09-12
 
 ### Added

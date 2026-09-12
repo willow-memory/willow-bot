@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "willow-bot"
-version = "0.1.0"
+version = "0.1.1"
 description = "Willow GitHub App webhook + orchestrator-feeding steward (propose-only deposits)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,7 +30,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-loki = ["nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master"]
+# Grove Loki semantic path needs Nestor; install separately (PyPI forbids direct URL deps):
+#   pip install "nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master"
 mcp = ["mcp>=1.0,<3"]
 dev = ["pytest>=8"]
 
@@ -42,9 +43,6 @@ willow-bot-steward = "willow_bot.cli:steward_main"
 Homepage = "https://github.com/willow-memory/willow-bot"
 Repository = "https://github.com/willow-memory/willow-bot"
 Issues = "https://github.com/willow-memory/willow-bot/issues"
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["willow_bot"]
