@@ -230,6 +230,14 @@ def handle(event: str, payload: dict) -> None:
                     "lane_hint": "webhook",
                 }
             )
+            # §12 middle row: draft CI deposit (pass and fail). Local always;
+            # MCP store_put when WILLOW_BOT_MCP=1.
+            try:
+                from willow_bot.deposits import deposit_from_check_run_payload
+
+                deposit_from_check_run_payload(payload)
+            except Exception:
+                log.exception("ci deposit failed for %s", repo)
         return
 
     if event == "push":

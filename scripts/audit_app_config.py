@@ -18,15 +18,18 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 
 # Repos the fleet actually uses (not every ~/github clone).
+# Orgs as of BOT-INVENTORY 2026-08-29; refresh when installs change.
 FLEET_CORE = [
-    "rudi193-cmd/Willow",  # charter seat — GitHub canonical casing (local folder: ~/github/willow)
-    "rudi193-cmd/willow-2.0",
-    "rudi193-cmd/willow-mcp",
-    "rudi193-cmd/willow-config",
+    "willow-memory/willow-mcp",
+    "willow-memory/kartikeya",
+    "willow-memory/willows-grove",
+    "willow-memory/willow-gate",
+    "willow-memory/ratatosk",
+    "willow-memory/corpus-lens",
+    "Die-Namic-Systems/Nestor",
+    "hornbook-knowledge/Jeles",
+    "forge-play/Forge",
     "rudi193-cmd/willow-bot",
-    "rudi193-cmd/safe-app-willow-grove",
-    "rudi193-cmd/willow-gate",
-    "rudi193-cmd/kartikeya",
 ]
 
 

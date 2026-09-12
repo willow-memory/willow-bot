@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "willow-bot"
+version = "0.1.0"
+description = "Willow GitHub App webhook + orchestrator-feeding steward (propose-only deposits)"
+readme = "INSTALL.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Sean Campbell" }]
+keywords = ["willow", "github-app", "webhook", "steward", "local-first"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "fastapi==0.135.1",
+    "uvicorn==0.42.0",
+    "PyJWT==2.10.1",
+    "cryptography>=44.0.0",
+    "requests==2.32.3",
+]
+
+[project.optional-dependencies]
+loki = ["nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master"]
+mcp = ["mcp>=1.0,<3"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+willow-bot = "willow_bot.cli:webhook_main"
+willow-bot-steward = "willow_bot.cli:steward_main"
+
+[project.urls]
+Homepage = "https://github.com/rudi193-cmd/willow-bot"
+Repository = "https://github.com/rudi193-cmd/willow-bot"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["willow_bot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
