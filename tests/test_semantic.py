@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+nestor = pytest.importorskip("nestor")
 from nestor import cascade
 from nestor.sqlite_store import SqliteStore
 
