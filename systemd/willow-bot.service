@@ -1,15 +1,19 @@
 [Unit]
 Description=Willow GitHub App webhook bot
-Documentation=https://github.com/rudi193-cmd/willow-bot
+Documentation=https://github.com/willow-memory/willow-bot
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-EnvironmentFile=%h/github/willow-bot/.env
-WorkingDirectory=%h/github/willow-bot
-ExecStart=%h/github/willow-bot/.venv/bin/uvicorn bot:app --host ${BOT_HOST} --port ${BOT_PORT}
+Environment=PATH=%h/sean-data-vault/willow-operator-box/venvs/willow-bot/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=WILLOW_HOME=%h/sean-data-vault/willow-operator-box
+Environment=WILLOW_VAULT_BOX=%h/sean-data-vault/willow-operator-box
+# Optional non-secret overrides (BOT_HOST, WEBHOOK_PUBLIC_URL, …). Secrets
+# resolve from $WILLOW_VAULT_BOX/secrets/ via credentials.py — not from here.
+EnvironmentFile=-%h/sean-data-vault/willow-operator-box/secrets/willow-bot.env
+WorkingDirectory=%h/github/willow-memory/willow-bot
+ExecStart=%h/sean-data-vault/willow-operator-box/venvs/willow-bot/bin/willow-bot
 Restart=on-failure
 RestartSec=10
 

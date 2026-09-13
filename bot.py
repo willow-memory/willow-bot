@@ -5,6 +5,9 @@ b17: WBBT1  ΔΣ=42
 Lightweight FastAPI webhook receiver. Runs on USER's machine.
 GitHub App sends events here through Pangolin or another external tunnel.
 
+Secrets resolve from the operator data vault (see credentials.py), not from
+a checkout-local .env of record.
+
 Run: uvicorn bot:app --host 127.0.0.1 --port 9000
 """
 import hashlib
@@ -14,6 +17,7 @@ import os
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
+import credentials
 import github_app
 import quips
 import router
@@ -23,10 +27,9 @@ log = logging.getLogger("willow-bot")
 
 app = FastAPI(title="willow-bot", docs_url=None, redoc_url=None)
 
-_SECRET_RAW = os.getenv("GITHUB_WEBHOOK_SECRET", "")
-if not _SECRET_RAW:
-    raise RuntimeError("GITHUB_WEBHOOK_SECRET must be set — refusing to start without signature verification")
-_SECRET = _SECRET_RAW.encode()
+_CRED = credentials.resolve(require_complete=True)
+_SECRET = _CRED.webhook_secret.encode()
+log.info("credentials loaded (%s)", _CRED.source)
 
 
 def _verify_signature(body: bytes, sig_header: str) -> bool:

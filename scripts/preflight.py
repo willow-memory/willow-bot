@@ -29,19 +29,41 @@ def _fail(label: str, detail: str = "") -> None:
 def main() -> int:
     failures = 0
 
-    app_id = os.getenv("GITHUB_APP_ID", "").strip()
-    if app_id:
-        _ok("GITHUB_APP_ID", app_id)
+    # Prefer vault-resolved credentials over checkout .env.
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    import credentials
+
+    # Non-secret settings may still live in secrets/willow-bot.env
+    for k, v in credentials._parse_env_file(credentials.vault_env_path()).items():
+        if k not in ("GITHUB_WEBHOOK_SECRET",) and k not in os.environ:
+            os.environ.setdefault(k, v)
+
+    try:
+        cred = credentials.resolve(require_complete=False)
+    except Exception as exc:
+        _fail("vault credentials", str(exc))
+        return 1
+
+    if cred.app_id:
+        _ok("GITHUB_APP_ID", cred.app_id)
     else:
-        _fail("GITHUB_APP_ID", "set this from the GitHub App settings")
+        _fail(
+            "GITHUB_APP_ID",
+            f"set in {credentials.vault_env_path()} or Fernet key willow-bot/app_id",
+        )
         failures += 1
 
-    webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET", "")
-    if webhook_secret:
+    if cred.webhook_secret:
         _ok("GITHUB_WEBHOOK_SECRET", "set")
     else:
-        _fail("GITHUB_WEBHOOK_SECRET", "must match the GitHub App webhook secret")
+        _fail(
+            "GITHUB_WEBHOOK_SECRET",
+            f"set in {credentials.vault_env_path()} or Fernet key willow-bot/webhook_secret",
+        )
         failures += 1
+
+    webhook_secret = cred.webhook_secret
 
     # Roundtrip HMAC check against the local listener — catches secret mismatches
     # before GitHub's delivery would produce a 401.
@@ -82,25 +104,23 @@ def main() -> int:
         except Exception as exc:
             code = getattr(getattr(exc, "code", None), "__str__", lambda: str(exc))()
             if "401" in str(exc):
-                _fail("webhook HMAC roundtrip", "401 — secret in .env does not match running service; restart willow-bot")
+                _fail("webhook HMAC roundtrip", "401 — secret does not match running service; restart willow-bot")
                 failures += 1
             else:
                 _warn("webhook HMAC roundtrip", f"could not reach local listener: {exc}")
 
-    key_path = Path(
-        os.getenv(
-            "GITHUB_APP_PRIVATE_KEY_PATH",
-            str(Path.home() / ".willow" / "secrets" / "willow-bot.pem"),
-        )
-    )
-    if key_path.is_file():
-        mode = key_path.stat().st_mode & 0o777
-        if mode & 0o077:
-            _warn("GitHub App PEM permissions", f"{key_path} is {mode:o}; prefer 600")
+    if cred.private_key_pem:
+        key_path = cred.private_key_path or credentials.default_pem_path()
+        if cred.private_key_path and cred.private_key_path.is_file():
+            mode = cred.private_key_path.stat().st_mode & 0o777
+            if mode & 0o077:
+                _warn("GitHub App PEM permissions", f"{cred.private_key_path} is {mode:o}; prefer 600")
+            else:
+                _ok("GitHub App PEM", str(cred.private_key_path))
         else:
-            _ok("GitHub App PEM", str(key_path))
+            _ok("GitHub App PEM", cred.source)
     else:
-        _fail("GitHub App PEM", f"missing: {key_path}")
+        _fail("GitHub App PEM", f"missing: {credentials.default_pem_path()}")
         failures += 1
 
     import tunnel

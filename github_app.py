@@ -3,30 +3,50 @@ github_app.py — GitHub App JWT auth and API calls.
 b17: WBGA1  ΔΣ=42
 
 Handles installation access tokens and posting comments/reactions.
-Private key lives on disk (never in env). Rotate by swapping the PEM file.
+Private key lives in the operator data vault (never committed). Env may
+override for tests.
 """
 import logging
-import os
 import time
-from pathlib import Path
 
 import jwt
 import requests
 
+import credentials as _creds
+
 log = logging.getLogger("willow-bot.github_app")
 
-_APP_ID = os.getenv("GITHUB_APP_ID", "")
-_KEY_PATH = Path(os.getenv("GITHUB_APP_PRIVATE_KEY_PATH",
-                            Path.home() / ".willow" / "secrets" / "willow-bot.pem"))
 # No GITHUB_BOT_LOGIN. The bot has been renamed twice and a login string was
 # wrong on both sides of each rename; nothing here ever read the value. Where
 # a bot must be recognised, match on `user.type == "Bot"` (BOT-INVENTORY.md).
 
 _installation_token_cache: dict[int, tuple[str, float]] = {}
+_cached: _creds.BotCredentials | None = None
+
+
+def _cred() -> _creds.BotCredentials:
+    global _cached
+    if _cached is None:
+        _cached = _creds.resolve(require_complete=True)
+    return _cached
+
+
+def reset_credential_cache() -> None:
+    """Test hook — drop the process-wide credential cache."""
+    global _cached
+    _cached = None
+
+
+def _configured() -> bool:
+    try:
+        c = _cred()
+    except RuntimeError:
+        return False
+    return bool(c.app_id and c.private_key_pem)
 
 
 def _load_private_key() -> str:
-    return _KEY_PATH.read_text().strip()
+    return _cred().private_key_pem
 
 
 def _make_jwt() -> str:
@@ -34,7 +54,7 @@ def _make_jwt() -> str:
     payload = {
         "iat": now - 60,
         "exp": now + 600,
-        "iss": _APP_ID,
+        "iss": _cred().app_id,
     }
     return jwt.encode(payload, _load_private_key(), algorithm="RS256")
 
@@ -70,7 +90,6 @@ def _get_installation_token(installation_id: int) -> str:
     r.raise_for_status()
     data = r.json()
     access_token = data["token"]
-    # GitHub installation tokens expire after 1 hour
     _installation_token_cache[installation_id] = (access_token, time.time() + 3600)
     return access_token
 
@@ -86,7 +105,7 @@ def _auth_headers(repo_full_name: str) -> dict:
 
 def post_comment(repo_full_name: str, issue_or_pr_number: int, body: str) -> bool:
     """Post a comment on an issue or PR. Returns True on success."""
-    if not _APP_ID or not _KEY_PATH.exists():
+    if not _configured():
         log.warning("GitHub App not configured — skipping comment")
         return False
     try:
