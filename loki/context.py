@@ -3,6 +3,7 @@ context.py — Build context packets for Cerebras. Target: under 2000 tokens.
 b17: LOKI3
 """
 import logging
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,7 +15,15 @@ from loki import poster
 
 log = logging.getLogger("loki.context")
 
-_GITHUB_ROOT = Path("/home/sean-campbell/github")
+# Foreign-user absolute path removed 2026-09-13: this module is imported by
+# the webhook handler that runs inside `willow-bot.service`, so hardcoding
+# `/home/sean-campbell/github` here meant a fresh clone or a different
+# operator's box could not build the catalog path. `WILLOW_GITHUB_ROOT` is
+# the operator's canonical GitHub checkout root; the default falls back to
+# `~/github` which matches the historical layout for anyone following the
+# fleet's install docs.
+_github_root_env = os.environ.get("WILLOW_GITHUB_ROOT", "").strip()
+_GITHUB_ROOT = Path(_github_root_env) if _github_root_env else (Path.home() / "github")
 _CATALOG_PATH = _GITHUB_ROOT / "safe-app-store" / "catalog.json"
 
 

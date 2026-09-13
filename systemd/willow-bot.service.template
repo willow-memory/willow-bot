@@ -1,0 +1,25 @@
+[Unit]
+Description=Willow GitHub App webhook bot
+Documentation=https://github.com/willow-memory/willow-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# `@…@` placeholders are substituted by scripts/install-service.sh at install
+# time. See that script for the resolved values. A fresh clone must NOT commit
+# a rendered service file — that's what the pre-render template guards
+# against.
+Environment=PATH=@VENV_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=WILLOW_HOME=@VAULT_BOX@
+Environment=WILLOW_VAULT_BOX=@VAULT_BOX@
+# Optional non-secret overrides (BOT_HOST, WEBHOOK_PUBLIC_URL, …). Secrets
+# resolve from $WILLOW_VAULT_BOX/secrets/ via credentials.py — not from here.
+EnvironmentFile=-@VAULT_BOX@/secrets/willow-bot.env
+WorkingDirectory=@WORKDIR@
+ExecStart=@VENV_BIN@/willow-bot
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
