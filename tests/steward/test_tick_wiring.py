@@ -162,3 +162,38 @@ def test_the_steward_unit_template_carries_the_wiring():
     assert placeholders == {"VENV_BIN", "VAULT_BOX", "WORKDIR"}, (
         f"only the three install-time placeholders may appear; got {placeholders}"
     )
+    # systemd splits an unquoted Environment= value on whitespace: the first
+    # install kept only the python path of WILLOW_BOT_MCP_COMMAND and logged
+    # "ignoring: -m" / "ignoring: willow_mcp", and the steward spawned a bare
+    # REPL as its server. Any value with a space must be quoted whole.
+    for line in text.splitlines():
+        if not line.startswith("Environment="):
+            continue
+        value = line[len("Environment="):]
+        if " " in value.strip():
+            assert value.startswith('"') and value.rstrip().endswith('"'), (
+                f"unquoted Environment= value with a space: {line!r}"
+            )
+
+
+def test_a_failed_start_tears_the_lifecycle_down(monkeypatch):
+    """Planted: a server that never initializes. start() must raise AND leave
+    no thread, loop or task behind — otherwise the hung child outlives the
+    failure and the next call spawns another (five orphaned servers per tick
+    on 2026-09-14, one per curated tool)."""
+    import asyncio
+    import threading
+
+    from willow_bot.steward import mcp_client as mc
+
+    async def hang(argv, ready):
+        await asyncio.Event().wait()  # initialize() that never returns
+
+    monkeypatch.setattr(mc, "_lifecycle", hang)
+    try:
+        mc.start(["/nonexistent/python"], timeout_s=0.2)
+        raise AssertionError("start() must raise on a server that never initializes")
+    except RuntimeError as exc:
+        assert "did not initialize" in str(exc)
+    assert mc._mcp_thread is None and mc._mcp_loop is None and mc._mcp_task is None
+    assert not any(t.name == "willow-bot-mcp" and t.is_alive() for t in threading.enumerate())
