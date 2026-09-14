@@ -20,7 +20,10 @@ Environment=WILLOW_BOT_MCP=1
 # The willow-mcp the steward spawns over stdio. The operator-box venv is the
 # one whose editable install tracks the fleet checkout; override with
 # WILLOW_BOT_MCP_COMMAND in the env file if it lives elsewhere.
-Environment=WILLOW_BOT_MCP_COMMAND=@VAULT_BOX@/venvs/willow-mcp/bin/python -m willow_mcp
+# Quoted: systemd splits an unquoted Environment= value on spaces and kept
+# only the python path on the first install (journal: "ignoring: -m",
+# "ignoring: willow_mcp"), so the steward spawned a bare REPL as its server.
+Environment="WILLOW_BOT_MCP_COMMAND=@VAULT_BOX@/venvs/willow-mcp/bin/python -m willow_mcp"
 # The spawned server sees this unit's whole environment, as the prove-phase
 # recipe in INSTALL.md sets it; the default forwards only WILLOW_*/PG* on top
 # of the MCP SDK's minimal env, which drops anything else the env file
