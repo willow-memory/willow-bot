@@ -20,8 +20,9 @@ from willow_bot.steward.config import host_sync_enabled, state_path
 _DEFAULT_PROMPT = (
     "Steward PR watch tick (Cursor seat — not Grove 3B watcher). "
     "JSON lines above are from willow-bot-steward. Treat webhook_pr as willow-bot "
-    "fleet_bridge hints. For each new_pr: audit; for merged_synced: confirm local "
-    "pull. Do not post to Grove; Grove Loki is separate. Brief tick summary."
+    "fleet_bridge hints. new_pr rows are dispatched to Loki by the audit step "
+    "(steward_audit line); steward_sweep says what came home; steward_mirror what "
+    "reached the store. Do not post to Grove; Grove Loki is separate. Brief tick summary."
 )
 
 
@@ -34,6 +35,8 @@ def _load_or_init_state(path: Path, open_keys: list[str]) -> dict:
         "merged_synced": [],
         "inbox_consumed": [],
         "webhook_signals": [],
+        "pending_audit": [],
+        "audit_dispatched": {},
     }
 
 
@@ -94,6 +97,16 @@ def run_once(*, do_host_sync: bool | None = None) -> int:
 
     state["seen"] = merged_seen
     state["open"] = keys
+    # A new PR is a pending audit until the audit step has dispatched it —
+    # persisted, so a tick that dies between scan and dispatch loses nothing.
+    pending = list(state.get("pending_audit") or [])
+    dispatched = state.get("audit_dispatched") or {}
+    for k in new_keys:
+        if k not in pending and k not in dispatched:
+            title_url = meta.get(k, "|")
+            title, url = title_url.split("|", 1) if "|" in title_url else (title_url, "")
+            pending.append({"repo_pr": k, "title": title, "url": url})
+    state["pending_audit"] = pending
     path.write_text(json.dumps(state, indent=2) + "\n")
 
     for k in new_keys:
@@ -106,6 +119,187 @@ def run_once(*, do_host_sync: bool | None = None) -> int:
             flush=True,
         )
     return 0
+
+
+# ── the audit step: a new PR becomes Loki's packet ───────────────────────────
+
+_AUDIT_PER_TICK = 5
+
+
+def _audit_brief(item: dict) -> str:
+    key, title, url = item.get("repo_pr", ""), item.get("title", ""), item.get("url", "")
+    repo, _, num = key.rpartition("#")
+    return (
+        f"# Audit {key}\n\n"
+        f"**{title}**\n{url}\n\n"
+        "Adversarial review of this pull request, in your register: name what "
+        "the PR promises, what the diff delivers, and the distance between "
+        "them. Specific findings with file and line; no summary of the diff "
+        "back to its author.\n\n"
+        "Read, do not build:\n"
+        f"- `integration_call(name='github', method='GET', path='/repos/{repo}/pulls/{num}')` "
+        "for the body and the head sha;\n"
+        f"- `integration_call(name='github', method='GET', path='/repos/{repo}/pulls/{num}/files')` "
+        "for the diff;\n"
+        f"- `store_search(collection='willow_bot_ci_deposits', query='{repo}')` for the "
+        "CI outcomes the bot deposited for its head sha.\n\n"
+        "Hold the body to the org PR template (Bite / What was done / Evidence / "
+        "Out of scope / Next bite) and say which sections are missing or empty. "
+        "Hold Evidence to receipts: a count with no command is a claim.\n\n"
+        "Close with `handoff_write_v4` to willow: findings ranked, most severe "
+        "first; `no findings` is a finding only when you say what you checked."
+    )
+
+
+def run_audit(*, enable_mcp: bool | None = None) -> dict:
+    """Dispatch every pending new PR to Loki as an audit packet.
+
+    One `dispatch_send(to_app='loki', role='auditor')` per PR — the call args
+    the verb gate cites are `{to_agents: loki, task_class: auditor}`, which
+    is the bounds of the standing dispatch envelope. Idempotent per repo#pr
+    through the state file: a PR moves from `pending_audit` to
+    `audit_dispatched[key] = dispatch_id` only on success, and a refusal
+    leaves it pending with the reason so the next tick tries again. Capped
+    per tick so a cold start does not flood the desk. Honest absence when
+    MCP is off.
+    """
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    receipt: dict = {"event": "steward_audit", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    path = state_path()
+    state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
+    pending = list(state.get("pending_audit") or [])
+    receipt["pending"] = len(pending)
+    if not enable_mcp:
+        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no dispatch")
+        print(json.dumps(receipt), flush=True)
+        return receipt
+    if not pending:
+        receipt.update(status="ok", dispatched=[], refused=[])
+        print(json.dumps(receipt), flush=True)
+        return receipt
+
+    from willow_bot.steward import mcp_client
+
+    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    dispatched = dict(state.get("audit_dispatched") or {})
+    done, refused, still = [], [], []
+    for item in pending[:_AUDIT_PER_TICK]:
+        key = item.get("repo_pr", "")
+        try:
+            result = mcp_client.call("dispatch_send", {
+                "app_id": app,
+                "to_app": "loki",
+                "role": "auditor",
+                "summary": f"Audit {key}: {item.get('title', '')}"[:200],
+                "assignment_md": _audit_brief(item),
+                "context_refs": [item.get("url", "")],
+                "reply_to": "willow",
+                "phase": "operate",
+                "priority": "normal",
+            })
+        except Exception as exc:  # noqa: BLE001 — a refused dispatch stays pending, with its reason
+            item["last_error"] = str(exc)[:300]
+            refused.append({"repo_pr": key, "error": item["last_error"]})
+            still.append(item)
+            continue
+        did = result.get("dispatch_id") if isinstance(result, dict) else None
+        if not did:
+            item["last_error"] = f"no dispatch_id in result: {str(result)[:200]}"
+            refused.append({"repo_pr": key, "error": item["last_error"]})
+            still.append(item)
+            continue
+        dispatched[key] = did
+        done.append({"repo_pr": key, "dispatch_id": did})
+    still.extend(pending[_AUDIT_PER_TICK:])
+    state["pending_audit"] = still
+    state["audit_dispatched"] = dispatched
+    path.write_text(json.dumps(state, indent=2) + "\n")
+    receipt.update(status="ok", dispatched=done, refused=refused, remaining=len(still))
+    print(json.dumps(receipt), flush=True)
+    return receipt
+
+
+# ── the mirror step: local CI deposits reach the store ───────────────────────
+
+_MIRROR_PER_TICK = 200
+
+
+def _mirror_offset_path() -> Path:
+    from willow_bot.deposits import deposits_dir
+
+    return deposits_dir() / "mirror.offset"
+
+
+def run_mirror(*, enable_mcp: bool | None = None) -> dict:
+    """Mirror new rows of ``deposits/ci_outcomes.jsonl`` into the store.
+
+    The webhook unit writes every check outcome locally and — because it
+    runs without MCP — never mirrors: 506 local rows against 6 in
+    ``willow_bot_ci_deposits`` on 2026-09-14. This step reads from a byte
+    offset, ``store_put``s each new row under its ``record_id_for`` (so a
+    re-run is an overwrite, not a duplicate), and advances the offset only
+    past rows that landed. Capped per tick. Honest absence when MCP is off.
+    """
+    from willow_bot.deposits import COLLECTION, deposits_jsonl, record_id_for
+
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    receipt: dict = {"event": "steward_mirror", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    src = deposits_jsonl()
+    if not src.is_file():
+        receipt.update(status="ok", present=False, mirrored=0, detail=f"no deposits file at {src}")
+        print(json.dumps(receipt), flush=True)
+        return receipt
+    off_path = _mirror_offset_path()
+    offset = int(off_path.read_text().strip() or 0) if off_path.is_file() else 0
+    size = src.stat().st_size
+    if offset > size:
+        offset = 0  # the file was truncated or rotated; start over, overwrites are idempotent
+    receipt.update(present=True, offset=offset, size=size)
+    if not enable_mcp:
+        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no store_put",
+                       behind=size - offset)
+        print(json.dumps(receipt), flush=True)
+        return receipt
+
+    from willow_bot.steward import mcp_client
+
+    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    mirrored, failed = 0, None
+    with src.open("rb") as fh:
+        fh.seek(offset)
+        while mirrored < _MIRROR_PER_TICK:
+            line = fh.readline()
+            if not line:
+                break
+            if not line.endswith(b"\n"):
+                break  # a row still being written; next tick
+            text = line.decode("utf-8", errors="replace").strip()
+            if not text:
+                offset = fh.tell()
+                continue
+            try:
+                rec = json.loads(text)
+                mcp_client.call("store_put", {
+                    "app_id": app, "collection": COLLECTION, "record": rec,
+                    "record_id": record_id_for(rec), "deviation": 0,
+                })
+            except Exception as exc:  # noqa: BLE001 — stop at the first failure; the offset stays before it
+                failed = str(exc)[:300]
+                break
+            mirrored += 1
+            offset = fh.tell()
+    off_path.parent.mkdir(parents=True, exist_ok=True)
+    off_path.write_text(f"{offset}\n", encoding="utf-8")
+    receipt.update(
+        status="ok" if failed is None else "could-not-run",
+        mirrored=mirrored, new_offset=offset, behind=size - offset,
+    )
+    if failed is not None:
+        receipt["detail"] = failed
+    print(json.dumps(receipt), flush=True)
+    return receipt
 
 
 def run_sweep(*, enable_mcp: bool | None = None) -> dict:
@@ -166,10 +360,11 @@ def run_loop(interval_s: float = 300.0) -> int:
             run_heartbeat()
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({"event": "error", "detail": f"heartbeat: {exc}"}), flush=True)
-        try:
-            run_sweep()
-        except Exception as exc:  # noqa: BLE001
-            print(json.dumps({"event": "error", "detail": f"sweep: {exc}"}), flush=True)
+        for name, step in (("sweep", run_sweep), ("mirror", run_mirror), ("audit", run_audit)):
+            try:
+                step()
+            except Exception as exc:  # noqa: BLE001
+                print(json.dumps({"event": "error", "detail": f"{name}: {exc}"}), flush=True)
         print(
             "AGENT_LOOP_TICK_PR_AUDIT "
             + json.dumps({"prompt": prompt}, separators=(",", ":")),
@@ -189,6 +384,12 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "sweep":
         run_sweep()
         return 0
+    if args[0] == "mirror":
+        run_mirror()
+        return 0
+    if args[0] == "audit":
+        run_audit()
+        return 0
     if args[0] == "loop":
         interval = float(
             os.environ.get(
@@ -205,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|mirror|audit|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2
