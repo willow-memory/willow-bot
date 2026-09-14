@@ -1,0 +1,39 @@
+[Unit]
+Description=Willow steward tick loop — PR watch, curated heartbeat, gitsync sweep
+Documentation=https://github.com/willow-memory/willow-bot
+After=network-online.target willow-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# `@…@` placeholders are substituted by scripts/install-service.sh at install
+# time (`scripts/install-service.sh willow-bot-steward`). A fresh clone must
+# NOT commit a rendered service file.
+Environment=PATH=@VENV_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=WILLOW_HOME=@VAULT_BOX@
+Environment=WILLOW_VAULT_BOX=@VAULT_BOX@
+# The tick's act half goes through willow-mcp: the curated heartbeat and the
+# gitsync sweep (git_pull_execute under the App's token, FRANK receipt). With
+# this on, merge.py's host gh/pip -e sync is off unless
+# WILLOW_BOT_STEWARD_HOST_SYNC says otherwise (steward/config.py).
+Environment=WILLOW_BOT_MCP=1
+# The willow-mcp the steward spawns over stdio. The operator-box venv is the
+# one whose editable install tracks the fleet checkout; override with
+# WILLOW_BOT_MCP_COMMAND in the env file if it lives elsewhere.
+Environment=WILLOW_BOT_MCP_COMMAND=@VAULT_BOX@/venvs/willow-mcp/bin/python -m willow_mcp
+# The spawned server sees this unit's whole environment, as the prove-phase
+# recipe in INSTALL.md sets it; the default forwards only WILLOW_*/PG* on top
+# of the MCP SDK's minimal env, which drops anything else the env file
+# carries (NESTOR_*, for one).
+Environment=WILLOW_BOT_MCP_INHERIT_ENV=1
+Environment=WILLOW_BOT_STEWARD_INTERVAL=300
+# Non-secret overrides and the WILLOW_* the spawned server needs (PG, keyring,
+# store root) come from the same env file the webhook unit reads.
+EnvironmentFile=-@VAULT_BOX@/secrets/willow-bot.env
+WorkingDirectory=@WORKDIR@
+ExecStart=@VENV_BIN@/willow-bot-steward loop
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

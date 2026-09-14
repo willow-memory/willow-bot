@@ -56,7 +56,15 @@ def _append_log(record: dict) -> None:
 
 
 def _local_clone_path(repo_full_name: str) -> Path | None:
-    """Return ~/github/<dir> if it is a git checkout of this remote."""
+    """Return the local checkout of this remote under the github root, or None.
+
+    Layouts, in order: ``<root>/<owner>/<name>`` (the org layout every fleet
+    clone on the box uses — forge-play/Forge, willow-memory/willow-mcp — and
+    the one this function did not know until 2026-09-14, so no gitsync
+    trigger was ever written for an org-layout repo), then the flat
+    ``<root>/<name>``, then a scan of ``<root>/*``. Verified by origin URL
+    in every case, never by folder name alone.
+    """
     if "/" not in repo_full_name:
         return None
     owner, name = repo_full_name.split("/", 1)
@@ -79,8 +87,14 @@ def _local_clone_path(repo_full_name: str) -> Path | None:
         except Exception:
             return False
 
-    # Fast path: folder name matches GitHub repo name (often lowercase locally).
-    for candidate in (_GITHUB_ROOT / name, _GITHUB_ROOT / name.lower()):
+    # Fast paths: the org layout first, then a flat folder named after the
+    # repo (often lowercase locally).
+    for candidate in (
+        _GITHUB_ROOT / owner / name,
+        _GITHUB_ROOT / owner / name.lower(),
+        _GITHUB_ROOT / name,
+        _GITHUB_ROOT / name.lower(),
+    ):
         if (candidate / ".git").is_dir() and _matches_origin(candidate):
             return candidate
 

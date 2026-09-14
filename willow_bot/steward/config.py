@@ -39,7 +39,15 @@ def watcher_url() -> str:
 
 
 def host_sync_enabled() -> bool:
-    """Optional merge→pull/pip -e. Default on (legacy loki_pr_watch behaviour)."""
+    """merge.py's host-side merge→``gh``/``git pull``/``pip -e`` sync.
+
+    Explicit ``WILLOW_BOT_STEWARD_HOST_SYNC`` always wins. Otherwise: ON when
+    MCP is off (the legacy loki_pr_watch behaviour, which is the only pull
+    path a box without the broker has) and OFF when ``WILLOW_BOT_MCP`` is on,
+    because then the tick's sweep asks willow-mcp's ``gitsync_sweep`` to
+    bring merges home under the App's token with a FRANK receipt, and two
+    pullers racing the same checkout is how a tree ends up half-way.
+    """
     if "WILLOW_BOT_STEWARD_HOST_SYNC" in os.environ:
         return _truthy("WILLOW_BOT_STEWARD_HOST_SYNC", "1")
-    return True
+    return not _truthy("WILLOW_BOT_MCP")

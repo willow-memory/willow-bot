@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -109,6 +108,47 @@ def run_once(*, do_host_sync: bool | None = None) -> int:
     return 0
 
 
+def run_sweep(*, enable_mcp: bool | None = None) -> dict:
+    """The act half of a tick: ask the broker to bring merges home.
+
+    ``gitsync_sweep`` (willow-mcp #524) consumes the flags fleet_bridge
+    writes on every push to a default branch — it fetches with the App's
+    token, fast-forwards, prunes nothing it was not told to, and leaves a
+    FRANK receipt. This replaces merge.py's host ``gh`` + ``pip -e`` path,
+    which needed a human's credential on the box. Honest absence when MCP
+    is off: the receipt says so, nothing is pulled, and nothing pretends.
+    """
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    receipt: dict = {"event": "steward_sweep", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if not enable_mcp:
+        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no sweep")
+        print(json.dumps(receipt), flush=True)
+        return receipt
+    try:
+        from willow_bot.steward import mcp_client
+
+        app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+        result = mcp_client.call("gitsync_sweep", {"app_id": app, "project": "fleet"})
+    except Exception as exc:  # noqa: BLE001 — a failed sweep is a line, not a dead loop
+        receipt.update(status="could-not-run", detail=str(exc)[:400])
+        print(json.dumps(receipt), flush=True)
+        return receipt
+    swept = result.get("swept", []) if isinstance(result, dict) else []
+    receipt.update(
+        status="ok" if isinstance(result, dict) and result.get("ok") else "could-not-run",
+        present=bool(isinstance(result, dict) and result.get("present")),
+        pulled=[s.get("repo") for s in swept if s.get("ok") and s.get("pulled")],
+        refused=[{"flag": s.get("flag"), "error": s.get("error")} for s in swept if not s.get("ok")],
+    )
+    print(json.dumps(receipt), flush=True)
+    return receipt
+
+
+def mcp_enabled() -> bool:
+    return os.environ.get("WILLOW_BOT_MCP", "").strip().lower() in ("1", "true", "yes")
+
+
 def run_loop(interval_s: float = 300.0) -> int:
     prompt = os.environ.get("WILLOW_BOT_STEWARD_AGENT_PROMPT") or os.environ.get(
         "LOKI_PR_WATCH_AGENT_PROMPT", _DEFAULT_PROMPT
@@ -126,6 +166,10 @@ def run_loop(interval_s: float = 300.0) -> int:
             run_heartbeat()
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({"event": "error", "detail": f"heartbeat: {exc}"}), flush=True)
+        try:
+            run_sweep()
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"event": "error", "detail": f"sweep: {exc}"}), flush=True)
         print(
             "AGENT_LOOP_TICK_PR_AUDIT "
             + json.dumps({"prompt": prompt}, separators=(",", ":")),
@@ -141,6 +185,9 @@ def main(argv: list[str] | None = None) -> int:
         from willow_bot.steward.heartbeat import run_heartbeat
 
         run_heartbeat()
+        return 0
+    if args[0] == "sweep":
+        run_sweep()
         return 0
     if args[0] == "loop":
         interval = float(
@@ -158,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2

@@ -64,7 +64,8 @@ Steward one-shot / loop (state under `$WILLOW_HOME` by default):
 export WILLOW_HOME="${WILLOW_HOME:-$HOME/sean-data-vault/willow-operator-box}"
 .venv/bin/willow-bot-steward tick
 .venv/bin/willow-bot-steward heartbeat   # curated mcp tools when WILLOW_BOT_MCP=1
-.venv/bin/willow-bot-steward loop        # tick + heartbeat + AGENT_LOOP_TICK_PR_AUDIT
+.venv/bin/willow-bot-steward sweep       # gitsync_sweep via mcp when WILLOW_BOT_MCP=1
+.venv/bin/willow-bot-steward loop        # tick + heartbeat + sweep + AGENT_LOOP_TICK_PR_AUDIT
 ```
 
 Prove-phase MCP (optional):
@@ -154,18 +155,36 @@ export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operat
 
 `local_listening` is expected to be `false` until `uvicorn` is running.
 
-## User Service
+## User Services
 
-After vault secrets pass preflight, install the user service:
+Two units, both rendered from `systemd/*.service.template` by
+`scripts/install-service.sh` (never commit a rendered unit):
+
+| Unit | Runs | What it does |
+|------|------|--------------|
+| `willow-bot.service` | `willow-bot` | the webhook receiver: inbox items, gitsync trigger flags, event log |
+| `willow-bot-steward.service` | `willow-bot-steward loop` | the tick, every 300 s: PR watch → curated heartbeat → **gitsync sweep** (`WILLOW_BOT_MCP=1`) |
+
+After vault secrets pass preflight:
 
 ```bash
-systemctl --user link ~/github/willow-memory/willow-bot/systemd/willow-bot.service
-systemctl --user daemon-reload
-systemctl --user enable --now willow-bot.service
-systemctl --user status willow-bot.service --no-pager
+scripts/install-service.sh --all
+systemctl --user enable --now willow-bot.service willow-bot-steward.service
+systemctl --user status willow-bot.service willow-bot-steward.service --no-pager
 ```
 
-The unit uses:
+The steward unit turns `WILLOW_BOT_MCP` on, so the tick's act half goes
+through willow-mcp: the heartbeat's curated read-only tools, then
+`gitsync_sweep`, which consumes the flags the webhook unit wrote and brings
+each merged default branch home under the App's token with a FRANK receipt
+(`git_pull_execute`, willow-mcp #524). With MCP on, `merge.py`'s host
+`gh`/`git pull`/`pip -e` sync is off unless `WILLOW_BOT_STEWARD_HOST_SYNC=1`
+says otherwise — one puller per checkout. Receipts:
+`$WILLOW_HOME/willow-bot/steward_heartbeat.jsonl` and the unit's journal
+(`steward_sweep` lines; `status: absent` means MCP was off, never "nothing
+to do").
+
+The webhook unit uses:
 - `WorkingDirectory` / `EnvironmentFile` under `~/github/willow-memory/willow-bot`
 - `ExecStart` from `$WILLOW_HOME/venvs/willow-bot/bin/willow-bot` (dogfood venv)
 - `bot:app` resolved from the checkout root (not shipped in the PyPI wheel)
