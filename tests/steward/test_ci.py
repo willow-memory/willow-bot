@@ -55,6 +55,12 @@ SHA = "34542ff3a05131c265a04bf96823b217da6f891b"
 
 
 def _seed():
+    # The step's first run starts at EOF (test below). These tests are about
+    # what happens AFTER the offset exists, so establish it before seeding —
+    # exactly what a box looks like once the step has ticked once.
+    deposits.append_local(_row("willow-memory/willow-bot", "0" * 40, 0, "older", "failure", pr=1))
+    first = tick.run_ci(enable_mcp=False)
+    assert first["first_run_skipped_bytes"] > 0 and first["red"] == []
     deposits.append_local(_row("willow-memory/willows-grove", SHA, 1, "title", "failure"))
     deposits.append_local(_row("willow-memory/willows-grove", SHA, 2, "CodeQL", "neutral"))
     deposits.append_local(_row("willow-memory/willows-grove", SHA, 3, "test-suite (3.13)", "failure"))
@@ -138,7 +144,7 @@ def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypat
     assert r["status"] == "could-not-run"
     assert [f["check"] for f in r["filed"]] == ["title"]
     assert r["refused"][0]["check"] == "test-suite (3.13)" and r["refused"][0]["error"] == "rate_limited"
-    assert r["new_offset"] == 0  # held
+    assert r["new_offset"] == r["offset"]  # held where the refused row can be found again
     # next tick: title is remembered, the other two are filed
     r2 = tick.run_ci()
     assert r2["status"] == "ok"
@@ -148,11 +154,32 @@ def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypat
 
 def test_a_red_with_no_pr_names_the_sha(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
     deposits.append_local(_row("willow-memory/willow-mcp", "c" * 40, 9, "release-please", "failure", pr=None))
     c = _Client()
     _use(monkeypatch, c)
     r = tick.run_ci()
-    assert r["filed"][0]["where"] == "willow-memory/willow-mcp@" + "c" * 12
+    assert r["filed"][-1]["where"] == "willow-memory/willow-mcp@" + "c" * 12
+
+
+def test_first_run_starts_at_eof_and_files_nothing_old(home, monkeypatch):
+    """The live file held 500+ historical rows; the first live run walked
+    them from 0 and filed three stale reds before the limiter stopped it.
+    A red that happened before the step existed is not the step's to raise."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    for i in range(3):
+        deposits.append_local(_row("forge-play/Forge", "d" * 40, 100 + i, "Tests", "failure", pr=4))
+    c = _Client()
+    _use(monkeypatch, c)
+    r = tick.run_ci()
+    assert r["status"] == "ok" and r["red"] == [] and r["filed"] == []
+    assert r["first_run_skipped_bytes"] == r["size"] > 0 and r["offset"] == r["size"]
+    assert c.calls == []
+    # from here on, only new rows
+    deposits.append_local(_row("forge-play/Forge", "e" * 40, 200, "Tests", "failure", pr=5))
+    r2 = tick.run_ci()
+    assert [f["where"] for f in r2["filed"]] == ["forge-play/Forge#5"]
+    assert "first_run_skipped_bytes" not in r2
 
 
 def test_ci_step_runs_in_the_loop_after_mirror_before_audit():
