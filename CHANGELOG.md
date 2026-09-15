@@ -6,6 +6,32 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Steward-state labels on a PR: reconcile the bot's owned namespace.**
+  New `willow_bot/pr_labels.py` exposes `reconcile_labels(repo,
+  pr_number, desired, owned_prefix="willow-bot/")` that brings the PR's
+  labels under the owned prefix to exactly `desired` — additive within
+  its own namespace, never touching labels a human or another bot
+  applied (`bug`, `area/steward`, …). Vocabulary shipped: `ci-red`,
+  `needs-ratification`, `audit-dispatched`, `bot-opened`, each under
+  `willow-bot/`. A caller passing a label outside the namespace in
+  `desired` is refused before any HTTP — otherwise the reconcile would
+  add the label and then immediately delete it on the next pass. Empty
+  strings in `desired` are silently dropped so a set-arithmetic caller
+  never lands one in the POST body. Failure modes as receipts: an
+  unavailable App, a list-labels error, and a partial reconcile
+  (add-failed but remove-succeeded) each surface in `refused` with the
+  op that failed. A DELETE 404 is treated as "already gone" — a
+  concurrent reconcile that beat us to it left the label where we
+  wanted it. Gap `acfd27ae3259` (labels sub-part). Thirteen unit tests
+  cover vocabulary invariants, first-call add, repeat is a no-op on the
+  network, moving between states adds new and removes stale in one pass,
+  non-owned labels are reported but not touched, out-of-namespace desired
+  is refused before HTTP, empty strings dropped, auth/list failures as
+  lines, partial success is not silent, DELETE 404 is treated as absent,
+  and pagination walks until a short page.
+
+### Added
+
 - **Resolve step lands `Idea-Id` trailers as `idea_landings` records and
   reads trailers the reconciler's way.** Each `Idea-Id: willow-ideas-NNN`
   (the reconciler's own id shape, `reconciler/ids.py`) found on a merged
