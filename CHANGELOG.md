@@ -63,6 +63,29 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Tick step: refresh each pulled checkout's editable install.** New
+  `willow_bot.steward.tick.run_install_receipts(sweep)` reads the ranges
+  the sweep brought home and calls
+  `willow_bot.install_receipt.refresh_editable(Path(checkout), default_branch)`
+  for each. Wired into `run_loop` between `resolve` and `mirror` — a
+  merge that arrives via `gitsync_sweep` now has its editable install
+  refreshed in the same tick, without a human's credential on the box.
+  The default branch is read from the checkout's `origin/HEAD` symref
+  (set by `git clone`); a checkout with no symref (fresh `git init`,
+  remote added later) is refused as `unknown_default_branch` rather
+  than guessed as `main`, so a repo defaulting to `master` cannot be
+  yanked off it. One range raising is a per-entry `state="error"` line,
+  not a dead step. New CLI subcommand `willow-bot-steward install-receipts`
+  runs a sweep and then the install step, mirroring `resolve`. Eleven
+  unit tests cover the empty-sweep-is-honest-ok path, a real git clone
+  landing on `install=skipped` (no `.venv`), `origin/HEAD` read, a
+  supplied `default_branch` short-circuiting the read, a missing checkout,
+  an `origin/HEAD`-absent clone, a raised exception per range, receipts
+  landing in `steward_ticks.jsonl`, CLI wiring, and loop ordering
+  (resolve → install → mirror). Deprecates `willow_bot.steward.merge.sync_checkout`,
+  which stays on disk for one prove window behind `WILLOW_BOT_STEWARD_HOST_SYNC=1`
+  and is scheduled for removal once the receipts land against a live
+  merge. Gap `1f6b033ffca7` (bot half, wiring).
 - **Merged-release install receipt.** New
   `willow_bot/install_receipt.py` exposes `refresh_editable(repo_dir,
   default_branch, *, remote="origin", do_install=True)` — brings a

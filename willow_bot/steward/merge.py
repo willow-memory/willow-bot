@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""After each watch tick: detect PRs that left the open set, pull if merged, pip -e."""
+"""After each watch tick: detect PRs that left the open set, pull if merged, pip -e.
+
+DEPRECATED (2026-09-15). This is the legacy host-sync path — it shells out
+to ``gh api`` (a human's credential on the box), ``git pull`` (which turns
+a diverged checkout into a merge commit), and ``pip install -e .`` on
+whatever ``.venv`` it finds. The replacement is a pair the tick now runs
+after every sweep: ``willow_bot.steward.tick.run_sweep`` (App-token
+``gitsync_sweep`` via willow-mcp) and
+``willow_bot.steward.tick.run_install_receipts`` (which calls
+``willow_bot.install_receipt.refresh_editable`` — distinct states for
+every refusal, never switches branches, never turns diverge into merge).
+
+The module stays on disk for one prove window: an operator with no
+willow-mcp on the box can still opt into the old behaviour with
+``WILLOW_BOT_STEWARD_HOST_SYNC=1``. It is not called from the loop when
+MCP is on (the default in production), and its ``sync_checkout`` will be
+removed once the receipts land against a live merge.
+"""
 from __future__ import annotations
 
 import json
