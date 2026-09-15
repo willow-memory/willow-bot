@@ -799,6 +799,11 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "audit":
         run_audit()
         return 0
+    if args[0] == "status":
+        from willow_bot import status
+
+        print(json.dumps(status.report(), separators=(",", ":"), default=str))
+        return 0
     if args[0] == "loop":
         interval = float(
             os.environ.get(
@@ -815,7 +820,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|mirror|ci|audit|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|mirror|ci|audit|status|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2

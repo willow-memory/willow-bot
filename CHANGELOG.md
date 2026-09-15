@@ -39,6 +39,29 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Read-only status surface for the seat.** New `willow_bot/status.py`
+  exposes `report()` returning one structured dict covering: package
+  version, running commit (git HEAD of the checkout), last heartbeat
+  and last tick receipt, a recent journal excerpt (bounded to 5 rows),
+  webhook inbox depth by kind, cursor offsets (mirror, ci) and the
+  chain tip, and the last successful sweep. Every field carries its
+  own three-state status (`populated`, `empty`, `unreachable`) so the
+  seat can tell a fresh install (empty) from a broken read
+  (unreachable) — an unreadable journal is not "unit absent". One
+  field's miss never hides another field's data. Wired into the CLI as
+  `willow-bot-steward status`. Gap `158600e03598`. Twenty-two unit
+  tests cover overall shape, ISO8601 timestamp, version populated when
+  installed, running-commit unreachable without .git, running-commit
+  populated reads the sha (subprocess stubbed), missing-receipt-file is
+  empty (not unreachable), populated receipt returns last row, garbage
+  file is unreachable, garbage-tail-past-valid-row still reads the
+  valid row, journal returns the last N rows, journal absent is empty,
+  journal marks unparseable row instead of dropping it, inbox absent
+  is empty-zero, inbox counts by kind, inbox unreadable entry is
+  counted not dropped, cursors absent is empty, cursors present, cursor
+  garbled offset is None not raise, sync no-tick-file is empty, sync
+  returns last-ok-sweep only, sync ignores non-sweep events, and one
+  field's failure does not hide another's data.
 - **Hash chain on `ci_outcomes.jsonl`.** Every row appended by
   `willow_bot.deposits.append_local` carries `prev_hash` (the previous
   chained row's `row_hash`, or `"0"*64` when this row starts the chain)
