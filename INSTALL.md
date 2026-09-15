@@ -155,6 +155,19 @@ export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operat
 
 `local_listening` is expected to be `false` until `uvicorn` is running.
 
+## Pre-push CI-fresh check
+
+Before pushing a branch that changes `pyproject.toml` or adds a new test
+dependency, run `scripts/fresh-check.sh` — it builds a temp venv from scratch,
+installs `-e ".[dev]"`, and runs the test suite. This reproduces the CI
+shape (`pip install -e ".[dev]"` on a fresh matrix leg) so a dev-dep that
+your local `.venv` picked up by hand does not slip past you and turn CI
+red. The venv is a tempdir and cleaned on exit.
+
+```bash
+scripts/fresh-check.sh
+```
+
 ## User Services
 
 Two units, both rendered from `systemd/*.service.template` by
