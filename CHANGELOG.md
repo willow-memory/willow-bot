@@ -39,6 +39,31 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Hash chain on `ci_outcomes.jsonl`.** Every row appended by
+  `willow_bot.deposits.append_local` carries `prev_hash` (the previous
+  chained row's `row_hash`, or `"0"*64` when this row starts the chain)
+  and `row_hash` (sha256 over the row's other fields in canonical form,
+  plus prev_hash). `verify_chain(path)` walks the file and confirms
+  each chained row's prev_hash equals the previous chained row's
+  row_hash and each row's row_hash equals a recomputed value; a tampered
+  historical row breaks the chain at its successor, and the receipt
+  names the 1-indexed line of the break. Legacy rows written before this
+  step existed are tolerated at the head of the file: the verifier
+  reports `legacy_head` and `chained_from` distinctly, so an upgrade to
+  a live box does not read as a broken chain. A sidecar
+  `ci_outcomes.chain.tip` keeps append O(1); a missing tip file is
+  rebuilt on the next append by scanning the deposits tail (the deposits
+  file is the source of truth, tip is an index). Canonical form sorts
+  keys and excludes the chain fields, so a rec re-hashed after storage
+  computes the same value, and a set-arithmetic caller does not
+  accidentally desynchronize the hash. Gap `a6c0926d7e83` (hash chain
+  sub-part). Seventeen unit tests cover first-row-from-genesis,
+  second-row-chains-first, tip file tracks head, tip recovery from
+  missing tip, empty-file receipt, all-chained receipt, legacy-head-
+  then-chain, tampered-body detection, broken-prev detection, legacy-
+  row-inside-chain detection, non-JSON row detection, canonical-form
+  key-order stability, chain-key exclusion, prev-changes-changes-hash,
+  sha256 shape, and end-to-end coverage via `deposit_from_check_run_payload`.
 - **Operator assignment for bot-opened PRs.** New
   `willow_bot/pr_assign.py` exposes `assign_to_operator(repo, pr_number,
   *, login=None)`. With no argument it reads
