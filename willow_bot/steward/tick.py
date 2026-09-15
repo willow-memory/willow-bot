@@ -25,7 +25,8 @@ _DEFAULT_PROMPT = (
     "fleet_bridge hints. new_pr rows are dispatched to Loki by the audit step "
     "(steward_audit line); steward_sweep says what came home; steward_resolve which "
     "backlog gaps those merges named (Gap-Id: trailers); steward_mirror what "
-    "reached the store. Do not post to Grove; Grove Loki is separate. Brief tick summary."
+    "reached the store; steward_ci which checks went red and were filed for review. "
+    "Do not post to Grove; Grove Loki is separate. Brief tick summary."
 )
 
 
@@ -328,6 +329,139 @@ _clock = time.monotonic
 _sleep = time.sleep
 
 
+# ── the ci step: a red check reaches a seat ─────────────────────────────────
+
+# Conclusions that mean "this leg did not pass". `cancelled` is in: a leg
+# that never reached a verdict is not green, and the aggregate `test` gate
+# in the fleet's tests.yml treats it as a failure too.
+_CI_RED = frozenset({"failure", "timed_out", "cancelled", "startup_failure"})
+_CI_PER_TICK = 50
+
+
+def _ci_offset_path() -> Path:
+    from willow_bot.deposits import deposits_dir
+
+    return deposits_dir() / "ci.offset"
+
+
+def _ci_key(rec: dict) -> str:
+    return f"{rec.get('head_sha', '')}:{rec.get('check_run_id', '')}"
+
+
+def run_ci(*, enable_mcp: bool | None = None) -> dict:
+    """File every red check the bot deposited since the last tick.
+
+    Gap 8d1bcb2b7c02: the bot records a red check faithfully and reports
+    it to nobody — a `ci_fail` quip in the webhook log, a `check_run` item
+    the inbox step skips, a deposit row nothing reads back. On 2026-09-14
+    the operator told the seat a PR was red, twice. This step reads
+    ``deposits/ci_outcomes.jsonl`` from its own byte offset (the mirror's
+    shape, its own offset file so the two never race), and for each new
+    row whose conclusion is in ``_CI_RED`` files one ``human_required``
+    item of kind ``review`` naming the PR, the leg and the job URL — the
+    bot's own deposits as the only source, no lease, no ``gh``.
+
+    Idempotent per (head_sha, check_run_id) through ``ci_filed`` in the
+    state file: a re-delivered completion or a rotated deposits file does
+    not file twice. A refused enqueue leaves the offset before that row
+    and reports the reason; the next tick retries the same row. Reds are
+    reported in the receipt even when MCP is off — the seat reading the
+    receipt file still learns what went red, it just is not filed.
+    """
+    from willow_bot.deposits import deposits_jsonl
+
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    receipt: dict = {"event": "steward_ci", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    src = deposits_jsonl()
+    if not src.is_file():
+        receipt.update(status="ok", present=False, red=[], filed=[], detail=f"no deposits file at {src}")
+        return _emit(receipt)
+    off_path = _ci_offset_path()
+    offset = int(off_path.read_text().strip() or 0) if off_path.is_file() else 0
+    size = src.stat().st_size
+    if offset > size:
+        offset = 0  # truncated or rotated; ci_filed keeps a re-read from filing twice
+    receipt.update(present=True, offset=offset, size=size)
+
+    path = state_path()
+    state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
+    filed_before = dict(state.get("ci_filed") or {})
+
+    # Read first: every red row is in the receipt whether or not it can be filed.
+    red: list[dict] = []
+    scanned = 0
+    with src.open("rb") as fh:
+        fh.seek(offset)
+        while scanned < _CI_PER_TICK:
+            line = fh.readline()
+            if not line:
+                break
+            if not line.endswith(b"\n"):
+                break  # a row still being written; next tick
+            text = line.decode("utf-8", errors="replace").strip()
+            if text:
+                try:
+                    rec = json.loads(text)
+                except json.JSONDecodeError:
+                    rec = None
+                if isinstance(rec, dict) and rec.get("conclusion") in _CI_RED:
+                    red.append({
+                        "repo": rec.get("repo", ""), "pr": rec.get("pr_number"),
+                        "head_sha": rec.get("head_sha", ""), "check": rec.get("check_name", ""),
+                        "conclusion": rec.get("conclusion"), "url": rec.get("html_url", ""),
+                        "key": _ci_key(rec),
+                    })
+                scanned += 1
+            offset = fh.tell()
+    receipt["red"] = [{k: v for k, v in r.items() if k != "key"} for r in red]
+
+    to_file = [r for r in red if r["key"] not in filed_before]
+    if not enable_mcp:
+        off_path.parent.mkdir(parents=True, exist_ok=True)
+        off_path.write_text(f"{offset}\n", encoding="utf-8")
+        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — reds reported, not filed",
+                       filed=[], refused=[], new_offset=offset)
+        return _emit(receipt)
+
+    from willow_bot.steward import mcp_client
+
+    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    filed, refused = [], []
+    filed_now = dict(filed_before)
+    for r in to_file:
+        where = f"{r['repo']}#{r['pr']}" if r["pr"] else f"{r['repo']}@{r['head_sha'][:12]}"
+        args = {
+            "app_id": app, "kind": "review", "priority": "normal",
+            "title": f"CI red: {where} — {r['check']} {r['conclusion']}",
+            "summary": f"{r['check']} concluded {r['conclusion']} on {r['head_sha']}. {r['url']}",
+            "source_ref": r["url"],
+        }
+        try:
+            result = mcp_client.call("human_required_enqueue", args)
+        except Exception as exc:  # noqa: BLE001 — a refused filing is a line with its reason
+            refused.append({"where": where, "check": r["check"], "error": str(exc)[:300]})
+            break
+        err = _tool_error(result)
+        if err:
+            refused.append({"where": where, "check": r["check"], "error": err})
+            break
+        item_id = result.get("id") if isinstance(result, dict) else None
+        filed_now[r["key"]] = item_id or "filed"
+        filed.append({"where": where, "check": r["check"], "conclusion": r["conclusion"], "id": item_id})
+    # On a refusal the offset stays where a retry can find the row; what was
+    # filed before it is remembered in ci_filed so the retry skips it.
+    state["ci_filed"] = filed_now
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n")
+    if not refused:
+        off_path.parent.mkdir(parents=True, exist_ok=True)
+        off_path.write_text(f"{offset}\n", encoding="utf-8")
+    receipt.update(status="ok" if not refused else "could-not-run", filed=filed, refused=refused,
+                   skipped=len(red) - len(to_file), new_offset=offset if not refused else receipt["offset"])
+    return _emit(receipt)
+
+
 def run_sweep(*, enable_mcp: bool | None = None) -> dict:
     """The act half of a tick: ask the broker to bring merges home.
 
@@ -552,6 +686,7 @@ def run_loop(interval_s: float = 300.0) -> int:
         for name, step in (
             ("resolve", lambda: run_resolve(sweep)),
             ("mirror", run_mirror),
+            ("ci", run_ci),
             ("audit", run_audit),
         ):
             try:
@@ -584,6 +719,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "mirror":
         run_mirror()
         return 0
+    if args[0] == "ci":
+        run_ci()
+        return 0
     if args[0] == "audit":
         run_audit()
         return 0
@@ -603,7 +741,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|mirror|audit|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|mirror|ci|audit|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2
