@@ -6,6 +6,38 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Merged-release install receipt.** New
+  `willow_bot/install_receipt.py` exposes `refresh_editable(repo_dir,
+  default_branch, *, remote="origin", do_install=True)` — brings a
+  checkout to the current remote default and refreshes its editable
+  install only when it is safe to do so. The receipt's `state` names
+  distinctly what it found: `missing_checkout`, `dirty`,
+  `on_feature_branch`, `fetch_failed`, `diverged`, `ahead`, `install_failed`,
+  or `ok`. Never switches branches (an agent's active feature branch is
+  never touched), never resolves a merge conflict (a diverged checkout
+  is a line, not a merge commit), never creates a venv (a missing venv
+  is `install=skipped`, state stays `ok`). Fast-forward uses `git merge
+  --ff-only` rather than `git pull` so the default behaviour cannot
+  turn a diverged checkout into a merge commit. A sidecar
+  `.willow-bot-installed.commit` stamp records the commit the pip
+  install ran on, so a future tick tells drift by comparing
+  `checkout_commit` with `installed_commit` (the stamp is read into
+  `installed_before` and, only on a successful install, overwritten
+  with the new HEAD). Gap `1f6b033ffca7` (bot half). Thirteen
+  integration tests use real `subprocess git` against tmp_path
+  checkouts (a fake would hide the exact shape of `--porcelain`,
+  `rev-list --left-right --count`, and `merge --ff-only`): missing
+  checkout, dirty tree refuses refresh, feature branch is not
+  touched, up-to-date-with-no-venv is `install=skipped`, behind ->
+  fast-forward updates `checkout_commit`, ahead reports but does not
+  push, diverged refuses refresh, install-ok writes stamp with HEAD,
+  install-failed does NOT write stamp, `installed_before` reads
+  prior stamp, `read_installed_commit` returns None when missing,
+  `do_install=False` never calls pip, and a sanity check that `git` is
+  on PATH.
+
+### Added
+
 - **Resolve step lands `Idea-Id` trailers as `idea_landings` records and
   reads trailers the reconciler's way.** Each `Idea-Id: willow-ideas-NNN`
   (the reconciler's own id shape, `reconciler/ids.py`) found on a merged
