@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Steward tick reconciles owned-prefix labels on every open PR.**
+  New `willow_bot/steward/voice.py` exposes `run_voice(state)` that
+  reads the tick's state file, maps `audit_dispatched[repo#pr]` →
+  `willow-bot/audit-dispatched`, and calls the label reconciler
+  (`pr_labels.reconcile_labels`) for each open PR — including PRs with
+  an empty desired set, so stale owned labels are cleaned up. Wired
+  into the loop after `run_ci` and `run_audit` (so voice sees fresh
+  state) and exposed as the CLI subcommand `willow-bot-steward voice`.
+  Idempotent: an unchanged desired set is a network no-op inside the
+  primitive (only a GET). Per-PR failures surface in `refused` while
+  successful reconciles still land; `status` reflects the mix
+  (`ok` / `partial` / `could-not-run`). Twelve unit tests cover
+  parse_key edge cases, audit_dispatched mapping, per-PR reconcile
+  outcomes, partial vs. all-fail status, garbled open keys, empty open
+  set, jsonl append, and state-file fallback when no arg is passed.
+  This closes the caller side of gap `acfd27ae3259`.
+
+  `ci_filed` → `ci-red` label mapping is stubbed pending a shape update
+  (the current `ci_filed` key is `head_sha:check_run_id`, without a PR
+  index). `pr_voice` comment + `pr_voice.publish_check` wiring is left
+  for a follow-on that carries a head SHA through the state.
+
 ### Fixed
 
 - **Webhook boundary dedups on `X-GitHub-Delivery`.** `bot.py`'s webhook

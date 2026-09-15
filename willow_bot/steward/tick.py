@@ -846,12 +846,19 @@ def run_loop(interval_s: float = 300.0) -> int:
             sweep = run_sweep()
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({"event": "error", "detail": f"sweep: {exc}"}), flush=True)
+        # voice runs LAST — after ci and audit have written the state the
+        # label reconciler reads. If both ran clean, voice sees fresh
+        # audit_dispatched; if either raised, voice reconciles what state
+        # it can see and the next tick picks up what changed.
+        from willow_bot.steward.voice import run_voice
+
         for name, step in (
             ("resolve", lambda: run_resolve(sweep)),
             ("install", lambda: run_install_receipts(sweep)),
             ("mirror", run_mirror),
             ("ci", run_ci),
             ("audit", run_audit),
+            ("voice", run_voice),
         ):
             try:
                 step()
@@ -893,6 +900,11 @@ def main(argv: list[str] | None = None) -> int:
         # Sweep then install, as the loop does — install alone has no ranges.
         run_install_receipts(run_sweep())
         return 0
+    if args[0] == "voice":
+        from willow_bot.steward.voice import run_voice
+
+        run_voice()
+        return 0
     if args[0] == "status":
         from willow_bot import status
 
@@ -914,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|audit|status|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|audit|voice|status|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2

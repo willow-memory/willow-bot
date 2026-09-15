@@ -20,7 +20,9 @@ python3 -m venv .venv
 Canonical checkout: `~/github/willow-memory/willow-bot`. The workshop clone is a
 stale second home — do not point the unit or Kart bind at it.
 
-Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `audit` | `inbox` | `scan`).
+Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `audit` | `status` | `inbox` | `scan`).
+
+`status` prints one JSON receipt for the seat, with three-state fields (`populated` / `empty` / `unreachable`) — an unreadable journal is not "unit absent". See `willow_bot/status.py`.
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
@@ -83,6 +85,13 @@ CI draft deposits land under `$WILLOW_HOME/willow-bot/deposits/ci_outcomes.jsonl
 (and `store_put` collection `willow_bot_ci_deposits` when MCP is on). Dew stays on Kart.
 
 Legacy env names `LOKI_PR_WATCH_*` still work during prove; prefer `WILLOW_BOT_STEWARD_*`.
+
+Additional env vars (all optional):
+
+| Env | Purpose | Default |
+|-----|---------|---------|
+| `WILLOW_OPERATOR_GITHUB_LOGIN` | Assignee / requested reviewer for bot-opened PRs (`willow_bot.pr_assign`). Unset is honest-absence, not error. | unset |
+| `WILLOW_BOT_DELIVERY_STATE` | Path override for the webhook `X-GitHub-Delivery` LRU (`willow_bot.delivery_dedup`). | `$WILLOW_HOME/willow-bot/delivery-seen.json` |
 
 ## Pangolin route
 
@@ -154,6 +163,19 @@ export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operat
 ```
 
 `local_listening` is expected to be `false` until `uvicorn` is running.
+
+## Pre-push CI-fresh check
+
+Before pushing a branch that changes `pyproject.toml` or adds a new test
+dependency, run `scripts/fresh-check.sh` — it builds a temp venv from scratch,
+installs `-e ".[dev]"`, and runs the test suite. This reproduces the CI
+shape (`pip install -e ".[dev]"` on a fresh matrix leg) so a dev-dep that
+your local `.venv` picked up by hand does not slip past you and turn CI
+red. The venv is a tempdir and cleaned on exit.
+
+```bash
+scripts/fresh-check.sh
+```
 
 ## User Services
 

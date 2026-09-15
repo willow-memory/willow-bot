@@ -4,18 +4,22 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from willow_bot.paths import webhook_inbox_dir as _paths_webhook_inbox_dir
+from willow_bot.paths import willow_home as _paths_willow_home
+
 
 def _truthy(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes")
 
 
 def willow_home() -> Path:
-    default = Path.home() / "sean-data-vault" / "willow-operator-box"
-    return Path(os.environ.get("WILLOW_HOME", default))
+    # Re-export from the shared paths module so an old caller
+    # (`from willow_bot.steward.config import willow_home`) still resolves.
+    return _paths_willow_home()
 
 
 def webhook_inbox_dir() -> Path:
-    return willow_home() / "upstream_steward" / "webhook_inbox"
+    return _paths_webhook_inbox_dir()
 
 
 def state_path() -> Path:

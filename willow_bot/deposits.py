@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from willow_bot.paths import deposits_dir as _paths_deposits_dir
+
 log = logging.getLogger("willow-bot.deposits")
 
 COLLECTION = "willow_bot_ci_deposits"
@@ -38,13 +40,8 @@ GENESIS_HASH = "0" * 64
 _CHAIN_KEYS = frozenset({"prev_hash", "row_hash"})
 
 
-def _willow_home() -> Path:
-    default = Path.home() / "sean-data-vault" / "willow-operator-box"
-    return Path(os.environ.get("WILLOW_HOME", default))
-
-
 def deposits_dir() -> Path:
-    return _willow_home() / "willow-bot" / "deposits"
+    return _paths_deposits_dir()
 
 
 def deposits_jsonl() -> Path:

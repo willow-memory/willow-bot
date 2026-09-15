@@ -29,6 +29,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from willow_bot.paths import bot_dir
+
 log = logging.getLogger("willow-bot.delivery_dedup")
 
 # The last N delivery ids to remember. GitHub retries a failing webhook up
@@ -37,20 +39,13 @@ log = logging.getLogger("willow-bot.delivery_dedup")
 _MAX_IDS = 5000
 
 
-def _willow_home() -> Path:
-    raw = os.environ.get("WILLOW_HOME", "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    return Path.home() / "sean-data-vault" / "willow-operator-box"
-
-
 def state_path() -> Path:
     """Where the seen-delivery LRU lives. Kept next to ``event-log.jsonl``
     so an operator inspecting the bot's write set finds it there."""
     override = os.environ.get("WILLOW_BOT_DELIVERY_STATE", "").strip()
     if override:
         return Path(override).expanduser()
-    return _willow_home() / "willow-bot" / "delivery-seen.json"
+    return bot_dir() / "delivery-seen.json"
 
 
 def _load(path: Path) -> list[str]:
