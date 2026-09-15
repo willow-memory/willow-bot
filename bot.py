@@ -21,6 +21,7 @@ import credentials
 import github_app
 import quips
 import router
+from willow_bot import delivery_dedup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("willow-bot")
@@ -44,6 +45,7 @@ async def webhook(
     request: Request,
     x_github_event: str = Header(...),
     x_hub_signature_256: str = Header(default=""),
+    x_github_delivery: str = Header(default=""),
 ):
     body = await request.body()
 
@@ -55,11 +57,26 @@ async def webhook(
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON")
 
-    log.info("event: %s action: %s", x_github_event, payload.get("action", "—"))
+    # Gap acfd27ae3259 (webhook idempotency): a redelivery of the same
+    # X-GitHub-Delivery id short-circuits before dispatch, so router.route
+    # and fleet_bridge.handle don't double-write journals or double-count
+    # a merge. The inbox and gitsync paths are semantic-idempotent already,
+    # but ci_outcomes.jsonl and event-log.jsonl are pure append and would
+    # take a duplicate row without this guard. An empty header (a webhook
+    # that is not GitHub's) is accepted with 200 as a dispatch-time no-op
+    # rather than a dedup — the signature check above is what rejects the
+    # non-GitHub caller. See willow_bot/delivery_dedup.py.
+    if not delivery_dedup.mark_seen(x_github_delivery):
+        log.info("event: %s action: %s delivery: %s (redelivery — skipped)",
+                 x_github_event, payload.get("action", "—"), x_github_delivery)
+        return {"ok": True, "dedup": "delivery_seen", "delivery": x_github_delivery}
+
+    log.info("event: %s action: %s delivery: %s",
+             x_github_event, payload.get("action", "—"), x_github_delivery or "—")
 
     router.route(x_github_event, payload, github_app.post_comment)
 
-    return {"ok": True}
+    return {"ok": True, "delivery": x_github_delivery or None}
 
 
 @app.get("/")
