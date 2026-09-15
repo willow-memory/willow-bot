@@ -6,6 +6,21 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- **Webhook boundary dedups on `X-GitHub-Delivery`.** `bot.py`'s webhook
+  handler now consults `willow_bot.delivery_dedup.mark_seen(delivery_id)`
+  before dispatching. A redelivery (operator-triggered replay, GitHub's
+  own retry after a non-2xx, a proxy handing the same body to two
+  instances) short-circuits with `{"ok": true, "dedup": "delivery_seen"}`
+  and does not re-run `router.route` or `fleet_bridge.handle`. Without
+  the guard `event-log.jsonl` and `ci_outcomes.jsonl` (pure-append
+  journals) took a duplicate row on every retry, and `quips.record_merge`
+  double-counted a merge. The upstream_steward inbox and the gitsync
+  trigger flag were already semantic-idempotent — this closes the
+  journal/counter gap at the boundary. A bounded LRU (5000 delivery ids,
+  atomic-rename JSON under `$WILLOW_HOME/willow-bot/delivery-seen.json`)
+  survives a restart, so a redelivery landing after a systemd roll still
+  dedups. Fails open on a disk error — a broken cache does not drop real
+  deliveries. Gap acfd27ae3259 (webhook idempotency sub-part).
 - **Steward inbox consumes `check_run` items.** `willow_bot/steward/inbox.py`
   returned early on any item whose `kind` was not `pull_request`, so every
   completed check `fleet_bridge.handle` deposited (keyed on the check id,
@@ -49,9 +64,73 @@ All notable changes to this project are documented here.
   row-inside-chain detection, non-JSON row detection, canonical-form
   key-order stability, chain-key exclusion, prev-changes-changes-hash,
   sha256 shape, and end-to-end coverage via `deposit_from_check_run_payload`.
-
-### Added
-
+- **Operator assignment for bot-opened PRs.** New
+  `willow_bot/pr_assign.py` exposes `assign_to_operator(repo, pr_number,
+  *, login=None)`. With no argument it reads
+  `WILLOW_OPERATOR_GITHUB_LOGIN` from the env; an unset or blank env is
+  `status="absent"` (honest absence, not error) so a fleet without an
+  operator wired does not see refusal noise. On a configured operator
+  the module hits both `POST /issues/{pr}/assignees` and `POST
+  /pulls/{pr}/requested_reviewers` — assignee and requested-reviewer
+  are independent APIs and either half succeeding on its own is worth
+  reporting. GitHub silently drops an unreachable login on
+  `/assignees` (200 with the ORIGINAL list back); the module inspects
+  the response body and reports "not in returned list — unreachable
+  login?" rather than a false success. A 422 on `/requested_reviewers`
+  (already requested or refused) is not a raise. The receipt names
+  exactly which half landed so a retry can hit only the miss:
+  `status=ok` on full success, `partial` on one-of-two,
+  `could-not-run` on both-failed. Gap `acfd27ae3259` (assignment
+  sub-part). Twelve unit tests cover env lookup edge cases,
+  absent-when-unconfigured, explicit login override, happy path,
+  review-422 as already-or-refused, unreachable login as a specific
+  line, assign failure not stopping review, auth failure, review 5xx,
+  and both-failed as could-not-run.
+- **Steward-state labels on a PR: reconcile the bot's owned namespace.**
+  New `willow_bot/pr_labels.py` exposes `reconcile_labels(repo,
+  pr_number, desired, owned_prefix="willow-bot/")` that brings the PR's
+  labels under the owned prefix to exactly `desired` — additive within
+  its own namespace, never touching labels a human or another bot
+  applied (`bug`, `area/steward`, …). Vocabulary shipped: `ci-red`,
+  `needs-ratification`, `audit-dispatched`, `bot-opened`, each under
+  `willow-bot/`. A caller passing a label outside the namespace in
+  `desired` is refused before any HTTP — otherwise the reconcile would
+  add the label and then immediately delete it on the next pass. Empty
+  strings in `desired` are silently dropped so a set-arithmetic caller
+  never lands one in the POST body. Failure modes as receipts: an
+  unavailable App, a list-labels error, and a partial reconcile
+  (add-failed but remove-succeeded) each surface in `refused` with the
+  op that failed. A DELETE 404 is treated as "already gone" — a
+  concurrent reconcile that beat us to it left the label where we
+  wanted it. Gap `acfd27ae3259` (labels sub-part). Thirteen unit tests
+  cover vocabulary invariants, first-call add, repeat is a no-op on the
+  network, moving between states adds new and removes stale in one pass,
+  non-owned labels are reported but not touched, out-of-namespace desired
+  is refused before HTTP, empty strings dropped, auth/list failures as
+  lines, partial success is not silent, DELETE 404 is treated as absent,
+  and pagination walks until a short page.
+- **Bot voice on a PR: one status comment and one bot check per head SHA.**
+  New `willow_bot/pr_voice.py` exposes two idempotent operations keyed on
+  the head SHA. `upsert_status_comment(repo, pr_number, head_sha, body)`
+  posts a comment carrying an invisible marker (`<!-- willow-bot:status
+  head=<sha> -->`); a repeat call for the same head_sha PATCHes the same
+  comment, a different head_sha (a force-push moved the world) writes a
+  new row rather than rewriting the old one. `publish_check(repo,
+  head_sha, name, status, conclusion, output, external_id)` creates or
+  updates one App-owned check-run for that (head_sha, name); the GET
+  filters `filter=app&check_name=NAME` server-side so two apps sharing a
+  name on the same sha do not confuse the upsert. Both operations key on
+  the marker / on `(check_run.id, filter=app)`, never on a login — the
+  bot has been renamed twice and a login string was wrong on both sides
+  of each rename. Validation before the network: a `completed` check
+  without a valid `conclusion`, a conclusion on a non-terminal check, or
+  a missing `head_sha` are refused with a receipt line, no POST. An HTTP
+  or auth failure is likewise a `could-not-run` receipt line, not a
+  raise. Gap `acfd27ae3259` (voice sub-part). Seventeen unit tests cover
+  marker uniqueness, first-call create vs update-on-marker, distinct
+  head_shas writing side by side, paginated comment walk, refuse-before-
+  POST for every invalid check shape, auth-failure receipts, and HTTP
+  failure receipts.
 - **Resolve step lands `Idea-Id` trailers as `idea_landings` records and
   reads trailers the reconciler's way.** Each `Idea-Id: willow-ideas-NNN`
   (the reconciler's own id shape, `reconciler/ids.py`) found on a merged
