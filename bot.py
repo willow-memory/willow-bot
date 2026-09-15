@@ -28,15 +28,41 @@ log = logging.getLogger("willow-bot")
 
 app = FastAPI(title="willow-bot", docs_url=None, redoc_url=None)
 
-_CRED = credentials.resolve(require_complete=True)
-_SECRET = _CRED.webhook_secret.encode()
-log.info("credentials loaded (%s)", _CRED.source)
+
+# Credentials resolve lazily on the first webhook, not at module import.
+# Eager resolve at load meant every test importing bot.py had to prime the
+# full vault chain (PEM, app_id, webhook secret) even to exercise a
+# handler that never verified a signature — and a systemd-style import
+# under a rotated PEM could crash the whole worker before uvicorn came up.
+# Cache once after the first success so subsequent requests do not re-read
+# disk. github_app._cred() uses the same shape; a rename to a shared
+# helper is possible when a third caller lands.
+_cred_cache: credentials.BotCredentials | None = None
+
+
+def _cred() -> credentials.BotCredentials:
+    global _cred_cache
+    if _cred_cache is None:
+        _cred_cache = credentials.resolve(require_complete=True)
+        log.info("credentials loaded (%s)", _cred_cache.source)
+    return _cred_cache
+
+
+def reset_credential_cache() -> None:
+    """Test hook — drop the process-wide credential cache.
+
+    Mirrors ``github_app.reset_credential_cache`` so a test rotating the
+    vault mid-suite can force the next request to re-resolve.
+    """
+    global _cred_cache
+    _cred_cache = None
 
 
 def _verify_signature(body: bytes, sig_header: str) -> bool:
     if not sig_header or not sig_header.startswith("sha256="):
         return False
-    expected = "sha256=" + hmac.new(_SECRET, body, hashlib.sha256).hexdigest()
+    secret = _cred().webhook_secret.encode()
+    expected = "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, sig_header)
 
 
