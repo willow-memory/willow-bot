@@ -473,6 +473,141 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     return _emit(receipt)
 
 
+# ── the catch-up step: repair state after a missed webhook ───────────────────
+
+_CATCHUP_PER_TICK = 3
+
+
+def _catchup_repos(state: dict) -> list[str]:
+    """Every ``owner/repo`` that has ever appeared in state, plus any that
+    ``WILLOW_BOT_CATCHUP_EXTRA_REPOS`` names (comma-separated). The catchup
+    step polls each in turn, rotating across ticks. A fleet with zero PRs
+    on record and no extras env returns an empty list — the receipt then
+    says so honestly rather than fabricating a target."""
+    repos: set[str] = set()
+
+    def _add_key(key: object) -> None:
+        if not isinstance(key, str) or "#" not in key:
+            return
+        repo = key.rsplit("#", 1)[0]
+        if "/" in repo:
+            repos.add(repo)
+
+    for src in ("open", "seen", "merged_synced"):
+        for key in state.get(src) or []:
+            _add_key(key)
+    for item in state.get("pending_audit") or []:
+        if isinstance(item, dict):
+            _add_key(item.get("repo_pr"))
+    for key in (state.get("audit_dispatched") or {}).keys():
+        _add_key(key)
+    extras = os.environ.get("WILLOW_BOT_CATCHUP_EXTRA_REPOS", "").strip()
+    if extras:
+        for r in extras.split(","):
+            r = r.strip()
+            if r and "/" in r:
+                repos.add(r)
+    return sorted(repos)
+
+
+def run_catchup(*, enable_mcp: bool | None = None) -> dict:
+    """Repair a missed webhook by polling ``/repos/{repo}/pulls`` under the
+    App's install token.
+
+    Gap: a lost webhook (a Pangolin restart mid-delivery, a systemd roll
+    while a POST was in flight, a proxy dropping the body) is invisible
+    to the bot — the tick's ``open`` set stays stale, the audit step
+    never sees the PR, the seat learns of it from a human. This step is
+    the reader: for a bounded batch of repos each tick, query the App's
+    live view of open PRs and reconcile it with ``state["open"]``. Any
+    PR the API sees that state does not gets promoted to
+    ``pending_audit`` under the same shape as ``run_once`` writes,
+    so the same-tick audit step picks it up.
+
+    Idempotent per (repo, PR) through the same ``pending_audit`` +
+    ``audit_dispatched`` guards as ``run_once``: a repair for an
+    already-known PR is a no-op. The catch-up cursor
+    (``state["catchup_cursor"] = {next_index, last_polled_at, batch}``)
+    rotates the polling across ticks so a fleet of 20 repos does not
+    hammer 20 requests every 5 min — 3 × 12 = 36 requests/hour under
+    the default cap, well inside the App installation's 5000/hr.
+
+    Honest absence when MCP is off — this is an act-half read (a live
+    GitHub API poll under the App's credential); the same posture as
+    ``sweep``/``mirror``/``audit``.
+    """
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    receipt: dict = {
+        "event": "steward_catchup",
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if not enable_mcp:
+        receipt.update(status="absent",
+                       detail="WILLOW_BOT_MCP not enabled — no list_pulls")
+        return _emit(receipt)
+
+    path = state_path()
+    state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
+    repos = _catchup_repos(state)
+    receipt["repos_known"] = len(repos)
+    if not repos:
+        receipt.update(status="ok", polled=[], repaired=[], errors=[],
+                       detail="no repos to poll (state carries none, no extras env)")
+        return _emit(receipt)
+
+    cursor = state.get("catchup_cursor") or {}
+    start = int(cursor.get("next_index") or 0) % len(repos)
+    batch = repos[start:start + _CATCHUP_PER_TICK]
+    if len(batch) < _CATCHUP_PER_TICK and len(repos) > _CATCHUP_PER_TICK:
+        batch.extend(repos[:_CATCHUP_PER_TICK - len(batch)])
+    receipt["batch"] = batch
+
+    import github_app  # local import so a test can monkeypatch the module
+
+    now_open = set(state.get("open") or [])
+    pending = list(state.get("pending_audit") or [])
+    dispatched = state.get("audit_dispatched") or {}
+    already_pending = {p.get("repo_pr") for p in pending if isinstance(p, dict)}
+    polled: list[dict] = []
+    repaired: list[dict] = []
+    errors: list[dict] = []
+    for repo in batch:
+        try:
+            pulls = github_app.list_open_pulls(repo)
+        except Exception as exc:  # noqa: BLE001 — one bad repo is a line, not a dead step
+            errors.append({"repo": repo, "error": str(exc)[:300]})
+            continue
+        polled.append({"repo": repo, "count": len(pulls)})
+        for pr in pulls:
+            num = pr.get("number") if isinstance(pr, dict) else None
+            if not num:
+                continue
+            key = f"{repo}#{num}"
+            if key in now_open:
+                continue
+            title = pr.get("title", "") if isinstance(pr, dict) else ""
+            url = pr.get("html_url", "") if isinstance(pr, dict) else ""
+            if key not in already_pending and key not in dispatched:
+                pending.append({"repo_pr": key, "title": title, "url": url})
+                already_pending.add(key)
+            repaired.append({"repo_pr": key, "title": title, "url": url})
+            now_open.add(key)
+
+    state["open"] = sorted(now_open)
+    state["pending_audit"] = pending
+    state["catchup_cursor"] = {
+        "next_index": (start + _CATCHUP_PER_TICK) % max(len(repos), 1),
+        "last_polled_at": receipt["at"],
+        "batch": batch,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n")
+    receipt.update(status="ok", polled=polled, repaired=repaired, errors=errors,
+                   cursor=state["catchup_cursor"])
+    return _emit(receipt)
+
+
 # ── the install step: refresh editable installs after a sweep ────────────────
 
 
@@ -857,6 +992,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("install", lambda: run_install_receipts(sweep)),
             ("mirror", run_mirror),
             ("ci", run_ci),
+            ("catchup", run_catchup),
             ("audit", run_audit),
             ("voice", run_voice),
         ):
@@ -896,6 +1032,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "audit":
         run_audit()
         return 0
+    if args[0] == "catchup":
+        run_catchup()
+        return 0
     if args[0] == "install-receipts":
         # Sweep then install, as the loop does — install alone has no ranges.
         run_install_receipts(run_sweep())
@@ -926,7 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|audit|voice|status|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|catchup|audit|voice|status|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2
