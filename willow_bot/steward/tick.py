@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -21,7 +23,8 @@ _DEFAULT_PROMPT = (
     "Steward PR watch tick (Cursor seat — not Grove 3B watcher). "
     "JSON lines above are from willow-bot-steward. Treat webhook_pr as willow-bot "
     "fleet_bridge hints. new_pr rows are dispatched to Loki by the audit step "
-    "(steward_audit line); steward_sweep says what came home; steward_mirror what "
+    "(steward_audit line); steward_sweep says what came home; steward_resolve which "
+    "backlog gaps those merges named (Gap-Id: trailers); steward_mirror what "
     "reached the store. Do not post to Grove; Grove Loki is separate. Brief tick summary."
 )
 
@@ -359,7 +362,132 @@ def run_sweep(*, enable_mcp: bool | None = None) -> dict:
         present=bool(isinstance(result, dict) and result.get("present")),
         pulled=[s.get("repo") for s in swept if s.get("ok") and s.get("pulled")],
         refused=[{"flag": s.get("flag"), "error": s.get("error")} for s in swept if not s.get("ok")],
+        # What came home, as ranges — the resolve step reads trailers off them.
+        ranges=[
+            {"repo": s.get("repo"), "checkout": s.get("checkout"),
+             "before": s.get("before"), "after": s.get("after")}
+            for s in swept if s.get("ok") and s.get("pulled")
+        ],
     )
+    return _emit(receipt)
+
+
+# ── the resolve step: a merged commit names the gap it closed ────────────────
+
+# `Gap-Id: <12 hex>` / `Idea-Id: <slug>` — the join keys willows-grove
+# INVARIANTS §11 defines. The CI checker there refuses a malformed value;
+# this side matches the well-formed shape only and ignores anything else,
+# so a trailer that slipped past a repo without the checker still cannot
+# resolve the wrong gap.
+_GAP_ID_RE = re.compile(r"^\s*Gap-Id\s*:\s*([0-9a-f]{12})\s*$", re.MULTILINE | re.IGNORECASE)
+_IDEA_ID_RE = re.compile(r"^\s*Idea-Id\s*:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$", re.MULTILINE | re.IGNORECASE)
+
+
+def _commits_in_range(checkout: str, before: str, after: str) -> list[tuple[str, str]]:
+    """``[(sha, full message)]`` for ``before..after`` in ``checkout``, newest
+    first, read from the host tree the sweep just fast-forwarded. A fresh
+    branch (no ``before``) yields nothing: there is no range to read."""
+    if not checkout or not before or not after or before == after:
+        return []
+    # NUL-separated records so a message body with blank lines parses.
+    proc = subprocess.run(
+        ["git", "-C", checkout, "log", f"{before}..{after}", "--format=%H%x00%B%x00"],
+        capture_output=True, text=True, check=False, timeout=60,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout).strip()[-300:] or f"git log exited {proc.returncode}")
+    fields = proc.stdout.split("\x00")
+    out: list[tuple[str, str]] = []
+    for i in range(0, len(fields) - 1, 2):
+        sha = fields[i].strip()
+        if sha:
+            out.append((sha, fields[i + 1]))
+    return out
+
+
+def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) -> dict:
+    """Resolve every backlog gap a merged commit named in a ``Gap-Id:`` trailer.
+
+    Gap e278ec952b9c: the backlog has no mechanism linking a landed fix
+    back to the gap that motivated it, so a seat orienting on ``gap_list``
+    re-derives fixed problems and warns operators off working mechanisms.
+    This is the reader for the join key: for each range the sweep brought
+    home, read the merged commits' trailers and call ``gap_resolve`` with
+    ``merged <repo>@<sha>`` as the note. ``Idea-Id:`` trailers are collected
+    into the receipt only — that is the reconciler's prospective tier, and
+    nothing here writes to it yet.
+
+    Idempotent per (gap, sha) through the state file: a gap moves into
+    ``gaps_resolved[gap_id] = repo@sha`` only when the tool answered without
+    an error dict; a refusal is reported and retried next time that range
+    is seen — which it will not be, so ``refused`` is the line to read.
+    Honest absence when MCP is off or when the sweep pulled nothing.
+    """
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    receipt: dict = {"event": "steward_resolve", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    ranges = list((sweep or {}).get("ranges") or [])
+    receipt["ranges"] = len(ranges)
+    if not ranges:
+        receipt.update(status="ok", resolved=[], ideas=[], refused=[], detail="nothing came home")
+        return _emit(receipt)
+
+    # Read first, so a missing MCP still reports what it WOULD have resolved.
+    found: list[dict] = []
+    ideas: list[dict] = []
+    unreadable: list[dict] = []
+    for rng in ranges:
+        repo = rng.get("repo", "")
+        try:
+            commits = _commits_in_range(rng.get("checkout", ""), rng.get("before", ""), rng.get("after", ""))
+        except Exception as exc:  # noqa: BLE001 — one unreadable range is a line, not a dead step
+            unreadable.append({"repo": repo, "error": str(exc)[:300]})
+            continue
+        for sha, message in commits:
+            for gap_id in _GAP_ID_RE.findall(message):
+                found.append({"gap_id": gap_id.lower(), "repo": repo, "sha": sha})
+            for idea_id in _IDEA_ID_RE.findall(message):
+                ideas.append({"idea_id": idea_id, "repo": repo, "sha": sha})
+    receipt["ideas"] = ideas
+    if unreadable:
+        receipt["unreadable"] = unreadable
+    if not enable_mcp:
+        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no gap_resolve",
+                       found=found, resolved=[], refused=[])
+        return _emit(receipt)
+    if not found:
+        receipt.update(status="ok", resolved=[], refused=[])
+        return _emit(receipt)
+
+    from willow_bot.steward import mcp_client
+
+    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    path = state_path()
+    state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
+    already = dict(state.get("gaps_resolved") or {})
+    resolved, refused, skipped = [], [], []
+    for item in found:
+        gap_id, where = item["gap_id"], f"{item['repo']}@{item['sha']}"
+        if already.get(gap_id) == where:
+            skipped.append({"gap_id": gap_id, "where": where})
+            continue
+        try:
+            result = mcp_client.call("gap_resolve", {
+                "app_id": app, "gap_id": gap_id, "note": f"merged {where}",
+            })
+        except Exception as exc:  # noqa: BLE001 — a refused resolve is a line with its reason
+            refused.append({"gap_id": gap_id, "where": where, "error": str(exc)[:300]})
+            continue
+        err = _tool_error(result)
+        if err:
+            refused.append({"gap_id": gap_id, "where": where, "error": err})
+            continue
+        already[gap_id] = where
+        resolved.append({"gap_id": gap_id, "where": where})
+    state["gaps_resolved"] = already
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n")
+    receipt.update(status="ok", resolved=resolved, refused=refused, skipped=skipped)
     return _emit(receipt)
 
 
@@ -415,7 +543,17 @@ def run_loop(interval_s: float = 300.0) -> int:
             run_heartbeat()
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({"event": "error", "detail": f"heartbeat: {exc}"}), flush=True)
-        for name, step in (("sweep", run_sweep), ("mirror", run_mirror), ("audit", run_audit)):
+        # Sweep first; resolve reads the ranges the sweep brought home.
+        sweep: dict | None = None
+        try:
+            sweep = run_sweep()
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"event": "error", "detail": f"sweep: {exc}"}), flush=True)
+        for name, step in (
+            ("resolve", lambda: run_resolve(sweep)),
+            ("mirror", run_mirror),
+            ("audit", run_audit),
+        ):
             try:
                 step()
             except Exception as exc:  # noqa: BLE001
@@ -439,6 +577,10 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "sweep":
         run_sweep()
         return 0
+    if args[0] == "resolve":
+        # Sweep then resolve, as the loop does — resolve alone has no ranges.
+        run_resolve(run_sweep())
+        return 0
     if args[0] == "mirror":
         run_mirror()
         return 0
@@ -461,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|mirror|audit|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|mirror|audit|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2
