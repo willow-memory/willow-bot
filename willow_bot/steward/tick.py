@@ -172,12 +172,10 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     receipt["pending"] = len(pending)
     if not enable_mcp:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no dispatch")
-        print(json.dumps(receipt), flush=True)
-        return receipt
+        return _emit(receipt)
     if not pending:
         receipt.update(status="ok", dispatched=[], refused=[])
-        print(json.dumps(receipt), flush=True)
-        return receipt
+        return _emit(receipt)
 
     from willow_bot.steward import mcp_client
 
@@ -203,9 +201,10 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
             refused.append({"repo_pr": key, "error": item["last_error"]})
             still.append(item)
             continue
-        did = result.get("dispatch_id") if isinstance(result, dict) else None
+        err = _tool_error(result)
+        did = None if err else (result.get("dispatch_id") if isinstance(result, dict) else None)
         if not did:
-            item["last_error"] = f"no dispatch_id in result: {str(result)[:200]}"
+            item["last_error"] = err or f"no dispatch_id in result: {str(result)[:200]}"
             refused.append({"repo_pr": key, "error": item["last_error"]})
             still.append(item)
             continue
@@ -216,8 +215,7 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     state["audit_dispatched"] = dispatched
     path.write_text(json.dumps(state, indent=2) + "\n")
     receipt.update(status="ok", dispatched=done, refused=refused, remaining=len(still))
-    print(json.dumps(receipt), flush=True)
-    return receipt
+    return _emit(receipt)
 
 
 # ── the mirror step: local CI deposits reach the store ───────────────────────
@@ -249,8 +247,7 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     src = deposits_jsonl()
     if not src.is_file():
         receipt.update(status="ok", present=False, mirrored=0, detail=f"no deposits file at {src}")
-        print(json.dumps(receipt), flush=True)
-        return receipt
+        return _emit(receipt)
     off_path = _mirror_offset_path()
     offset = int(off_path.read_text().strip() or 0) if off_path.is_file() else 0
     size = src.stat().st_size
@@ -260,8 +257,7 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     if not enable_mcp:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no store_put",
                        behind=size - offset)
-        print(json.dumps(receipt), flush=True)
-        return receipt
+        return _emit(receipt)
 
     from willow_bot.steward import mcp_client
 
@@ -281,12 +277,16 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
                 continue
             try:
                 rec = json.loads(text)
-                mcp_client.call("store_put", {
+                result = mcp_client.call("store_put", {
                     "app_id": app, "collection": COLLECTION, "record": rec,
                     "record_id": record_id_for(rec), "deviation": 0,
                 })
             except Exception as exc:  # noqa: BLE001 — stop at the first failure; the offset stays before it
                 failed = str(exc)[:300]
+                break
+            err = _tool_error(result)
+            if err:
+                failed = err
                 break
             mirrored += 1
             offset = fh.tell()
@@ -298,8 +298,7 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     )
     if failed is not None:
         receipt["detail"] = failed
-    print(json.dumps(receipt), flush=True)
-    return receipt
+    return _emit(receipt)
 
 
 def run_sweep(*, enable_mcp: bool | None = None) -> dict:
@@ -317,8 +316,7 @@ def run_sweep(*, enable_mcp: bool | None = None) -> dict:
     receipt: dict = {"event": "steward_sweep", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     if not enable_mcp:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no sweep")
-        print(json.dumps(receipt), flush=True)
-        return receipt
+        return _emit(receipt)
     try:
         from willow_bot.steward import mcp_client
 
@@ -326,8 +324,11 @@ def run_sweep(*, enable_mcp: bool | None = None) -> dict:
         result = mcp_client.call("gitsync_sweep", {"app_id": app, "project": "fleet"})
     except Exception as exc:  # noqa: BLE001 — a failed sweep is a line, not a dead loop
         receipt.update(status="could-not-run", detail=str(exc)[:400])
-        print(json.dumps(receipt), flush=True)
-        return receipt
+        return _emit(receipt)
+    err = _tool_error(result)
+    if err:
+        receipt.update(status="could-not-run", detail=err)
+        return _emit(receipt)
     swept = result.get("swept", []) if isinstance(result, dict) else []
     receipt.update(
         status="ok" if isinstance(result, dict) and result.get("ok") else "could-not-run",
@@ -335,12 +336,42 @@ def run_sweep(*, enable_mcp: bool | None = None) -> dict:
         pulled=[s.get("repo") for s in swept if s.get("ok") and s.get("pulled")],
         refused=[{"flag": s.get("flag"), "error": s.get("error")} for s in swept if not s.get("ok")],
     )
-    print(json.dumps(receipt), flush=True)
-    return receipt
+    return _emit(receipt)
 
 
 def mcp_enabled() -> bool:
     return os.environ.get("WILLOW_BOT_MCP", "").strip().lower() in ("1", "true", "yes")
+
+
+def _tool_error(result: object) -> str | None:
+    """willow-mcp tools report a refusal as a dict with an `error` key, and
+    the MCP client returns that dict — it does not raise. A step that treats
+    any returned dict as success counts refusals as done: the first live
+    mirror advanced its offset past 200 rows that never landed. Every step
+    asks this first."""
+    if isinstance(result, dict) and result.get("error"):
+        return str(result["error"])[:300]
+    return None
+
+
+def _receipts_path() -> Path:
+    from willow_bot.steward.config import willow_home
+
+    return willow_home() / "willow-bot" / "steward_ticks.jsonl"
+
+
+def _emit(receipt: dict) -> dict:
+    """Print the receipt (the journal) AND append it to steward_ticks.jsonl
+    (a file the seat can read — the journal it cannot)."""
+    try:
+        path = _receipts_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(receipt, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+    print(json.dumps(receipt), flush=True)
+    return receipt
 
 
 def run_loop(interval_s: float = 300.0) -> int:
