@@ -6,6 +6,16 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Resolve step lands `Idea-Id` trailers as `idea_landings` records and
+  reads trailers the reconciler's way.** Each `Idea-Id: willow-ideas-NNN`
+  (the reconciler's own id shape, `reconciler/ids.py`) found on a merged
+  range is `store_put` under `<idea_id>:<sha12>` as `{idea_id, status, repo,
+  sha, merged_at}`, with `Idea-Status: partial` honoured commit-wide; a
+  re-run overwrites, a refused put is a line and the gap still resolves.
+  Both `Gap-Id` and `Idea-Id` are now read from the commit's trailer block
+  only (same rule as `reconciler/gitevidence.trailer_block`): a body that
+  explains the convention no longer resolves a gap. The reconciler itself
+  keeps reading git; this is the desk's timestamped view of the same landing.
 - **Steward `ci` step: a red check reaches a seat.** `run_ci` reads
   `deposits/ci_outcomes.jsonl` from its own byte offset (`ci.offset`) and,
   for each new row whose conclusion is `failure` / `timed_out` / `cancelled`
