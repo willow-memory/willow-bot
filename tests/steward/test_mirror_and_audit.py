@@ -97,6 +97,44 @@ def test_mirror_stops_at_the_first_failure_and_keeps_the_offset_before_it(home, 
     assert r2["mirrored"] == 2 and c2.calls[0][1]["record_id"] == bad
 
 
+def test_a_refusal_returned_as_a_dict_is_not_counted_as_mirrored(home, monkeypatch):
+    """Planted: the live bug. willow-mcp returns a refusal as {'error': ...}
+    and the client returns it without raising; the first live mirror counted
+    200 of those as landed and moved its offset past them."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    rows = [_row("o/r", "f" * 40, i) for i in range(3)]
+    for r in rows:
+        deposits.append_local(r)
+    c = _Client(result={"error": "orchestrator_session_attestation_missing: ..."})
+    _use(monkeypatch, c)
+    r = tick.run_mirror()
+    assert r["status"] == "could-not-run" and r["mirrored"] == 0
+    assert "attestation_missing" in r["detail"]
+    assert r["new_offset"] == 0 and r["behind"] > 0
+    assert len(c.calls) == 1, "stop at the first refusal; do not burn the rest"
+
+
+def test_every_step_leaves_a_receipt_the_seat_can_read(home, monkeypatch):
+    """The journal is not readable from the seat; steward_ticks.jsonl is."""
+    monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
+    tick.run_sweep()
+    tick.run_mirror()
+    tick.run_audit()
+    lines = [json.loads(ln) for ln in tick._receipts_path().read_text().splitlines() if ln.strip()]
+    assert [ln["event"] for ln in lines] == ["steward_sweep", "steward_mirror", "steward_audit"]
+    assert all(ln["status"] in ("absent", "ok") for ln in lines)
+
+
+def test_an_audit_refusal_dict_stays_pending_with_the_tools_reason(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    p = _state_with_pending(home, "o/r#7")
+    _use(monkeypatch, _Client(result={"error": "EDQUOT: max_count exhausted"}))
+    r = tick.run_audit()
+    assert r["dispatched"] == [] and "EDQUOT" in r["refused"][0]["error"]
+    st = json.loads(p.read_text())
+    assert "EDQUOT" in st["pending_audit"][0]["last_error"]
+
+
 def test_mirror_does_not_read_a_half_written_last_line(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     deposits.append_local(_row("o/r", "d" * 40, 1))
@@ -183,8 +221,12 @@ def test_a_result_without_a_dispatch_id_is_not_counted_as_dispatched(home, monke
     p = _state_with_pending(home, "o/r#1")
     _use(monkeypatch, _Client(result={"error": "ENOENT: no active dispatch envelope"}))
     r = tick.run_audit()
-    assert r["dispatched"] == [] and "no dispatch_id" in r["refused"][0]["error"]
+    assert r["dispatched"] == [] and "ENOENT" in r["refused"][0]["error"]
     assert len(json.loads(p.read_text())["pending_audit"]) == 1
+    # and a result that is neither an error nor a packet is still not a dispatch
+    _use(monkeypatch, _Client(result={"status": "weird"}))
+    r2 = tick.run_audit()
+    assert r2["dispatched"] == [] and "no dispatch_id" in r2["refused"][0]["error"]
 
 
 def test_audit_is_capped_per_tick(home, monkeypatch):
