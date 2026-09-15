@@ -20,7 +20,7 @@ python3 -m venv .venv
 Canonical checkout: `~/github/willow-memory/willow-bot`. The workshop clone is a
 stale second home — do not point the unit or Kart bind at it.
 
-Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `mirror` | `ci` | `audit` | `inbox` | `scan`).
+Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `audit` | `inbox` | `scan`).
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
