@@ -508,13 +508,40 @@ def run_sweep(*, enable_mcp: bool | None = None) -> dict:
 
 # ── the resolve step: a merged commit names the gap it closed ────────────────
 
-# `Gap-Id: <12 hex>` / `Idea-Id: <slug>` — the join keys willows-grove
-# INVARIANTS §11 defines. The CI checker there refuses a malformed value;
-# this side matches the well-formed shape only and ignores anything else,
-# so a trailer that slipped past a repo without the checker still cannot
-# resolve the wrong gap.
+# `Gap-Id: <12 hex>` / `Idea-Id: willow-ideas-NNN` — the join keys
+# willows-grove INVARIANTS §11 defines. The CI checker there refuses a
+# malformed value; this side matches the well-formed shape only and ignores
+# anything else, so a trailer that slipped past a repo without the checker
+# still cannot resolve the wrong gap. The Idea-Id shape is the reconciler's
+# (willow-reconciler/reconciler/ids.py: `willow-ideas-<3 digits>`), and
+# `Idea-Status` is commit-level there too — a commit landing several ideas
+# partially says so about all of them.
 _GAP_ID_RE = re.compile(r"^\s*Gap-Id\s*:\s*([0-9a-f]{12})\s*$", re.MULTILINE | re.IGNORECASE)
-_IDEA_ID_RE = re.compile(r"^\s*Idea-Id\s*:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*$", re.MULTILINE | re.IGNORECASE)
+_IDEA_ID_RE = re.compile(r"^\s*Idea-Id\s*:\s*(willow-ideas-\d{3})\s*$", re.MULTILINE | re.IGNORECASE)
+_IDEA_STATUS_RE = re.compile(r"^\s*Idea-Status\s*:\s*(landed|partial)\s*$", re.MULTILINE | re.IGNORECASE)
+_TRAILER_LINE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:[ \t]")
+
+IDEA_LANDINGS = "idea_landings"
+
+
+def _trailer_block(message: str) -> str:
+    """The trailer block only: the run of paragraphs at the END of the
+    message whose every line is `Key: value` shaped. Same rule as the
+    reconciler's gitevidence.trailer_block — a commit that DISCUSSES the
+    convention in its body must not read as one that CARRIES it (a body
+    explaining `Gap-Id:` would otherwise resolve a gap). Walks back over
+    consecutive all-trailer paragraphs so a `Gap-Id` above the
+    `Co-Authored-By` block still counts; stops at the first prose line."""
+    paragraphs = re.split(r"\n[ \t]*\n", message)
+    kept: list[str] = []
+    for para in reversed(paragraphs):
+        lines = [ln for ln in para.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        if not all(_TRAILER_LINE_RE.match(ln) for ln in lines):
+            break
+        kept.insert(0, "\n".join(lines))
+    return "\n".join(kept)
 
 
 def _commits_in_range(checkout: str, before: str, after: str) -> list[tuple[str, str]]:
@@ -546,10 +573,15 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
     back to the gap that motivated it, so a seat orienting on ``gap_list``
     re-derives fixed problems and warns operators off working mechanisms.
     This is the reader for the join key: for each range the sweep brought
-    home, read the merged commits' trailers and call ``gap_resolve`` with
-    ``merged <repo>@<sha>`` as the note. ``Idea-Id:`` trailers are collected
-    into the receipt only — that is the reconciler's prospective tier, and
-    nothing here writes to it yet.
+    home, read the merged commits' trailer blocks and call ``gap_resolve``
+    with ``merged <repo>@<sha>`` as the note.
+
+    ``Idea-Id:`` trailers (the reconciler's ``willow-ideas-NNN``) land as
+    one ``idea_landings`` record each — ``{idea_id, status, repo, sha,
+    merged_at}`` under record id ``<idea_id>:<sha12>`` so a re-run
+    overwrites rather than duplicates. The reconciler itself keeps reading
+    git (stdlib-only, by design); this record is the desk's timestamped
+    view of the same landing, the moment it merges, without a git walk.
 
     Idempotent per (gap, sha) through the state file: a gap moves into
     ``gaps_resolved[gap_id] = repo@sha`` only when the tool answered without
@@ -578,19 +610,27 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
             unreadable.append({"repo": repo, "error": str(exc)[:300]})
             continue
         for sha, message in commits:
-            for gap_id in _GAP_ID_RE.findall(message):
+            trailers = _trailer_block(message)
+            for gap_id in _GAP_ID_RE.findall(trailers):
                 found.append({"gap_id": gap_id.lower(), "repo": repo, "sha": sha})
-            for idea_id in _IDEA_ID_RE.findall(message):
-                ideas.append({"idea_id": idea_id, "repo": repo, "sha": sha})
+            status_m = _IDEA_STATUS_RE.search(trailers)
+            status = status_m.group(1).lower() if status_m else "landed"
+            seen: set[str] = set()
+            for idea_id in _IDEA_ID_RE.findall(trailers):
+                idea_id = idea_id.lower()
+                if idea_id in seen:
+                    continue  # one commit repeating an id is one claim
+                seen.add(idea_id)
+                ideas.append({"idea_id": idea_id, "status": status, "repo": repo, "sha": sha})
     receipt["ideas"] = ideas
     if unreadable:
         receipt["unreadable"] = unreadable
     if not enable_mcp:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no gap_resolve",
-                       found=found, resolved=[], refused=[])
+                       found=found, resolved=[], refused=[], ideas_stored=[])
         return _emit(receipt)
-    if not found:
-        receipt.update(status="ok", resolved=[], refused=[])
+    if not found and not ideas:
+        receipt.update(status="ok", resolved=[], refused=[], ideas_stored=[])
         return _emit(receipt)
 
     from willow_bot.steward import mcp_client
@@ -600,6 +640,29 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
     state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
     already = dict(state.get("gaps_resolved") or {})
     resolved, refused, skipped = [], [], []
+
+    # Ideas first: a landing record is a write with no side effect beyond
+    # itself, and it must not be lost behind a refused gap_resolve.
+    ideas_stored, ideas_refused = [], []
+    for idea in ideas:
+        record_id = f"{idea['idea_id']}:{idea['sha'][:12]}"
+        args = {
+            "app_id": app, "collection": IDEA_LANDINGS, "record_id": record_id, "deviation": 0,
+            "record": {**idea, "merged_at": receipt["at"], "source": "willow-bot-steward"},
+        }
+        try:
+            result = mcp_client.call("store_put", args)
+        except Exception as exc:  # noqa: BLE001 — a refused landing is a line with its reason
+            ideas_refused.append({"record_id": record_id, "error": str(exc)[:300]})
+            continue
+        err = _tool_error(result)
+        if err:
+            ideas_refused.append({"record_id": record_id, "error": err})
+            continue
+        ideas_stored.append(record_id)
+    receipt["ideas_stored"] = ideas_stored
+    if ideas_refused:
+        receipt["ideas_refused"] = ideas_refused
     for item in found:
         gap_id, where = item["gap_id"], f"{item['repo']}@{item['sha']}"
         if already.get(gap_id) == where:
