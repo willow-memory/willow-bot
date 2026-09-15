@@ -28,11 +28,16 @@ def _sign(body: bytes, secret: str = WEBHOOK_SECRET) -> str:
 
 @pytest.fixture
 def bot_app(tmp_path, monkeypatch):
-    """Import bot.py in a per-test environment. The module resolves
-    credentials at import (fail-fast on unsigned start), so we prime the
-    env, write a stub PEM, and force a fresh import per test — otherwise
-    a first-test import binds `_SECRET` and every later test sees stale
-    state."""
+    """Prime the env with a stub PEM and secret, import bot.py, and hand
+    back a TestClient. Credentials are LAZY (bot._cred()), so the module
+    imports without touching the vault — but the first request through
+    `_verify_signature` resolves them, so per-test env still matters.
+    Between tests, `bot.reset_credential_cache()` drops the cached
+    BotCredentials so the next test sees its own WEBHOOK_SECRET.
+
+    The delivery-seen LRU is captured at call time from state_path(), so
+    a per-test WILLOW_HOME already isolates it — no module reload needed.
+    """
     pem = tmp_path / "willow-bot.pem"
     pem.write_text("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n")
 
@@ -43,18 +48,11 @@ def bot_app(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", str(pem))
     monkeypatch.delenv("WILLOW_BOT_DELIVERY_STATE", raising=False)
 
-    # Ensure a clean import: the app-scoped state (_SECRET, seen-cache path)
-    # is captured at module load, so a leaked import from another test
-    # would test the wrong secret / the wrong LRU location.
-    for mod in ("bot", "willow_bot.delivery_dedup"):
-        sys.modules.pop(mod, None)
-
-    # Make sure the working directory is on sys.path so `import bot` finds
-    # the top-level bot.py, not a package inside willow_bot/.
     repo_root = Path(__file__).resolve().parents[1]
     monkeypatch.syspath_prepend(str(repo_root))
 
     bot = importlib.import_module("bot")
+    bot.reset_credential_cache()  # each test re-resolves from its own env
     from fastapi.testclient import TestClient
 
     # Silence the outbound "post comment" call — this test does not exercise
@@ -81,6 +79,35 @@ def _post(client, body: dict, *, event: str = "pull_request", delivery: str = "d
         return resp.status_code, resp.json()
     except Exception:  # noqa: BLE001
         return resp.status_code, {"raw": resp.text}
+
+
+def test_import_bot_does_not_resolve_credentials(tmp_path, monkeypatch) -> None:
+    """A fresh import of bot.py must succeed even when the vault has
+    NOTHING wired — no PEM, no app id, no webhook secret. The
+    credential resolve is lazy; the FIRST signature check is what
+    triggers it. This is the shape a systemd unit needs so a rotated
+    PEM does not crash the worker at import time."""
+    # Point every credential source at an empty tmp dir.
+    monkeypatch.setenv("WILLOW_HOME", str(tmp_path))
+    monkeypatch.setenv("WILLOW_VAULT_BOX", str(tmp_path))
+    monkeypatch.delenv("GITHUB_APP_ID", raising=False)
+    monkeypatch.delenv("GITHUB_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("GITHUB_APP_PRIVATE_KEY_PATH", raising=False)
+    monkeypatch.delenv("WILLOW_BOT_DELIVERY_STATE", raising=False)
+
+    repo_root = Path(__file__).resolve().parents[1]
+    monkeypatch.syspath_prepend(str(repo_root))
+    for mod in ("bot", "willow_bot.delivery_dedup"):
+        sys.modules.pop(mod, None)
+
+    # No exception at import time even though credentials.resolve would
+    # raise if called now.
+    bot = importlib.import_module("bot")
+    assert bot.app is not None
+    # And a resolve, if forced, would fail — proving the import path
+    # never touched it.
+    with pytest.raises(RuntimeError):
+        bot._cred()
 
 
 def test_first_delivery_dispatches(bot_app) -> None:
@@ -143,7 +170,9 @@ def test_dedup_is_per_delivery_id_not_per_body(bot_app) -> None:
 def test_dedup_survives_a_module_reload(tmp_path, monkeypatch) -> None:
     """The LRU is on disk, so a bot process restarted between deliveries
     (systemd rolled the unit, uvicorn exited on a signal) still dedups
-    the pending redelivery when it lands."""
+    the pending redelivery when it lands. Simulated here by importing
+    bot once, posting, then re-importing after clearing sys.modules to
+    prove the state came from disk, not from a module-level cache."""
     pem = tmp_path / "willow-bot.pem"
     pem.write_text("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n")
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path))
@@ -155,16 +184,16 @@ def test_dedup_survives_a_module_reload(tmp_path, monkeypatch) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     monkeypatch.syspath_prepend(str(repo_root))
 
-    for _ in range(2):
+    for i in range(2):
         for mod in ("bot", "willow_bot.delivery_dedup"):
             sys.modules.pop(mod, None)
         bot = importlib.import_module("bot")
+        bot.reset_credential_cache()
         monkeypatch.setattr(bot.router, "route", lambda *_a, **_k: None)
         from fastapi.testclient import TestClient
         client = TestClient(bot.app)
-        # Post once with the id.
         status, body = _post(client, {"action": "opened"}, delivery="d-persistent")
-        if _ == 0:
+        if i == 0:
             assert body.get("dedup") is None  # first process: new
         else:
             assert body.get("dedup") == "delivery_seen"  # after reload: dedup

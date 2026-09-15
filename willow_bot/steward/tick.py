@@ -608,6 +608,95 @@ def run_catchup(*, enable_mcp: bool | None = None) -> dict:
     return _emit(receipt)
 
 
+# ── the install step: refresh editable installs after a sweep ────────────────
+
+
+def _default_branch_for(checkout: str) -> str | None:
+    """Read the checkout's remote HEAD symref (``refs/remotes/origin/HEAD``)
+    and return the branch name it points at. Git sets this when a repo is
+    cloned (``origin/HEAD -> origin/main``); a checkout that was ``git
+    init``-ed and later added a remote will not have it and returns None.
+    The sweep just fast-forwarded whatever this points to, so it is the
+    right branch to pass to ``refresh_editable``."""
+    if not checkout:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", checkout, "symbolic-ref", "--short",
+             "refs/remotes/origin/HEAD"],
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    v = proc.stdout.strip()
+    if v.startswith("origin/"):
+        v = v[len("origin/"):]
+    return v or None
+
+
+def run_install_receipts(sweep: dict | None = None) -> dict:
+    """Refresh the editable install of each checkout the sweep brought home.
+
+    Gap ``1f6b033ffca7`` (bot half). The old path was ``merge.py``'s
+    ``sync_checkout``: for every merged PR the bot checked out
+    ``default_branch`` (yanking an agent off their feature branch),
+    ``git pull``-ed (a diverged local turned into a merge commit),
+    and ran ``pip install -e .`` (returning ``skip`` or ``ok``, no
+    distinct name for the tree it should not have touched).
+
+    ``willow_bot.install_receipt.refresh_editable`` replaces the yanks
+    with distinct states — ``missing_checkout``, ``dirty``,
+    ``on_feature_branch``, ``fetch_failed``, ``diverged``, ``ahead``,
+    ``install_failed``, ``ok`` — and never switches branches or
+    resolves a merge conflict. This step is the wiring: for each range
+    the sweep pulled (``ok=True and pulled=True`` in the swept list),
+    read the checkout's ``origin/HEAD`` for the default branch, then
+    call ``refresh_editable``. Every receipt lands in the tick log.
+
+    Never runs on a range the sweep did not pull — a flag that landed
+    on a fresh branch (no ``before``) has no commits to refresh
+    against, and the state file's ``merged_synced`` already remembers
+    what came home. Honest absence when the sweep brought nothing
+    home; the seat reading a receipt file with an empty ``receipts``
+    array knows there was nothing to install.
+    """
+    from willow_bot import install_receipt as install_mod
+
+    receipt: dict = {
+        "event": "steward_install",
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    ranges = list((sweep or {}).get("ranges") or [])
+    receipt["ranges"] = len(ranges)
+    if not ranges:
+        receipt.update(status="ok", receipts=[], detail="nothing came home")
+        return _emit(receipt)
+
+    receipts_out: list[dict] = []
+    for rng in ranges:
+        checkout = rng.get("checkout") or ""
+        repo = rng.get("repo") or ""
+        entry: dict = {"repo": repo, "checkout": checkout}
+        branch = rng.get("default_branch") or _default_branch_for(checkout)
+        if not branch:
+            entry.update(state="unknown_default_branch",
+                         detail="could not read origin/HEAD; install refused")
+            receipts_out.append(entry)
+            continue
+        try:
+            r = install_mod.refresh_editable(Path(checkout), branch)
+        except Exception as exc:  # noqa: BLE001 — one bad checkout is a line, not a dead step
+            entry.update(state="error", detail=str(exc)[:300])
+            receipts_out.append(entry)
+            continue
+        entry.update(r)
+        receipts_out.append(entry)
+    receipt.update(status="ok", receipts=receipts_out)
+    return _emit(receipt)
+
+
 def run_sweep(*, enable_mcp: bool | None = None) -> dict:
     """The act half of a tick: ask the broker to bring merges home.
 
@@ -892,12 +981,20 @@ def run_loop(interval_s: float = 300.0) -> int:
             sweep = run_sweep()
         except Exception as exc:  # noqa: BLE001
             print(json.dumps({"event": "error", "detail": f"sweep: {exc}"}), flush=True)
+        # voice runs LAST — after ci and audit have written the state the
+        # label reconciler reads. If both ran clean, voice sees fresh
+        # audit_dispatched; if either raised, voice reconciles what state
+        # it can see and the next tick picks up what changed.
+        from willow_bot.steward.voice import run_voice
+
         for name, step in (
             ("resolve", lambda: run_resolve(sweep)),
+            ("install", lambda: run_install_receipts(sweep)),
             ("mirror", run_mirror),
             ("ci", run_ci),
             ("catchup", run_catchup),
             ("audit", run_audit),
+            ("voice", run_voice),
         ):
             try:
                 step()
@@ -938,6 +1035,15 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "catchup":
         run_catchup()
         return 0
+    if args[0] == "install-receipts":
+        # Sweep then install, as the loop does — install alone has no ranges.
+        run_install_receipts(run_sweep())
+        return 0
+    if args[0] == "voice":
+        from willow_bot.steward.voice import run_voice
+
+        run_voice()
+        return 0
     if args[0] == "status":
         from willow_bot import status
 
@@ -959,7 +1065,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|mirror|ci|catchup|audit|status|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|catchup|audit|voice|status|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2

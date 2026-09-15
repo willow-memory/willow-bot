@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- **Steward tick reconciles owned-prefix labels on every open PR.**
+  New `willow_bot/steward/voice.py` exposes `run_voice(state)` that
+  reads the tick's state file, maps `audit_dispatched[repo#pr]` →
+  `willow-bot/audit-dispatched`, and calls the label reconciler
+  (`pr_labels.reconcile_labels`) for each open PR — including PRs with
+  an empty desired set, so stale owned labels are cleaned up. Wired
+  into the loop after `run_ci` and `run_audit` (so voice sees fresh
+  state) and exposed as the CLI subcommand `willow-bot-steward voice`.
+  Idempotent: an unchanged desired set is a network no-op inside the
+  primitive (only a GET). Per-PR failures surface in `refused` while
+  successful reconciles still land; `status` reflects the mix
+  (`ok` / `partial` / `could-not-run`). Twelve unit tests cover
+  parse_key edge cases, audit_dispatched mapping, per-PR reconcile
+  outcomes, partial vs. all-fail status, garbled open keys, empty open
+  set, jsonl append, and state-file fallback when no arg is passed.
+  This closes the caller side of gap `acfd27ae3259`.
+
+  `ci_filed` → `ci-red` label mapping is stubbed pending a shape update
+  (the current `ci_filed` key is `head_sha:check_run_id`, without a PR
+  index). `pr_voice` comment + `pr_voice.publish_check` wiring is left
+  for a follow-on that carries a head SHA through the state.
+
 ### Fixed
 
 - **Webhook boundary dedups on `X-GitHub-Delivery`.** `bot.py`'s webhook
@@ -67,6 +91,29 @@ All notable changes to this project are documented here.
   PR, per-repo error line, cursor rotation across ticks, a partial-page
   PR shape not crashing, the receipt landing in `steward_ticks.jsonl`,
   CLI wiring, and `catchup → audit` loop ordering.
+- **Tick step: refresh each pulled checkout's editable install.** New
+  `willow_bot.steward.tick.run_install_receipts(sweep)` reads the ranges
+  the sweep brought home and calls
+  `willow_bot.install_receipt.refresh_editable(Path(checkout), default_branch)`
+  for each. Wired into `run_loop` between `resolve` and `mirror` — a
+  merge that arrives via `gitsync_sweep` now has its editable install
+  refreshed in the same tick, without a human's credential on the box.
+  The default branch is read from the checkout's `origin/HEAD` symref
+  (set by `git clone`); a checkout with no symref (fresh `git init`,
+  remote added later) is refused as `unknown_default_branch` rather
+  than guessed as `main`, so a repo defaulting to `master` cannot be
+  yanked off it. One range raising is a per-entry `state="error"` line,
+  not a dead step. New CLI subcommand `willow-bot-steward install-receipts`
+  runs a sweep and then the install step, mirroring `resolve`. Eleven
+  unit tests cover the empty-sweep-is-honest-ok path, a real git clone
+  landing on `install=skipped` (no `.venv`), `origin/HEAD` read, a
+  supplied `default_branch` short-circuiting the read, a missing checkout,
+  an `origin/HEAD`-absent clone, a raised exception per range, receipts
+  landing in `steward_ticks.jsonl`, CLI wiring, and loop ordering
+  (resolve → install → mirror). Deprecates `willow_bot.steward.merge.sync_checkout`,
+  which stays on disk for one prove window behind `WILLOW_BOT_STEWARD_HOST_SYNC=1`
+  and is scheduled for removal once the receipts land against a live
+  merge. Gap `1f6b033ffca7` (bot half, wiring).
 - **Merged-release install receipt.** New
   `willow_bot/install_receipt.py` exposes `refresh_editable(repo_dir,
   default_branch, *, remote="origin", do_install=True)` — brings a
