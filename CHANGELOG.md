@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Steward inbox consumes `check_run` items.** `willow_bot/steward/inbox.py`
+  returned early on any item whose `kind` was not `pull_request`, so every
+  completed check `fleet_bridge.handle` deposited (keyed on the check id,
+  not the PR number — a PR with four legs left four items) accumulated in
+  `$WILLOW_HOME/upstream_steward/webhook_inbox/` unread. The tick's journal
+  therefore never named a red leg, and the ci step's deposit-file reader
+  was the only path a seat could learn a check went red at all. The inbox
+  step now also emits one `webhook_check_run` line per row and adds the
+  work_id to `inbox_consumed`, so redelivery is a no-op. Every terminal
+  conclusion GitHub asserts (`success`, `failure`, `timed_out`, `cancelled`,
+  `skipped`, `stale`, `neutral`, `action_required`, plus a rare `null` from
+  a completed run without a verdict) is preserved verbatim; the ci step's
+  `(head_sha, check_run_id)` dedup key is unchanged, so a red is not filed
+  twice. Rows of any other kind (`installation`, `issue_comment`) stay in
+  the inbox for a later step, not silently dropped. Closes gap 1d737ffa2595.
+
 ### Added
 
 - **Operator assignment for bot-opened PRs.** New
