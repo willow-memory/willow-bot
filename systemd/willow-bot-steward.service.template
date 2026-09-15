@@ -29,6 +29,14 @@ Environment="WILLOW_BOT_MCP_COMMAND=@VAULT_BOX@/venvs/willow-mcp/bin/python -m w
 # of the MCP SDK's minimal env, which drops anything else the env file
 # carries (NESTOR_*, for one).
 Environment=WILLOW_BOT_MCP_INHERIT_ENV=1
+# The steward speaks to its spawned server as app_id=willow (the seat), and
+# the tools gated as envelope_apply — gitsync_sweep, git_pull_execute —
+# refuse unless the server is a human-orchestrator host: the first live
+# sweep answered "orchestrator_human_required" (2026-09-15 00:28Z). This
+# is the honest short fix and it is load-bearing to say so: the right one is
+# the bot's OWN seat with envelope_apply granted (INSTALL.md, "narrow
+# steward manifest later"), at which point this line goes.
+Environment=WILLOW_HUMAN_ORCHESTRATOR=1
 Environment=WILLOW_BOT_STEWARD_INTERVAL=300
 # Non-secret overrides and the WILLOW_* the spawned server needs (PG, keyring,
 # store root) come from the same env file the webhook unit reads.
