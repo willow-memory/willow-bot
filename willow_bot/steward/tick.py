@@ -378,10 +378,21 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         receipt.update(status="ok", present=False, red=[], filed=[], detail=f"no deposits file at {src}")
         return _emit(receipt)
     off_path = _ci_offset_path()
-    offset = int(off_path.read_text().strip() or 0) if off_path.is_file() else 0
     size = src.stat().st_size
-    if offset > size:
-        offset = 0  # truncated or rotated; ci_filed keeps a re-read from filing twice
+    if off_path.is_file():
+        offset = int(off_path.read_text().strip() or 0)
+        if offset > size:
+            offset = 0  # truncated or rotated; ci_filed keeps a re-read from filing twice
+    else:
+        # First run starts at EOF, as the seal watcher does. The live file
+        # held 500+ historical rows on 2026-09-15; walking it from 0 filed
+        # three stale reds (one a test fixture) before the limiter stopped it,
+        # and would have kept filing old failures for ten ticks. A red that
+        # happened before this step existed is not this step's to raise.
+        offset = size
+        off_path.parent.mkdir(parents=True, exist_ok=True)
+        off_path.write_text(f"{offset}\n", encoding="utf-8")
+        receipt["first_run_skipped_bytes"] = size
     receipt.update(present=True, offset=offset, size=size)
 
     path = state_path()
