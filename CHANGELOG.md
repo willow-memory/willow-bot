@@ -39,6 +39,28 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Operator assignment for bot-opened PRs.** New
+  `willow_bot/pr_assign.py` exposes `assign_to_operator(repo, pr_number,
+  *, login=None)`. With no argument it reads
+  `WILLOW_OPERATOR_GITHUB_LOGIN` from the env; an unset or blank env is
+  `status="absent"` (honest absence, not error) so a fleet without an
+  operator wired does not see refusal noise. On a configured operator
+  the module hits both `POST /issues/{pr}/assignees` and `POST
+  /pulls/{pr}/requested_reviewers` — assignee and requested-reviewer
+  are independent APIs and either half succeeding on its own is worth
+  reporting. GitHub silently drops an unreachable login on
+  `/assignees` (200 with the ORIGINAL list back); the module inspects
+  the response body and reports "not in returned list — unreachable
+  login?" rather than a false success. A 422 on `/requested_reviewers`
+  (already requested or refused) is not a raise. The receipt names
+  exactly which half landed so a retry can hit only the miss:
+  `status=ok` on full success, `partial` on one-of-two,
+  `could-not-run` on both-failed. Gap `acfd27ae3259` (assignment
+  sub-part). Twelve unit tests cover env lookup edge cases,
+  absent-when-unconfigured, explicit login override, happy path,
+  review-422 as already-or-refused, unreachable login as a specific
+  line, assign failure not stopping review, auth failure, review 5xx,
+  and both-failed as could-not-run.
 - **Steward-state labels on a PR: reconcile the bot's owned namespace.**
   New `willow_bot/pr_labels.py` exposes `reconcile_labels(repo,
   pr_number, desired, owned_prefix="willow-bot/")` that brings the PR's
