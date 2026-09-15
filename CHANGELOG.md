@@ -39,6 +39,28 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Bot voice on a PR: one status comment and one bot check per head SHA.**
+  New `willow_bot/pr_voice.py` exposes two idempotent operations keyed on
+  the head SHA. `upsert_status_comment(repo, pr_number, head_sha, body)`
+  posts a comment carrying an invisible marker (`<!-- willow-bot:status
+  head=<sha> -->`); a repeat call for the same head_sha PATCHes the same
+  comment, a different head_sha (a force-push moved the world) writes a
+  new row rather than rewriting the old one. `publish_check(repo,
+  head_sha, name, status, conclusion, output, external_id)` creates or
+  updates one App-owned check-run for that (head_sha, name); the GET
+  filters `filter=app&check_name=NAME` server-side so two apps sharing a
+  name on the same sha do not confuse the upsert. Both operations key on
+  the marker / on `(check_run.id, filter=app)`, never on a login — the
+  bot has been renamed twice and a login string was wrong on both sides
+  of each rename. Validation before the network: a `completed` check
+  without a valid `conclusion`, a conclusion on a non-terminal check, or
+  a missing `head_sha` are refused with a receipt line, no POST. An HTTP
+  or auth failure is likewise a `could-not-run` receipt line, not a
+  raise. Gap `acfd27ae3259` (voice sub-part). Seventeen unit tests cover
+  marker uniqueness, first-call create vs update-on-marker, distinct
+  head_shas writing side by side, paginated comment walk, refuse-before-
+  POST for every invalid check shape, auth-failure receipts, and HTTP
+  failure receipts.
 - **Resolve step lands `Idea-Id` trailers as `idea_landings` records and
   reads trailers the reconciler's way.** Each `Idea-Id: willow-ideas-NNN`
   (the reconciler's own id shape, `reconciler/ids.py`) found on a merged
