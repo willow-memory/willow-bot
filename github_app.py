@@ -103,6 +103,42 @@ def _auth_headers(repo_full_name: str) -> dict:
     }
 
 
+def list_open_pulls(repo_full_name: str, *, per_page: int = 100, max_pages: int = 5) -> list[dict]:
+    """List every open pull request in ``repo_full_name`` under the App's
+    install token — the same auth path ``post_comment`` uses.
+
+    Returns the parsed JSON list. Paginates up to ``max_pages`` pages of
+    ``per_page`` each (default 500 PRs, which is well past any repo we
+    watch; if a repo runs past that, the receipt reader can see it as
+    ``count >= 500`` and raise it separately). Raises on HTTP error so
+    the caller (the tick's catch-up step) can record the reason in its
+    receipt and try again next tick.
+
+    Rate limit: an App-authenticated request costs one against the
+    installation's 5000/hr budget. Called from the catch-up step at
+    3-repo × 12-tick = 36 requests/hr, this is <1% of that.
+    """
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — cannot list_open_pulls")
+    headers = _auth_headers(repo_full_name)
+    out: list[dict] = []
+    for page in range(1, max_pages + 1):
+        r = requests.get(
+            f"https://api.github.com/repos/{repo_full_name}/pulls",
+            headers=headers,
+            params={"state": "open", "per_page": per_page, "page": page},
+            timeout=15,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        if not isinstance(batch, list):
+            break  # a repo the App lost access to answers 404 → raise; a weird shape stops paging
+        out.extend(batch)
+        if len(batch) < per_page:
+            break
+    return out
+
+
 def post_comment(repo_full_name: str, issue_or_pr_number: int, body: str) -> bool:
     """Post a comment on an issue or PR. Returns True on success."""
     if not _configured():

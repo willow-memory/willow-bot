@@ -39,6 +39,34 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Catch-up-in-tick: repair a missed webhook next tick.** New
+  `willow_bot.steward.tick.run_catchup()` polls `/repos/{owner}/{repo}/pulls`
+  under the App's install token for a bounded batch of repos each tick,
+  reconciles the answer with `state["open"]`, and promotes any missing
+  PR to `pending_audit` under the same shape `run_once` writes — the
+  audit step in the same tick then dispatches it. A lost webhook
+  (Pangolin restart mid-delivery, systemd roll while a POST was in
+  flight, proxy dropping the body) is now closed on the next tick,
+  bounded by the tick interval rather than by an operator noticing.
+  Repos are discovered from every state key that has ever carried a
+  `repo#pr` (`open`, `seen`, `merged_synced`, `pending_audit`,
+  `audit_dispatched`) plus a `WILLOW_BOT_CATCHUP_EXTRA_REPOS`
+  comma-separated env for repos the App is on but state has not seen
+  yet. A cursor (`state["catchup_cursor"] = {next_index,
+  last_polled_at, batch}`) rotates the polling — three repos per tick
+  by default, 36 requests/hour under the App installation's 5000/hr
+  budget. Idempotent per (repo, PR) through the same guards as
+  `run_once`. Honest absence when MCP is off — this is an act-half
+  read. New `github_app.list_open_pulls(repo, per_page, max_pages)`
+  underlies the poll, using the same JWT + install-token machinery
+  `post_comment` already uses. New CLI subcommand
+  `willow-bot-steward catchup`. Thirteen unit tests cover the
+  absent-when-off path, no-repos-is-honest-ok, discovery from every
+  state key, extras-env, a missed PR promoting to pending_audit, no
+  duplicate on race with a webhook, no re-pend of an already-dispatched
+  PR, per-repo error line, cursor rotation across ticks, a partial-page
+  PR shape not crashing, the receipt landing in `steward_ticks.jsonl`,
+  CLI wiring, and `catchup → audit` loop ordering.
 - **Merged-release install receipt.** New
   `willow_bot/install_receipt.py` exposes `refresh_editable(repo_dir,
   default_branch, *, remote="origin", do_install=True)` — brings a
