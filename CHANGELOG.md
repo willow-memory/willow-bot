@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Webhook boundary dedups on `X-GitHub-Delivery`.** `bot.py`'s webhook
+  handler now consults `willow_bot.delivery_dedup.mark_seen(delivery_id)`
+  before dispatching. A redelivery (operator-triggered replay, GitHub's
+  own retry after a non-2xx, a proxy handing the same body to two
+  instances) short-circuits with `{"ok": true, "dedup": "delivery_seen"}`
+  and does not re-run `router.route` or `fleet_bridge.handle`. Without
+  the guard `event-log.jsonl` and `ci_outcomes.jsonl` (pure-append
+  journals) took a duplicate row on every retry, and `quips.record_merge`
+  double-counted a merge. The upstream_steward inbox and the gitsync
+  trigger flag were already semantic-idempotent — this closes the
+  journal/counter gap at the boundary. A bounded LRU (5000 delivery ids,
+  atomic-rename JSON under `$WILLOW_HOME/willow-bot/delivery-seen.json`)
+  survives a restart, so a redelivery landing after a systemd roll still
+  dedups. Fails open on a disk error — a broken cache does not drop real
+  deliveries. Gap acfd27ae3259 (webhook idempotency sub-part).
+
 ### Added
 
 - **Resolve step lands `Idea-Id` trailers as `idea_landings` records and
