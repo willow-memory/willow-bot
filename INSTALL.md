@@ -20,7 +20,9 @@ python3 -m venv .venv
 Canonical checkout: `~/github/willow-memory/willow-bot`. The workshop clone is a
 stale second home — do not point the unit or Kart bind at it.
 
-Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `mirror` | `ci` | `audit` | `inbox` | `scan`).
+Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `mirror` | `ci` | `audit` | `status` | `inbox` | `scan`).
+
+`status` prints one JSON receipt for the seat, with three-state fields (`populated` / `empty` / `unreachable`) — an unreadable journal is not "unit absent". See `willow_bot/status.py`.
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
@@ -83,6 +85,13 @@ CI draft deposits land under `$WILLOW_HOME/willow-bot/deposits/ci_outcomes.jsonl
 (and `store_put` collection `willow_bot_ci_deposits` when MCP is on). Dew stays on Kart.
 
 Legacy env names `LOKI_PR_WATCH_*` still work during prove; prefer `WILLOW_BOT_STEWARD_*`.
+
+Additional env vars (all optional):
+
+| Env | Purpose | Default |
+|-----|---------|---------|
+| `WILLOW_OPERATOR_GITHUB_LOGIN` | Assignee / requested reviewer for bot-opened PRs (`willow_bot.pr_assign`). Unset is honest-absence, not error. | unset |
+| `WILLOW_BOT_DELIVERY_STATE` | Path override for the webhook `X-GitHub-Delivery` LRU (`willow_bot.delivery_dedup`). | `$WILLOW_HOME/willow-bot/delivery-seen.json` |
 
 ## Pangolin route
 

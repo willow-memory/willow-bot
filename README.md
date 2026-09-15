@@ -9,7 +9,8 @@ Docs: [INSTALL.md](INSTALL.md) · [docs/MOVE-STAY-BORROW.md](docs/MOVE-STAY-BORR
 
 ```bash
 willow-bot              # webhook (uvicorn)
-willow-bot-steward tick # PR watch one-shot
+willow-bot-steward tick    # PR watch one-shot
+willow-bot-steward status  # read-only surface: version, tick, inbox depth, cursors
 willow-bot-steward heartbeat  # curated willow-mcp tools when WILLOW_BOT_MCP=1
 ```
 
