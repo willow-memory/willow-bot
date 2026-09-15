@@ -262,7 +262,8 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     from willow_bot.steward import mcp_client
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
-    mirrored, failed = 0, None
+    mirrored, failed, paced = 0, None, 0
+    deadline = _clock() + _MIRROR_TIME_BUDGET_S
     with src.open("rb") as fh:
         fh.seek(offset)
         while mirrored < _MIRROR_PER_TICK:
@@ -275,30 +276,53 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
             if not text:
                 offset = fh.tell()
                 continue
-            try:
-                rec = json.loads(text)
-                result = mcp_client.call("store_put", {
-                    "app_id": app, "collection": COLLECTION, "record": rec,
-                    "record_id": record_id_for(rec), "deviation": 0,
-                })
-            except Exception as exc:  # noqa: BLE001 — stop at the first failure; the offset stays before it
-                failed = str(exc)[:300]
-                break
-            err = _tool_error(result)
-            if err:
-                failed = err
+            rec = json.loads(text)
+            args = {"app_id": app, "collection": COLLECTION, "record": rec,
+                    "record_id": record_id_for(rec), "deviation": 0}
+            # willow-mcp meters every app at 60/min with a burst of 10 and
+            # answers the 11th call {"error": "rate_limited", "retry_after": N}.
+            # The first live mirror stopped there with 7 rows landed (2026-09-15
+            # 00:28Z). Pace instead: wait what the limiter asks, retry the same
+            # row, inside a time budget per tick — the row is never skipped.
+            while True:
+                try:
+                    result = mcp_client.call("store_put", args)
+                except Exception as exc:  # noqa: BLE001 — stop at the first failure; the offset stays before it
+                    failed = str(exc)[:300]
+                    break
+                err = _tool_error(result)
+                if err is None:
+                    break
+                if err != "rate_limited":
+                    failed = err
+                    break
+                wait = min(max(int(result.get("retry_after") or 1), 1), _MIRROR_MAX_WAIT_S)
+                if _clock() + wait > deadline:
+                    failed = f"rate_limited (paced {paced}x; time budget spent, resumes next tick)"
+                    break
+                paced += 1
+                _sleep(wait)
+            if failed is not None:
                 break
             mirrored += 1
             offset = fh.tell()
     off_path.parent.mkdir(parents=True, exist_ok=True)
     off_path.write_text(f"{offset}\n", encoding="utf-8")
-    receipt.update(
-        status="ok" if failed is None else "could-not-run",
-        mirrored=mirrored, new_offset=offset, behind=size - offset,
-    )
+    behind = size - offset
+    status = "ok" if failed is None else ("paced" if failed.startswith("rate_limited") else "could-not-run")
+    receipt.update(status=status, mirrored=mirrored, paced=paced, new_offset=offset, behind=behind)
     if failed is not None:
         receipt["detail"] = failed
     return _emit(receipt)
+
+
+# Pacing knobs, module-level so a test can shrink them. The store meters at
+# 60 calls/min per app (burst 10); ~100 rows a tick is what two minutes
+# buys once the burst is spent, and a 500-row backlog drains in five ticks.
+_MIRROR_TIME_BUDGET_S = 120.0
+_MIRROR_MAX_WAIT_S = 10
+_clock = time.monotonic
+_sleep = time.sleep
 
 
 def run_sweep(*, enable_mcp: bool | None = None) -> dict:

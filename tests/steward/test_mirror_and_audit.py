@@ -114,6 +114,73 @@ def test_a_refusal_returned_as_a_dict_is_not_counted_as_mirrored(home, monkeypat
     assert len(c.calls) == 1, "stop at the first refusal; do not burn the rest"
 
 
+class _MeteredClient:
+    """The store's token bucket, in miniature: `burst` calls succeed, then
+    `rate_limited` with retry_after until `clock` has advanced by it."""
+
+    def __init__(self, clock, burst=3, retry_after=2):
+        self.clock, self.burst, self.retry_after = clock, burst, retry_after
+        self.calls, self.window_start, self.in_window = [], clock(), 0
+
+    def __call__(self, name, inputs):
+        now = self.clock()
+        if now - self.window_start >= self.retry_after:
+            self.window_start, self.in_window = now, 0
+        self.calls.append(inputs["record_id"])
+        if self.in_window >= self.burst:
+            return {"error": "rate_limited", "retry_after": self.retry_after}
+        self.in_window += 1
+        return {"ok": True}
+
+
+def _fake_time(monkeypatch):
+    t = {"now": 1000.0}
+    monkeypatch.setattr(tick, "_clock", lambda: t["now"])
+    monkeypatch.setattr(tick, "_sleep", lambda s: t.__setitem__("now", t["now"] + s))
+    return t
+
+
+def test_mirror_paces_through_the_rate_limit_and_skips_no_row(home, monkeypatch):
+    """Planted: the live refusal. Three land, the fourth is rate_limited;
+    the mirror waits retry_after (fake clock), retries the SAME row, and
+    every row lands in order — none skipped, none duplicated."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    t = _fake_time(monkeypatch)
+    rows = [_row("o/r", "9" * 40, i) for i in range(8)]
+    for r in rows:
+        deposits.append_local(r)
+    c = _MeteredClient(lambda: t["now"], burst=3, retry_after=2)
+    _use(monkeypatch, c)
+    r = tick.run_mirror()
+    assert r["status"] == "ok" and r["mirrored"] == 8 and r["behind"] == 0
+    assert r["paced"] >= 2
+    landed = [rid for rid in c.calls]
+    # the refused record ids are retried immediately after the wait
+    ids = [deposits.record_id_for(x) for x in rows]
+    assert [rid for rid in landed if landed.count(rid) >= 1][0] == ids[0]
+    assert sorted(set(landed), key=ids.index) == ids
+
+
+def test_mirror_stops_paced_when_the_time_budget_is_spent(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    t = _fake_time(monkeypatch)
+    monkeypatch.setattr(tick, "_MIRROR_TIME_BUDGET_S", 3.0)
+    rows = [_row("o/r", "8" * 40, i) for i in range(6)]
+    for r in rows:
+        deposits.append_local(r)
+    _use(monkeypatch, _MeteredClient(lambda: t["now"], burst=2, retry_after=2))
+    r = tick.run_mirror()
+    assert r["status"] == "paced" and 2 <= r["mirrored"] < 6 and r["behind"] > 0
+    assert "resumes next tick" in r["detail"]
+    # a second tick with a fresh budget picks up exactly where it left off
+    _fake_time(monkeypatch)
+    monkeypatch.setattr(tick, "_MIRROR_TIME_BUDGET_S", 120.0)
+    c2 = _MeteredClient(lambda: t["now"] + 1000, burst=10, retry_after=1)
+    _use(monkeypatch, c2)
+    r2 = tick.run_mirror()
+    assert r2["status"] == "ok" and r["mirrored"] + r2["mirrored"] == 6
+
+
 def test_every_step_leaves_a_receipt_the_seat_can_read(home, monkeypatch):
     """The journal is not readable from the seat; steward_ticks.jsonl is."""
     monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
