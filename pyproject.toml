@@ -33,7 +33,12 @@ dependencies = [
 # Grove Loki semantic path needs Nestor; install separately (PyPI forbids direct URL deps):
 #   pip install "nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master"
 mcp = ["mcp>=1.0,<3"]
-dev = ["pytest>=8"]
+# `httpx` is what `starlette.testclient.TestClient` uses for its in-process
+# transport; the newer starlette imports `httpx2 as httpx` first and falls
+# back to `httpx`, so either one satisfies the requirement. Without it the
+# webhook boundary tests raise `RuntimeError: … requires the httpx2 package`
+# — they need TestClient to exercise `bot.py`'s FastAPI handler end-to-end.
+dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
 willow-bot = "willow_bot.cli:webhook_main"
