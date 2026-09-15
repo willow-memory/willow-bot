@@ -6,7 +6,7 @@ Researched 2026-09-12. Core assembly: Apache-2.0 / MIT / BSD only (no LGPL/GPL).
 
 | pick | SPDX | use |
 |------|------|-----|
-| [gidgethub](https://github.com/gidgethub/gidgethub) | Apache-2.0 | Webhook HMAC + App JWT/install tokens (`sansio` / `apps`). FastAPI stays the shell. |
+| ~~[gidgethub](https://github.com/gidgethub/gidgethub)~~ | Apache-2.0 | ~~Webhook HMAC + App JWT/install tokens.~~ Considered, not adopted — see **Decisions** below. |
 | [fastapi-githubapp](https://github.com/primetheus/fastapi-githubapp) | MIT | Pattern reference only — do not hard-depend. |
 | [ghapi](https://github.com/AnswerDotAI/ghapi) | Apache-2.0 | Checks/PR REST for deposits; persist pass **and** fail. Webhook-first, poll for catch-up. |
 | [APScheduler](https://github.com/agronholm/apscheduler) | MIT | Optional named interval job for steward; else stdlib loop (already in `willow_bot.steward.tick`). |
@@ -24,3 +24,36 @@ PyGithub (LGPL), Celery/RQ stacks, Probot/Octokit as Python core, FastMCP (serve
 - HMAC over **raw** body before JSON parse (already in `bot.py`).
 - Dew clock stays on Kart (`CommitmentProactiveHook` via `run_worker_daemon`) until proven — not in this freeze.
 - Prefer official MCP SDK for prove-phase tool calls.
+
+## Decisions
+
+### gidgethub — not adopted (2026-09-15)
+
+The 2026-09-12 freeze list picked `gidgethub` for webhook HMAC + App JWT
+and install-token issuance. Three months in, `bot.py` and `github_app.py`
+ship the same coverage in stdlib + `requests`:
+
+- HMAC verification: five lines with `hmac.compare_digest`
+  (`bot._verify_signature`).
+- App JWT: eight lines with `pyjwt` (`github_app._make_jwt`).
+- Install token: one POST with a cache (`github_app._get_installation_token`).
+- Idempotent posts (comments, checks, labels, assignees): plain `requests`
+  wrapped by `willow_bot/pr_voice.py`, `willow_bot/pr_labels.py`,
+  `willow_bot/pr_assign.py`.
+
+Adopting gidgethub would trade ~30 lines of transparent code for a
+dependency with its own release cadence and a sansio/async surface the
+rest of the fleet does not use. The webhook receiver is synchronous
+FastAPI and the steward is a periodic tick — neither shape asks for
+async GitHub calls.
+
+Reconsider only when one of these holds:
+
+- A new caller needs the App's GraphQL surface (gidgethub carries it;
+  hand-rolling GraphQL over `requests` is where the line moves).
+- A rate-limit backoff / retry contract becomes worth centralizing (the
+  three primitives currently each do their own bounded retry).
+- The fleet standardizes on async I/O elsewhere — the tick is stdlib
+  today but if the sweep grows fanout, async pays for itself.
+
+Closes the gidgethub half of gap `a6c0926d7e83`.
