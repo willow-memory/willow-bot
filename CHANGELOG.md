@@ -6,6 +6,17 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Steward `ci` step: a red check reaches a seat.** `run_ci` reads
+  `deposits/ci_outcomes.jsonl` from its own byte offset (`ci.offset`) and,
+  for each new row whose conclusion is `failure` / `timed_out` / `cancelled`
+  / `startup_failure`, files one `human_required_enqueue(kind="review")`
+  naming the PR, the leg and the job URL — the bot's own deposits as the
+  only source, no lease, no `gh`. Idempotent per (head_sha, check_run_id)
+  through `ci_filed` in the state file; a refused filing holds the offset
+  and the next tick retries only what was not filed; reds are reported in
+  the receipt even with MCP off. Runs between mirror and audit and as
+  `willow-bot-steward ci`. Gap 8d1bcb2b7c02: the bot recorded two reds on
+  2026-09-14 and reported them to nobody.
 - **Steward `resolve` step: a merged commit names the gap it closed.**
   After `gitsync_sweep` brings a merge home, `run_resolve` reads the merged
   commits' `Gap-Id: <12 hex>` trailers (willows-grove INVARIANTS §11) off the
