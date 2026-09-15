@@ -50,31 +50,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from willow_bot.paths import (
+    bot_dir as _bot_dir,
+    deposits_dir as _deposits_dir,
+    webhook_inbox_dir as _inbox_dir,
+    willow_home as _willow_home,
+)
+
 
 _JOURNAL_TAIL = 5  # last N receipts included in the journal excerpt
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _willow_home() -> Path:
-    raw = os.environ.get("WILLOW_HOME", "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    return Path.home() / "sean-data-vault" / "willow-operator-box"
-
-
-def _bot_dir() -> Path:
-    return _willow_home() / "willow-bot"
-
-
-def _deposits_dir() -> Path:
-    return _bot_dir() / "deposits"
-
-
-def _inbox_dir() -> Path:
-    return _willow_home() / "upstream_steward" / "webhook_inbox"
 
 
 # ── version ──────────────────────────────────────────────────────────────
