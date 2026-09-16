@@ -5,7 +5,9 @@ Push path (replaces blind polling for installed repos):
   pull_request / issues / issue_comment / check_run
     → ~/.willow/upstream_steward/webhook_inbox/<work_id>.json
   push (default branch, local clone exists)
-    → ~/.willow/gitsync/trigger-<owner>-<repo>.flag
+    → ~/.willow/gitsync/trigger-<owner>-<repo>.flag, a JSON payload
+      {at, repo, clone, layout} — layout is "org", "flat", or "scan",
+      whichever shape of `_local_clone_path_with_layout` found the repo
 
 All events also append to ~/.willow/willow-bot/event-log.jsonl for audit.
 """
@@ -15,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -37,6 +40,44 @@ _EVENT_LOG = _WILLOW_HOME / "willow-bot" / "event-log.jsonl"
 _INBOX = _WILLOW_HOME / "upstream_steward" / "webhook_inbox"
 _GITSYNC_TRIGGERS = _WILLOW_HOME / "gitsync"
 _GIT = shutil.which("git") or "/usr/bin/git"
+
+# GitHub's own grammar for `owner/name`: ASCII alphanumerics, `-`, `_`, `.`;
+# neither side empty; a name never starts with `.` (so `..` cannot appear
+# as a whole component). `repository.full_name` is the only payload field
+# that becomes part of a filesystem path here (the trigger flag and the
+# clone lookup), so it is checked against this once, at the edge, and an
+# unexpected shape drops the event rather than reaching a path expression.
+# The HMAC check in bot.py already says the payload is GitHub's; this says
+# the value is a repo name and nothing else.
+_REPO_FULL_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]*)/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+
+
+def _valid_repo_full_name(value: object) -> str:
+    """The `owner/name` if it matches GitHub's grammar, else "" — never a
+    partially cleaned string. Length capped at what GitHub allows (39 + 1 +
+    100) so a pathological value cannot become a long filename either."""
+    if not isinstance(value, str) or len(value) > 140:
+        return ""
+    return value if _REPO_FULL_NAME_RE.match(value) else ""
+
+
+def _contained(root: Path, *parts: str) -> Path | None:
+    """`root/<parts...>` as a normalized path, or None when the join would
+    leave `root`. The belt to the regex's braces: every path built from a
+    repo name goes through here, and the value returned — not the parts —
+    is what touches the filesystem. Shaped as normpath + prefix check on
+    the same string so the containment is visible to a taint analysis
+    (CodeQL py/path-injection) rather than only to a reader."""
+    base = os.path.normpath(str(root))
+    full = os.path.normpath(os.path.join(base, *parts))
+    if full != base and not full.startswith(base + os.sep):
+        return None
+    return Path(full)
+
+
+def _under(root: Path, candidate: Path) -> bool:
+    """True only when `candidate` normalizes to a path inside `root`."""
+    return _contained(root, os.path.relpath(str(candidate), str(root))) is not None
 
 
 def _now() -> str:
@@ -64,9 +105,26 @@ def _local_clone_path(repo_full_name: str) -> Path | None:
     trigger was ever written for an org-layout repo), then the flat
     ``<root>/<name>``, then a scan of ``<root>/*``. Verified by origin URL
     in every case, never by folder name alone.
+
+    A thin wrapper over `_local_clone_path_with_layout` for callers that
+    only need the path, not which layout matched.
     """
-    if "/" not in repo_full_name:
-        return None
+    path, _layout = _local_clone_path_with_layout(repo_full_name)
+    return path
+
+
+def _local_clone_path_with_layout(repo_full_name: str) -> tuple[Path | None, str | None]:
+    """Same lookup as `_local_clone_path`, but also names which layout
+    matched: ``"org"`` (``<root>/<owner>/<name>``), ``"flat"``
+    (``<root>/<name>``), or ``"scan"`` (the local folder name differs
+    from both — the remote was found only by walking `<root>/*` and
+    matching origin). ``(None, None)`` when nothing matches. The caller
+    (`_request_gitsync`) puts the layout in the trigger payload so the
+    sweep can report which shape found the repo.
+    """
+    repo_full_name = _valid_repo_full_name(repo_full_name)
+    if not repo_full_name:
+        return None, None
     owner, name = repo_full_name.split("/", 1)
     target = f"{owner}/{name}".lower()
 
@@ -89,22 +147,25 @@ def _local_clone_path(repo_full_name: str) -> Path | None:
 
     # Fast paths: the org layout first, then a flat folder named after the
     # repo (often lowercase locally).
-    for candidate in (
-        _GITHUB_ROOT / owner / name,
-        _GITHUB_ROOT / owner / name.lower(),
-        _GITHUB_ROOT / name,
-        _GITHUB_ROOT / name.lower(),
+    for layout, parts in (
+        ("org", (owner, name)),
+        ("org", (owner, name.lower())),
+        ("flat", (name,)),
+        ("flat", (name.lower(),)),
     ):
+        candidate = _contained(_GITHUB_ROOT, *parts)
+        if candidate is None:
+            continue
         if (candidate / ".git").is_dir() and _matches_origin(candidate):
-            return candidate
+            return candidate, layout
 
     # Slow path: local folder name differs from remote (e.g. willow → rudi193-cmd/Willow).
     if not _GITHUB_ROOT.is_dir():
-        return None
+        return None, None
     for child in _GITHUB_ROOT.iterdir():
         if child.is_dir() and (child / ".git").is_dir() and _matches_origin(child):
-            return child
-    return None
+            return child, "scan"
+    return None, None
 
 
 def _queue_upstream(item: dict) -> None:
@@ -118,18 +179,31 @@ def _queue_upstream(item: dict) -> None:
 
 
 def _request_gitsync(repo_full_name: str) -> None:
-    clone = _local_clone_path(repo_full_name)
+    repo_full_name = _valid_repo_full_name(repo_full_name)
+    if not repo_full_name:
+        log.warning("gitsync skip: repository.full_name is not a repo name")
+        return
+    clone, layout = _local_clone_path_with_layout(repo_full_name)
     if not clone:
         log.info("gitsync skip: no local clone for %s (git=%s)", repo_full_name, _GIT)
         return
     _GITSYNC_TRIGGERS.mkdir(parents=True, exist_ok=True)
-    flag = _GITSYNC_TRIGGERS / f"trigger-{repo_full_name.replace('/', '-')}.flag"
-    flag.write_text(_now() + "\n", encoding="utf-8")
-    log.info("gitsync trigger: %s → %s", repo_full_name, clone)
+    owner, name = repo_full_name.split("/", 1)
+    flag = _contained(_GITSYNC_TRIGGERS, f"trigger-{owner}-{name}.flag")
+    if flag is None:
+        log.warning("gitsync skip: trigger path for %s escapes %s", repo_full_name, _GITSYNC_TRIGGERS)
+        return
+    payload = {"at": _now(), "repo": repo_full_name, "clone": str(clone), "layout": layout}
+    flag.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    log.info("gitsync trigger: %s (%s layout) → %s", repo_full_name, layout, clone)
 
 
 def _repo(payload: dict) -> str:
-    return (payload.get("repository") or {}).get("full_name", "")
+    """`repository.full_name` if it is a well-formed `owner/name`, else "".
+    Validated here, at the one place the payload's repo name enters this
+    module, so every path built from it downstream starts from a checked
+    value (CodeQL py/path-injection on willow-bot #28)."""
+    return _valid_repo_full_name((payload.get("repository") or {}).get("full_name", ""))
 
 
 def _sender_type(payload: dict) -> str:

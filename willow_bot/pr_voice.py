@@ -42,6 +42,10 @@ log = logging.getLogger("willow-bot.pr_voice")
 COMMENT_MARKER_PREFIX = "<!-- willow-bot:status head="
 COMMENT_MARKER_SUFFIX = " -->"
 
+# The name of the bot's own check-run, one per head SHA. A single call
+# site so a rename lands in one place; `steward.voice` is the only caller.
+CHECK_NAME = "willow-bot/steward"
+
 
 def comment_marker(head_sha: str) -> str:
     """The idempotency marker embedded in the comment body. A single call

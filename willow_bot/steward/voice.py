@@ -8,8 +8,9 @@ shipped the operations; this step decides — for each PR the tick tracks
 Mapping (state → desired labels under ``willow-bot/``):
 
 - ``audit_dispatched[repo#pr]`` present → ``willow-bot/audit-dispatched``
-- any ``ci_filed[…]`` entry whose stored ``where`` is ``repo#pr`` →
-  ``willow-bot/ci-red``
+- the PR's latest head_sha (from ``webhook_signals``, same lookup the
+  voice step uses) has any ``ci_filed`` key with that ``head_sha:``
+  prefix → ``willow-bot/ci-red``
 
 A PR carrying neither state converges to the empty owned set on the next
 tick (i.e. the reconciler removes stale owned labels). Labels a human or
@@ -31,8 +32,17 @@ comment and leaves the old one, while a repeat tick against the same
 head_sha updates the same comment in place. The body states the bot's
 view only: whether an audit was dispatched, whether any CI red legs are
 filed for that sha (``ci_filed`` keys are ``head_sha:check_run_id``), and
-the tick time. This step does NOT publish a check-run or commit status —
-comment only; that is a separate integration.
+the tick time.
+
+Voice sub-part, third half: for the same (repo, pr, head_sha) this step
+also publishes one bot check-run via ``willow_bot.pr_voice.publish_check``
+— ``willow_bot.pr_voice.CHECK_NAME``, upserted per head_sha exactly like
+the comment (``publish_check`` GETs by ``(head_sha, name, filter=app)``
+before deciding POST vs PATCH, so a re-run against the same sha never
+opens a second check). The conclusion is the bot's own view, in this
+order: ``failure`` when a red leg is filed for this sha; else ``success``
+when the audit is dispatched or was never required; else ``neutral`` when
+the audit is still pending and nothing else is known yet.
 """
 from __future__ import annotations
 
@@ -75,15 +85,15 @@ def _desired_labels_by_pr(state: dict) -> dict[str, set[str]]:
             continue
         desired.setdefault(key, set()).add(pr_labels.LABEL_AUDIT_DISPATCHED)
 
-    for filed_key, _item_id in (state.get("ci_filed") or {}).items():
-        # `ci_filed` keys are `head_sha:check_run_id`; the derived where
-        # (`repo#pr` or `repo@sha`) is not stored. Rebuild the mapping
-        # from the deposits file's `pr_number` field is expensive; the
-        # simpler path is to iterate the tick's `open` set and check
-        # whether ANY ci_filed entry belongs to that PR. That would need
-        # per-PR indexing we do not maintain yet. So this step's ci-red
-        # coverage is limited to what a future ci_filed shape carries.
-        _ = filed_key  # placeholder; ci-red mapping lands with the shape update
+    # `ci_filed` keys are `head_sha:check_run_id`; the PR they belong to
+    # is not stored there. `_latest_head_sha_by_pr` gives the other half
+    # of the join (repo#pr -> its current head_sha, from webhook_signals),
+    # so a PR gets `ci-red` exactly when a `ci_filed` key carries its
+    # latest head_sha's prefix.
+    for key, head_sha in _latest_head_sha_by_pr(state).items():
+        if _ci_red_legs_for_sha(state, head_sha):
+            desired.setdefault(key, set()).add(pr_labels.LABEL_CI_RED)
+
     return desired
 
 
@@ -134,6 +144,36 @@ def _status_comment_body(key: str, head_sha: str, state: dict, *, at: str) -> st
     )
 
 
+def _audit_state_ok(key: str, state: dict) -> bool:
+    """True when this PR's audit posture is settled: dispatched already,
+    or never queued for one. False only when the PR sits in
+    `pending_audit` with no matching `audit_dispatched` entry yet — an
+    audit is required and has not happened."""
+    if key in (state.get("audit_dispatched") or {}):
+        return True
+    pending_keys = {
+        p.get("repo_pr") for p in (state.get("pending_audit") or []) if isinstance(p, dict)
+    }
+    return key not in pending_keys
+
+
+def _check_conclusion(key: str, head_sha: str, state: dict) -> str:
+    """The bot's check-run conclusion for this (PR, head_sha), in order:
+
+    - ``failure`` — a red leg is filed for this sha (any `ci_filed` key
+      with the `head_sha:` prefix), regardless of audit state.
+    - ``success`` — no red leg, and the audit is dispatched or was never
+      required (`_audit_state_ok`).
+    - ``neutral`` — no red leg, but the audit is still pending — nothing
+      is known yet.
+    """
+    if _ci_red_legs_for_sha(state, head_sha):
+        return "failure"
+    if _audit_state_ok(key, state):
+        return "success"
+    return "neutral"
+
+
 def run_voice(
     state: dict | None = None,
     *,
@@ -143,19 +183,21 @@ def run_voice(
     upsert one status comment per PR that has a known head_sha.
 
     Reads the state file (or the passed-in dict), builds the desired
-    label set per PR from `audit_dispatched` (and, when the shape lands,
-    `ci_filed` per-PR indexing), and calls `pr_labels.reconcile_labels`
-    for each open PR. Separately, for each open PR whose latest
-    `webhook_pr` signal carries a `head_sha`, calls
-    `pr_voice.upsert_status_comment` with the bot's terse view. Returns a
-    receipt with per-PR outcome for both.
+    label set per PR from `audit_dispatched` and `ci_filed` (joined
+    through the PR's latest head_sha), and calls
+    `pr_labels.reconcile_labels` for each open PR. Separately, for each
+    open PR whose latest `webhook_pr` signal carries a `head_sha`, calls
+    `pr_voice.upsert_status_comment` with the bot's terse view, then
+    `pr_voice.publish_check` with the same view's conclusion. Returns a
+    receipt with per-PR outcome for all three.
 
     Idempotent: a PR whose desired set has not changed since last tick
     is a network no-op inside `reconcile_labels` (only a GET). A PR
     whose labels drifted (a human hand-added or removed one) converges
-    on the next tick. The comment upsert is keyed on head_sha — a repeat
-    call for the same sha updates the same comment; a new sha (a
-    force-push) opens a fresh one.
+    on the next tick. The comment upsert and the check-run publish are
+    both keyed on head_sha — a repeat call for the same sha updates the
+    same comment/check; a new sha (a force-push) opens a fresh one of
+    each.
     """
     from willow_bot import pr_labels, pr_voice
     from willow_bot.steward.config import state_path
@@ -198,6 +240,8 @@ def run_voice(
     head_sha_by_pr = _latest_head_sha_by_pr(state)
     voiced: list[dict[str, Any]] = []
     voice_refused: list[dict[str, Any]] = []
+    checked: list[dict[str, Any]] = []
+    check_refused: list[dict[str, Any]] = []
 
     for key in open_keys:
         pr = _parse_key(key)
@@ -216,8 +260,24 @@ def run_voice(
                 "repo_pr": key, "head_sha": head_sha, "detail": result.get("detail", ""),
             })
 
-    any_refused = bool(refused) or bool(voice_refused)
-    any_ok = bool(reconciled) or bool(voiced)
+        conclusion = _check_conclusion(key, head_sha, state)
+        check_result = pr_voice.publish_check(
+            repo, head_sha, pr_voice.CHECK_NAME,
+            status="completed", conclusion=conclusion,
+            output={"title": "willow-bot", "summary": body},
+        )
+        if check_result.get("status") == "ok":
+            checked.append({
+                "repo_pr": key, "head_sha": head_sha,
+                "action": check_result.get("action"), "conclusion": conclusion,
+            })
+        else:
+            check_refused.append({
+                "repo_pr": key, "head_sha": head_sha, "detail": check_result.get("detail", ""),
+            })
+
+    any_refused = bool(refused) or bool(voice_refused) or bool(check_refused)
+    any_ok = bool(reconciled) or bool(voiced) or bool(checked)
     receipt.update(
         status="ok" if not any_refused else "partial" if any_ok else "could-not-run",
         open=len(open_keys),
@@ -226,6 +286,8 @@ def run_voice(
         skipped=skipped,
         voiced=voiced,
         voice_refused=voice_refused,
+        checked=checked,
+        check_refused=check_refused,
     )
     _emit(receipt)
     return receipt
