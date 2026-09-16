@@ -142,7 +142,40 @@ def test_push_to_master_on_an_org_layout_repo_writes_the_trigger(tmp_path, monke
     monkeypatch.setattr(fleet_bridge.subprocess, "run",
                         _fake_git({str(org): "https://github.com/forge-play/Forge.git"}))
     fleet_bridge._request_gitsync("forge-play/Forge")
-    assert (tmp_path / "gitsync" / "trigger-forge-play-Forge.flag").is_file()
+    flag = tmp_path / "gitsync" / "trigger-forge-play-Forge.flag"
+    assert flag.is_file()
+    payload = json.loads(flag.read_text(encoding="utf-8"))
+    assert payload["layout"] == "org"
+    assert payload["repo"] == "forge-play/Forge"
+    assert payload["clone"] == str(org)
+
+
+def test_push_to_master_on_a_flat_layout_repo_reports_flat_in_the_trigger(tmp_path, monkeypatch):
+    root = tmp_path / "github"
+    flat = root / "willow-bot"
+    (flat / ".git").mkdir(parents=True)
+    monkeypatch.setattr(fleet_bridge, "_GITHUB_ROOT", root)
+    monkeypatch.setattr(fleet_bridge, "_GITSYNC_TRIGGERS", tmp_path / "gitsync")
+    monkeypatch.setattr(fleet_bridge.subprocess, "run",
+                        _fake_git({str(flat): "https://github.com/rudi193-cmd/willow-bot.git"}))
+    fleet_bridge._request_gitsync("rudi193-cmd/willow-bot")
+    flag = tmp_path / "gitsync" / "trigger-rudi193-cmd-willow-bot.flag"
+    payload = json.loads(flag.read_text(encoding="utf-8"))
+    assert payload["layout"] == "flat"
+    assert payload["clone"] == str(flat)
+
+
+def test_local_clone_path_with_layout_reports_org_scan_or_none(tmp_path, monkeypatch):
+    root = tmp_path / "github"
+    monkeypatch.setattr(fleet_bridge, "_GITHUB_ROOT", root)
+    monkeypatch.setattr(fleet_bridge.subprocess, "run", _fake_git({}))
+    assert fleet_bridge._local_clone_path_with_layout("o/nope") == (None, None)
+
+    org = root / "forge-play" / "Forge"
+    (org / ".git").mkdir(parents=True)
+    monkeypatch.setattr(fleet_bridge.subprocess, "run",
+                        _fake_git({str(org): "https://github.com/forge-play/Forge.git"}))
+    assert fleet_bridge._local_clone_path_with_layout("forge-play/Forge") == (org, "org")
 
 
 # ── the unit template renders and says what the loop needs ──────────────────

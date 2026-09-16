@@ -5,7 +5,9 @@ Push path (replaces blind polling for installed repos):
   pull_request / issues / issue_comment / check_run
     → ~/.willow/upstream_steward/webhook_inbox/<work_id>.json
   push (default branch, local clone exists)
-    → ~/.willow/gitsync/trigger-<owner>-<repo>.flag
+    → ~/.willow/gitsync/trigger-<owner>-<repo>.flag, a JSON payload
+      {at, repo, clone, layout} — layout is "org", "flat", or "scan",
+      whichever shape of `_local_clone_path_with_layout` found the repo
 
 All events also append to ~/.willow/willow-bot/event-log.jsonl for audit.
 """
@@ -64,9 +66,25 @@ def _local_clone_path(repo_full_name: str) -> Path | None:
     trigger was ever written for an org-layout repo), then the flat
     ``<root>/<name>``, then a scan of ``<root>/*``. Verified by origin URL
     in every case, never by folder name alone.
+
+    A thin wrapper over `_local_clone_path_with_layout` for callers that
+    only need the path, not which layout matched.
+    """
+    path, _layout = _local_clone_path_with_layout(repo_full_name)
+    return path
+
+
+def _local_clone_path_with_layout(repo_full_name: str) -> tuple[Path | None, str | None]:
+    """Same lookup as `_local_clone_path`, but also names which layout
+    matched: ``"org"`` (``<root>/<owner>/<name>``), ``"flat"``
+    (``<root>/<name>``), or ``"scan"`` (the local folder name differs
+    from both — the remote was found only by walking `<root>/*` and
+    matching origin). ``(None, None)`` when nothing matches. The caller
+    (`_request_gitsync`) puts the layout in the trigger payload so the
+    sweep can report which shape found the repo.
     """
     if "/" not in repo_full_name:
-        return None
+        return None, None
     owner, name = repo_full_name.split("/", 1)
     target = f"{owner}/{name}".lower()
 
@@ -89,22 +107,22 @@ def _local_clone_path(repo_full_name: str) -> Path | None:
 
     # Fast paths: the org layout first, then a flat folder named after the
     # repo (often lowercase locally).
-    for candidate in (
-        _GITHUB_ROOT / owner / name,
-        _GITHUB_ROOT / owner / name.lower(),
-        _GITHUB_ROOT / name,
-        _GITHUB_ROOT / name.lower(),
+    for layout, candidate in (
+        ("org", _GITHUB_ROOT / owner / name),
+        ("org", _GITHUB_ROOT / owner / name.lower()),
+        ("flat", _GITHUB_ROOT / name),
+        ("flat", _GITHUB_ROOT / name.lower()),
     ):
         if (candidate / ".git").is_dir() and _matches_origin(candidate):
-            return candidate
+            return candidate, layout
 
     # Slow path: local folder name differs from remote (e.g. willow → rudi193-cmd/Willow).
     if not _GITHUB_ROOT.is_dir():
-        return None
+        return None, None
     for child in _GITHUB_ROOT.iterdir():
         if child.is_dir() and (child / ".git").is_dir() and _matches_origin(child):
-            return child
-    return None
+            return child, "scan"
+    return None, None
 
 
 def _queue_upstream(item: dict) -> None:
@@ -118,14 +136,15 @@ def _queue_upstream(item: dict) -> None:
 
 
 def _request_gitsync(repo_full_name: str) -> None:
-    clone = _local_clone_path(repo_full_name)
+    clone, layout = _local_clone_path_with_layout(repo_full_name)
     if not clone:
         log.info("gitsync skip: no local clone for %s (git=%s)", repo_full_name, _GIT)
         return
     _GITSYNC_TRIGGERS.mkdir(parents=True, exist_ok=True)
     flag = _GITSYNC_TRIGGERS / f"trigger-{repo_full_name.replace('/', '-')}.flag"
-    flag.write_text(_now() + "\n", encoding="utf-8")
-    log.info("gitsync trigger: %s → %s", repo_full_name, clone)
+    payload = {"at": _now(), "repo": repo_full_name, "clone": str(clone), "layout": layout}
+    flag.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    log.info("gitsync trigger: %s (%s layout) → %s", repo_full_name, layout, clone)
 
 
 def _repo(payload: dict) -> str:
