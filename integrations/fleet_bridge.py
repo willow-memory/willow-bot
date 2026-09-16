@@ -61,14 +61,23 @@ def _valid_repo_full_name(value: object) -> str:
     return value if _REPO_FULL_NAME_RE.match(value) else ""
 
 
+def _contained(root: Path, *parts: str) -> Path | None:
+    """`root/<parts...>` as a normalized path, or None when the join would
+    leave `root`. The belt to the regex's braces: every path built from a
+    repo name goes through here, and the value returned — not the parts —
+    is what touches the filesystem. Shaped as normpath + prefix check on
+    the same string so the containment is visible to a taint analysis
+    (CodeQL py/path-injection) rather than only to a reader."""
+    base = os.path.normpath(str(root))
+    full = os.path.normpath(os.path.join(base, *parts))
+    if full != base and not full.startswith(base + os.sep):
+        return None
+    return Path(full)
+
+
 def _under(root: Path, candidate: Path) -> bool:
-    """True only when `candidate` resolves inside `root` — the belt to the
-    regex's braces, so a path expression built from a repo name is refused
-    outright if it ever escapes."""
-    try:
-        return candidate.resolve().is_relative_to(root.resolve())
-    except (OSError, ValueError):
-        return False
+    """True only when `candidate` normalizes to a path inside `root`."""
+    return _contained(root, os.path.relpath(str(candidate), str(root))) is not None
 
 
 def _now() -> str:
@@ -138,14 +147,16 @@ def _local_clone_path_with_layout(repo_full_name: str) -> tuple[Path | None, str
 
     # Fast paths: the org layout first, then a flat folder named after the
     # repo (often lowercase locally).
-    for layout, candidate in (
-        ("org", _GITHUB_ROOT / owner / name),
-        ("org", _GITHUB_ROOT / owner / name.lower()),
-        ("flat", _GITHUB_ROOT / name),
-        ("flat", _GITHUB_ROOT / name.lower()),
+    for layout, parts in (
+        ("org", (owner, name)),
+        ("org", (owner, name.lower())),
+        ("flat", (name,)),
+        ("flat", (name.lower(),)),
     ):
-        if (_under(_GITHUB_ROOT, candidate) and (candidate / ".git").is_dir()
-                and _matches_origin(candidate)):
+        candidate = _contained(_GITHUB_ROOT, *parts)
+        if candidate is None:
+            continue
+        if (candidate / ".git").is_dir() and _matches_origin(candidate):
             return candidate, layout
 
     # Slow path: local folder name differs from remote (e.g. willow → rudi193-cmd/Willow).
@@ -178,8 +189,8 @@ def _request_gitsync(repo_full_name: str) -> None:
         return
     _GITSYNC_TRIGGERS.mkdir(parents=True, exist_ok=True)
     owner, name = repo_full_name.split("/", 1)
-    flag = _GITSYNC_TRIGGERS / f"trigger-{owner}-{name}.flag"
-    if not _under(_GITSYNC_TRIGGERS, flag):
+    flag = _contained(_GITSYNC_TRIGGERS, f"trigger-{owner}-{name}.flag")
+    if flag is None:
         log.warning("gitsync skip: trigger path for %s escapes %s", repo_full_name, _GITSYNC_TRIGGERS)
         return
     payload = {"at": _now(), "repo": repo_full_name, "clone": str(clone), "layout": layout}

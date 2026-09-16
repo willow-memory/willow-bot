@@ -219,3 +219,14 @@ def test_under_refuses_a_path_outside_root(tmp_path):
     assert fleet_bridge._under(root, root / "x" / "y")
     assert not fleet_bridge._under(root, tmp_path / "elsewhere")
     assert not fleet_bridge._under(root, root / ".." / "elsewhere")
+
+
+def test_contained_returns_a_normalized_path_inside_root_or_none(tmp_path):
+    root = tmp_path / "root"
+    assert fleet_bridge._contained(root, "owner", "name") == root / "owner" / "name"
+    assert fleet_bridge._contained(root, "trigger-a-b.flag") == root / "trigger-a-b.flag"
+    assert fleet_bridge._contained(root, "..", "escape") is None
+    assert fleet_bridge._contained(root, "owner", "..", "..", "escape") is None
+    assert fleet_bridge._contained(root, "/etc/passwd") is None
+    # A sibling whose name merely starts with root's name is outside root.
+    assert fleet_bridge._contained(root, "..", root.name + "2", "x") is None
