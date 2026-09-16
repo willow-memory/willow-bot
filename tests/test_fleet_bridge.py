@@ -149,3 +149,73 @@ def test_synchronize_carries_the_new_head_sha(home):
     fleet_bridge.handle("pull_request", _pull_request(7, "synchronize", sha=new_sha))
     (item,) = _inbox(home)
     assert item["head_sha"] == new_sha
+
+
+# ── repository.full_name is validated before it touches a path ──────────────
+# CodeQL py/path-injection on #28: the webhook's repo name became part of the
+# gitsync trigger filename and the clone lookup. The HMAC already says the
+# payload is GitHub's; these say the value is a repo name and nothing else.
+
+
+@pytest.mark.parametrize("name", [
+    "willow-memory/willow-bot",
+    "Die-Namic-Systems/Nestor",
+    "a/b",
+    "rudi193-cmd/Willow",
+    "org_1/repo.name-v2",
+])
+def test_valid_repo_full_names_pass(name):
+    assert fleet_bridge._valid_repo_full_name(name) == name
+
+
+@pytest.mark.parametrize("name", [
+    "",
+    "no-slash",
+    "../../etc/passwd",
+    "owner/../escape",
+    "owner/.hidden",
+    "owner/name/extra",
+    "own er/name",
+    "-owner/name",
+    "owner/",
+    "/name",
+    None,
+    42,
+    "o" * 200 + "/name",
+])
+def test_invalid_repo_full_names_are_empty_not_cleaned(name):
+    assert fleet_bridge._valid_repo_full_name(name) == ""
+
+
+def test_push_with_a_malformed_repo_name_writes_no_trigger(home):
+    payload = {
+        "ref": "refs/heads/main",
+        "repository": {"full_name": "../../gitsync-escape"},
+        "sender": {"type": "User"},
+    }
+    fleet_bridge.handle("push", payload)
+    triggers = fleet_bridge._GITSYNC_TRIGGERS
+    assert not triggers.exists() or list(triggers.iterdir()) == []
+
+
+def test_trigger_flag_name_is_built_from_owner_and_name(home, monkeypatch, tmp_path):
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    monkeypatch.setattr(fleet_bridge, "_local_clone_path_with_layout",
+                        lambda _repo: (clone, "org"))
+    fleet_bridge.handle("push", {
+        "ref": "refs/heads/main",
+        "repository": {"full_name": "willow-memory/willow-bot"},
+        "sender": {"type": "User"},
+    })
+    (flag,) = list(fleet_bridge._GITSYNC_TRIGGERS.iterdir())
+    assert flag.name == "trigger-willow-memory-willow-bot.flag"
+    assert fleet_bridge._under(fleet_bridge._GITSYNC_TRIGGERS, flag)
+
+
+def test_under_refuses_a_path_outside_root(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    assert fleet_bridge._under(root, root / "x" / "y")
+    assert not fleet_bridge._under(root, tmp_path / "elsewhere")
+    assert not fleet_bridge._under(root, root / ".." / "elsewhere")
