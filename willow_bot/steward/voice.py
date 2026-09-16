@@ -22,11 +22,17 @@ does not gate on ``WILLOW_BOT_MCP`` — the label calls go directly to
 GitHub with the App token, not via willow-mcp — but a missing PEM still
 makes each PR's call a receipt line rather than a raise.
 
-The step does NOT yet publish a check-run or upsert a status comment;
-those need a head SHA the tick's state does not currently carry (the
-webhook_pr signal from `fleet_bridge` does not include it). That
-integration lands after fleet_bridge starts writing head_sha into
-pull_request items, or after a later step reads it from `/pulls/{num}`.
+Voice sub-part, second half: for each open PR whose latest ``webhook_pr``
+signal carries a ``head_sha`` (fleet_bridge now writes it; inbox carries
+it through into ``webhook_signals``), this step also upserts one bot-owned
+status comment on that PR via ``willow_bot.pr_voice.upsert_status_comment``
+— keyed on the head_sha, so a force-push (new head_sha) opens a fresh
+comment and leaves the old one, while a repeat tick against the same
+head_sha updates the same comment in place. The body states the bot's
+view only: whether an audit was dispatched, whether any CI red legs are
+filed for that sha (``ci_filed`` keys are ``head_sha:check_run_id``), and
+the tick time. This step does NOT publish a check-run or commit status —
+comment only; that is a separate integration.
 """
 from __future__ import annotations
 
@@ -81,24 +87,77 @@ def _desired_labels_by_pr(state: dict) -> dict[str, set[str]]:
     return desired
 
 
+def _latest_head_sha_by_pr(state: dict) -> dict[str, str]:
+    """`{repo#pr: head_sha}` from the tick's `webhook_signals`.
+
+    Only `webhook_pr` signals carry both `repo_pr` and `head_sha`;
+    `webhook_check_run` signals are skipped (they key by `kind`, not
+    `repo_pr`, and their own `head_sha` names a check's commit, not
+    necessarily the PR's current head). Signals are stored oldest-first
+    and capped at `_MAX_SIGNALS` in `inbox.ingest`, so a later entry for
+    the same key overwrites an earlier one here — a force-push's fresh
+    `synchronize` signal wins over its PR's `opened` signal. A signal
+    with no `head_sha` (an item queued before fleet_bridge started
+    writing it) leaves any prior mapping for that key untouched rather
+    than blanking it back out.
+    """
+    out: dict[str, str] = {}
+    for sig in state.get("webhook_signals") or []:
+        if sig.get("kind") == "check_run":
+            continue
+        key = sig.get("repo_pr")
+        sha = sig.get("head_sha")
+        if key and sha:
+            out[key] = sha
+    return out
+
+
+def _ci_red_legs_for_sha(state: dict, head_sha: str) -> list[str]:
+    """`ci_filed` keys (`head_sha:check_run_id`) belonging to this sha,
+    sorted. Empty when nothing has been filed for it yet."""
+    prefix = f"{head_sha}:"
+    return sorted(k for k in (state.get("ci_filed") or {}) if k.startswith(prefix))
+
+
+def _status_comment_body(key: str, head_sha: str, state: dict, *, at: str) -> str:
+    """The bot's terse view for this (PR, head_sha): audit dispatched or
+    not, CI red legs filed for this sha or none, and the tick time. No
+    exposition — a seat or operator reading the PR gets three lines."""
+    audit = "dispatched" if key in (state.get("audit_dispatched") or {}) else "not dispatched"
+    red = _ci_red_legs_for_sha(state, head_sha)
+    ci = f"{len(red)} red leg(s) filed" if red else "none filed"
+    return (
+        f"willow-bot status for `{head_sha[:12]}`\n"
+        f"- audit: {audit}\n"
+        f"- CI red: {ci}\n"
+        f"- last tick: {at}\n"
+    )
+
+
 def run_voice(
     state: dict | None = None,
     *,
     enable_mcp: bool | None = None,  # unused; kept for signature symmetry with other steps
 ) -> dict:
-    """Reconcile owned-prefix labels on each PR the tick knows about.
+    """Reconcile owned-prefix labels on each PR the tick knows about, then
+    upsert one status comment per PR that has a known head_sha.
 
     Reads the state file (or the passed-in dict), builds the desired
     label set per PR from `audit_dispatched` (and, when the shape lands,
     `ci_filed` per-PR indexing), and calls `pr_labels.reconcile_labels`
-    for each open PR. Returns a receipt with per-PR outcome.
+    for each open PR. Separately, for each open PR whose latest
+    `webhook_pr` signal carries a `head_sha`, calls
+    `pr_voice.upsert_status_comment` with the bot's terse view. Returns a
+    receipt with per-PR outcome for both.
 
     Idempotent: a PR whose desired set has not changed since last tick
     is a network no-op inside `reconcile_labels` (only a GET). A PR
     whose labels drifted (a human hand-added or removed one) converges
-    on the next tick.
+    on the next tick. The comment upsert is keyed on head_sha — a repeat
+    call for the same sha updates the same comment; a new sha (a
+    force-push) opens a fresh one.
     """
-    from willow_bot import pr_labels
+    from willow_bot import pr_labels, pr_voice
     from willow_bot.steward.config import state_path
 
     receipt: dict[str, Any] = {"event": "steward_voice", "at": _tick_at()}
@@ -136,12 +195,37 @@ def run_voice(
                 "refused": result.get("refused") or [],
             })
 
+    head_sha_by_pr = _latest_head_sha_by_pr(state)
+    voiced: list[dict[str, Any]] = []
+    voice_refused: list[dict[str, Any]] = []
+
+    for key in open_keys:
+        pr = _parse_key(key)
+        if pr is None:
+            continue  # already recorded in `skipped` above
+        head_sha = head_sha_by_pr.get(key)
+        if not head_sha:
+            continue  # no webhook_pr signal has named a head yet
+        repo, pr_num = pr
+        body = _status_comment_body(key, head_sha, state, at=receipt["at"])
+        result = pr_voice.upsert_status_comment(repo, pr_num, head_sha, body)
+        if result.get("status") == "ok":
+            voiced.append({"repo_pr": key, "head_sha": head_sha, "action": result.get("action")})
+        else:
+            voice_refused.append({
+                "repo_pr": key, "head_sha": head_sha, "detail": result.get("detail", ""),
+            })
+
+    any_refused = bool(refused) or bool(voice_refused)
+    any_ok = bool(reconciled) or bool(voiced)
     receipt.update(
-        status="ok" if not refused else "partial" if reconciled else "could-not-run",
+        status="ok" if not any_refused else "partial" if any_ok else "could-not-run",
         open=len(open_keys),
         reconciled=reconciled,
         refused=refused,
         skipped=skipped,
+        voiced=voiced,
+        voice_refused=voice_refused,
     )
     _emit(receipt)
     return receipt
