@@ -103,3 +103,49 @@ def test_sender_type_is_empty_not_guessed_when_absent(home):
     fleet_bridge.handle("check_run", payload)
     (item,) = _inbox(home)
     assert item["sender_type"] == ""
+
+
+# ── pull_request: head_sha carried into the queued item ─────────────────
+
+
+def _pull_request(number: int, action: str, *, sha: str = SHA) -> dict:
+    return {
+        "action": action,
+        "repository": {"full_name": REPO},
+        "pull_request": {
+            "number": number,
+            "title": "A PR",
+            "state": "open",
+            "merged": False,
+            "user": {"login": "someone"},
+            "html_url": f"https://example.invalid/pull/{number}",
+            "head": {"sha": sha},
+        },
+    }
+
+
+def test_pull_request_item_carries_head_sha(home):
+    """Gap acfd27ae3259 (voice sub-part): the steward voice step needs a
+    head_sha to key its status comment on, and this is where it starts —
+    `payload['pull_request']['head']['sha']` copied straight through."""
+    fleet_bridge.handle("pull_request", _pull_request(7, "opened"))
+    (item,) = _inbox(home)
+    assert item["kind"] == "pull_request"
+    assert item["head_sha"] == SHA
+
+
+def test_pull_request_head_sha_absent_is_empty_string_not_missing(home):
+    payload = _pull_request(7, "opened")
+    del payload["pull_request"]["head"]
+    fleet_bridge.handle("pull_request", payload)
+    (item,) = _inbox(home)
+    assert item["head_sha"] == ""
+
+
+def test_synchronize_carries_the_new_head_sha(home):
+    """A force-push (`synchronize`) is a queued item too, and its head_sha
+    is the NEW head — the voice step keys a fresh comment off this."""
+    new_sha = "1111111111111111111111111111111111111111"
+    fleet_bridge.handle("pull_request", _pull_request(7, "synchronize", sha=new_sha))
+    (item,) = _inbox(home)
+    assert item["head_sha"] == new_sha

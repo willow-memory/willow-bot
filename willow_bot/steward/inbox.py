@@ -108,6 +108,11 @@ def ingest(state_path: Path) -> int:
                 "merged": item.get("merged"),
                 "pr_state": item.get("state"),
                 "source": item.get("source") or "willow-bot",
+                # Carried through from fleet_bridge (gap acfd27ae3259, voice
+                # sub-part) so the voice step can key a status comment on
+                # this SHA without a follow-up read of /pulls/{num}. Absent
+                # on an item written before fleet_bridge started sending it.
+                "head_sha": item.get("head_sha") or "",
             }
             _emit(ev)
             signals.append({k: v for k, v in ev.items() if k != "event"})

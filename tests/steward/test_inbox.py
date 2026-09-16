@@ -44,6 +44,78 @@ def test_ingest_pull_request_emits_once(tmp_path: Path, monkeypatch, capsys) -> 
     assert capsys.readouterr().out.strip() == ""
 
 
+def test_ingest_pull_request_carries_head_sha_through(tmp_path: Path, monkeypatch, capsys) -> None:
+    """fleet_bridge now writes head_sha on a pull_request item (gap
+    acfd27ae3259, voice sub-part); this step must carry it into both the
+    emitted `webhook_pr` line and the stored `webhook_signals` entry, or
+    the steward voice step has no sha to key its status comment on."""
+    home = tmp_path / "willow"
+    inbox = home / "upstream_steward" / "webhook_inbox"
+    inbox.mkdir(parents=True)
+    item = {
+        "source": "willow-bot",
+        "received_at": "2026-09-16T00:00:00+00:00",
+        "event": "pull_request",
+        "repo": "willow-memory/willow-mcp",
+        "action": "synchronize",
+        "work_id": "wh-willow-memory-willow-mcp-pr-99-cafef00d",
+        "kind": "pull_request",
+        "number": 99,
+        "title": "Test PR",
+        "state": "open",
+        "merged": False,
+        "html_url": "https://github.com/willow-memory/willow-mcp/pull/99",
+        "head_sha": "deadbeefcafe",
+    }
+    (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
+    state = tmp_path / "state.json"
+    monkeypatch.setenv("WILLOW_HOME", str(home))
+    monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
+    monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
+
+    assert ingest(state) == 0
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.strip().splitlines() if ln.strip()]
+    assert len(lines) == 1
+    assert lines[0]["head_sha"] == "deadbeefcafe"
+
+    saved = json.loads(state.read_text())
+    (signal,) = saved["webhook_signals"]
+    assert signal["head_sha"] == "deadbeefcafe"
+
+
+def test_ingest_pull_request_missing_head_sha_is_empty_string(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """An older fleet_bridge item written before head_sha existed carries
+    none — this step preserves the honest absence, not a raise."""
+    home = tmp_path / "willow"
+    inbox = home / "upstream_steward" / "webhook_inbox"
+    inbox.mkdir(parents=True)
+    item = {
+        "source": "willow-bot",
+        "received_at": "2026-09-16T00:00:00+00:00",
+        "event": "pull_request",
+        "repo": "willow-memory/willow-mcp",
+        "action": "opened",
+        "work_id": "wh-willow-memory-willow-mcp-pr-100-cafef00e",
+        "kind": "pull_request",
+        "number": 100,
+        "title": "Test PR",
+        "state": "open",
+        "merged": False,
+        "html_url": "https://github.com/willow-memory/willow-mcp/pull/100",
+    }
+    (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
+    state = tmp_path / "state.json"
+    monkeypatch.setenv("WILLOW_HOME", str(home))
+    monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
+    monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
+
+    assert ingest(state) == 0
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.strip().splitlines() if ln.strip()]
+    assert lines[0]["head_sha"] == ""
+
+
 def test_call_watcher_flag_rejected(tmp_path: Path, monkeypatch, capsys) -> None:
     state = tmp_path / "state.json"
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "empty"))

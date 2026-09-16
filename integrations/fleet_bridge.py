@@ -166,6 +166,12 @@ def handle(event: str, payload: dict) -> None:
                     "merged": pr.get("merged"),
                     "user": (pr.get("user") or {}).get("login"),
                     "html_url": pr.get("html_url"),
+                    # The head sha at delivery time. Steward's voice step
+                    # keys its status comment on this so it can find the
+                    # right (repo, pr, sha) row without a follow-up read
+                    # of /pulls/{num}; a later synchronize event carries a
+                    # new sha and the voice step opens a fresh comment.
+                    "head_sha": (pr.get("head") or {}).get("sha") or "",
                     "lane_hint": "webhook",
                 }
             )
