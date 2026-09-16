@@ -74,6 +74,37 @@ def fake_upsert(monkeypatch):
     return u
 
 
+class _RecordPublishCheck:
+    """Records each `publish_check` call and simulates a real check-run
+    store keyed on (repo, head_sha, name) → check_run_id, so a second
+    call for the same sha reports `updated` and a new sha reports
+    `created` — the same idempotency contract `pr_voice` itself tests."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, str, str | None, dict | None]] = []
+        self._by_sha: dict[tuple[str, str, str], int] = {}
+        self._next_id = 1
+
+    def __call__(self, repo, head_sha, name, *, status="completed",
+                 conclusion=None, output=None, external_id=None):
+        self.calls.append((repo, head_sha, name, conclusion, output))
+        if not head_sha:
+            return {"status": "could-not-run", "detail": "no head_sha", "action": "skipped"}
+        key = (repo, head_sha, name)
+        if key in self._by_sha:
+            return {"status": "ok", "action": "updated", "check_run_id": self._by_sha[key]}
+        self._by_sha[key] = self._next_id
+        self._next_id += 1
+        return {"status": "ok", "action": "created", "check_run_id": self._by_sha[key]}
+
+
+@pytest.fixture
+def fake_publish_check(monkeypatch):
+    p = _RecordPublishCheck()
+    monkeypatch.setattr(pr_voice, "publish_check", p)
+    return p
+
+
 def _pr_signal(repo_pr: str, head_sha: str) -> dict:
     return {"repo_pr": repo_pr, "action": "synchronize", "title": "", "url": "",
             "received_at": "2026-09-16T00:00:00Z", "work_id": f"wid-{head_sha}",
@@ -269,7 +300,8 @@ def test_status_comment_body_reports_absence_honestly():
 
 
 def test_run_voice_upserts_one_comment_per_head_sha(
-    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
 ):
     """A PR whose latest webhook_pr signal names a head_sha gets one
     status comment; a PR with no signal yet gets none."""
@@ -286,7 +318,8 @@ def test_run_voice_upserts_one_comment_per_head_sha(
 
 
 def test_run_voice_same_sha_twice_updates_one_comment(
-    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
 ):
     """Two ticks against the same head_sha update the same comment —
     `pr_voice`'s own fake reports `updated` the second time, and this
@@ -299,7 +332,8 @@ def test_run_voice_same_sha_twice_updates_one_comment(
 
 
 def test_run_voice_new_sha_opens_a_second_comment(
-    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
 ):
     """A force-push's new head_sha is a fresh comment, not a rewrite of
     the old one — the old comment is left as-is (this step never deletes
@@ -324,7 +358,8 @@ def test_run_voice_no_signal_yet_voices_nothing(
 
 
 def test_run_voice_voice_refusal_marks_status_partial(
-    home: Path, fake_reconcile: _RecordReconcile, monkeypatch
+    home: Path, fake_reconcile: _RecordReconcile, fake_publish_check: _RecordPublishCheck,
+    monkeypatch,
 ):
     monkeypatch.setattr(
         pr_voice, "upsert_status_comment",
@@ -336,3 +371,132 @@ def test_run_voice_voice_refusal_marks_status_partial(
     assert receipt["voice_refused"] == [
         {"repo_pr": "o/r#1", "head_sha": "aaa111", "detail": "auth: no PEM"}
     ]
+
+
+# ── run_voice: check-run publish, one per head sha ───────────────────────
+
+
+def test_run_voice_publishes_one_check_per_head_sha(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    receipt = voice.run_voice(state)
+    assert len(fake_publish_check.calls) == 1
+    repo, sha, name, conclusion, _output = fake_publish_check.calls[0]
+    assert (repo, sha, name) == ("o/r", "aaa111", pr_voice.CHECK_NAME)
+    assert receipt["checked"] == [
+        {"repo_pr": "o/r#1", "head_sha": "aaa111", "action": "created", "conclusion": conclusion}
+    ]
+
+
+def test_run_voice_same_sha_twice_updates_one_check(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    """Idempotent per head sha: re-running a tick against the same sha
+    updates the same check, never a second one."""
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    voice.run_voice(dict(state))
+    receipt = voice.run_voice(dict(state))
+    assert len(fake_publish_check.calls) == 2
+    assert receipt["checked"][0]["action"] == "updated"
+
+
+def test_run_voice_new_sha_opens_a_second_check(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    state1 = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    voice.run_voice(state1)
+    state2 = {"open": ["o/r#1"], "webhook_signals": [
+        _pr_signal("o/r#1", "aaa111"), _pr_signal("o/r#1", "bbb222"),
+    ]}
+    receipt = voice.run_voice(state2)
+    shas_called = [c[1] for c in fake_publish_check.calls]
+    assert shas_called == ["aaa111", "bbb222"]
+    assert receipt["checked"][0]["action"] == "created"
+
+
+def test_run_voice_check_conclusion_failure_when_ci_red_filed(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    state = {
+        "open": ["o/r#1"],
+        "webhook_signals": [_pr_signal("o/r#1", "aaa111")],
+        "ci_filed": {"aaa111:1": "H-abc"},
+    }
+    receipt = voice.run_voice(state)
+    assert receipt["checked"][0]["conclusion"] == "failure"
+    assert fake_publish_check.calls[0][3] == "failure"
+
+
+def test_run_voice_check_conclusion_success_when_audit_dispatched_and_clean(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    state = {
+        "open": ["o/r#1"],
+        "webhook_signals": [_pr_signal("o/r#1", "aaa111")],
+        "audit_dispatched": {"o/r#1": "D-1"},
+    }
+    receipt = voice.run_voice(state)
+    assert receipt["checked"][0]["conclusion"] == "success"
+
+
+def test_run_voice_check_conclusion_success_when_audit_not_required(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    """No CI red and the PR was never queued for audit (`pending_audit`
+    does not name it) — nothing is outstanding, so the view is green."""
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    receipt = voice.run_voice(state)
+    assert receipt["checked"][0]["conclusion"] == "success"
+
+
+def test_run_voice_check_conclusion_neutral_when_audit_pending(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    state = {
+        "open": ["o/r#1"],
+        "webhook_signals": [_pr_signal("o/r#1", "aaa111")],
+        "pending_audit": [{"repo_pr": "o/r#1", "title": "t", "url": "u"}],
+    }
+    receipt = voice.run_voice(state)
+    assert receipt["checked"][0]["conclusion"] == "neutral"
+
+
+def test_run_voice_check_refusal_marks_status_partial(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        pr_voice, "publish_check",
+        lambda repo, head_sha, name, **kw: {"status": "could-not-run", "detail": "auth: no PEM"},
+    )
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    receipt = voice.run_voice(state)
+    assert receipt["status"] == "partial"  # the comment landed; the check did not
+    assert receipt["check_refused"] == [
+        {"repo_pr": "o/r#1", "head_sha": "aaa111", "detail": "auth: no PEM"}
+    ]
+
+
+# ── _check_conclusion / _audit_state_ok directly ─────────────────────────
+
+
+def test_audit_state_ok_true_when_dispatched():
+    state = {"audit_dispatched": {"o/r#1": "D-1"}}
+    assert voice._audit_state_ok("o/r#1", state) is True
+
+
+def test_audit_state_ok_true_when_never_queued():
+    assert voice._audit_state_ok("o/r#1", {}) is True
+
+
+def test_audit_state_ok_false_when_pending_and_not_dispatched():
+    state = {"pending_audit": [{"repo_pr": "o/r#1", "title": "t", "url": "u"}]}
+    assert voice._audit_state_ok("o/r#1", state) is False
