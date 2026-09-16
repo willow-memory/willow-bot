@@ -8,8 +8,9 @@ shipped the operations; this step decides — for each PR the tick tracks
 Mapping (state → desired labels under ``willow-bot/``):
 
 - ``audit_dispatched[repo#pr]`` present → ``willow-bot/audit-dispatched``
-- any ``ci_filed[…]`` entry whose stored ``where`` is ``repo#pr`` →
-  ``willow-bot/ci-red``
+- the PR's latest head_sha (from ``webhook_signals``, same lookup the
+  voice step uses) has any ``ci_filed`` key with that ``head_sha:``
+  prefix → ``willow-bot/ci-red``
 
 A PR carrying neither state converges to the empty owned set on the next
 tick (i.e. the reconciler removes stale owned labels). Labels a human or
@@ -84,15 +85,15 @@ def _desired_labels_by_pr(state: dict) -> dict[str, set[str]]:
             continue
         desired.setdefault(key, set()).add(pr_labels.LABEL_AUDIT_DISPATCHED)
 
-    for filed_key, _item_id in (state.get("ci_filed") or {}).items():
-        # `ci_filed` keys are `head_sha:check_run_id`; the derived where
-        # (`repo#pr` or `repo@sha`) is not stored. Rebuild the mapping
-        # from the deposits file's `pr_number` field is expensive; the
-        # simpler path is to iterate the tick's `open` set and check
-        # whether ANY ci_filed entry belongs to that PR. That would need
-        # per-PR indexing we do not maintain yet. So this step's ci-red
-        # coverage is limited to what a future ci_filed shape carries.
-        _ = filed_key  # placeholder; ci-red mapping lands with the shape update
+    # `ci_filed` keys are `head_sha:check_run_id`; the PR they belong to
+    # is not stored there. `_latest_head_sha_by_pr` gives the other half
+    # of the join (repo#pr -> its current head_sha, from webhook_signals),
+    # so a PR gets `ci-red` exactly when a `ci_filed` key carries its
+    # latest head_sha's prefix.
+    for key, head_sha in _latest_head_sha_by_pr(state).items():
+        if _ci_red_legs_for_sha(state, head_sha):
+            desired.setdefault(key, set()).add(pr_labels.LABEL_CI_RED)
+
     return desired
 
 

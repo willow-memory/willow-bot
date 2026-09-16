@@ -146,6 +146,54 @@ def test_empty_state_yields_empty_mapping():
     assert voice._desired_labels_by_pr({}) == {}
 
 
+# ── desired-labels: ci_filed (joined through latest head_sha) → ci-red ──
+
+
+def test_ci_filed_for_latest_head_sha_maps_to_ci_red_label():
+    state = {
+        "webhook_signals": [_pr_signal("owner/repo#7", "aaa111")],
+        "ci_filed": {"aaa111:1": "H-abc"},
+    }
+    got = voice._desired_labels_by_pr(state)
+    assert got == {"owner/repo#7": {pr_labels.LABEL_CI_RED}}
+
+
+def test_ci_filed_for_a_stale_head_sha_does_not_map():
+    """A force-push moved the PR's head on; a red leg filed against the
+    old sha is not this PR's current state."""
+    state = {
+        "webhook_signals": [_pr_signal("owner/repo#7", "bbb222")],
+        "ci_filed": {"aaa111:1": "H-abc"},
+    }
+    got = voice._desired_labels_by_pr(state)
+    assert got == {}
+
+
+def test_audit_dispatched_and_ci_red_both_apply_to_the_same_pr():
+    state = {
+        "audit_dispatched": {"owner/repo#7": "D-abc"},
+        "webhook_signals": [_pr_signal("owner/repo#7", "aaa111")],
+        "ci_filed": {"aaa111:1": "H-abc"},
+    }
+    got = voice._desired_labels_by_pr(state)
+    assert got == {
+        "owner/repo#7": {pr_labels.LABEL_AUDIT_DISPATCHED, pr_labels.LABEL_CI_RED},
+    }
+
+
+def test_run_voice_drops_ci_red_once_no_longer_filed(home: Path, fake_reconcile: _RecordReconcile):
+    """A PR that was red converges to the empty owned set (minus whatever
+    else applies) once its ci_filed rows are gone — reconcile_labels does
+    the actual removal, but this step must stop asking for the label."""
+    state = {
+        "open": ["owner/repo#7"],
+        "webhook_signals": [_pr_signal("owner/repo#7", "aaa111")],
+    }
+    voice.run_voice(state)
+    call_map = {(repo, num): desired for repo, num, desired in fake_reconcile.calls}
+    assert call_map[("owner/repo", 7)] == set()
+
+
 # ── run_voice: iterates open, reconciles each ───────────────────────────
 
 
