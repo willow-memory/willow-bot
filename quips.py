@@ -8,6 +8,8 @@ import random
 import sqlite3
 from pathlib import Path
 
+import runes
+
 _CONFIG_PATH = Path(__file__).parent / "willow-bot.json"
 _DB_PATH = Path.home() / ".willow" / "willow-bot-contributors.db"
 
@@ -69,11 +71,17 @@ def is_first_contribution(login: str) -> bool:
     return row is None or row[0] == 0
 
 
-def pick(event: str, login: str = "") -> str:
+def _with_rune(event: str, sha: str, line: str) -> str:
+    if event == "pr_opened" and sha:
+        return f"{line}\n\n{runes.cast(sha)}" if line else runes.cast(sha)
+    return line
+
+
+def pick(event: str, login: str = "", sha: str = "") -> str:
     cfg = _cfg()
 
     if os.getenv("FRANK_MODE"):
-        return _frank(event, login)
+        return _with_rune(event, sha, _frank(event, login))
 
     if os.getenv("PROPHET_MODE"):
         return _prophet(event, login)
@@ -81,11 +89,11 @@ def pick(event: str, login: str = "") -> str:
     chaos_prob = cfg.get("chaos", {}).get(event, 0.0)
     if chaos_prob and random.random() < chaos_prob:
         lines = cfg.get("chaos_lines", ["sure"])
-        return random.choice(lines)
+        return _with_rune(event, sha, random.choice(lines))
 
     lines = cfg.get("voice", {}).get(event, [])
     if not lines:
-        return ""
+        return _with_rune(event, sha, "")
 
     line = random.choice(lines)
 
@@ -93,7 +101,7 @@ def pick(event: str, login: str = "") -> str:
         title = get_title(login)
         line = f"**{title.capitalize()} {login}** — {line}"
 
-    return line
+    return _with_rune(event, sha, line)
 
 
 def _frank(event: str, login: str) -> str:

@@ -55,6 +55,11 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
             if shame:
                 msg = f"{shame}\n\n{msg}"
             post(repo, pr.get("number"), msg)
+    elif action == "opened":
+        sha = pr.get("head", {}).get("sha", "")
+        msg = quips.pick("pr_opened", login, sha=sha)
+        if msg:
+            post(repo, pr.get("number"), msg)
 
 
 def _handle_push(payload: dict, post: Callable) -> None:
