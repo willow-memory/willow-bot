@@ -8,6 +8,7 @@ import random
 import sqlite3
 from pathlib import Path
 
+import horoscope
 import runes
 
 _CONFIG_PATH = Path(__file__).parent / "willow-bot.json"
@@ -84,7 +85,7 @@ def pick(event: str, login: str = "", sha: str = "") -> str:
         return _with_rune(event, sha, _frank(event, login))
 
     if os.getenv("PROPHET_MODE"):
-        return _prophet(event, login)
+        return _with_rune(event, sha, _prophet(event, login))
 
     chaos_prob = cfg.get("chaos", {}).get(event, 0.0)
     if chaos_prob and random.random() < chaos_prob:
@@ -100,6 +101,9 @@ def pick(event: str, login: str = "", sha: str = "") -> str:
     if login and event in ("pr_merged", "pr_opened", "first_contribution"):
         title = get_title(login)
         line = f"**{title.capitalize()} {login}** — {line}"
+
+        if event == "pr_merged":
+            line = f"{line}\n\n{horoscope.reading(login, title=title)}"
 
     return _with_rune(event, sha, line)
 

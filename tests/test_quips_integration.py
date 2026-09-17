@@ -1,6 +1,8 @@
 """
-tests/test_quips_integration.py — quips.pick() with runes on pr_opened.
+tests/test_quips_integration.py — quips.pick() extras: runes on pr_opened, horoscope on pr_merged.
 """
+import random
+
 import quips
 
 
@@ -22,3 +24,15 @@ def test_pr_opened_without_sha_has_no_rune(monkeypatch, tmp_path):
     line = quips.pick("pr_opened", "someuser")
     assert not line.startswith(">")
     assert "\n\n" not in line
+
+
+def test_pr_merged_includes_horoscope(tmp_path, monkeypatch):
+    monkeypatch.setattr(quips, "_DB_PATH", tmp_path / "contributors.db")
+    monkeypatch.delenv("FRANK_MODE", raising=False)
+    monkeypatch.delenv("PROPHET_MODE", raising=False)
+    monkeypatch.setattr(random, "random", lambda: 1.0)
+
+    line = quips.pick("pr_merged", "someuser")
+
+    assert "**Thrall someuser** —" in line
+    assert "\n\n_Today" in line
