@@ -6,6 +6,7 @@ import logging
 from typing import Callable
 
 import quips
+import rebase_shame
 from integrations import fleet_bridge
 
 log = logging.getLogger("willow-bot.router")
@@ -48,13 +49,20 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
         quips.record_merge(login)
         msg = quips.pick("pr_merged", login)
         if msg:
+            head_ref = pr.get("head", {}).get("ref", "")
+            shame = rebase_shame.header(rebase_shame.get(repo, head_ref))
+            if shame:
+                msg = f"{shame}\n\n{msg}"
             post(repo, pr.get("number"), msg)
 
 
 def _handle_push(payload: dict, post: Callable) -> None:
     ref = payload.get("ref", "")
     repo = payload.get("repository", {}).get("full_name", "")
-    pr_number = None  # push events don't have a PR — post to commit status instead
+
+    if payload.get("forced") and ref.startswith("refs/heads/"):
+        branch = ref[len("refs/heads/"):]
+        rebase_shame.increment(repo, branch)
 
     if ref in ("refs/heads/main", "refs/heads/master"):
         msg = quips.pick("push_to_main")
