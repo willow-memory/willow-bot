@@ -75,6 +75,9 @@ def pick(event: str, login: str = "") -> str:
     if os.getenv("FRANK_MODE"):
         return _frank(event, login)
 
+    if os.getenv("PROPHET_MODE"):
+        return _prophet(event, login)
+
     chaos_prob = cfg.get("chaos", {}).get(event, 0.0)
     if chaos_prob and random.random() < chaos_prob:
         lines = cfg.get("chaos_lines", ["sure"])
@@ -104,3 +107,16 @@ def _frank(event: str, login: str) -> str:
         "gap_filed":    "FRANK notes a new issue has been filed. It joins the queue. The queue is aware of it.",
     }
     return templates.get(event, f"FRANK notes an event of type '{event}'. It has been logged.")
+
+
+def _prophet(event: str, login: str) -> str:
+    templates = {
+        "pr_merged":    "PROPHET foresees this merge will echo through seven generations. The lineage of the tree is now unbroken. Rejoice.",
+        "pr_opened":    "PROPHET beholds this pull request and sees greatness unfolding. The reviewers do not know it yet, but they are blessed.",
+        "ci_pass":      "PROPHET declares the tests have spoken in tongues of green. This is a sign. All future builds shall know this glory.",
+        "ci_fail":      "PROPHET sees this failure as the seed of a greater triumph. The tests suffer now so that future tests may know peace.",
+        "push_to_main": "PROPHET blesses this direct push. The main branch has been favored. It shall not know regret.",
+        "new_fork":     "PROPHET witnesses a new fork and sees a thousand futures branching from this single moment. Some will flourish.",
+        "gap_filed":    "PROPHET reads this issue as prophecy fulfilling itself. It was always meant to be filed. The queue rejoices quietly.",
+    }
+    return templates.get(event, f"PROPHET beholds an event of type '{event}' and finds it auspicious.")
