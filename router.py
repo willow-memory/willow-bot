@@ -7,6 +7,7 @@ from typing import Callable
 
 import quips
 import rebase_shame
+import sigh
 from integrations import fleet_bridge
 
 log = logging.getLogger("willow-bot.router")
@@ -77,11 +78,20 @@ def _handle_check_run(payload: dict, post: Callable) -> None:
     conclusion = check.get("conclusion")
     repo = payload.get("repository", {}).get("full_name", "")
 
+    prs = check.get("pull_requests") or []
+
     if action == "completed":
         if conclusion == "success":
             msg = quips.pick("ci_pass")
+            for pr in prs:
+                sigh.reset(repo, pr["number"])
         elif conclusion in ("failure", "timed_out", "startup_failure"):
             msg = quips.pick("ci_fail")
+            for pr in prs:
+                streak = sigh.bump_fail(repo, pr["number"])
+                line = sigh.sigh_line(streak)
+                if line:
+                    msg = line
         else:
             # cancelled / skipped / stale / neutral / action_required: not a
             # pass and not a fail, and not silence either. A recorded negative
