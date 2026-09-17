@@ -6,6 +6,8 @@ import logging
 from typing import Callable
 
 import quips
+import rebase_shame
+import sigh
 from integrations import fleet_bridge
 
 log = logging.getLogger("willow-bot.router")
@@ -48,13 +50,25 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
         quips.record_merge(login)
         msg = quips.pick("pr_merged", login)
         if msg:
+            head_ref = pr.get("head", {}).get("ref", "")
+            shame = rebase_shame.header(rebase_shame.get(repo, head_ref))
+            if shame:
+                msg = f"{shame}\n\n{msg}"
+            post(repo, pr.get("number"), msg)
+    elif action == "opened":
+        sha = pr.get("head", {}).get("sha", "")
+        msg = quips.pick("pr_opened", login, sha=sha)
+        if msg:
             post(repo, pr.get("number"), msg)
 
 
 def _handle_push(payload: dict, post: Callable) -> None:
     ref = payload.get("ref", "")
     repo = payload.get("repository", {}).get("full_name", "")
-    pr_number = None  # push events don't have a PR — post to commit status instead
+
+    if payload.get("forced") and ref.startswith("refs/heads/"):
+        branch = ref[len("refs/heads/"):]
+        rebase_shame.increment(repo, branch)
 
     if ref in ("refs/heads/main", "refs/heads/master"):
         msg = quips.pick("push_to_main")
@@ -69,11 +83,20 @@ def _handle_check_run(payload: dict, post: Callable) -> None:
     conclusion = check.get("conclusion")
     repo = payload.get("repository", {}).get("full_name", "")
 
+    prs = check.get("pull_requests") or []
+
     if action == "completed":
         if conclusion == "success":
             msg = quips.pick("ci_pass")
+            for pr in prs:
+                sigh.reset(repo, pr["number"])
         elif conclusion in ("failure", "timed_out", "startup_failure"):
             msg = quips.pick("ci_fail")
+            for pr in prs:
+                streak = sigh.bump_fail(repo, pr["number"])
+                line = sigh.sigh_line(streak)
+                if line:
+                    msg = line
         else:
             # cancelled / skipped / stale / neutral / action_required: not a
             # pass and not a fail, and not silence either. A recorded negative
