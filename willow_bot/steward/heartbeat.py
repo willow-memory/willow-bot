@@ -14,13 +14,22 @@ from typing import Any
 from willow_bot.steward.config import willow_home
 
 
-# Read-only / status verbs — no dew publish, no seal.
+# Status verbs plus the seal watch tick. None of these publish dew or seal
+# anything: seal_drain mirrors a HUMAN's Nestor seal onto its SOIL record
+# (willow-mcp seal_handler.on_seal) and advances a local offset — sealed
+# decision 72292afd, "the seal watch runs on the same tick as the bot".
 DEFAULT_CURATED: list[tuple[str, dict[str, Any]]] = [
     ("fleet_health", {}),
     ("commitment_surface", {}),
     ("human_required_list", {}),
     ("diagnostic_summary", {}),
+    ("seal_drain", {}),
 ]
+
+# Result fields worth carrying into the receipt verbatim (small scalars /
+# short lists), so bot_status can show a tool's three-state without the
+# reader opening the tool's own journal. Everything else stays keys-only.
+_RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after")
 
 
 def _app_id() -> str:
@@ -78,9 +87,14 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
         try:
             result = mcp_client.call(name, args)
             entry["outcome"] = "ok"
-            # Keep receipt small — summarize
+            # Keep receipt small — summarize, but carry the three-state
+            # fields through so the journal says what happened, not just
+            # that something answered.
             if isinstance(result, dict):
                 entry["result_keys"] = sorted(result.keys())[:20]
+                for field in _RECEIPT_FIELDS:
+                    if field in result:
+                        entry[field] = result[field]
             else:
                 entry["result_preview"] = str(result)[:240]
         except Exception as exc:  # noqa: BLE001
