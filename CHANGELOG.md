@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.2.0](https://github.com/willow-memory/willow-bot/compare/v0.1.2...v0.2.0) (2026-09-19)
+
+
+### Added
+
+* **steward:** seal watch runs on the tick — seal_drain in the curated heartbeat ([d3c5aa9](https://github.com/willow-memory/willow-bot/commit/d3c5aa93fc31f554e243f4179c639214e12a86b7))
+* **steward:** seal watch runs on the tick — seal_drain in the curated heartbeat ([7aa1d52](https://github.com/willow-memory/willow-bot/commit/7aa1d5224617f8390a4c121a2df72b681a7acd1c))
+
 ## [Unreleased]
 
 ### Added
