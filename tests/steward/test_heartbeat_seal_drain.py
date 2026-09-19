@@ -9,7 +9,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import willow_bot.steward
 from willow_bot.steward import heartbeat
+
+
+def _stub_client(monkeypatch, call):
+    """Replace the MCP client for the duration of a test.
+
+    ``heartbeat.run_heartbeat`` does ``from willow_bot.steward import
+    mcp_client``. Once any earlier test has imported the real module, that
+    resolves the PACKAGE ATTRIBUTE, not ``sys.modules`` — so a stub in
+    ``sys.modules`` alone is bypassed in a full run and the real client blocks
+    waiting for a broker (PR #31's five matrix legs each died at ~9 min on
+    exactly this). Patch both.
+    """
+    import sys
+    import types
+
+    fake = types.ModuleType("willow_bot.steward.mcp_client")
+    fake.call = call
+    monkeypatch.setitem(sys.modules, "willow_bot.steward.mcp_client", fake)
+    monkeypatch.setattr(willow_bot.steward, "mcp_client", fake, raising=False)
+    return fake
 
 
 def test_seal_drain_is_on_the_tick() -> None:
@@ -43,16 +64,7 @@ def test_receipt_carries_the_drain_three_state(tmp_path: Path, monkeypatch, caps
         },
     }
 
-    class _Client:
-        @staticmethod
-        def call(name, args):
-            return answers[name]
-
-    import sys
-    import types
-    fake = types.ModuleType("willow_bot.steward.mcp_client")
-    fake.call = _Client.call
-    monkeypatch.setitem(sys.modules, "willow_bot.steward.mcp_client", fake)
+    _stub_client(monkeypatch, lambda name, args: answers[name])
 
     r = heartbeat.run_heartbeat()
 
@@ -77,12 +89,9 @@ def test_unreachable_drain_is_visible_not_collapsed(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "seal_drain")
 
-    import sys
-    import types
-    fake = types.ModuleType("willow_bot.steward.mcp_client")
-    fake.call = lambda name, args: {"state": "unreachable", "reason": "ledger_missing",
-                                    "ledger": "/nope"}
-    monkeypatch.setitem(sys.modules, "willow_bot.steward.mcp_client", fake)
+    _stub_client(monkeypatch, lambda name, args: {"state": "unreachable",
+                                                  "reason": "ledger_missing",
+                                                  "ledger": "/nope"})
 
     r = heartbeat.run_heartbeat()
     drain = r["tools"][0]
