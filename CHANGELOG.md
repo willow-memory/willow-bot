@@ -44,15 +44,30 @@ All notable changes to this project are documented here.
   that runs once, lists open review items, and resolves the ones the
   leg-per-item `run_ci` filed before this build (old title shape, not one
   of this build's `ci_items` ids, GitHub `source_ref`) with `superseded by
-  the run_ci collapse build (<sha>)`. A real red (`failure` / `timed_out`
-  / `startup_failure`) on a PR still in the scan's `open` set is KEPT and
-  reported — the operator asked for the noise cleared, not for a live
-  failure to be called superseded; with no scan on record every real red
-  is kept. Resolves are paced against the store limiter the way the
-  mirror step is. Per item resolved / refused / kept, the whole step
-  `unreachable` when the queue cannot be listed; recorded in
-  `ci_legacy_cleared` only when the pass was clean and complete, so a
-  partial or paced pass re-runs next tick.
+  the run_ci collapse build (<sha>): cancelled run, not a failure`. A real
+  red (`failure` / `timed_out` / `startup_failure`) on a PR still in the
+  scan's `open` set is KEPT and reported — the operator asked for the
+  noise cleared, not for a live failure to be called superseded; a red on
+  a merged PR is cleared as `moot: PR merged`, on a closed one as `moot:
+  PR closed without merge`. `open` is trusted only through an unfiltered
+  scan record (see below); otherwise every real red is kept. Resolves are
+  paced against the store limiter the way the mirror step is. Per item
+  resolved / refused / kept, the whole step `unreachable` when the queue
+  cannot be listed; recorded in `ci_legacy_cleared` only when the pass was
+  clean and complete, so a partial or paced pass re-runs next tick.
+
+### Fixed
+
+- **Steward scan ran under the unit's own argv** (gap `1045a4056d11`).
+  `run_once` called `scan.main()` with the process argv unreset; scan reads
+  `sys.argv[1:]` as repo filters, the unit runs `willow-bot-steward loop`,
+  so the filter was `['loop']`, every PR was rejected, and `state['open']`
+  was written empty on every tick (catchup refilled three repos a tick
+  behind it). The argv is now reset around the scan the way `merge`'s
+  already was; filters are an explicit `run_once(scan_filters=...)`
+  argument; and a `steward_scan` receipt (`open`, `filters`, `at`, and a
+  `detail` line when nothing was found) makes an empty open set visible.
+  The same record is written to `state['scan']`.
 
 ### Added
 

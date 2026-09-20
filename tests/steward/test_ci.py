@@ -654,16 +654,79 @@ def _queue_client(rows, *, refuse=()):
     return _Client(result=answer)
 
 
-def _live_shaped_state(*, open_prs, old_ids):
+def _live_shaped_state(*, open_prs, old_ids, merged=(), scan_filters=(), scan=True):
     """The box as the leg-per-item build left it: its item ids in
     `ci_filed` (Loki 18CE5C43 — the collapse build must not read those as
-    its own), and the scan's `open` set."""
+    its own), the scan's `open` set, `merged_synced`, and the scan record
+    run_once now writes (absent, or filtered, when the test says so)."""
     state = _state_or_empty()
     state["open"] = open_prs
+    state["merged_synced"] = list(merged)
     state["ci_filed"] = {f"{'e' * 40}:{i}": oid for i, oid in enumerate(old_ids)}
+    if scan:
+        state["scan"] = {"at": "2026-09-20T22:00:00Z", "open": len(open_prs), "filters": list(scan_filters)}
+    else:
+        state.pop("scan", None)
     p = state_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(state, indent=2) + "\n")
+
+
+# ── the scan writes `open` honestly (gap 1045a4056d11) ──────────────────────
+
+def _scan_stub(monkeypatch, lines):
+    seen_argv: list[list[str]] = []
+
+    def main():
+        import sys
+
+        seen_argv.append(list(sys.argv))
+        # the real scan filters on sys.argv[1:]; mimic it so a leaked argv shows
+        filters = sys.argv[1:]
+        for ln in lines:
+            key = ln.split("|", 1)[0]
+            if not filters or any(f in key for f in filters):
+                print(ln)
+
+    monkeypatch.setattr(tick.scan_mod, "main", main)
+    monkeypatch.setattr(tick.inbox_mod, "ingest", lambda path: 0)
+    return seen_argv
+
+
+def test_scan_runs_with_argv_reset_so_the_units_loop_arg_is_not_a_filter(home, monkeypatch):
+    """The unit runs `willow-bot-steward loop`; scan read `['loop']` as a repo
+    filter, rejected every PR and wrote `open = []` every tick."""
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["willow-bot-steward", "loop"])
+    seen = _scan_stub(monkeypatch, ["o/r#1|a|https://x/1", "o/r#2|b|https://x/2"])
+    assert tick.run_once(do_host_sync=False) == 0
+    assert seen == [["scan"]]
+    st = _state_or_empty()
+    assert st["open"] == ["o/r#1", "o/r#2"]
+    assert st["scan"]["open"] == 2 and st["scan"]["filters"] == [] and st["scan"]["at"]
+    assert sys.argv == ["willow-bot-steward", "loop"]  # restored
+
+
+def test_scan_filters_are_explicit_and_receipted(home, monkeypatch, capsys):
+    seen = _scan_stub(monkeypatch, ["o/r#1|a|https://x/1", "p/q#2|b|https://x/2"])
+    assert tick.run_once(do_host_sync=False, scan_filters=["p/"]) == 0
+    assert seen == [["scan", "p/"]]
+    st = _state_or_empty()
+    assert st["open"] == ["p/q#2"] and st["scan"]["filters"] == ["p/"]
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.startswith("{")]
+    scan_line = [ln for ln in lines if ln["event"] == "steward_scan"][0]
+    assert scan_line["open"] == 1 and scan_line["filters"] == ["p/"] and "detail" not in scan_line
+
+
+def test_an_empty_unfiltered_scan_is_visible_in_the_receipt(home, monkeypatch, capsys):
+    _scan_stub(monkeypatch, [])
+    assert tick.run_once(do_host_sync=False) == 0
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.startswith("{")]
+    scan_line = [ln for ln in lines if ln["event"] == "steward_scan"][0]
+    assert scan_line["open"] == 0 and scan_line["filters"] == []
+    assert scan_line["detail"].startswith("scan returned no open PRs")
+    assert _state_or_empty()["scan"]["open"] == 0
 
 
 MCP = "willow-memory/willow-mcp"
@@ -681,6 +744,7 @@ def test_legacy_clear_resolves_only_what_run_ci_filed_before_this_build(home, mo
         _legacy(3, check="fleet-seams", conclusion="failure"),       # REAL red on an open PR → kept
         _legacy(4, where=f"{MCP}#579", check="test-matrix (3.13)", conclusion="cancelled"),  # live #579 shape
         _legacy(5, where=f"{MCP}#550", check="test-matrix (3.11)", conclusion="failure"),    # red, PR merged → moot
+        _legacy(6, where=f"{MCP}#540", check="lint", conclusion="timed_out"),                 # red, PR closed → moot
         {"id": "hr-1", "kind": "review", "status": "open",
          "title": f"CI red: {GROVE}#76 — 2 leg(s): title, test-suite (3.13)",
          "source_ref": "https://github.com/x/actions/runs/1/job/1"},
@@ -689,22 +753,27 @@ def test_legacy_clear_resolves_only_what_run_ci_filed_before_this_build(home, mo
          "title": "CI red: something — someone typed this failure", "source_ref": "mailto:not-github"},
         {"id": "cons-1", "kind": "consent", "status": "open", "title": "CI red: x — y failure", "source_ref": ""},
     ]
-    # the leg-per-item build's ids sit in ci_filed on the live box; #76 and #579 are open, #550 is not
-    _live_shaped_state(open_prs=[f"{GROVE}#76", f"{MCP}#579"], old_ids=["old-1", "old-2", "old-3", "old-4", "old-5"])
+    # the leg-per-item build's ids sit in ci_filed on the live box; #76 and #579 are open,
+    # #550 merged, #540 closed without merge; the scan record is this build's, unfiltered
+    _live_shaped_state(open_prs=[f"{GROVE}#76", f"{MCP}#579"], merged=[f"{MCP}#550"],
+                       old_ids=["old-1", "old-2", "old-3", "old-4", "old-5", "old-6"])
     q = _queue_client(rows)
     _use(monkeypatch, q)
     r = tick.run_ci_legacy_clear(build_sha="6c91320")
-    assert r["status"] == "ok" and r["ran"] and r["recorded"]
-    assert r["listed"] == 9 and r["legacy"] == 5
-    assert [x["item_id"] for x in r["resolved"]] == ["old-1", "old-2", "old-4", "old-5"] and r["refused"] == []
+    assert r["status"] == "ok" and r["ran"] and r["recorded"] and r["open_known"] is True
+    assert r["listed"] == 10 and r["legacy"] == 6
+    assert [(x["item_id"], x["why"]) for x in r["resolved"]] == [
+        ("old-1", "cancelled run"), ("old-2", "cancelled run"), ("old-4", "cancelled run"),
+        ("old-5", "PR merged"), ("old-6", "PR closed without merge")] and r["refused"] == []
     assert r["kept"] == [{"item_id": "old-3", "title": _legacy(3, check="fleet-seams", conclusion="failure")["title"],
                           "reason": "real red on an open PR"}]
-    res = q.named("human_required_resolve")
-    assert {i["item_id"] for i in res} == {"old-1", "old-2", "old-4", "old-5"}
-    assert all(i["note"] == "superseded by the run_ci collapse build (6c91320)" and i["status"] == "resolved"
-               for i in res)
+    notes = {i["item_id"]: i["note"] for i in q.named("human_required_resolve")}
+    assert notes["old-1"] == "superseded by the run_ci collapse build (6c91320): cancelled run, not a failure"
+    assert notes["old-5"] == "moot: PR merged; cleared by the run_ci collapse build (6c91320)"
+    assert notes["old-6"] == "moot: PR closed without merge; cleared by the run_ci collapse build (6c91320)"
+    assert all(i["status"] == "resolved" for i in q.named("human_required_resolve"))
     state = json.loads(state_path().read_text())
-    assert state["ci_legacy_cleared"] == {"at": r["at"], "resolved": 4, "kept": 1, "build_sha": "6c91320"}
+    assert state["ci_legacy_cleared"] == {"at": r["at"], "resolved": 5, "kept": 1, "build_sha": "6c91320"}
 
 
 def test_legacy_clear_keeps_every_real_red_when_the_open_set_is_unknown(home, monkeypatch):
@@ -712,10 +781,37 @@ def test_legacy_clear_keeps_every_real_red_when_the_open_set_is_unknown(home, mo
     q = _queue_client([_legacy(1), _legacy(3, check="fleet-seams", conclusion="failure")])
     _use(monkeypatch, q)
     r = tick.run_ci_legacy_clear(build_sha="abc")  # no state file: no scan has ever run
+    assert r["open_known"] is False
     assert [x["item_id"] for x in r["resolved"]] == ["old-1"]
     assert r["kept"] == [{"item_id": "old-3", "title": _legacy(3, check="fleet-seams", conclusion="failure")["title"],
-                          "reason": "open set unknown"}]
+                          "reason": "open set unknown (no unfiltered scan on record)"}]
     assert r["recorded"] is True  # kept is a decision, not a refusal
+
+
+def test_legacy_clear_does_not_trust_an_empty_open_set_from_the_old_filtered_scan(home, monkeypatch):
+    """Loki B7B947C4: the unit's scan wrote `open = []` under the leaked
+    `['loop']` filter every tick, so `open_known` was True on an empty set
+    and every real red read as moot. An empty `open` with no scan record —
+    the box as the old build left it — is unknown, not empty."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    red = _legacy(3, check="fleet-seams", conclusion="failure")
+    _live_shaped_state(open_prs=[], old_ids=["old-1", "old-3"], scan=False)
+    q = _queue_client([_legacy(1), red])
+    _use(monkeypatch, q)
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["open_known"] is False
+    assert [x["item_id"] for x in r["resolved"]] == ["old-1"]
+    assert r["kept"][0]["item_id"] == "old-3"
+    # a FILTERED scan record is not trusted either
+    _live_shaped_state(open_prs=[], old_ids=["old-1", "old-3"], scan_filters=["loop"])
+    r2 = tick.run_ci_legacy_clear(build_sha="abc", force=True)
+    assert r2["open_known"] is False and r2["kept"][0]["item_id"] == "old-3"
+    # an unfiltered scan that genuinely found nothing IS trusted: the red's PR is not open
+    _live_shaped_state(open_prs=[], old_ids=["old-1", "old-3"], scan_filters=[])
+    r3 = tick.run_ci_legacy_clear(build_sha="abc", force=True)
+    assert r3["open_known"] is True and r3["kept"] == []
+    assert [(x["item_id"], x["why"]) for x in r3["resolved"]] == [("old-1", "cancelled run"),
+                                                                    ("old-3", "PR closed without merge")]
 
 
 def test_legacy_clear_paces_against_the_limiter_and_finishes(home, monkeypatch):

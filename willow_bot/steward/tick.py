@@ -44,17 +44,30 @@ def _load_or_init_state(path: Path, open_keys: list[str]) -> dict:
     }
 
 
-def run_once(*, do_host_sync: bool | None = None) -> int:
+def run_once(*, do_host_sync: bool | None = None, scan_filters: list[str] | None = None) -> int:
     path = state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Capture scan lines
+    # Capture scan lines. `scan.main()` reads `sys.argv[1:]` as repo
+    # filters; the unit runs `willow-bot-steward loop`, so with the
+    # process argv left in place the filter was `['loop']`, every PR was
+    # rejected, and `state['open']` was written EMPTY every tick — the
+    # catchup step refilled three repos a tick behind it (gap
+    # 1045a4056d11, Loki B7B947C4). The argv is reset around the call, the
+    # way `merge` below already does, and the filters actually applied are
+    # receipted so an empty open set is visible for what it is.
     from io import StringIO
     from contextlib import redirect_stdout
 
+    filters = list(scan_filters or [])
     buf = StringIO()
-    with redirect_stdout(buf):
-        scan_mod.main()
+    old_argv = sys.argv
+    sys.argv = ["scan", *filters]
+    try:
+        with redirect_stdout(buf):
+            scan_mod.main()
+    finally:
+        sys.argv = old_argv
     lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
 
     keys: list[str] = []
@@ -66,7 +79,18 @@ def run_once(*, do_host_sync: bool | None = None) -> int:
         meta[key] = f"{title}|{url}"
 
     state = _load_or_init_state(path, keys)
+    # The scan receipt: how many PRs the bot sees open, under which filters,
+    # at what time. An unfiltered scan that finds nothing says so rather
+    # than leaving an empty list to be mistaken for "no PRs are open" —
+    # and the legacy clear trusts `open` only through this record.
+    state["scan"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                     "open": len(keys), "filters": filters}
     path.write_text(json.dumps(state, indent=2) + "\n")
+    scan_receipt: dict = {"event": "steward_scan", **state["scan"]}
+    if not keys:
+        scan_receipt["detail"] = ("scan returned no open PRs" + (f" under filters {filters}" if filters
+                                  else " — the fleet has none, or the listing failed silently"))
+    _emit(scan_receipt)
 
     rc = inbox_mod.ingest(path)
     if rc != 0:
@@ -925,36 +949,54 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
     # still sees open is exactly what the noise was drowning — the operator
     # asked for the noise cleared, not for a live failure to be called
     # superseded. Cancelled legacy items are the noise; reds on PRs no
-    # longer in `state["open"]` are moot (the PR merged or closed). When
-    # the open set is unknown (no scan has run) every real red is kept.
+    # longer open are moot — MERGED (in `merged_synced`) or CLOSED without
+    # merge — and each gets the words that are true of it.
+    #
+    # `open` is trusted only through the scan record run_once writes: an
+    # UNFILTERED scan, this build's shape. Before the argv fix the unit's
+    # scan ran under the filter `['loop']` and wrote `open = []` every tick
+    # (gap 1045a4056d11); an empty list from that path is not "no PRs are
+    # open", it is "the scan saw nothing", and every real red is kept.
+    scan = state.get("scan")
     open_prs = state.get("open")
-    open_known = isinstance(open_prs, list)
-    open_set = set(open_prs or [])
+    open_known = (isinstance(scan, dict) and scan.get("filters") == [] and isinstance(open_prs, list)
+                  and (open_prs != [] or scan.get("open") == 0))
+    open_set = set(open_prs or []) if open_known else set()
+    merged = set(state.get("merged_synced") or [])
     kept: list[dict] = []
-    to_clear: list[dict] = []
+    to_clear: list[tuple[dict, str]] = []
     for item in legacy:
         title = str(item.get("title", ""))
         m = _CI_LEGACY_TITLE_RE.match(title)
         conclusion = m.group(1) if m else ""
         where = title[len("CI red: "):].split(" — ", 1)[0]
-        if conclusion != _CI_CANCELLED:
-            if not open_known:
-                kept.append({"item_id": str(item.get("id")), "title": title, "reason": "open set unknown"})
-                continue
-            if where in open_set:
-                kept.append({"item_id": str(item.get("id")), "title": title, "reason": "real red on an open PR"})
-                continue
-        to_clear.append(item)
-    receipt.update(listed=len(rows), legacy=len(legacy), kept=kept)
-    note = f"superseded by the run_ci collapse build ({build_sha or 'unknown sha'})"
+        if conclusion == _CI_CANCELLED:
+            to_clear.append((item, "cancelled run"))
+            continue
+        if not open_known:
+            kept.append({"item_id": str(item.get("id")), "title": title,
+                         "reason": "open set unknown (no unfiltered scan on record)"})
+            continue
+        if where in open_set:
+            kept.append({"item_id": str(item.get("id")), "title": title, "reason": "real red on an open PR"})
+            continue
+        to_clear.append((item, "PR merged" if where in merged else "PR closed without merge"))
+    receipt.update(listed=len(rows), legacy=len(legacy), kept=kept, open_known=open_known)
+    build = build_sha or "unknown sha"
+    notes = {
+        "cancelled run": f"superseded by the run_ci collapse build ({build}): cancelled run, not a failure",
+        "PR merged": f"moot: PR merged; cleared by the run_ci collapse build ({build})",
+        "PR closed without merge": f"moot: PR closed without merge; cleared by the run_ci collapse build ({build})",
+    }
     # Paced like the mirror step: the store meters 60/min with a burst of 10
     # and answers the 11th call rate_limited. Wait what the limiter asks,
     # retry the same item, inside a time budget; the remainder is next tick's.
     resolved, refused, remaining, paced = [], [], 0, 0
     deadline = _clock() + _MIRROR_TIME_BUDGET_S
     budget_spent = False
-    for index, item in enumerate(to_clear):
+    for index, (item, why) in enumerate(to_clear):
         item_id = str(item.get("id"))
+        note = notes[why]
         while True:
             try:
                 result = mcp_client.call("human_required_resolve", {
@@ -965,7 +1007,7 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
                 break
             err = _tool_error(result)
             if err is None:
-                resolved.append({"item_id": item_id, "title": item.get("title", "")})
+                resolved.append({"item_id": item_id, "title": item.get("title", ""), "why": why})
                 break
             if err != "rate_limited":
                 refused.append({"item_id": item_id, "title": item.get("title", ""), "error": err})
