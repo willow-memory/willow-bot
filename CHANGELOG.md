@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.0](https://github.com/willow-memory/willow-bot/compare/v0.2.0...v0.3.0) (2026-09-20)
+
+
+### Added
+
+* **steward:** run_ci — cancelled is its own state, one item per head, resolve-on-green ([2d0709b](https://github.com/willow-memory/willow-bot/commit/2d0709bdc771ce15011f01f5eb387393f5f76105))
+* **steward:** run_ci — cancelled is its own state, one item per head, resolve-on-green, legacy clear ([19da483](https://github.com/willow-memory/willow-bot/commit/19da483fe06440ce6a2240c46e9c0fb7e15dc9e1))
+
+
+### Fixed
+
+* **steward:** legacy clear reads only this build's ids, keeps real reds on open PRs, paces; bad-clock successor judged by first sighting ([abc9ab0](https://github.com/willow-memory/willow-bot/commit/abc9ab0d41e1187d4cdab6d433e639af7b49f4bb))
+* **steward:** run_ci rework after audit — honest green, cancelled is never red, re-run resolves, bounded state, legacy clear ([2468670](https://github.com/willow-memory/willow-bot/commit/2468670fd88092de980d1396032d7b4b8fdc9f88))
+* **steward:** scan runs with argv reset and receipts its open set; legacy clear trusts open only through it, names merged vs closed ([f693d46](https://github.com/willow-memory/willow-bot/commit/f693d4643928dd69f7514bfecab213aa59c467a1))
+
 ## [0.2.0](https://github.com/willow-memory/willow-bot/compare/v0.1.2...v0.2.0) (2026-09-19)
 
 
