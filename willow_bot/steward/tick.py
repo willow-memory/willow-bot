@@ -447,17 +447,25 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
         mine = seen.get(leg["head_sha"])
         if mine is None:
             mine = _ci_epoch(leg.get("received_at"))
-        later = [sha for sha, at in seen.items()
-                 if sha != leg["head_sha"] and at is not None and (mine is None or at > mine)]
         if mine is None:
+            # The deposit's own clock is unreadable, so "later than me" is
+            # judged against the moment this step first saw it: a head
+            # whose first deposit arrived after that is a successor; an
+            # older dated head is not (Loki 18CE5C43 — any dated head used
+            # to count, so a bad clock on the newest head dropped it).
             since = leg.get("pending_since")
+            later = [sha for sha, at in seen.items()
+                     if sha != leg["head_sha"] and at is not None
+                     and isinstance(since, (int, float)) and at > since]
             if later:
-                out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1]}
+                out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1],
+                            "aged_by": "pending_since"}
             elif isinstance(since, (int, float)) and now - since >= grace_s:
                 out[key] = {**leg, "state": "stuck", "aged_by": "pending_since"}
             else:
                 out[key] = {**leg, "state": "unreachable"}
             continue
+        later = [sha for sha, at in seen.items() if sha != leg["head_sha"] and at is not None and at > mine]
         if later:
             out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1]}
         elif now - mine >= grace_s:
@@ -905,35 +913,84 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
         receipt.update(status="unreachable", ran=False, detail=f"unrecognised listing shape: {str(listing)[:120]}")
         return _emit(receipt)
 
+    # This build's own items are the ones in `ci_items` — every item it files
+    # lands there. NOT `ci_filed`: the leg-per-item build wrote its item ids
+    # into `ci_filed` too, so on the live box (~169 of them) that union read
+    # every legacy item as "own" and the pass cleared nothing, then recorded
+    # itself done (Loki 18CE5C43). The title shape is the real discriminator;
+    # the id check only guards a same-shaped title this build produced.
     own_ids = {str(v.get("id")) for v in (state.get("ci_items") or {}).values() if isinstance(v, dict)}
-    own_ids |= {str(v) for v in (state.get("ci_filed") or {}).values()}
-    own_ids |= {str(v) for v in (state.get("ci_filed_cancelled") or {}).values()}
     legacy = [r for r in rows if _is_legacy_ci_item(r, own_ids=own_ids)]
-    receipt.update(listed=len(rows), legacy=len(legacy))
-    note = f"superseded by the run_ci collapse build ({build_sha or 'unknown sha'})"
-    resolved, refused = [], []
+    # A real red (failure / timed_out / startup_failure) on a PR the bot
+    # still sees open is exactly what the noise was drowning — the operator
+    # asked for the noise cleared, not for a live failure to be called
+    # superseded. Cancelled legacy items are the noise; reds on PRs no
+    # longer in `state["open"]` are moot (the PR merged or closed). When
+    # the open set is unknown (no scan has run) every real red is kept.
+    open_prs = state.get("open")
+    open_known = isinstance(open_prs, list)
+    open_set = set(open_prs or [])
+    kept: list[dict] = []
+    to_clear: list[dict] = []
     for item in legacy:
+        title = str(item.get("title", ""))
+        m = _CI_LEGACY_TITLE_RE.match(title)
+        conclusion = m.group(1) if m else ""
+        where = title[len("CI red: "):].split(" — ", 1)[0]
+        if conclusion != _CI_CANCELLED:
+            if not open_known:
+                kept.append({"item_id": str(item.get("id")), "title": title, "reason": "open set unknown"})
+                continue
+            if where in open_set:
+                kept.append({"item_id": str(item.get("id")), "title": title, "reason": "real red on an open PR"})
+                continue
+        to_clear.append(item)
+    receipt.update(listed=len(rows), legacy=len(legacy), kept=kept)
+    note = f"superseded by the run_ci collapse build ({build_sha or 'unknown sha'})"
+    # Paced like the mirror step: the store meters 60/min with a burst of 10
+    # and answers the 11th call rate_limited. Wait what the limiter asks,
+    # retry the same item, inside a time budget; the remainder is next tick's.
+    resolved, refused, remaining, paced = [], [], 0, 0
+    deadline = _clock() + _MIRROR_TIME_BUDGET_S
+    budget_spent = False
+    for index, item in enumerate(to_clear):
         item_id = str(item.get("id"))
-        try:
-            result = mcp_client.call("human_required_resolve", {
-                "app_id": app, "item_id": item_id, "status": "resolved", "note": note,
-            })
-        except Exception as exc:  # noqa: BLE001 — one refused item is a line, not a dead step
-            refused.append({"item_id": item_id, "title": item.get("title", ""), "error": str(exc)[:300]})
-            continue
-        err = _tool_error(result)
-        if err:
-            refused.append({"item_id": item_id, "title": item.get("title", ""), "error": err})
-            continue
-        resolved.append({"item_id": item_id, "title": item.get("title", "")})
-    # Recorded as cleared only when nothing was refused, so a partial pass
-    # runs again next tick for the remainder rather than leaving it a hand pass.
-    if not refused:
-        state["ci_legacy_cleared"] = {"at": receipt["at"], "resolved": len(resolved), "build_sha": build_sha}
+        while True:
+            try:
+                result = mcp_client.call("human_required_resolve", {
+                    "app_id": app, "item_id": item_id, "status": "resolved", "note": note,
+                })
+            except Exception as exc:  # noqa: BLE001 — one refused item is a line, not a dead step
+                refused.append({"item_id": item_id, "title": item.get("title", ""), "error": str(exc)[:300]})
+                break
+            err = _tool_error(result)
+            if err is None:
+                resolved.append({"item_id": item_id, "title": item.get("title", "")})
+                break
+            if err != "rate_limited":
+                refused.append({"item_id": item_id, "title": item.get("title", ""), "error": err})
+                break
+            wait = min(max(int((result.get("retry_after") if isinstance(result, dict) else 1) or 1), 1),
+                       _MIRROR_MAX_WAIT_S)
+            if _clock() + wait > deadline:
+                budget_spent = True
+                break
+            paced += 1
+            _sleep(wait)
+        if budget_spent:
+            remaining = len(to_clear) - index
+            break
+    # Recorded as cleared only when the pass was clean AND complete, so a
+    # partial pass runs again next tick for the remainder — never a hand pass.
+    complete = not refused and not remaining
+    if complete:
+        state["ci_legacy_cleared"] = {"at": receipt["at"], "resolved": len(resolved), "kept": len(kept),
+                                      "build_sha": build_sha}
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state, indent=2) + "\n")
-    receipt.update(status="ok" if not refused else "partial", ran=True, resolved=resolved, refused=refused,
-                   recorded=not refused)
+    status = "ok" if complete else ("paced" if remaining and not refused else "partial")
+    receipt.update(status=status, ran=True, resolved=resolved, refused=refused, remaining=remaining,
+                   paced=paced, recorded=complete)
     return _emit(receipt)
 
 

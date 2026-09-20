@@ -424,6 +424,29 @@ def test_unreachable_ages_by_first_sighting_and_becomes_stuck(home, monkeypatch)
     assert json.loads(state_path().read_text())["ci_cancelled_pending"] == {}
 
 
+def test_unreadable_timestamp_on_the_newest_head_is_not_superseded_by_an_older_head(home, monkeypatch):
+    """Loki 18CE5C43: with `mine` unknown, any dated head used to count as
+    a successor — an older one included — so a cancelled leg on the newest
+    head with a bad clock was dropped. Now "later" is judged against the
+    moment the step first saw the leg."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    base = time.time()
+    # #552 has an older, dated head, then a newer head whose deposit clock is unreadable
+    deposits.append_local(_row(MCP, SHA3, 41, "lint", "success", pr=552, received_at=_iso(base - 3600)))
+    deposits.append_local(_row(MCP, SHA2, 40, "lint", "cancelled", pr=552, received_at="not a time"))
+    c = _Client()
+    _use(monkeypatch, c)
+    monkeypatch.setattr(tick, "_ci_clock", lambda: base)
+    r = tick.run_ci()
+    assert {x["leg"]: x["state"] for x in r["cancelled"] if x["pr"] == 552} == {"lint": "unreachable"}
+    # a head that genuinely arrives after the sighting IS a successor
+    deposits.append_local(_row(MCP, "f" * 40, 42, "lint", "success", pr=552, received_at=_iso(base + 30)))
+    r2 = tick.run_ci()
+    lint = [x for x in r2["cancelled"] if x["pr"] == 552][0]
+    assert lint["state"] == "superseded" and lint["successor"] == "f" * 40 and lint["aged_by"] == "pending_since"
+
+
 def test_grace_env_overrides_the_default(home, monkeypatch):
     monkeypatch.setenv(tick._CI_CANCELLED_GRACE_ENV, "2.5")
     assert tick._ci_grace_s() == 150.0
@@ -631,6 +654,21 @@ def _queue_client(rows, *, refuse=()):
     return _Client(result=answer)
 
 
+def _live_shaped_state(*, open_prs, old_ids):
+    """The box as the leg-per-item build left it: its item ids in
+    `ci_filed` (Loki 18CE5C43 — the collapse build must not read those as
+    its own), and the scan's `open` set."""
+    state = _state_or_empty()
+    state["open"] = open_prs
+    state["ci_filed"] = {f"{'e' * 40}:{i}": oid for i, oid in enumerate(old_ids)}
+    p = state_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(state, indent=2) + "\n")
+
+
+MCP = "willow-memory/willow-mcp"
+
+
 def test_legacy_clear_resolves_only_what_run_ci_filed_before_this_build(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
@@ -638,7 +676,11 @@ def test_legacy_clear_resolves_only_what_run_ci_filed_before_this_build(home, mo
     _use(monkeypatch, c)
     tick.run_ci()  # files hr-1, a new-shape item
     rows = [
-        _legacy(1), _legacy(2, check="test-matrix (3.11)"), _legacy(3, check="fleet-seams", conclusion="failure"),
+        _legacy(1),                                                  # cancelled, open PR → noise
+        _legacy(2, check="test-matrix (3.11)"),                      # cancelled, open PR → noise
+        _legacy(3, check="fleet-seams", conclusion="failure"),       # REAL red on an open PR → kept
+        _legacy(4, where=f"{MCP}#579", check="test-matrix (3.13)", conclusion="cancelled"),  # live #579 shape
+        _legacy(5, where=f"{MCP}#550", check="test-matrix (3.11)", conclusion="failure"),    # red, PR merged → moot
         {"id": "hr-1", "kind": "review", "status": "open",
          "title": f"CI red: {GROVE}#76 — 2 leg(s): title, test-suite (3.13)",
          "source_ref": "https://github.com/x/actions/runs/1/job/1"},
@@ -647,18 +689,85 @@ def test_legacy_clear_resolves_only_what_run_ci_filed_before_this_build(home, mo
          "title": "CI red: something — someone typed this failure", "source_ref": "mailto:not-github"},
         {"id": "cons-1", "kind": "consent", "status": "open", "title": "CI red: x — y failure", "source_ref": ""},
     ]
+    # the leg-per-item build's ids sit in ci_filed on the live box; #76 and #579 are open, #550 is not
+    _live_shaped_state(open_prs=[f"{GROVE}#76", f"{MCP}#579"], old_ids=["old-1", "old-2", "old-3", "old-4", "old-5"])
     q = _queue_client(rows)
     _use(monkeypatch, q)
     r = tick.run_ci_legacy_clear(build_sha="6c91320")
     assert r["status"] == "ok" and r["ran"] and r["recorded"]
-    assert r["listed"] == 7 and r["legacy"] == 3
-    assert [x["item_id"] for x in r["resolved"]] == ["old-1", "old-2", "old-3"] and r["refused"] == []
+    assert r["listed"] == 9 and r["legacy"] == 5
+    assert [x["item_id"] for x in r["resolved"]] == ["old-1", "old-2", "old-4", "old-5"] and r["refused"] == []
+    assert r["kept"] == [{"item_id": "old-3", "title": _legacy(3, check="fleet-seams", conclusion="failure")["title"],
+                          "reason": "real red on an open PR"}]
     res = q.named("human_required_resolve")
-    assert {i["item_id"] for i in res} == {"old-1", "old-2", "old-3"}
+    assert {i["item_id"] for i in res} == {"old-1", "old-2", "old-4", "old-5"}
     assert all(i["note"] == "superseded by the run_ci collapse build (6c91320)" and i["status"] == "resolved"
                for i in res)
     state = json.loads(state_path().read_text())
-    assert state["ci_legacy_cleared"]["resolved"] == 3 and state["ci_legacy_cleared"]["build_sha"] == "6c91320"
+    assert state["ci_legacy_cleared"] == {"at": r["at"], "resolved": 4, "kept": 1, "build_sha": "6c91320"}
+
+
+def test_legacy_clear_keeps_every_real_red_when_the_open_set_is_unknown(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    q = _queue_client([_legacy(1), _legacy(3, check="fleet-seams", conclusion="failure")])
+    _use(monkeypatch, q)
+    r = tick.run_ci_legacy_clear(build_sha="abc")  # no state file: no scan has ever run
+    assert [x["item_id"] for x in r["resolved"]] == ["old-1"]
+    assert r["kept"] == [{"item_id": "old-3", "title": _legacy(3, check="fleet-seams", conclusion="failure")["title"],
+                          "reason": "open set unknown"}]
+    assert r["recorded"] is True  # kept is a decision, not a refusal
+
+
+def test_legacy_clear_paces_against_the_limiter_and_finishes(home, monkeypatch):
+    """169 open on the box; the store meters 60/min with a burst of 10 and
+    answers the 11th call rate_limited. The clear waits what it is told
+    and retries the same item — every item lands, none is skipped."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    rows = [_legacy(i) for i in range(1, 26)]
+    limited = {"n": 0}
+
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            return {"items": rows, "count": len(rows), "stats": {"open": len(rows)}}
+        if name == "human_required_resolve":
+            limited["n"] += 1
+            if limited["n"] % 11 == 0:
+                return {"error": "rate_limited", "retry_after": 2}
+            return {"ok": True}
+        return {"ok": True}
+
+    sleeps: list[int] = []
+    monkeypatch.setattr(tick, "_sleep", sleeps.append)
+    _use(monkeypatch, _Client(result=answer))
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["status"] == "ok" and r["recorded"] and r["remaining"] == 0
+    assert len(r["resolved"]) == 25 and r["refused"] == []
+    assert r["paced"] == len(sleeps) == 2 and sleeps == [2, 2]
+
+
+def test_legacy_clear_stops_at_the_time_budget_and_resumes_next_tick(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    rows = [_legacy(i) for i in range(1, 4)]
+    calls = {"n": 0}
+
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            return {"items": rows}
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return {"error": "rate_limited", "retry_after": 30}
+        return {"ok": True}
+
+    monkeypatch.setattr(tick, "_MIRROR_TIME_BUDGET_S", 5.0)
+    monkeypatch.setattr(tick, "_sleep", lambda s: (_ for _ in ()).throw(AssertionError("must not sleep past budget")))
+    _use(monkeypatch, _Client(result=answer))
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["status"] == "paced" and r["recorded"] is False
+    assert [x["item_id"] for x in r["resolved"]] == ["old-1"] and r["remaining"] == 2
+    assert "ci_legacy_cleared" not in _state_or_empty()
+    monkeypatch.setattr(tick, "_MIRROR_TIME_BUDGET_S", 120.0)
+    r2 = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r2["ran"] is True and r2["recorded"] is True
 
 
 def test_legacy_clear_runs_once_unless_forced(home, monkeypatch):

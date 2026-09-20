@@ -43,11 +43,16 @@ All notable changes to this project are documented here.
   **`ci-legacy-clear`** — a new tick step (also a subcommand, `force`)
   that runs once, lists open review items, and resolves the ones the
   leg-per-item `run_ci` filed before this build (old title shape, not one
-  of this build's ids, GitHub `source_ref`) with `superseded by the
-  run_ci collapse build (<sha>)`; per item resolved / refused, the whole
-  step `unreachable` when the queue cannot be listed; recorded in
-  `ci_legacy_cleared` only when nothing was refused, so a partial pass
-  re-runs next tick.
+  of this build's `ci_items` ids, GitHub `source_ref`) with `superseded by
+  the run_ci collapse build (<sha>)`. A real red (`failure` / `timed_out`
+  / `startup_failure`) on a PR still in the scan's `open` set is KEPT and
+  reported — the operator asked for the noise cleared, not for a live
+  failure to be called superseded; with no scan on record every real red
+  is kept. Resolves are paced against the store limiter the way the
+  mirror step is. Per item resolved / refused / kept, the whole step
+  `unreachable` when the queue cannot be listed; recorded in
+  `ci_legacy_cleared` only when the pass was clean and complete, so a
+  partial or paced pass re-runs next tick.
 
 ### Added
 
