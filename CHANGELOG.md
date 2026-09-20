@@ -12,6 +12,63 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Steward `run_ci` stops drowning the review queue** (gap `25cb3c1a3489`).
+  `cancelled` is no longer a red: a cancelled leg is held in
+  `ci_cancelled_pending` and decided each tick — `superseded` when a later
+  head for the same PR shows up in the bot's own deposits (dropped, never
+  filed), `waiting` inside the grace window, `stuck` after it (filed), or
+  `unreachable` when the deposit's timestamp cannot be read (neither).
+  Grace defaults to 10 minutes (`WILLOW_BOT_CI_CANCELLED_GRACE_MIN`). Red
+  legs collapse into ONE review item per (repo, pr, head_sha), keyed in
+  `ci_items`, with the aggregate `test` job folded into its cause's item;
+  a later leg on a filed head joins the item (`appended`) instead of filing
+  again. When a later head for the same PR is fully green, the PR's older
+  items are resolved through `human_required_resolve` with `superseded by
+  <sha>, green at <ts>`. `ci_filed` keeps its `head_sha:check_run_id` key
+  shape so the voice step's `ci-red` label mapping is unchanged.
+
+  After Loki's audit (dispatch 82A7DB13): "green" means every leg the
+  item's own head recorded has reported green on the later head — the
+  earlier head's leg set is the only expected set the bot knows — never
+  a single early green leg; a head re-run to green resolves its own item
+  (`re-run green at <ts>`); a stuck cancelled leg is remembered in
+  `ci_filed_cancelled`, not `ci_filed`, so voice never shows it as red;
+  a pending cancelled leg whose check re-runs is `rerun` and dropped; an
+  `unreachable` leg ages by first sighting (`pending_since`) and becomes
+  `stuck`; the state maps are pruned each tick to one live head per PR
+  plus the heads of unresolved items and pending cancels, with resolved
+  items dropped (`ci_filed` remains the durable no-refile memory).
+  **`ci-legacy-clear`** — a new tick step (also a subcommand, `force`)
+  that runs once, lists open review items, and resolves the ones the
+  leg-per-item `run_ci` filed before this build (old title shape, not one
+  of this build's `ci_items` ids, GitHub `source_ref`) with `superseded by
+  the run_ci collapse build (<sha>): cancelled run, not a failure`. A real
+  red (`failure` / `timed_out` / `startup_failure`) on a PR still in the
+  scan's `open` set is KEPT and reported — the operator asked for the
+  noise cleared, not for a live failure to be called superseded; a red on
+  a merged PR is cleared as `moot: PR merged`, on a closed one as `moot:
+  PR closed without merge`. `open` is trusted only through an unfiltered
+  scan record (see below); otherwise every real red is kept. Resolves are
+  paced against the store limiter the way the mirror step is. Per item
+  resolved / refused / kept, the whole step `unreachable` when the queue
+  cannot be listed; recorded in `ci_legacy_cleared` only when the pass was
+  clean and complete, so a partial or paced pass re-runs next tick.
+
+### Fixed
+
+- **Steward scan ran under the unit's own argv** (gap `1045a4056d11`).
+  `run_once` called `scan.main()` with the process argv unreset; scan reads
+  `sys.argv[1:]` as repo filters, the unit runs `willow-bot-steward loop`,
+  so the filter was `['loop']`, every PR was rejected, and `state['open']`
+  was written empty on every tick (catchup refilled three repos a tick
+  behind it). The argv is now reset around the scan the way `merge`'s
+  already was; filters are an explicit `run_once(scan_filters=...)`
+  argument; and a `steward_scan` receipt (`open`, `filters`, `at`, and a
+  `detail` line when nothing was found) makes an empty open set visible.
+  The same record is written to `state['scan']`.
+
 ### Added
 
 - **Steward tick reconciles owned-prefix labels on every open PR.**
