@@ -29,6 +29,26 @@ All notable changes to this project are documented here.
   <sha>, green at <ts>`. `ci_filed` keeps its `head_sha:check_run_id` key
   shape so the voice step's `ci-red` label mapping is unchanged.
 
+  After Loki's audit (dispatch 82A7DB13): "green" means every leg the
+  item's own head recorded has reported green on the later head — the
+  earlier head's leg set is the only expected set the bot knows — never
+  a single early green leg; a head re-run to green resolves its own item
+  (`re-run green at <ts>`); a stuck cancelled leg is remembered in
+  `ci_filed_cancelled`, not `ci_filed`, so voice never shows it as red;
+  a pending cancelled leg whose check re-runs is `rerun` and dropped; an
+  `unreachable` leg ages by first sighting (`pending_since`) and becomes
+  `stuck`; the state maps are pruned each tick to one live head per PR
+  plus the heads of unresolved items and pending cancels, with resolved
+  items dropped (`ci_filed` remains the durable no-refile memory).
+  **`ci-legacy-clear`** — a new tick step (also a subcommand, `force`)
+  that runs once, lists open review items, and resolves the ones the
+  leg-per-item `run_ci` filed before this build (old title shape, not one
+  of this build's ids, GitHub `source_ref`) with `superseded by the
+  run_ci collapse build (<sha>)`; per item resolved / refused, the whole
+  step `unreachable` when the queue cannot be listed; recorded in
+  `ci_legacy_cleared` only when nothing was refused, so a partial pass
+  re-runs next tick.
+
 ### Added
 
 - **Steward tick reconciles owned-prefix labels on every open PR.**

@@ -7,12 +7,17 @@ from an offset and files red heads as human_required review items.
 Gap 25cb3c1a3489 (2026-09-20) — three asks on top: `cancelled` is its own
 state (superseded / waiting / stuck / unreachable), one item per (repo, pr,
 head_sha) with the aggregate `test` job folded in, and resolve-on-green.
+Loki's audit (82A7DB13) added: green means the earlier head's leg set has
+reported, not the first green leg; a stuck cancelled leg is not a red;
+a head re-run to green resolves; the state maps stay bounded; and the
+one-time clear of items filed before this build runs inside the bot.
 The deposits file is real; the MCP client is a fake.
 """
 from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -52,6 +57,10 @@ def _use(monkeypatch, client):
     monkeypatch.setattr("willow_bot.steward.mcp_client.call", client)
 
 
+def _iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
 def _row(repo, sha, cid, name, conclusion, pr=76, received_at=None):
     rec = deposits.ci_outcome_record(repo=repo, head_sha=sha, check_run_id=cid,
                                      check_name=name, conclusion=conclusion, received_at=received_at)
@@ -62,7 +71,10 @@ def _row(repo, sha, cid, name, conclusion, pr=76, received_at=None):
 
 SHA = "34542ff3a05131c265a04bf96823b217da6f891b"
 SHA2 = "9e1d0c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d"
+SHA3 = "1111111111111111111111111111111111111111"
 GROVE = "willow-memory/willows-grove"
+# The seed head's leg set — the expected set a later head must report on.
+SEED_LEGS = ("title", "CodeQL", "test-suite (3.13)", "test-windows (3.11)")
 
 
 def _seed():
@@ -82,6 +94,13 @@ def _seed():
 def _later(minutes: float):
     base = time.time()
     return lambda: base + minutes * 60
+
+
+def _green_head(repo, sha, pr, *, at, legs=SEED_LEGS, start_cid=50):
+    """Every leg in `legs` green on `sha` — CodeQL neutral, the rest success."""
+    for i, name in enumerate(legs):
+        deposits.append_local(_row(repo, sha, start_cid + i, name, "neutral" if name == "CodeQL" else "success",
+                                   pr=pr, received_at=_iso(at)))
 
 
 # ── the basics, carried over ─────────────────────────────────────────────────
@@ -106,7 +125,6 @@ def test_reds_are_reported_even_when_mcp_is_off(home, monkeypatch):
     assert [x["check"] for x in r["red"]] == ["title", "test-suite (3.13)"]
     assert [(x["leg"], x["state"]) for x in r["cancelled"]] == [("test-windows (3.11)", "waiting")]
     assert c.calls == [] and r["filed"] == []
-    # the offset advanced: the seat has read these; a later MCP-on tick does not re-report them
     r2 = tick.run_ci()
     assert r2["red"] == []
 
@@ -137,11 +155,12 @@ def test_a_red_with_no_pr_names_the_sha(home, monkeypatch):
     assert r["filed"][-1]["where"] == "willow-memory/willow-mcp@" + "c" * 12
 
 
-def test_ci_step_runs_in_the_loop_after_mirror_before_audit():
+def test_ci_steps_run_in_the_loop_after_mirror_before_audit():
     import inspect
 
     src = inspect.getsource(tick.run_loop)
-    assert src.index('("mirror", run_mirror)') < src.index('("ci", run_ci)') < src.index('("audit", run_audit)')
+    assert (src.index('("mirror", run_mirror)') < src.index('("ci", run_ci)')
+            < src.index('("ci-legacy-clear", run_ci_legacy_clear)') < src.index('("audit", run_audit)'))
 
 
 # ── ask 2: one filing per (repo, pr, head_sha) ───────────────────────────────
@@ -161,15 +180,12 @@ def test_one_item_per_head_naming_every_red_leg(home, monkeypatch):
     assert i["summary"].startswith(f"head {SHA}\n")
     assert "job/1" in i["summary"] and "job/3" in i["summary"]
     assert i["source_ref"].endswith("/job/1")
-    # the cancelled leg is not in the item and not filed
     assert "test-windows" not in i["summary"]
     assert r["filed"] == [{"where": f"{GROVE}#76", "head_sha": SHA, "legs": ["title", "test-suite (3.13)"],
                            "conclusions": ["failure", "failure"], "id": "hr-1"}]
-    # both legs map to the one item, under the key shape voice reads by sha prefix
     state = json.loads(state_path().read_text())
     assert state["ci_filed"] == {f"{SHA}:1": "hr-1", f"{SHA}:3": "hr-1"}
     assert state["ci_items"][f"{GROVE}#76@{SHA}"]["id"] == "hr-1"
-    # second tick: nothing new, nothing re-filed
     r2 = tick.run_ci()
     assert r2["red"] == [] and r2["filed"] == [] and len(c.calls) == 1
 
@@ -194,11 +210,27 @@ def test_a_new_leg_on_a_filed_head_joins_its_item(home, monkeypatch):
     tick.run_ci()
     deposits.append_local(_row(GROVE, SHA, 6, "fleet-seams", "failure"))
     r = tick.run_ci()
-    assert r["filed"] == [] and r["appended"] == [{"where": f"{GROVE}#76", "check": "fleet-seams", "id": "hr-1"}]
+    assert r["filed"] == [] and r["appended"] == [{"where": f"{GROVE}#76", "check": "fleet-seams",
+                                                   "conclusion": "failure", "id": "hr-1"}]
     assert len(c.named("human_required_enqueue")) == 1
     state = json.loads(state_path().read_text())
     assert state["ci_filed"][f"{SHA}:6"] == "hr-1"
     assert state["ci_items"][f"{GROVE}#76@{SHA}"]["legs"] == ["title", "test-suite (3.13)", "fleet-seams"]
+
+
+def test_a_rerun_of_a_red_leg_does_not_duplicate_its_name(home, monkeypatch):
+    """Loki note: a re-run under a new check_run_id is the same leg."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    deposits.append_local(_row(GROVE, SHA, 7, "title", "failure"))  # re-run, still red
+    r = tick.run_ci()
+    assert [a["check"] for a in r["appended"]] == ["title"]
+    state = json.loads(state_path().read_text())
+    assert state["ci_items"][f"{GROVE}#76@{SHA}"]["legs"] == ["title", "test-suite (3.13)"]
+    assert state["ci_filed"][f"{SHA}:7"] == "hr-1"
 
 
 def test_the_aggregate_test_job_is_folded_into_its_cause(home, monkeypatch):
@@ -214,6 +246,21 @@ def test_the_aggregate_test_job_is_folded_into_its_cause(home, monkeypatch):
     assert mcp_items[0]["title"] == "CI red: willow-memory/willow-mcp#550 — 1 leg(s): test-matrix (3.11)"
     assert "test concluded failure (aggregate)" in mcp_items[0]["summary"]
     assert mcp_items[0]["source_ref"].endswith("/job/20")
+
+
+def test_the_aggregate_alone_on_an_unfiled_head_is_still_filed(home, monkeypatch):
+    """Loki note: when only the aggregate arrives (its cause leg's deposit
+    lost or later), the head is still red — filed naming `test`."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    deposits.append_local(_row("willow-memory/willow-mcp", SHA2, 21, "test", "failure", pr=550))
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    mcp_items = [i for i in c.named("human_required_enqueue") if "#550" in i["title"]]
+    assert mcp_items[0]["title"] == "CI red: willow-memory/willow-mcp#550 — 1 leg(s): test"
+    assert "(aggregate)" not in mcp_items[0]["summary"]
+    assert mcp_items[0]["source_ref"].endswith("/job/21")
 
 
 def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypatch):
@@ -232,7 +279,7 @@ def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypat
     assert r["status"] == "could-not-run"
     assert [f["where"] for f in r["filed"]] == [f"{GROVE}#76"]
     assert r["refused"] == [{"where": "willow-memory/willow-mcp#550", "legs": ["lint"], "error": "rate_limited"}]
-    assert r["new_offset"] == r["offset"]  # held where the refused row can be found again
+    assert r["new_offset"] == r["offset"]
     r2 = tick.run_ci()
     assert r2["status"] == "ok"
     assert [f["where"] for f in r2["filed"]] == ["willow-memory/willow-mcp#550"]
@@ -250,11 +297,11 @@ def test_cancelled_waits_inside_the_grace_window(home, monkeypatch):
     assert r["cancelled"] == [{"repo": GROVE, "pr": 76, "head_sha": SHA, "leg": "test-windows (3.11)",
                                "state": "waiting"}]
     assert "cancelled" not in json.dumps([i["title"] for i in c.named("human_required_enqueue")])
-    # still pending next tick; decided again, not re-read
     r2 = tick.run_ci()
     assert [x["state"] for x in r2["cancelled"]] == ["waiting"]
     state = json.loads(state_path().read_text())
     assert list(state["ci_cancelled_pending"]) == [f"{SHA}:5"]
+    assert isinstance(state["ci_cancelled_pending"][f"{SHA}:5"]["pending_since"], float)
 
 
 def test_cancelled_is_superseded_when_a_later_head_appears(home, monkeypatch):
@@ -263,16 +310,13 @@ def test_cancelled_is_superseded_when_a_later_head_appears(home, monkeypatch):
     c = _Client()
     _use(monkeypatch, c)
     tick.run_ci()
-    # the next push: a new head for #76 — the cancelled run was superseded
-    deposits.append_local(_row(GROVE, SHA2, 7, "title", "success",
-                               received_at=_iso(time.time() + 30)))
+    deposits.append_local(_row(GROVE, SHA2, 7, "title", "success", received_at=_iso(time.time() + 30)))
     r = tick.run_ci()
     assert r["cancelled"] == [{"repo": GROVE, "pr": 76, "head_sha": SHA, "leg": "test-windows (3.11)",
                                "state": "superseded", "successor": SHA2}]
-    assert len(c.named("human_required_enqueue")) == 1  # the red item only
+    assert len(c.named("human_required_enqueue")) == 1
     state = json.loads(state_path().read_text())
     assert state["ci_cancelled_pending"] == {}
-    # gone for good: the next tick does not mention it
     assert tick.run_ci()["cancelled"] == []
 
 
@@ -286,14 +330,22 @@ def test_cancelled_with_no_successor_after_grace_is_stuck_and_filed(home, monkey
     monkeypatch.setattr(tick, "_ci_clock", _later(6))
     r = tick.run_ci()
     assert [x["state"] for x in r["cancelled"]] == ["stuck"]
-    # folded into the SAME item as the head's reds — no second item
     assert r["filed"] == [] and r["appended"] == [{"where": f"{GROVE}#76", "check": "test-windows (3.11)",
-                                                   "id": "hr-1"}]
+                                                   "conclusion": "cancelled", "id": "hr-1"}]
     state = json.loads(state_path().read_text())
-    assert state["ci_filed"][f"{SHA}:5"] == "hr-1" and state["ci_cancelled_pending"] == {}
+    assert state["ci_cancelled_pending"] == {}
+    # Loki finding 2: a cancelled leg is remembered, but NOT as a red —
+    # voice must not derive `ci-red` / "N red leg(s) filed" from it.
+    assert f"{SHA}:5" not in state["ci_filed"]
+    assert state["ci_filed_cancelled"][f"{SHA}:5"] == "hr-1"
+    from willow_bot.steward import voice
+
+    assert voice._ci_red_legs_for_sha(state, SHA) == [f"{SHA}:1", f"{SHA}:3"]
+    r3 = tick.run_ci()
+    assert r3["cancelled"] == [] and r3["appended"] == []
 
 
-def test_stuck_cancelled_on_an_unfiled_head_is_its_own_item(home, monkeypatch):
+def test_stuck_cancelled_on_an_unfiled_head_is_its_own_item_and_not_a_red(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
     deposits.append_local(_row("willow-memory/willow-mcp", SHA2, 30, "test-matrix (3.13)", "cancelled", pr=551))
@@ -305,6 +357,36 @@ def test_stuck_cancelled_on_an_unfiled_head_is_its_own_item(home, monkeypatch):
     stuck = [f for f in r["filed"] if f["where"] == "willow-memory/willow-mcp#551"]
     assert stuck == [{"where": "willow-memory/willow-mcp#551", "head_sha": SHA2, "legs": ["test-matrix (3.13)"],
                       "conclusions": ["cancelled"], "id": "hr-2"}]
+    state = json.loads(state_path().read_text())
+    from willow_bot.steward import voice
+
+    assert voice._ci_red_legs_for_sha(state, SHA2) == []
+
+
+def test_grace_boundary_at_equality_is_stuck(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setenv(tick._CI_CANCELLED_GRACE_ENV, "5")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    state = json.loads(state_path().read_text())
+    received = tick._ci_epoch(state["ci_cancelled_pending"][f"{SHA}:5"]["received_at"])
+    monkeypatch.setattr(tick, "_ci_clock", lambda: received + 300.0)
+    assert [x["state"] for x in tick.run_ci()["cancelled"]] == ["stuck"]
+
+
+def test_grace_boundary_just_under_is_waiting(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setenv(tick._CI_CANCELLED_GRACE_ENV, "5")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    state = json.loads(state_path().read_text())
+    received = tick._ci_epoch(state["ci_cancelled_pending"][f"{SHA}:5"]["received_at"])
+    monkeypatch.setattr(tick, "_ci_clock", lambda: received + 299.0)
+    assert [x["state"] for x in tick.run_ci()["cancelled"]] == ["waiting"]
 
 
 def test_cancelled_with_unreadable_timestamp_is_unreachable_not_filed(home, monkeypatch):
@@ -314,11 +396,32 @@ def test_cancelled_with_unreadable_timestamp_is_unreachable_not_filed(home, monk
                                received_at="not a time"))
     c = _Client()
     _use(monkeypatch, c)
-    monkeypatch.setattr(tick, "_ci_clock", _later(60))
     r = tick.run_ci()
     states = {x["leg"]: x["state"] for x in r["cancelled"]}
-    assert states["lint"] == "unreachable" and states["test-windows (3.11)"] == "stuck"
+    assert states["lint"] == "unreachable" and states["test-windows (3.11)"] == "waiting"
     assert not any("#552" in i["title"] for i in c.named("human_required_enqueue"))
+
+
+def test_unreachable_ages_by_first_sighting_and_becomes_stuck(home, monkeypatch):
+    """Loki finding 4 (pending set unbounded): an unreadable timestamp is
+    `unreachable` only until the grace window has passed since the step
+    first saw it; then it is stuck by `pending_since`."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    deposits.append_local(_row("willow-memory/willow-mcp", SHA2, 40, "lint", "cancelled", pr=552,
+                               received_at="not a time"))
+    c = _Client()
+    _use(monkeypatch, c)
+    base = time.time()
+    monkeypatch.setattr(tick, "_ci_clock", lambda: base)
+    r = tick.run_ci()
+    assert {x["leg"]: x["state"] for x in r["cancelled"]}["lint"] == "unreachable"
+    monkeypatch.setattr(tick, "_ci_clock", lambda: base + 601)
+    r2 = tick.run_ci()
+    lint = [x for x in r2["cancelled"] if x["leg"] == "lint"][0]
+    assert lint["state"] == "stuck" and lint["aged_by"] == "pending_since"
+    assert any("#552" in i["title"] for i in c.named("human_required_enqueue"))
+    assert json.loads(state_path().read_text())["ci_cancelled_pending"] == {}
 
 
 def test_grace_env_overrides_the_default(home, monkeypatch):
@@ -330,18 +433,6 @@ def test_grace_env_overrides_the_default(home, monkeypatch):
 
 # ── ask 3: resolve-on-green ──────────────────────────────────────────────────
 
-def _iso(epoch: float) -> str:
-    from datetime import datetime, timezone
-
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
-
-
-def _green_head(repo, sha, pr, *, at):
-    for cid, name in ((51, "lint"), (52, "test-matrix (3.11)"), (53, "CodeQL")):
-        deposits.append_local(_row(repo, sha, cid, name, "success" if name != "CodeQL" else "neutral",
-                                   pr=pr, received_at=_iso(at)))
-
-
 def test_a_later_green_head_resolves_the_prs_older_items(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
@@ -351,40 +442,88 @@ def test_a_later_green_head_resolves_the_prs_older_items(home, monkeypatch):
     assert first["resolved"] == []
     _green_head(GROVE, SHA2, 76, at=time.time() + 60)
     r = tick.run_ci()
-    assert r["resolved"] == [{"where": f"{GROVE}#76@{SHA}", "item_id": "hr-1", "superseded_by": SHA2}]
+    assert r["resolved"] == [{"where": f"{GROVE}#76@{SHA}", "item_id": "hr-1", "superseded_by": SHA2,
+                              "how": "superseded"}]
     res = c.named("human_required_resolve")
     assert len(res) == 1
     assert res[0]["item_id"] == "hr-1" and res[0]["status"] == "resolved"
     assert res[0]["note"].startswith(f"superseded by {SHA2}, green at ")
+    # Loki finding 4: a resolved item is dropped from state; its legs stay in ci_filed
     state = json.loads(state_path().read_text())
-    assert state["ci_items"][f"{GROVE}#76@{SHA}"]["resolved"]["by"] == SHA2
-    # idempotent: a third tick resolves nothing again
+    assert f"{GROVE}#76@{SHA}" not in state["ci_items"]
+    assert state["ci_filed"][f"{SHA}:1"] == "hr-1"
     assert tick.run_ci()["resolved"] == [] and len(c.named("human_required_resolve")) == 1
 
 
-def test_a_later_head_that_is_not_fully_green_resolves_nothing(home, monkeypatch):
+def test_a_single_early_green_leg_does_not_resolve(home, monkeypatch):
+    """Loki finding 1: deposits arrive one per webhook; `{lint: success}`
+    alone is an early head, not a green one. The item's own leg set is the
+    expected set — only when every one has reported green does it resolve."""
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
     c = _Client()
     _use(monkeypatch, c)
     tick.run_ci()
     at = time.time() + 60
-    deposits.append_local(_row(GROVE, SHA2, 61, "lint", "success", received_at=_iso(at)))
-    deposits.append_local(_row(GROVE, SHA2, 62, "test-matrix (3.11)", "failure", received_at=_iso(at)))
+    deposits.append_local(_row(GROVE, SHA2, 50, "title", "success", received_at=_iso(at)))
+    assert tick.run_ci()["resolved"] == []
+    deposits.append_local(_row(GROVE, SHA2, 51, "CodeQL", "neutral", received_at=_iso(at)))
+    deposits.append_local(_row(GROVE, SHA2, 52, "test-suite (3.13)", "success", received_at=_iso(at)))
+    assert tick.run_ci()["resolved"] == []  # test-windows (3.11) has not reported
+    assert c.named("human_required_resolve") == []
+    deposits.append_local(_row(GROVE, SHA2, 53, "test-windows (3.11)", "success", received_at=_iso(at)))
+    r = tick.run_ci()
+    assert [x["item_id"] for x in r["resolved"]] == ["hr-1"]
+
+
+def test_a_later_head_with_an_extra_red_leg_resolves_nothing(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    at = time.time() + 60
+    _green_head(GROVE, SHA2, 76, at=at)
+    deposits.append_local(_row(GROVE, SHA2, 62, "fleet-seams", "failure", received_at=_iso(at)))
     r = tick.run_ci()
     assert r["resolved"] == [] and c.named("human_required_resolve") == []
-    # the new head's red is its own item
     assert [f["head_sha"] for f in r["filed"]] == [SHA2]
 
 
 def test_an_earlier_green_head_does_not_resolve_a_later_red(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
-    _green_head(GROVE, SHA2, 76, at=time.time() - 3600)  # older than the red head
+    _green_head(GROVE, SHA2, 76, at=time.time() - 3600)
     c = _Client()
     _use(monkeypatch, c)
     r = tick.run_ci()
     assert r["resolved"] == [] and c.named("human_required_resolve") == []
+
+
+def test_the_same_head_rerun_to_green_resolves(home, monkeypatch):
+    """Loki finding 3: a head that goes green by re-running its failed
+    jobs (new check_run_ids, same sha) resolves its own item."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    at = time.time() + 120
+    deposits.append_local(_row(GROVE, SHA, 71, "title", "success", received_at=_iso(at)))
+    assert tick.run_ci()["resolved"] == []  # test-suite and test-windows still not green
+    deposits.append_local(_row(GROVE, SHA, 72, "test-suite (3.13)", "success", received_at=_iso(at)))
+    deposits.append_local(_row(GROVE, SHA, 73, "test-windows (3.11)", "success", received_at=_iso(at)))
+    r = tick.run_ci()
+    assert r["resolved"] == [{"where": f"{GROVE}#76@{SHA}", "item_id": "hr-1", "superseded_by": SHA,
+                              "how": "re-run"}]
+    note = c.named("human_required_resolve")[0]["note"]
+    assert note.startswith("re-run green at ")
+    # the pending cancelled leg re-ran too: it is `rerun`, not waiting, and
+    # leaves the pending set; no second item was filed
+    assert r["cancelled"] == [{"repo": GROVE, "pr": 76, "head_sha": SHA, "leg": "test-windows (3.11)",
+                               "state": "rerun", "latest": "success"}]
+    assert json.loads(state_path().read_text())["ci_cancelled_pending"] == {}
+    assert len(c.named("human_required_enqueue")) == 1
 
 
 def test_a_refused_resolve_is_reported_and_retried(home, monkeypatch):
@@ -402,7 +541,7 @@ def test_a_refused_resolve_is_reported_and_retried(home, monkeypatch):
     _green_head(GROVE, SHA2, 76, at=time.time() + 60)
     r = tick.run_ci()
     assert r["resolved"] == [] and r["resolve_refused"][0]["error"] == "unknown_item"
-    assert r["status"] == "ok"  # a refused resolve does not hold the offset
+    assert r["status"] == "ok"
     r2 = tick.run_ci()
     assert [x["item_id"] for x in r2["resolved"]] == ["hr-1"]
 
@@ -417,5 +556,161 @@ def test_resolve_on_green_is_reported_not_done_when_mcp_is_off(home, monkeypatch
     _green_head(GROVE, SHA2, 76, at=time.time() + 60)
     r = tick.run_ci()
     assert r["status"] == "absent"
-    assert r["would_resolve"] == [{"where": f"{GROVE}#76@{SHA}", "superseded_by": SHA2}]
+    assert r["would_resolve"] == [{"where": f"{GROVE}#76@{SHA}", "superseded_by": SHA2, "how": "superseded"}]
     assert c.named("human_required_resolve") == []
+
+
+# ── Loki finding 4: the maps stay bounded ────────────────────────────────────
+
+def test_state_maps_are_pruned_to_live_heads(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    base = time.time()
+    # ten green heads on an unrelated PR: only the newest survives
+    for i in range(10):
+        _green_head("willow-memory/willow-mcp", f"{i:040x}", 600, at=base + i, start_cid=1000 + 10 * i)
+    # and the seed PR goes green on a later head, then gets two more heads
+    _green_head(GROVE, SHA2, 76, at=base + 60)
+    _green_head(GROVE, SHA3, 76, at=base + 120, start_cid=90)
+    r = tick.run_ci()
+    assert [x["item_id"] for x in r["resolved"]] == ["hr-1"]
+    assert r["pruned"]["items"] == 1 and r["pruned"]["heads"] >= 10
+    state = json.loads(state_path().read_text())
+    assert state["ci_items"] == {}
+    assert list(state["ci_heads"]["willow-memory/willow-mcp#600"]) == [f"{9:040x}"]
+    assert list(state["ci_heads"][f"{GROVE}#76"]) == [SHA3]
+    # one live head per PR — including the seed's green willow-bot#7
+    assert set(state["ci_head_legs"]) == {f"willow-memory/willow-mcp#600@{9:040x}", f"{GROVE}#76@{SHA3}",
+                                          "willow-memory/willow-bot#7@" + "b" * 40}
+    # ci_filed is the durable memory: the resolved item's legs never re-file
+    deposits.append_local(_row(GROVE, SHA, 1, "title", "failure"))
+    assert tick.run_ci()["skipped"] == 1 and len(c.named("human_required_enqueue")) == 1
+
+
+def test_pruning_keeps_the_head_of_an_unresolved_item_and_a_pending_cancel(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()
+    # a newer head that is NOT green: the old item stays, and so must its head
+    deposits.append_local(_row(GROVE, SHA2, 80, "title", "failure", received_at=_iso(time.time() + 60)))
+    tick.run_ci()
+    state = json.loads(state_path().read_text())
+    assert set(state["ci_heads"][f"{GROVE}#76"]) == {SHA, SHA2}
+    assert set(state["ci_items"]) == {f"{GROVE}#76@{SHA}", f"{GROVE}#76@{SHA2}"}
+
+
+# ── the one-time legacy clear ────────────────────────────────────────────────
+
+def _legacy(i, where=f"{GROVE}#76", check="test-matrix (3.13)", conclusion="cancelled"):
+    return {"id": f"old-{i}", "kind": "review", "status": "open",
+            "title": f"CI red: {where} — {check} {conclusion}",
+            "source_ref": f"https://github.com/willow-memory/x/actions/runs/1/job/{i}"}
+
+
+def _state_or_empty() -> dict:
+    p = state_path()
+    return json.loads(p.read_text()) if p.is_file() and p.read_text().strip() else {}
+
+
+def _queue_client(rows, *, refuse=()):
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            assert inputs["kind"] == "review" and inputs["status"] == "open"
+            return {"items": rows, "by_status": {"open": len(rows)}}
+        if name == "human_required_resolve":
+            if inputs["item_id"] in refuse:
+                return {"error": "unknown_item"}
+            return {"ok": True}
+        return {"ok": True, "id": f"hr-{n}"}
+
+    return _Client(result=answer)
+
+
+def test_legacy_clear_resolves_only_what_run_ci_filed_before_this_build(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    _seed()
+    c = _Client()
+    _use(monkeypatch, c)
+    tick.run_ci()  # files hr-1, a new-shape item
+    rows = [
+        _legacy(1), _legacy(2, check="test-matrix (3.11)"), _legacy(3, check="fleet-seams", conclusion="failure"),
+        {"id": "hr-1", "kind": "review", "status": "open",
+         "title": f"CI red: {GROVE}#76 — 2 leg(s): title, test-suite (3.13)",
+         "source_ref": "https://github.com/x/actions/runs/1/job/1"},
+        {"id": "ask-9", "kind": "review", "status": "open", "title": "Review the willow-bot brief", "source_ref": ""},
+        {"id": "ask-10", "kind": "review", "status": "open",
+         "title": "CI red: something — someone typed this failure", "source_ref": "mailto:not-github"},
+        {"id": "cons-1", "kind": "consent", "status": "open", "title": "CI red: x — y failure", "source_ref": ""},
+    ]
+    q = _queue_client(rows)
+    _use(monkeypatch, q)
+    r = tick.run_ci_legacy_clear(build_sha="6c91320")
+    assert r["status"] == "ok" and r["ran"] and r["recorded"]
+    assert r["listed"] == 7 and r["legacy"] == 3
+    assert [x["item_id"] for x in r["resolved"]] == ["old-1", "old-2", "old-3"] and r["refused"] == []
+    res = q.named("human_required_resolve")
+    assert {i["item_id"] for i in res} == {"old-1", "old-2", "old-3"}
+    assert all(i["note"] == "superseded by the run_ci collapse build (6c91320)" and i["status"] == "resolved"
+               for i in res)
+    state = json.loads(state_path().read_text())
+    assert state["ci_legacy_cleared"]["resolved"] == 3 and state["ci_legacy_cleared"]["build_sha"] == "6c91320"
+
+
+def test_legacy_clear_runs_once_unless_forced(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    q = _queue_client([_legacy(1)])
+    _use(monkeypatch, q)
+    assert tick.run_ci_legacy_clear(build_sha="abc")["resolved"] != []
+    r2 = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r2["status"] == "ok" and r2["ran"] is False and "already cleared" in r2["detail"]
+    assert len(q.named("human_required_list")) == 1
+    r3 = tick.run_ci_legacy_clear(build_sha="abc", force=True)
+    assert r3["ran"] is True and len(q.named("human_required_list")) == 2
+
+
+def test_legacy_clear_partial_is_not_recorded_and_retries(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    q = _queue_client([_legacy(1), _legacy(2)], refuse={"old-2"})
+    _use(monkeypatch, q)
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["status"] == "partial" and r["recorded"] is False
+    assert [x["item_id"] for x in r["resolved"]] == ["old-1"]
+    assert r["refused"] == [{"item_id": "old-2", "title": _legacy(2)["title"], "error": "unknown_item"}]
+    assert "ci_legacy_cleared" not in _state_or_empty()
+    # next tick runs again — the loop does not need a hand pass
+    assert tick.run_ci_legacy_clear(build_sha="abc")["ran"] is True
+
+
+def test_legacy_clear_is_unreachable_when_the_queue_cannot_be_listed(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            return {"error": "gate denied"}
+        raise AssertionError("must not resolve when it cannot see the queue")
+
+    _use(monkeypatch, _Client(result=answer))
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["status"] == "unreachable" and r["ran"] is False and r["detail"] == "gate denied"
+    assert "ci_legacy_cleared" not in _state_or_empty()
+
+
+def test_legacy_clear_is_absent_when_mcp_is_off(home, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
+    _use(monkeypatch, _Client(result=lambda *a: (_ for _ in ()).throw(AssertionError("no calls"))))
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["status"] == "absent" and r["ran"] is False
+
+
+def test_legacy_title_shape_is_exact():
+    ok = {"id": "x", "title": f"CI red: {GROVE}#76 — test-windows (3.11) cancelled", "source_ref": ""}
+    assert tick._is_legacy_ci_item(ok, own_ids=set())
+    assert not tick._is_legacy_ci_item({**ok, "id": "mine"}, own_ids={"mine"})
+    assert not tick._is_legacy_ci_item({**ok, "title": f"CI red: {GROVE}#76 — 1 leg(s): lint"}, own_ids=set())
+    assert not tick._is_legacy_ci_item({**ok, "title": "CI red: x — y success"}, own_ids=set())
+    assert not tick._is_legacy_ci_item({**ok, "source_ref": "https://example.org/job"}, own_ids=set())

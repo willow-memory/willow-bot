@@ -406,9 +406,13 @@ def _ci_epoch(value: object) -> float | None:
     return dt.timestamp()
 
 
-def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float) -> dict:
-    """Each pending cancelled leg gets exactly one of four states.
+def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
+                      head_legs: dict | None = None) -> dict:
+    """Each pending cancelled leg gets exactly one of five states.
 
+    * ``rerun`` — the same leg name on the same head has since reported a
+      conclusion other than ``cancelled`` (a re-run): the cancelled run
+      is moot. Dropped; the new conclusion is judged on its own.
     * ``superseded`` — a different head for the same PR was first seen
       AFTER this one: the run was cancelled because the next push landed.
       Dropped, never filed.
@@ -416,26 +420,44 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float)
       window. Stays pending; the next tick decides again.
     * ``stuck`` — no successor and older than the grace window: nothing
       superseded it, so the PR is sitting on a cancelled run. Filed, in
-      the same per-head item a red leg would be.
+      the same per-head item a red leg would be — as a cancelled leg,
+      never as a red one.
     * ``unreachable`` — the deposit's timestamp cannot be read, so its age
-      is unknowable. Stays pending and says so; it neither files nor
-      clears, which is what an unreadable input earns.
+      from the deposit is unknowable. Stays pending and says so — until
+      the grace window has passed since the step FIRST SAW it
+      (``pending_since``, wall clock, which is known), at which point it
+      is ``stuck`` with ``aged_by: pending_since``. An unreadable input
+      earns a wait, not a permanent seat in the pending set.
 
     Successor evidence is the bot's own deposits (``heads`` maps
     `repo#pr` → {head_sha: first_seen_epoch}); no GitHub API is asked, so
-    there is no fifth "API failed" state to report.
+    there is no fifth "API failed" state to report. Successor ORDER is
+    the deposits' ``received_at`` (the webhook's arrival), not GitHub's
+    push order — close enough that a superseding push is always later,
+    and the only clock the bot holds.
     """
     out: dict[str, dict] = {}
     for key, leg in pending.items():
         pr_key = _ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"])
+        latest = ((head_legs or {}).get(_ci_head_key_from_pr(pr_key, leg["head_sha"])) or {}).get(leg["check"])
+        if latest is not None and latest != _CI_CANCELLED:
+            out[key] = {**leg, "state": "rerun", "latest": latest}
+            continue
         seen = heads.get(pr_key) or {}
         mine = seen.get(leg["head_sha"])
         if mine is None:
             mine = _ci_epoch(leg.get("received_at"))
+        later = [sha for sha, at in seen.items()
+                 if sha != leg["head_sha"] and at is not None and (mine is None or at > mine)]
         if mine is None:
-            out[key] = {**leg, "state": "unreachable"}
+            since = leg.get("pending_since")
+            if later:
+                out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1]}
+            elif isinstance(since, (int, float)) and now - since >= grace_s:
+                out[key] = {**leg, "state": "stuck", "aged_by": "pending_since"}
+            else:
+                out[key] = {**leg, "state": "unreachable"}
             continue
-        later = [sha for sha, at in seen.items() if sha != leg["head_sha"] and at is not None and at > mine]
         if later:
             out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1]}
         elif now - mine >= grace_s:
@@ -443,6 +465,65 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float)
         else:
             out[key] = {**leg, "state": "waiting"}
     return out
+
+
+def _head_is_green(later_legs: dict, expected: set[str]) -> bool:
+    """What "the head is green" can honestly mean when the bot only sees
+    deposits, one per webhook: every leg the EARLIER head recorded has
+    reported on this head (the earlier head's leg set is the only known
+    expected set), every leg reported so far is green, and at least one
+    is a real ``success``. A head with only ``lint: success`` so far is
+    not green — it is early."""
+    if not later_legs:
+        return False
+    if not expected.issubset(later_legs.keys()):
+        return False
+    return all(c in _CI_GREEN for c in later_legs.values()) and "success" in later_legs.values()
+
+
+def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending: dict) -> dict:
+    """Keep the four maps bounded (Loki, dispatch 82A7DB13, finding 4).
+
+    A head is kept when it is the newest the bot has seen for its PR, the
+    head of an unresolved item, or the head of a pending cancelled leg;
+    every other head — and its ``head_legs`` — is dropped. Resolved items
+    are dropped (``ci_filed`` still remembers their legs, so a
+    re-delivered completion never re-files). The resolve loop is then
+    unresolved-items × kept-heads, a handful per PR. Returns counts.
+    """
+    keep: dict[str, set[str]] = {}
+    for item in items.values():
+        if not item.get("resolved"):
+            keep.setdefault(_ci_pr_key(item["repo"], item["pr"], item["head_sha"]), set()).add(item["head_sha"])
+    for leg in cancelled_pending.values():
+        keep.setdefault(_ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"]), set()).add(leg["head_sha"])
+    dropped_heads = dropped_items = 0
+    for pr_key in list(heads):
+        seen = heads[pr_key]
+        dated = [s for s, at in seen.items() if at is not None]
+        newest = max(dated, key=lambda s: seen[s]) if dated else (next(iter(seen)) if seen else None)
+        wanted = set(keep.get(pr_key, set()))
+        if newest:
+            wanted.add(newest)
+        for sha in list(seen):
+            if sha not in wanted:
+                del seen[sha]
+                dropped_heads += 1
+        if not seen:
+            del heads[pr_key]
+    live_heads = {_ci_head_key_from_pr(pr_key, sha) for pr_key, seen in heads.items() for sha in seen}
+    for head_key in list(head_legs):
+        if head_key not in live_heads:
+            del head_legs[head_key]
+    for item_key in list(items):
+        if items[item_key].get("resolved"):
+            del items[item_key]
+            dropped_items += 1
+    return {"heads": dropped_heads, "items": dropped_items}
+
+
+def _ci_head_key_from_pr(pr_key: str, head_sha: str) -> str:
+    return f"{pr_key}@{head_sha}"
 
 
 def _leg_of(rec: dict) -> dict:
@@ -533,11 +614,18 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
 
     path = state_path()
     state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
+    # `ci_filed` holds RED legs only (head_sha:check_run_id → item id) — voice
+    # derives the `ci-red` label from its prefixes, so a cancelled leg must
+    # never land there. Stuck cancelled legs are remembered in
+    # `ci_filed_cancelled` under the same key shape for the same idempotence.
     filed_before = dict(state.get("ci_filed") or {})
+    filed_cancelled_before = dict(state.get("ci_filed_cancelled") or {})
+    already = set(filed_before) | set(filed_cancelled_before)
     items = {k: dict(v) for k, v in (state.get("ci_items") or {}).items()}
     heads = {k: dict(v) for k, v in (state.get("ci_heads") or {}).items()}
     head_legs = {k: dict(v) for k, v in (state.get("ci_head_legs") or {}).items()}
     cancelled_pending = {k: dict(v) for k, v in (state.get("ci_cancelled_pending") or {}).items()}
+    now = _ci_clock()
 
     # Read first: every row is in the receipt whether or not it can be filed.
     red: list[dict] = []
@@ -561,58 +649,73 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                     pr_key = _ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"])
                     head_key = _ci_head_key(leg["repo"], leg["pr"], leg["head_sha"])
                     at = _ci_epoch(leg["received_at"])
-                    # Every head the bot has seen for this PR, oldest first —
-                    # the successor evidence for a cancelled leg.
+                    # Every head the bot has seen for this PR, with the
+                    # received_at of its first deposit — the successor
+                    # evidence for a cancelled leg.
                     seen = heads.setdefault(pr_key, {})
                     if leg["head_sha"] not in seen or (at is not None and seen[leg["head_sha"]] is None):
                         seen[leg["head_sha"]] = at
-                    # Latest conclusion per leg name per head — the green test.
+                    # Latest conclusion per leg NAME per head — a re-run of
+                    # a leg (new check_run_id) overwrites, so a head that
+                    # went green by re-running reads green here.
                     head_legs.setdefault(head_key, {})[leg["check"]] = leg["conclusion"]
                     if leg["conclusion"] in _CI_RED:
                         red.append(leg)
-                    elif leg["conclusion"] == _CI_CANCELLED and leg["key"] not in filed_before:
-                        cancelled_pending.setdefault(leg["key"], leg)
+                    elif leg["conclusion"] == _CI_CANCELLED and leg["key"] not in already:
+                        cancelled_pending.setdefault(leg["key"], {**leg, "pending_since": now})
                 scanned += 1
             offset = fh.tell()
     receipt["red"] = [_public(r) for r in red]
 
-    decided = _decide_cancelled(cancelled_pending, heads, now=_ci_clock(), grace_s=_ci_grace_s())
+    decided = _decide_cancelled(cancelled_pending, heads, now=now, grace_s=_ci_grace_s(), head_legs=head_legs)
     receipt["cancelled"] = [
         {"repo": d["repo"], "pr": d["pr"], "head_sha": d["head_sha"], "leg": d["check"], "state": d["state"],
-         **({"successor": d["successor"]} if "successor" in d else {})}
+         **({k: d[k] for k in ("successor", "aged_by", "latest") if k in d})}
         for d in decided.values()
     ]
     stuck = [d for d in decided.values() if d["state"] == "stuck"]
-    # Superseded legs leave the pending set for good; waiting/unreachable stay.
-    cancelled_pending = {k: {kk: vv for kk, vv in d.items() if kk not in ("state", "successor")}
+    # Superseded, rerun and stuck legs leave the pending set; waiting/unreachable stay.
+    cancelled_pending = {k: {kk: vv for kk, vv in d.items() if kk not in ("state", "successor", "aged_by", "latest")}
                          for k, d in decided.items() if d["state"] in ("waiting", "unreachable")}
 
     # One item per head: group the legs to file (reds + stuck cancelled) by head key.
     groups: dict[str, list[dict]] = {}
     for leg in red + stuck:
-        if leg["key"] in filed_before:
+        if leg["key"] in already:
             continue
         groups.setdefault(_ci_head_key(leg["repo"], leg["pr"], leg["head_sha"]), []).append(leg)
-    skipped = sum(1 for leg in red + stuck if leg["key"] in filed_before)
+    skipped = sum(1 for leg in red + stuck if leg["key"] in already)
 
-    # Resolve-on-green candidates: a head whose recorded legs are all green,
-    # against older filed items for the same PR that are not yet resolved.
-    to_resolve: list[tuple[str, dict, str]] = []
+    # Resolve-on-green candidates. Two honest routes to "this item is done":
+    # a LATER head for the same PR on which every leg the item's head
+    # recorded has reported green (the item's leg set is the only expected
+    # set the bot knows), or the SAME head re-run to green (every leg name
+    # it ever recorded now reads green). Never on a single early green leg.
+    to_resolve: list[tuple[str, dict, str, str]] = []
     for item_key, item in items.items():
         if item.get("resolved"):
             continue
         pr_key = _ci_pr_key(item["repo"], item["pr"], item["head_sha"])
+        own_key = _ci_head_key(item["repo"], item["pr"], item["head_sha"])
+        expected = set((head_legs.get(own_key) or {}).keys())
+        own = head_legs.get(own_key) or {}
+        if _head_is_green(own, expected):
+            to_resolve.append((item_key, item, item["head_sha"], "re-run"))
+            continue
         mine = (heads.get(pr_key) or {}).get(item["head_sha"])
         for sha, at in (heads.get(pr_key) or {}).items():
             if sha == item["head_sha"] or at is None or mine is None or at <= mine:
                 continue
-            legs = head_legs.get(_ci_head_key(item["repo"], item["pr"], sha)) or {}
-            if legs and all(c in _CI_GREEN for c in legs.values()) and "success" in legs.values():
-                to_resolve.append((item_key, item, sha))
+            if _head_is_green(head_legs.get(_ci_head_key(item["repo"], item["pr"], sha)) or {}, expected):
+                to_resolve.append((item_key, item, sha, "superseded"))
                 break
 
     def _persist() -> None:
+        pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending)
+        if pruned["heads"] or pruned["items"]:
+            receipt["pruned"] = pruned
         state["ci_filed"] = filed_now
+        state["ci_filed_cancelled"] = filed_cancelled_now
         state["ci_items"] = items
         state["ci_heads"] = heads
         state["ci_head_legs"] = head_legs
@@ -620,14 +723,22 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state, indent=2) + "\n")
 
+    def _remember(leg: dict, item_id: str) -> None:
+        if leg["conclusion"] == _CI_CANCELLED:
+            filed_cancelled_now[leg["key"]] = item_id
+        else:
+            filed_now[leg["key"]] = item_id
+
     filed_now = dict(filed_before)
+    filed_cancelled_now = dict(filed_cancelled_before)
     if not enable_mcp:
         _persist()
         off_path.parent.mkdir(parents=True, exist_ok=True)
         off_path.write_text(f"{offset}\n", encoding="utf-8")
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — reds reported, not filed",
                        filed=[], appended=[], resolved=[], refused=[], skipped=skipped, new_offset=offset,
-                       would_resolve=[{"where": k, "superseded_by": sha} for k, _, sha in to_resolve])
+                       would_resolve=[{"where": k, "superseded_by": sha, "how": how}
+                                      for k, _, sha, how in to_resolve])
         return _emit(receipt)
 
     from willow_bot.steward import mcp_client
@@ -641,9 +752,12 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         if existing and existing.get("id"):
             # The head already has its item; a new leg joins it, no second filing.
             for lg in legs:
-                filed_now[lg["key"]] = existing["id"]
-                existing.setdefault("legs", []).append(lg["check"])
-                appended.append({"where": where, "check": lg["check"], "id": existing["id"]})
+                _remember(lg, existing["id"])
+                names = existing.setdefault("legs", [])
+                if lg["check"] not in names:  # a re-run under a new check_run_id is the same leg
+                    names.append(lg["check"])
+                appended.append({"where": where, "check": lg["check"], "conclusion": lg["conclusion"],
+                                 "id": existing["id"]})
             continue
         args = _filing_args(app, where, first["head_sha"], legs)
         try:
@@ -656,17 +770,20 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": err})
             break
         item_id = (result.get("id") if isinstance(result, dict) else None) or "filed"
+        names: list[str] = []
         for lg in legs:
-            filed_now[lg["key"]] = item_id
+            _remember(lg, item_id)
+            if lg["check"] not in names:
+                names.append(lg["check"])
         items[head_key] = {"id": item_id, "repo": first["repo"], "pr": first["pr"],
-                           "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
-                           "filed_at": receipt["at"]}
+                           "head_sha": first["head_sha"], "legs": names, "filed_at": receipt["at"]}
         filed.append({"where": where, "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
                       "conclusions": [lg["conclusion"] for lg in legs], "id": item_id})
 
     resolved, resolve_refused = [], []
-    for item_key, item, sha in to_resolve:
-        note = f"superseded by {sha}, green at {receipt['at']}"
+    for item_key, item, sha, how in to_resolve:
+        note = (f"re-run green at {receipt['at']}" if how == "re-run"
+                else f"superseded by {sha}, green at {receipt['at']}")
         try:
             result = mcp_client.call("human_required_resolve", {
                 "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
@@ -678,11 +795,13 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         if err:
             resolve_refused.append({"where": item_key, "item_id": item["id"], "error": err})
             continue
-        item["resolved"] = {"by": sha, "at": receipt["at"]}
-        resolved.append({"where": item_key, "item_id": item["id"], "superseded_by": sha})
+        item["resolved"] = {"by": sha, "how": how, "at": receipt["at"]}
+        resolved.append({"where": item_key, "item_id": item["id"], "superseded_by": sha, "how": how})
 
     # On a refusal the offset stays where a retry can find the row; what was
-    # filed before it is remembered in ci_filed so the retry skips it.
+    # filed before it is remembered in ci_filed so the retry skips it. (The
+    # enqueue-then-persist window — a crash between the two double-files
+    # one head — is the same window the leg-per-item build had; not widened.)
     _persist()
     if not refused:
         off_path.parent.mkdir(parents=True, exist_ok=True)
@@ -692,6 +811,129 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     receipt.update(status="ok" if not refused else "could-not-run", filed=filed, appended=appended,
                    resolved=resolved, refused=refused, skipped=skipped,
                    new_offset=offset if not refused else receipt["offset"])
+    return _emit(receipt)
+
+
+# ── the legacy-clear step: items filed before the collapse build ─────────────
+
+# Items the leg-per-item run_ci filed carry this title shape; the collapse
+# build's titles carry " leg(s): " instead. Neither shape is produced by
+# anything but run_ci.
+_CI_LEGACY_TITLE_RE = re.compile(r"^CI red: \S+ — (?!\d+ leg\(s\): ).+ (failure|timed_out|cancelled|startup_failure)$")
+_CI_LEGACY_LIST_LIMIT = 500
+
+
+def _is_legacy_ci_item(item: dict, *, own_ids: set[str]) -> bool:
+    """A review item run_ci filed BEFORE the collapse build: the old title
+    shape, not one of this build's own item ids, and a GitHub job URL as
+    its source_ref (what run_ci always passed). Anything else — a real
+    review ask, a new-shape item — is not this step's to touch."""
+    if not isinstance(item, dict) or item.get("kind", "review") != "review":
+        return False
+    if str(item.get("id", "")) in own_ids:
+        return False
+    title = str(item.get("title", ""))
+    if not _CI_LEGACY_TITLE_RE.match(title):
+        return False
+    ref = str(item.get("source_ref", ""))
+    return ref == "" or ref.startswith("https://github.com/")
+
+
+def _own_sha() -> str:
+    """The bot's own checkout HEAD (editable install), for the clear note;
+    empty when the tree is not a checkout or git is unavailable."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None = None,
+                        force: bool = False) -> dict:
+    """One-time, receipted, idempotent: resolve every open review item the
+    leg-per-item ``run_ci`` filed before the collapse build. Those items
+    have no head history in state, so resolve-on-green can never reach
+    them (operator, 2026-09-20: "lets tie that in for hanuman").
+
+    A tick step rather than a subcommand — the point of the bot is that
+    the operator does not type — that runs once and records
+    ``ci_legacy_cleared`` in the state file; ``force`` (the subcommand)
+    re-runs it. Per item three-state: ``resolved`` / ``refused`` (the
+    verb answered with an error) / and the whole step ``unreachable`` when
+    the queue cannot be listed. Never touches an item it did not file:
+    the old title shape, not one of this build's own ids, a GitHub
+    source_ref. Honest absence when MCP is off.
+    """
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    if build_sha is None:
+        build_sha = _own_sha()
+    receipt: dict = {"event": "steward_ci_legacy_clear",
+                     "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    path = state_path()
+    state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
+    done = state.get("ci_legacy_cleared")
+    if done and not force:
+        receipt.update(status="ok", ran=False, detail=f"already cleared at {done.get('at')}", cleared_at=done.get("at"))
+        return _emit(receipt)
+    if not enable_mcp:
+        receipt.update(status="absent", ran=False, detail="WILLOW_BOT_MCP not enabled — no list, no resolve")
+        return _emit(receipt)
+
+    from willow_bot.steward import mcp_client
+
+    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    try:
+        listing = mcp_client.call("human_required_list", {
+            "app_id": app, "kind": "review", "status": "open", "limit": _CI_LEGACY_LIST_LIMIT,
+        })
+    except Exception as exc:  # noqa: BLE001 — cannot see the queue: say so, touch nothing
+        receipt.update(status="unreachable", ran=False, detail=str(exc)[:300])
+        return _emit(receipt)
+    err = _tool_error(listing)
+    if err:
+        receipt.update(status="unreachable", ran=False, detail=err)
+        return _emit(receipt)
+    rows = listing.get("items") if isinstance(listing, dict) else None
+    if rows is None and isinstance(listing, list):
+        rows = listing
+    if not isinstance(rows, list):
+        receipt.update(status="unreachable", ran=False, detail=f"unrecognised listing shape: {str(listing)[:120]}")
+        return _emit(receipt)
+
+    own_ids = {str(v.get("id")) for v in (state.get("ci_items") or {}).values() if isinstance(v, dict)}
+    own_ids |= {str(v) for v in (state.get("ci_filed") or {}).values()}
+    own_ids |= {str(v) for v in (state.get("ci_filed_cancelled") or {}).values()}
+    legacy = [r for r in rows if _is_legacy_ci_item(r, own_ids=own_ids)]
+    receipt.update(listed=len(rows), legacy=len(legacy))
+    note = f"superseded by the run_ci collapse build ({build_sha or 'unknown sha'})"
+    resolved, refused = [], []
+    for item in legacy:
+        item_id = str(item.get("id"))
+        try:
+            result = mcp_client.call("human_required_resolve", {
+                "app_id": app, "item_id": item_id, "status": "resolved", "note": note,
+            })
+        except Exception as exc:  # noqa: BLE001 — one refused item is a line, not a dead step
+            refused.append({"item_id": item_id, "title": item.get("title", ""), "error": str(exc)[:300]})
+            continue
+        err = _tool_error(result)
+        if err:
+            refused.append({"item_id": item_id, "title": item.get("title", ""), "error": err})
+            continue
+        resolved.append({"item_id": item_id, "title": item.get("title", "")})
+    # Recorded as cleared only when nothing was refused, so a partial pass
+    # runs again next tick for the remainder rather than leaving it a hand pass.
+    if not refused:
+        state["ci_legacy_cleared"] = {"at": receipt["at"], "resolved": len(resolved), "build_sha": build_sha}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2) + "\n")
+    receipt.update(status="ok" if not refused else "partial", ran=True, resolved=resolved, refused=refused,
+                   recorded=not refused)
     return _emit(receipt)
 
 
@@ -1214,6 +1456,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("install", lambda: run_install_receipts(sweep)),
             ("mirror", run_mirror),
             ("ci", run_ci),
+            ("ci-legacy-clear", run_ci_legacy_clear),
             ("catchup", run_catchup),
             ("audit", run_audit),
             ("voice", run_voice),
@@ -1251,6 +1494,10 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "ci":
         run_ci()
         return 0
+    if args[0] == "ci-legacy-clear":
+        # The subcommand re-runs the one-time clear (force); the loop runs it once.
+        run_ci_legacy_clear(force=True)
+        return 0
     if args[0] == "audit":
         run_audit()
         return 0
@@ -1287,7 +1534,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|catchup|audit|voice|status|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|voice|status|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2
