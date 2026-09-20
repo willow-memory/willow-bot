@@ -331,11 +331,33 @@ _sleep = time.sleep
 
 # ── the ci step: a red check reaches a seat ─────────────────────────────────
 
-# Conclusions that mean "this leg did not pass". `cancelled` is in: a leg
-# that never reached a verdict is not green, and the aggregate `test` gate
-# in the fleet's tests.yml treats it as a failure too.
-_CI_RED = frozenset({"failure", "timed_out", "cancelled", "startup_failure"})
+# Conclusions that mean "this leg failed". `cancelled` is NOT in (gap
+# 25cb3c1a3489): GitHub cancels a run when the next push supersedes it
+# (`concurrency: cancel-in-progress` in the fleet's tests.yml), and every
+# release-please cycle produced three to four such legs — filed as reds,
+# they drowned the real ones. A cancelled leg is its own state, decided
+# by whether a successor head shows up (see ``_decide_cancelled``).
+_CI_RED = frozenset({"failure", "timed_out", "startup_failure"})
+_CI_CANCELLED = "cancelled"
+# Conclusions that mean "this leg passed or did not count". A head whose
+# every recorded leg is one of these, with at least one `success`, is green.
+_CI_GREEN = frozenset({"success", "skipped", "neutral"})
 _CI_PER_TICK = 50
+
+# A cancelled leg with no successor head after this long is a stuck PR,
+# not a superseded run, and IS worth an item. Ten minutes: release-please
+# pushes its release commit within a minute or two of the merge and the
+# superseding run starts at once, so ten covers a queued runner without
+# leaving a genuinely stuck PR silent for long. Env-overridable.
+_CI_CANCELLED_GRACE_ENV = "WILLOW_BOT_CI_CANCELLED_GRACE_MIN"
+_CI_CANCELLED_GRACE_MIN_DEFAULT = 10
+
+# The aggregate job in the fleet's tests.yml (`test`, `needs: test-matrix,
+# if: always()`) fails BECAUSE a leg failed. It is folded into that head's
+# item as an aggregate leg, never counted as a cause of its own.
+_CI_AGGREGATE_CHECKS = frozenset({"test"})
+
+_ci_clock = time.time
 
 
 def _ci_offset_path() -> Path:
@@ -348,25 +370,138 @@ def _ci_key(rec: dict) -> str:
     return f"{rec.get('head_sha', '')}:{rec.get('check_run_id', '')}"
 
 
+def _ci_pr_key(repo: str, pr: object, head_sha: str) -> str:
+    """`repo#pr` when the row names a PR, else `repo@sha12` — the same
+    spelling the filing's title carries."""
+    return f"{repo}#{pr}" if pr else f"{repo}@{head_sha[:12]}"
+
+
+def _ci_head_key(repo: str, pr: object, head_sha: str) -> str:
+    """The dedupe key for one filing: one review item per (repo, pr, head_sha)."""
+    return f"{_ci_pr_key(repo, pr, head_sha)}@{head_sha}"
+
+
+def _ci_grace_s() -> float:
+    raw = os.environ.get(_CI_CANCELLED_GRACE_ENV, "").strip()
+    try:
+        minutes = float(raw) if raw else float(_CI_CANCELLED_GRACE_MIN_DEFAULT)
+    except ValueError:
+        minutes = float(_CI_CANCELLED_GRACE_MIN_DEFAULT)
+    return max(minutes, 0.0) * 60.0
+
+
+def _ci_epoch(value: object) -> float | None:
+    """The deposit's `received_at` (ISO-8601, UTC) as epoch seconds, or
+    None when it cannot be read — the third state, not zero."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float) -> dict:
+    """Each pending cancelled leg gets exactly one of four states.
+
+    * ``superseded`` — a different head for the same PR was first seen
+      AFTER this one: the run was cancelled because the next push landed.
+      Dropped, never filed.
+    * ``waiting`` — no successor yet and the leg is younger than the grace
+      window. Stays pending; the next tick decides again.
+    * ``stuck`` — no successor and older than the grace window: nothing
+      superseded it, so the PR is sitting on a cancelled run. Filed, in
+      the same per-head item a red leg would be.
+    * ``unreachable`` — the deposit's timestamp cannot be read, so its age
+      is unknowable. Stays pending and says so; it neither files nor
+      clears, which is what an unreadable input earns.
+
+    Successor evidence is the bot's own deposits (``heads`` maps
+    `repo#pr` → {head_sha: first_seen_epoch}); no GitHub API is asked, so
+    there is no fifth "API failed" state to report.
+    """
+    out: dict[str, dict] = {}
+    for key, leg in pending.items():
+        pr_key = _ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"])
+        seen = heads.get(pr_key) or {}
+        mine = seen.get(leg["head_sha"])
+        if mine is None:
+            mine = _ci_epoch(leg.get("received_at"))
+        if mine is None:
+            out[key] = {**leg, "state": "unreachable"}
+            continue
+        later = [sha for sha, at in seen.items() if sha != leg["head_sha"] and at is not None and at > mine]
+        if later:
+            out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1]}
+        elif now - mine >= grace_s:
+            out[key] = {**leg, "state": "stuck"}
+        else:
+            out[key] = {**leg, "state": "waiting"}
+    return out
+
+
+def _leg_of(rec: dict) -> dict:
+    return {
+        "repo": rec.get("repo", ""), "pr": rec.get("pr_number"),
+        "head_sha": rec.get("head_sha", ""), "check": rec.get("check_name", ""),
+        "conclusion": rec.get("conclusion"), "url": rec.get("html_url", ""),
+        "received_at": rec.get("received_at", ""), "key": _ci_key(rec),
+    }
+
+
+def _public(leg: dict) -> dict:
+    return {k: v for k, v in leg.items() if k not in ("key", "received_at")}
+
+
+def _filing_args(app: str, where: str, head_sha: str, legs: list[dict]) -> dict:
+    causes = [lg for lg in legs if lg["check"] not in _CI_AGGREGATE_CHECKS] or legs
+    names = ", ".join(lg["check"] for lg in causes)
+    lines = [f"{lg['check']} concluded {lg['conclusion']}"
+             + (" (aggregate)" if lg["check"] in _CI_AGGREGATE_CHECKS and lg not in causes else "")
+             + f". {lg['url']}" for lg in legs]
+    return {
+        "app_id": app, "kind": "review", "priority": "normal",
+        "title": f"CI red: {where} — {len(causes)} leg(s): {names}"[:200],
+        "summary": f"head {head_sha}\n" + "\n".join(lines),
+        "source_ref": causes[0]["url"] or legs[0]["url"],
+    }
+
+
 def run_ci(*, enable_mcp: bool | None = None) -> dict:
-    """File every red check the bot deposited since the last tick.
+    """File every red head the bot deposited since the last tick — one
+    review item per (repo, pr, head_sha) — hold cancelled legs until a
+    successor shows or the grace window passes, and resolve a PR's older
+    items when a later head goes green.
 
     Gap 8d1bcb2b7c02: the bot records a red check faithfully and reports
-    it to nobody — a `ci_fail` quip in the webhook log, a `check_run` item
-    the inbox step skips, a deposit row nothing reads back. On 2026-09-14
-    the operator told the seat a PR was red, twice. This step reads
-    ``deposits/ci_outcomes.jsonl`` from its own byte offset (the mirror's
-    shape, its own offset file so the two never race), and for each new
-    row whose conclusion is in ``_CI_RED`` files one ``human_required``
-    item of kind ``review`` naming the PR, the leg and the job URL — the
-    bot's own deposits as the only source, no lease, no ``gh``.
+    it to nobody. This step reads ``deposits/ci_outcomes.jsonl`` from its
+    own byte offset (the mirror's shape, its own offset file so the two
+    never race) — the bot's own deposits as the only source, no lease, no
+    ``gh``.
 
-    Idempotent per (head_sha, check_run_id) through ``ci_filed`` in the
-    state file: a re-delivered completion or a rotated deposits file does
-    not file twice. A refused enqueue leaves the offset before that row
-    and reports the reason; the next tick retries the same row. Reds are
-    reported in the receipt even when MCP is off — the seat reading the
-    receipt file still learns what went red, it just is not filed.
+    Gap 25cb3c1a3489, the three asks: (1) ``cancelled`` is its own state
+    (``_decide_cancelled``), reported under ``cancelled`` in the receipt
+    and filed only when stuck; (2) legs collapse into one item per head,
+    keyed ``repo#pr@head_sha`` in ``ci_items``, the aggregate ``test``
+    job folded into its cause's item; (3) when a later head for the same
+    PR is fully green (every recorded leg in ``_CI_GREEN``, at least one
+    ``success``), the PR's older items are resolved through
+    ``human_required_resolve`` with ``superseded by <sha>, green at <ts>``.
+
+    Idempotent per leg through ``ci_filed`` (``head_sha:check_run_id`` →
+    item id, the shape ``voice`` reads by sha prefix) and per head through
+    ``ci_items``: a re-delivered completion, a rotated file, or a second
+    leg on an already-filed head files nothing new — the extra leg is
+    remembered against the same item and reported as ``appended``. A
+    refused enqueue leaves the offset before that row and reports the
+    reason; the next tick retries. Reds are reported in the receipt even
+    when MCP is off — the seat reading the receipt file still learns what
+    went red, it just is not filed.
     """
     from willow_bot.deposits import deposits_jsonl
 
@@ -375,7 +510,8 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     receipt: dict = {"event": "steward_ci", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     src = deposits_jsonl()
     if not src.is_file():
-        receipt.update(status="ok", present=False, red=[], filed=[], detail=f"no deposits file at {src}")
+        receipt.update(status="ok", present=False, red=[], cancelled=[], filed=[], resolved=[],
+                       detail=f"no deposits file at {src}")
         return _emit(receipt)
     off_path = _ci_offset_path()
     size = src.stat().st_size
@@ -398,8 +534,12 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     path = state_path()
     state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
     filed_before = dict(state.get("ci_filed") or {})
+    items = {k: dict(v) for k, v in (state.get("ci_items") or {}).items()}
+    heads = {k: dict(v) for k, v in (state.get("ci_heads") or {}).items()}
+    head_legs = {k: dict(v) for k, v in (state.get("ci_head_legs") or {}).items()}
+    cancelled_pending = {k: dict(v) for k, v in (state.get("ci_cancelled_pending") or {}).items()}
 
-    # Read first: every red row is in the receipt whether or not it can be filed.
+    # Read first: every row is in the receipt whether or not it can be filed.
     red: list[dict] = []
     scanned = 0
     with src.open("rb") as fh:
@@ -416,60 +556,142 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                     rec = json.loads(text)
                 except json.JSONDecodeError:
                     rec = None
-                if isinstance(rec, dict) and rec.get("conclusion") in _CI_RED:
-                    red.append({
-                        "repo": rec.get("repo", ""), "pr": rec.get("pr_number"),
-                        "head_sha": rec.get("head_sha", ""), "check": rec.get("check_name", ""),
-                        "conclusion": rec.get("conclusion"), "url": rec.get("html_url", ""),
-                        "key": _ci_key(rec),
-                    })
+                if isinstance(rec, dict) and rec.get("head_sha"):
+                    leg = _leg_of(rec)
+                    pr_key = _ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"])
+                    head_key = _ci_head_key(leg["repo"], leg["pr"], leg["head_sha"])
+                    at = _ci_epoch(leg["received_at"])
+                    # Every head the bot has seen for this PR, oldest first —
+                    # the successor evidence for a cancelled leg.
+                    seen = heads.setdefault(pr_key, {})
+                    if leg["head_sha"] not in seen or (at is not None and seen[leg["head_sha"]] is None):
+                        seen[leg["head_sha"]] = at
+                    # Latest conclusion per leg name per head — the green test.
+                    head_legs.setdefault(head_key, {})[leg["check"]] = leg["conclusion"]
+                    if leg["conclusion"] in _CI_RED:
+                        red.append(leg)
+                    elif leg["conclusion"] == _CI_CANCELLED and leg["key"] not in filed_before:
+                        cancelled_pending.setdefault(leg["key"], leg)
                 scanned += 1
             offset = fh.tell()
-    receipt["red"] = [{k: v for k, v in r.items() if k != "key"} for r in red]
+    receipt["red"] = [_public(r) for r in red]
 
-    to_file = [r for r in red if r["key"] not in filed_before]
+    decided = _decide_cancelled(cancelled_pending, heads, now=_ci_clock(), grace_s=_ci_grace_s())
+    receipt["cancelled"] = [
+        {"repo": d["repo"], "pr": d["pr"], "head_sha": d["head_sha"], "leg": d["check"], "state": d["state"],
+         **({"successor": d["successor"]} if "successor" in d else {})}
+        for d in decided.values()
+    ]
+    stuck = [d for d in decided.values() if d["state"] == "stuck"]
+    # Superseded legs leave the pending set for good; waiting/unreachable stay.
+    cancelled_pending = {k: {kk: vv for kk, vv in d.items() if kk not in ("state", "successor")}
+                         for k, d in decided.items() if d["state"] in ("waiting", "unreachable")}
+
+    # One item per head: group the legs to file (reds + stuck cancelled) by head key.
+    groups: dict[str, list[dict]] = {}
+    for leg in red + stuck:
+        if leg["key"] in filed_before:
+            continue
+        groups.setdefault(_ci_head_key(leg["repo"], leg["pr"], leg["head_sha"]), []).append(leg)
+    skipped = sum(1 for leg in red + stuck if leg["key"] in filed_before)
+
+    # Resolve-on-green candidates: a head whose recorded legs are all green,
+    # against older filed items for the same PR that are not yet resolved.
+    to_resolve: list[tuple[str, dict, str]] = []
+    for item_key, item in items.items():
+        if item.get("resolved"):
+            continue
+        pr_key = _ci_pr_key(item["repo"], item["pr"], item["head_sha"])
+        mine = (heads.get(pr_key) or {}).get(item["head_sha"])
+        for sha, at in (heads.get(pr_key) or {}).items():
+            if sha == item["head_sha"] or at is None or mine is None or at <= mine:
+                continue
+            legs = head_legs.get(_ci_head_key(item["repo"], item["pr"], sha)) or {}
+            if legs and all(c in _CI_GREEN for c in legs.values()) and "success" in legs.values():
+                to_resolve.append((item_key, item, sha))
+                break
+
+    def _persist() -> None:
+        state["ci_filed"] = filed_now
+        state["ci_items"] = items
+        state["ci_heads"] = heads
+        state["ci_head_legs"] = head_legs
+        state["ci_cancelled_pending"] = cancelled_pending
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2) + "\n")
+
+    filed_now = dict(filed_before)
     if not enable_mcp:
+        _persist()
         off_path.parent.mkdir(parents=True, exist_ok=True)
         off_path.write_text(f"{offset}\n", encoding="utf-8")
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — reds reported, not filed",
-                       filed=[], refused=[], new_offset=offset)
+                       filed=[], appended=[], resolved=[], refused=[], skipped=skipped, new_offset=offset,
+                       would_resolve=[{"where": k, "superseded_by": sha} for k, _, sha in to_resolve])
         return _emit(receipt)
 
     from willow_bot.steward import mcp_client
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
-    filed, refused = [], []
-    filed_now = dict(filed_before)
-    for r in to_file:
-        where = f"{r['repo']}#{r['pr']}" if r["pr"] else f"{r['repo']}@{r['head_sha'][:12]}"
-        args = {
-            "app_id": app, "kind": "review", "priority": "normal",
-            "title": f"CI red: {where} — {r['check']} {r['conclusion']}",
-            "summary": f"{r['check']} concluded {r['conclusion']} on {r['head_sha']}. {r['url']}",
-            "source_ref": r["url"],
-        }
+    filed, appended, refused = [], [], []
+    for head_key, legs in groups.items():
+        first = legs[0]
+        where = _ci_pr_key(first["repo"], first["pr"], first["head_sha"])
+        existing = items.get(head_key)
+        if existing and existing.get("id"):
+            # The head already has its item; a new leg joins it, no second filing.
+            for lg in legs:
+                filed_now[lg["key"]] = existing["id"]
+                existing.setdefault("legs", []).append(lg["check"])
+                appended.append({"where": where, "check": lg["check"], "id": existing["id"]})
+            continue
+        args = _filing_args(app, where, first["head_sha"], legs)
         try:
             result = mcp_client.call("human_required_enqueue", args)
         except Exception as exc:  # noqa: BLE001 — a refused filing is a line with its reason
-            refused.append({"where": where, "check": r["check"], "error": str(exc)[:300]})
+            refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": str(exc)[:300]})
             break
         err = _tool_error(result)
         if err:
-            refused.append({"where": where, "check": r["check"], "error": err})
+            refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": err})
             break
-        item_id = result.get("id") if isinstance(result, dict) else None
-        filed_now[r["key"]] = item_id or "filed"
-        filed.append({"where": where, "check": r["check"], "conclusion": r["conclusion"], "id": item_id})
+        item_id = (result.get("id") if isinstance(result, dict) else None) or "filed"
+        for lg in legs:
+            filed_now[lg["key"]] = item_id
+        items[head_key] = {"id": item_id, "repo": first["repo"], "pr": first["pr"],
+                           "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
+                           "filed_at": receipt["at"]}
+        filed.append({"where": where, "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
+                      "conclusions": [lg["conclusion"] for lg in legs], "id": item_id})
+
+    resolved, resolve_refused = [], []
+    for item_key, item, sha in to_resolve:
+        note = f"superseded by {sha}, green at {receipt['at']}"
+        try:
+            result = mcp_client.call("human_required_resolve", {
+                "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
+            })
+        except Exception as exc:  # noqa: BLE001 — a refused resolve is a line; the item stays open and is retried
+            resolve_refused.append({"where": item_key, "item_id": item["id"], "error": str(exc)[:300]})
+            continue
+        err = _tool_error(result)
+        if err:
+            resolve_refused.append({"where": item_key, "item_id": item["id"], "error": err})
+            continue
+        item["resolved"] = {"by": sha, "at": receipt["at"]}
+        resolved.append({"where": item_key, "item_id": item["id"], "superseded_by": sha})
+
     # On a refusal the offset stays where a retry can find the row; what was
     # filed before it is remembered in ci_filed so the retry skips it.
-    state["ci_filed"] = filed_now
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2) + "\n")
+    _persist()
     if not refused:
         off_path.parent.mkdir(parents=True, exist_ok=True)
         off_path.write_text(f"{offset}\n", encoding="utf-8")
-    receipt.update(status="ok" if not refused else "could-not-run", filed=filed, refused=refused,
-                   skipped=len(red) - len(to_file), new_offset=offset if not refused else receipt["offset"])
+    if resolve_refused:
+        receipt["resolve_refused"] = resolve_refused
+    receipt.update(status="ok" if not refused else "could-not-run", filed=filed, appended=appended,
+                   resolved=resolved, refused=refused, skipped=skipped,
+                   new_offset=offset if not refused else receipt["offset"])
     return _emit(receipt)
 
 

@@ -12,6 +12,23 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Steward `run_ci` stops drowning the review queue** (gap `25cb3c1a3489`).
+  `cancelled` is no longer a red: a cancelled leg is held in
+  `ci_cancelled_pending` and decided each tick — `superseded` when a later
+  head for the same PR shows up in the bot's own deposits (dropped, never
+  filed), `waiting` inside the grace window, `stuck` after it (filed), or
+  `unreachable` when the deposit's timestamp cannot be read (neither).
+  Grace defaults to 10 minutes (`WILLOW_BOT_CI_CANCELLED_GRACE_MIN`). Red
+  legs collapse into ONE review item per (repo, pr, head_sha), keyed in
+  `ci_items`, with the aggregate `test` job folded into its cause's item;
+  a later leg on a filed head joins the item (`appended`) instead of filing
+  again. When a later head for the same PR is fully green, the PR's older
+  items are resolved through `human_required_resolve` with `superseded by
+  <sha>, green at <ts>`. `ci_filed` keeps its `head_sha:check_run_id` key
+  shape so the voice step's `ci-red` label mapping is unchanged.
+
 ### Added
 
 - **Steward tick reconciles owned-prefix labels on every open PR.**
