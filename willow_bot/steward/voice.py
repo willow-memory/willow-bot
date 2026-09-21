@@ -129,18 +129,43 @@ def _ci_red_legs_for_sha(state: dict, head_sha: str) -> list[str]:
     return sorted(k for k in (state.get("ci_filed") or {}) if k.startswith(prefix))
 
 
+def _ci_item_for_sha(state: dict, head_sha: str) -> dict | None:
+    """The `ci_items` entry filed for this head, if any (one item per head
+    by construction; the first match wins)."""
+    for item in (state.get("ci_items") or {}).values():
+        if isinstance(item, dict) and item.get("head_sha") == head_sha and item.get("id"):
+            return item
+    return None
+
+
+def _ci_detail_line(item: dict | None) -> str | None:
+    """The CI line the seat was told (pair 11ccb0f7), for the PR comment —
+    same words on the PR as on the seat's channel: filed red, filed stuck,
+    or resolved with why. None when nothing is filed for this head."""
+    if not item:
+        return None
+    from willow_bot.steward import tick as _tick
+
+    if item.get("resolved"):
+        return _tick._ci_line_resolved(item)
+    return _tick._ci_line_filed(item)
+
+
 def _status_comment_body(key: str, head_sha: str, state: dict, *, at: str) -> str:
     """The bot's terse view for this (PR, head_sha): audit dispatched or
-    not, CI red legs filed for this sha or none, and the tick time. No
-    exposition — a seat or operator reading the PR gets three lines."""
+    not, CI red legs filed for this sha or none, the CI line as told to
+    the seat (when an item is filed for this head), and the tick time. No
+    exposition — a seat or operator reading the PR gets a few lines."""
     audit = "dispatched" if key in (state.get("audit_dispatched") or {}) else "not dispatched"
     red = _ci_red_legs_for_sha(state, head_sha)
     ci = f"{len(red)} red leg(s) filed" if red else "none filed"
+    detail = _ci_detail_line(_ci_item_for_sha(state, head_sha))
     return (
         f"willow-bot status for `{head_sha[:12]}`\n"
         f"- audit: {audit}\n"
         f"- CI red: {ci}\n"
-        f"- last tick: {at}\n"
+        + (f"- {detail}\n" if detail else "")
+        + f"- last tick: {at}\n"
     )
 
 
