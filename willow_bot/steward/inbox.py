@@ -33,6 +33,7 @@ from willow_bot.steward.config import (
 
 _MAX_CONSUMED = 5000
 _MAX_SIGNALS = 100
+_MAX_CLOSED = 500
 
 
 def _load_state(path: Path) -> dict:
@@ -74,11 +75,13 @@ def ingest(state_path: Path) -> int:
     state.setdefault("merged_synced", [])
     consumed: set[str] = set(state.get("inbox_consumed") or [])
     signals: list[dict] = list(state.get("webhook_signals") or [])
+    closed: dict[str, dict] = dict(state.get("pr_closed") or {})
 
     if not inbox.is_dir():
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state["inbox_consumed"] = sorted(consumed)
         state["webhook_signals"] = signals[-_MAX_SIGNALS:]
+        state["pr_closed"] = closed
         state_path.write_text(json.dumps(state, indent=2) + "\n")
         return 0
 
@@ -116,6 +119,15 @@ def ingest(state_path: Path) -> int:
             }
             _emit(ev)
             signals.append({k: v for k, v in ev.items() if k != "event"})
+            # A closed PR is remembered durably (gap 52928edb3fc7): the
+            # signals window above rolls at _MAX_SIGNALS, so the ci step
+            # could not rely on it to know a PR had closed by the time a
+            # cancelled leg aged past its grace. `merged` is GitHub's own
+            # word for it; a reopen drops the row.
+            if ev["action"] == "closed":
+                closed[key] = {"at": ev["received_at"], "merged": bool(ev["merged"])}
+            elif ev["action"] == "reopened":
+                closed.pop(key, None)
         elif kind == "check_run":
             # Consumed unconditionally: an in-flight check (`action="created"`
             # in fleet_bridge terms) never reaches this inbox — only
@@ -155,8 +167,15 @@ def ingest(state_path: Path) -> int:
     if len(consumed) > _MAX_CONSUMED:
         consumed = set(sorted(consumed)[-_MAX_CONSUMED:])
 
+    if len(closed) > _MAX_CLOSED:
+        # Oldest by received_at go first; a PR closed months ago has no
+        # cancelled leg left to be moot for.
+        keep = sorted(closed, key=lambda k: str(closed[k].get("at") or ""))[-_MAX_CLOSED:]
+        closed = {k: closed[k] for k in keep}
+
     state["inbox_consumed"] = sorted(consumed)
     state["webhook_signals"] = signals[-_MAX_SIGNALS:]
+    state["pr_closed"] = closed
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(state, indent=2) + "\n")
     return 0

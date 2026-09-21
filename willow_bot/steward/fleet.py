@@ -25,6 +25,25 @@ def gh_api(path: str):
     return json.loads(subprocess.check_output(["gh", "api", path], text=True))
 
 
+#: What the last scan could NOT list (gap 52928edb3fc7, Loki 25CBCB13). The
+#: per-repo / per-org `except CalledProcessError` below keep one failing call
+#: from killing the whole scan — right — but they also made a partial scan
+#: indistinguishable from a complete one: a repo whose `pulls` call failed
+#: simply had no open PRs as far as `state['open']` could tell, and a
+#: consumer that reads "not in the open set" as "closed on GitHub" (the
+#: legacy clear, the stuck backfill) would retire a live PR's item. Each
+#: swallowed failure now lands here as ``org:<login>``, ``user:<login>`` or
+#: ``repo:<full_name>``; ``iter_open_pulls`` resets it at the start of a scan
+#: and ``run_once`` copies it into the scan record.
+last_scan_errors: list[str] = []
+
+
+def _note_error(kind: str, name: str) -> None:
+    key = f"{kind}:{name}"
+    if key not in last_scan_errors:
+        last_scan_errors.append(key)
+
+
 @lru_cache(maxsize=1)
 def fleet_orgs() -> tuple[str, ...]:
     """Org logins to scan. Override with LOKI_PR_WATCH_ORGS (comma-separated)."""
@@ -52,6 +71,7 @@ def repos_for_org(org: str) -> list[str]:
         try:
             batch = gh_api(f"/orgs/{org}/repos?per_page=100&page={page}")
         except subprocess.CalledProcessError:
+            _note_error("org", org)
             break
         if not batch:
             break
@@ -71,6 +91,7 @@ def repos_for_user(user: str) -> list[str]:
                 f"/users/{user}/repos?per_page=100&page={page}&type=owner"
             )
         except subprocess.CalledProcessError:
+            _note_error("user", user)
             break
         if not batch:
             break
@@ -91,11 +112,16 @@ def fleet_repos() -> list[str]:
 
 
 def iter_open_pulls() -> Iterator[tuple[str, int, str, str]]:
-    """Yield (full_name, number, title, html_url) for every open PR in fleet scope."""
+    """Yield (full_name, number, title, html_url) for every open PR in fleet scope.
+
+    A repo whose listing fails is skipped AND recorded in ``last_scan_errors``
+    — the scan goes on, but it must not read as complete for that repo."""
+    last_scan_errors.clear()
     for repo in fleet_repos():
         try:
             pulls = gh_api(f"repos/{repo}/pulls?state=open&per_page=50")
         except subprocess.CalledProcessError:
+            _note_error("repo", repo)
             continue
         for p in pulls:
             yield (
