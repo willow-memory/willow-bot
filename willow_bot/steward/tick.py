@@ -259,8 +259,17 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     envelope_id = state.get(_AUDIT_ENVELOPE_STATE_KEY) or None
     resolved_this_tick = False
     done, refused, still = [], [], []
+    # Paced through this step's own budget (gap 52928edb3fc7): audit is
+    # the step that reaches Loki, and it used to refuse a PR on the first
+    # rate_limited the mirror's pacing left behind — three of five on the
+    # 2026-09-21 01:07Z tick. A budget-spent stop leaves the rest pending
+    # for the next tick, as a refusal always has.
+    pace = _Pacer(_AUDIT_TIME_BUDGET_S)
     for item in pending[:_AUDIT_PER_TICK]:
         key = item.get("repo_pr", "")
+        if pace.budget_spent:
+            still.append(item)
+            continue
         args = {
             "app_id": app,
             "to_app": _AUDIT_TO_AGENT,
@@ -274,45 +283,38 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
         }
         if envelope_id:
             args["envelope_id"] = envelope_id
-        try:
-            result = mcp_client.call("dispatch_send", args)
-            err = _tool_error(result)
-            if err and err.startswith("EAMBIG") and not envelope_id:
-                # First refusal of the lifetime: the tool named the options.
-                picked = _auditor_envelope_from(result.get("envelopes"))
-                if picked is None:
-                    result = {"error": "no auditor envelope: none of the active dispatch "
-                                       "envelopes is bounded to task_class=auditor for loki"}
-                else:
-                    envelope_id = picked
-                    resolved_this_tick = True
-                    result = mcp_client.call("dispatch_send", {**args, "envelope_id": envelope_id})
-                    if _tool_error(result):
-                        # The id the tool itself just listed was refused when
-                        # named — same rule as below: a refused assertion is
-                        # not carried out of the tick, whatever the errno.
-                        envelope_id = None
-                        resolved_this_tick = False
-                        state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
-            elif err and envelope_id:
-                # A refusal while the remembered id was named — ENOENT (it
-                # no longer governs), EAMBIG (its bounds changed under us),
-                # or anything else. The id was this step's own assertion
-                # and the tool just refused it, so the assertion is gone
-                # whatever the errno (Loki 09922563: an EAMBIG here used to
-                # fall through, keep the id, and refuse every PR every tick
-                # forever). Forget it; this PR stays pending with the reason
-                # and the next refusal re-resolves from the tool's own list.
-                # No second call this tick — one honest refusal beats a
-                # guessed retry against a registry that moved.
-                envelope_id = None
-                state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
-        except Exception as exc:  # noqa: BLE001 — a refused dispatch stays pending, with its reason
-            item["last_error"] = str(exc)[:300]
-            refused.append({"repo_pr": key, "error": item["last_error"]})
-            still.append(item)
-            continue
-        err = _tool_error(result)
+        result, err = pace.call(mcp_client.call, "dispatch_send", args)
+        if err and err.startswith("EAMBIG") and not envelope_id:
+            # First refusal of the lifetime: the tool named the options.
+            picked = _auditor_envelope_from(result.get("envelopes") if isinstance(result, dict) else None)
+            if picked is None:
+                result, err = None, ("no auditor envelope: none of the active dispatch "
+                                     "envelopes is bounded to task_class=auditor for loki")
+            else:
+                envelope_id = picked
+                resolved_this_tick = True
+                result, err = pace.call(mcp_client.call, "dispatch_send", {**args, "envelope_id": envelope_id})
+                if err:
+                    # The id the tool itself just listed was refused when
+                    # named — same rule as below: a refused assertion is
+                    # not carried out of the tick, whatever the errno.
+                    envelope_id = None
+                    resolved_this_tick = False
+                    state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
+        elif err and envelope_id and not err.startswith("rate_limited"):
+            # A refusal while the remembered id was named — ENOENT (it
+            # no longer governs), EAMBIG (its bounds changed under us),
+            # or anything else. The id was this step's own assertion
+            # and the tool just refused it, so the assertion is gone
+            # whatever the errno (Loki 09922563: an EAMBIG here used to
+            # fall through, keep the id, and refuse every PR every tick
+            # forever). Forget it; this PR stays pending with the reason
+            # and the next refusal re-resolves from the tool's own list.
+            # No second call this tick — one honest refusal beats a
+            # guessed retry against a registry that moved. A limiter
+            # answer is not a refusal of the id: the envelope stays.
+            envelope_id = None
+            state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
         did = None if err else (result.get("dispatch_id") if isinstance(result, dict) else None)
         if not did:
             item["last_error"] = err or f"no dispatch_id in result: {str(result)[:200]}"
@@ -327,8 +329,9 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     if envelope_id:
         state[_AUDIT_ENVELOPE_STATE_KEY] = envelope_id
     path.write_text(json.dumps(state, indent=2) + "\n")
-    receipt.update(status="ok", dispatched=done, refused=refused, remaining=len(still),
-                   envelope_id=envelope_id, envelope_resolved=resolved_this_tick)
+    receipt.update(status="ok" if not pace.budget_spent else "paced", dispatched=done, refused=refused,
+                   remaining=len(still), envelope_id=envelope_id, envelope_resolved=resolved_this_tick,
+                   **pace.receipt())
     return _emit(receipt)
 
 
@@ -376,8 +379,8 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     from willow_bot.steward import mcp_client
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
-    mirrored, failed, paced = 0, None, 0
-    deadline = _clock() + _MIRROR_TIME_BUDGET_S
+    mirrored, failed = 0, None
+    pace = _Pacer(_MIRROR_TIME_BUDGET_S, calls=_MIRROR_CALLS_PER_TICK)
     with src.open("rb") as fh:
         fh.seek(offset)
         while mirrored < _MIRROR_PER_TICK:
@@ -397,46 +400,87 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
             # answers the 11th call {"error": "rate_limited", "retry_after": N}.
             # The first live mirror stopped there with 7 rows landed (2026-09-15
             # 00:28Z). Pace instead: wait what the limiter asks, retry the same
-            # row, inside a time budget per tick — the row is never skipped.
-            while True:
-                try:
-                    result = mcp_client.call("store_put", args)
-                except Exception as exc:  # noqa: BLE001 — stop at the first failure; the offset stays before it
-                    failed = str(exc)[:300]
-                    break
-                err = _tool_error(result)
-                if err is None:
-                    break
-                if err != "rate_limited":
-                    failed = err
-                    break
-                wait = min(max(int(result.get("retry_after") or 1), 1), _MIRROR_MAX_WAIT_S)
-                if _clock() + wait > deadline:
-                    failed = f"rate_limited (paced {paced}x; time budget spent, resumes next tick)"
-                    break
-                paced += 1
-                _sleep(wait)
-            if failed is not None:
+            # row, inside this step's budget — the row is never skipped.
+            result, err = pace.call(mcp_client.call, "store_put", args)
+            if err is not None:
+                failed = err
                 break
             mirrored += 1
             offset = fh.tell()
     off_path.parent.mkdir(parents=True, exist_ok=True)
     off_path.write_text(f"{offset}\n", encoding="utf-8")
     behind = size - offset
-    status = "ok" if failed is None else ("paced" if failed.startswith("rate_limited") else "could-not-run")
-    receipt.update(status=status, mirrored=mirrored, paced=paced, new_offset=offset, behind=behind)
+    status = "ok" if failed is None else ("paced" if pace.budget_spent else "could-not-run")
+    receipt.update(status=status, mirrored=mirrored, new_offset=offset, behind=behind, **pace.receipt())
     if failed is not None:
         receipt["detail"] = failed
     return _emit(receipt)
 
 
 # Pacing knobs, module-level so a test can shrink them. The store meters at
-# 60 calls/min per app (burst 10); ~100 rows a tick is what two minutes
-# buys once the burst is spent, and a 500-row backlog drains in five ticks.
+# 60 calls/min per app (burst 10). Every MCP step that writes shares that
+# one limiter, and until gap 52928edb3fc7 the mirror alone paced inside a
+# 120 s budget while ci and audit fell over on their FIRST rate_limited —
+# on 2026-09-21 01:07Z the mirror paced 21 of 27 rows, then ci ended
+# `could-not-run rate_limited` on a real Nestor red and audit refused three
+# PRs. Each step now paces through its own budget (`_Pacer`), and the
+# mirror is additionally CAPPED in calls per tick so it cannot drain the
+# minute the later steps need: 30 of the 60 leaves ci + audit the other
+# half, and a 500-row backlog still lands in ~17 ticks. Mirror stays first
+# in the loop (ci reads what it mirrored); the cap is what makes it yield.
 _MIRROR_TIME_BUDGET_S = 120.0
+_MIRROR_CALLS_PER_TICK = 30
 _MIRROR_MAX_WAIT_S = 10
+_CI_TIME_BUDGET_S = 60.0
+_AUDIT_TIME_BUDGET_S = 60.0
 _clock = time.monotonic
 _sleep = time.sleep
+
+
+class _Pacer:
+    """One step's slice of the tick's limiter allowance.
+
+    ``call`` retries the SAME call on ``rate_limited`` — waiting what the
+    limiter asks, capped at ``_MIRROR_MAX_WAIT_S`` — until the step's time
+    budget would be overrun or its call cap is reached; then reports
+    ``budget_spent`` and the step stops where a retry can resume. Every
+    other error is returned as-is. ``receipt()`` is the three fields each
+    step's receipt carries so starvation is legible in the heartbeat:
+    ``paced`` (how many waits), ``budget_spent`` (bool), ``calls`` (made).
+    """
+
+    def __init__(self, budget_s: float, *, calls: int | None = None) -> None:
+        self.deadline = _clock() + budget_s
+        self.cap = calls
+        self.paced = 0
+        self.calls = 0
+        self.budget_spent = False
+
+    def call(self, fn, name: str, args: dict) -> tuple[object, str | None]:
+        while True:
+            if self.cap is not None and self.calls >= self.cap:
+                self.budget_spent = True
+                return None, f"rate_limited (call cap {self.cap} reached; resumes next tick)"
+            try:
+                self.calls += 1
+                result = fn(name, args)
+            except Exception as exc:  # noqa: BLE001 — the caller decides what one failure means
+                return None, str(exc)[:300]
+            err = _tool_error(result)
+            if err is None:
+                return result, None
+            if err != "rate_limited":
+                return result, err
+            retry = result.get("retry_after") if isinstance(result, dict) else None
+            wait = min(max(int(retry or 1), 1), _MIRROR_MAX_WAIT_S)
+            if _clock() + wait > self.deadline:
+                self.budget_spent = True
+                return result, f"rate_limited (paced {self.paced}x; time budget spent, resumes next tick)"
+            self.paced += 1
+            _sleep(wait)
+
+    def receipt(self) -> dict:
+        return {"paced": self.paced, "budget_spent": self.budget_spent, "calls": self.calls}
 
 
 # ── the ci step: a red check reaches a seat ─────────────────────────────────
@@ -516,22 +560,39 @@ def _ci_epoch(value: object) -> float | None:
     return dt.timestamp()
 
 
+def _ci_branch_key(repo: str, branch: str) -> str:
+    """The successor group for a head with no PR: every head the bot has
+    seen on ``repo``'s ``branch``. Spelled so it can never collide with a
+    ``repo#pr`` key (``#`` is not legal in a branch name's position here)."""
+    return f"{repo}~{branch}"
+
+
 def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
-                      head_legs: dict | None = None) -> dict:
-    """Each pending cancelled leg gets exactly one of five states.
+                      head_legs: dict | None = None, closed: dict | None = None) -> dict:
+    """Each pending cancelled leg gets exactly one of six states.
 
     * ``rerun`` — the same leg name on the same head has since reported a
       conclusion other than ``cancelled`` (a re-run): the cancelled run
       is moot. Dropped; the new conclusion is judged on its own.
+    * ``moot`` — the PR the leg belongs to has CLOSED (merged or not) in
+      the bot's own deposits: a run cancelled on a PR that no longer
+      exists is nobody's stuck PR. Dropped, never filed (gap
+      52928edb3fc7 — release-please PRs whose successor is the merge
+      itself filed as stuck after grace).
     * ``superseded`` — a different head for the same PR was first seen
       AFTER this one: the run was cancelled because the next push landed.
-      Dropped, never filed.
+      For a head with NO PR (a release commit on master, keyed
+      ``repo@sha12``) the same rule runs over the heads seen on the same
+      ``repo`` + ``head_branch`` — the deposit carries the branch since
+      52928edb3fc7; a row without one has no successor group and ages
+      like any other. Dropped, never filed.
     * ``waiting`` — no successor yet and the leg is younger than the grace
       window. Stays pending; the next tick decides again.
     * ``stuck`` — no successor and older than the grace window: nothing
       superseded it, so the PR is sitting on a cancelled run. Filed, in
       the same per-head item a red leg would be — as a cancelled leg,
-      never as a red one.
+      never as a red one, and never under a "CI red" title when it is
+      the only kind of leg on the head (``_filing_args``).
     * ``unreachable`` — the deposit's timestamp cannot be read, so its age
       from the deposit is unknowable. Stays pending and says so — until
       the grace window has passed since the step FIRST SAW it
@@ -540,11 +601,13 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
       earns a wait, not a permanent seat in the pending set.
 
     Successor evidence is the bot's own deposits (``heads`` maps
-    `repo#pr` → {head_sha: first_seen_epoch}); no GitHub API is asked, so
-    there is no fifth "API failed" state to report. Successor ORDER is
-    the deposits' ``received_at`` (the webhook's arrival), not GitHub's
-    push order — close enough that a superseding push is always later,
-    and the only clock the bot holds.
+    `repo#pr` — or `repo~branch` for PR-less heads — → {head_sha:
+    first_seen_epoch}); closure evidence is the inbox's ``pr_closed``
+    record (``closed``). No GitHub API is asked, so there is no "API
+    failed" state to report. Successor ORDER is the deposits'
+    ``received_at`` (the webhook's arrival), not GitHub's push order —
+    close enough that a superseding push is always later, and the only
+    clock the bot holds.
     """
     out: dict[str, dict] = {}
     for key, leg in pending.items():
@@ -553,7 +616,14 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
         if latest is not None and latest != _CI_CANCELLED:
             out[key] = {**leg, "state": "rerun", "latest": latest}
             continue
-        seen = heads.get(pr_key) or {}
+        if leg["pr"] and pr_key in (closed or {}):
+            out[key] = {**leg, "state": "moot",
+                        "closed": "merged" if (closed or {})[pr_key].get("merged") else "closed"}
+            continue
+        group = pr_key
+        if not leg["pr"] and leg.get("head_branch"):
+            group = _ci_branch_key(leg["repo"], leg["head_branch"])
+        seen = heads.get(group) or {}
         mine = seen.get(leg["head_sha"])
         if mine is None:
             mine = _ci_epoch(leg.get("received_at"))
@@ -615,6 +685,8 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
             keep.setdefault(_ci_pr_key(item["repo"], item["pr"], item["head_sha"]), set()).add(item["head_sha"])
     for leg in cancelled_pending.values():
         keep.setdefault(_ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"]), set()).add(leg["head_sha"])
+        if not leg["pr"] and leg.get("head_branch"):
+            keep.setdefault(_ci_branch_key(leg["repo"], leg["head_branch"]), set()).add(leg["head_sha"])
     dropped_heads = dropped_items = 0
     for pr_key in list(heads):
         seen = heads[pr_key]
@@ -650,22 +722,34 @@ def _leg_of(rec: dict) -> dict:
         "head_sha": rec.get("head_sha", ""), "check": rec.get("check_name", ""),
         "conclusion": rec.get("conclusion"), "url": rec.get("html_url", ""),
         "received_at": rec.get("received_at", ""), "key": _ci_key(rec),
+        "head_branch": rec.get("head_branch") or "",
     }
 
 
 def _public(leg: dict) -> dict:
-    return {k: v for k, v in leg.items() if k not in ("key", "received_at")}
+    return {k: v for k, v in leg.items() if k not in ("key", "received_at", "head_branch")}
 
 
-def _filing_args(app: str, where: str, head_sha: str, legs: list[dict]) -> dict:
+def _filing_args(app: str, where: str, head_sha: str, legs: list[dict], *, grace_s: float = 0.0) -> dict:
     causes = [lg for lg in legs if lg["check"] not in _CI_AGGREGATE_CHECKS] or legs
     names = ", ".join(lg["check"] for lg in causes)
     lines = [f"{lg['check']} concluded {lg['conclusion']}"
              + (" (aggregate)" if lg["check"] in _CI_AGGREGATE_CHECKS and lg not in causes else "")
              + f". {lg['url']}" for lg in legs]
+    # A head whose every leg is a stuck cancellation is not red — nothing
+    # failed; something never finished and nothing superseded it. The
+    # title says that (gap 52928edb3fc7: three such items filed as "CI
+    # red: … concluded cancelled" on 2026-09-20). A head with any real red
+    # is red, and its cancelled legs ride in the summary as before.
+    if legs and all(lg["conclusion"] == _CI_CANCELLED for lg in legs):
+        minutes = int(round(grace_s / 60.0)) if grace_s else _CI_CANCELLED_GRACE_MIN_DEFAULT
+        title = (f"CI stuck: {where} — {len(causes)} leg(s) cancelled, "
+                 f"no successor after {minutes} min: {names}")
+    else:
+        title = f"CI red: {where} — {len(causes)} leg(s): {names}"
     return {
         "app_id": app, "kind": "review", "priority": "normal",
-        "title": f"CI red: {where} — {len(causes)} leg(s): {names}"[:200],
+        "title": title[:200],
         "summary": f"head {head_sha}\n" + "\n".join(lines),
         "source_ref": causes[0]["url"] or legs[0]["url"],
     }
@@ -773,6 +857,13 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                     seen = heads.setdefault(pr_key, {})
                     if leg["head_sha"] not in seen or (at is not None and seen[leg["head_sha"]] is None):
                         seen[leg["head_sha"]] = at
+                    # A PR-less head is ALSO remembered under its branch:
+                    # that is the only group in which its successor (the
+                    # next push to the same branch) can ever be found.
+                    if not leg["pr"] and leg["head_branch"]:
+                        on_branch = heads.setdefault(_ci_branch_key(leg["repo"], leg["head_branch"]), {})
+                        if leg["head_sha"] not in on_branch or (at is not None and on_branch[leg["head_sha"]] is None):
+                            on_branch[leg["head_sha"]] = at
                     # Latest conclusion per leg NAME per head — a re-run of
                     # a leg (new check_run_id) overwrites, so a head that
                     # went green by re-running reads green here.
@@ -785,15 +876,23 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             offset = fh.tell()
     receipt["red"] = [_public(r) for r in red]
 
-    decided = _decide_cancelled(cancelled_pending, heads, now=now, grace_s=_ci_grace_s(), head_legs=head_legs)
+    grace_s = _ci_grace_s()
+    # Closure evidence: the inbox's durable `pr_closed` record, plus what
+    # the host sync already brought home as merged.
+    closed = {k: v for k, v in (state.get("pr_closed") or {}).items() if isinstance(v, dict)}
+    for key in state.get("merged_synced") or []:
+        closed.setdefault(key, {"merged": True})
+    decided = _decide_cancelled(cancelled_pending, heads, now=now, grace_s=grace_s, head_legs=head_legs,
+                                closed=closed)
     receipt["cancelled"] = [
         {"repo": d["repo"], "pr": d["pr"], "head_sha": d["head_sha"], "leg": d["check"], "state": d["state"],
-         **({k: d[k] for k in ("successor", "aged_by", "latest") if k in d})}
+         **({k: d[k] for k in ("successor", "aged_by", "latest", "closed") if k in d})}
         for d in decided.values()
     ]
     stuck = [d for d in decided.values() if d["state"] == "stuck"]
-    # Superseded, rerun and stuck legs leave the pending set; waiting/unreachable stay.
-    cancelled_pending = {k: {kk: vv for kk, vv in d.items() if kk not in ("state", "successor", "aged_by", "latest")}
+    # Superseded, rerun, moot and stuck legs leave the pending set; waiting/unreachable stay.
+    cancelled_pending = {k: {kk: vv for kk, vv in d.items()
+                             if kk not in ("state", "successor", "aged_by", "latest", "closed")}
                          for k, d in decided.items() if d["state"] in ("waiting", "unreachable")}
 
     # One item per head: group the legs to file (reds + stuck cancelled) by head key.
@@ -863,6 +962,8 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
     filed, appended, refused = [], [], []
+    pace = _Pacer(_CI_TIME_BUDGET_S)
+    to_file = sum(1 for hk in groups if not (items.get(hk) or {}).get("id"))
     for head_key, legs in groups.items():
         first = legs[0]
         where = _ci_pr_key(first["repo"], first["pr"], first["head_sha"])
@@ -877,13 +978,12 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                 appended.append({"where": where, "check": lg["check"], "conclusion": lg["conclusion"],
                                  "id": existing["id"]})
             continue
-        args = _filing_args(app, where, first["head_sha"], legs)
-        try:
-            result = mcp_client.call("human_required_enqueue", args)
-        except Exception as exc:  # noqa: BLE001 — a refused filing is a line with its reason
-            refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": str(exc)[:300]})
-            break
-        err = _tool_error(result)
+        args = _filing_args(app, where, first["head_sha"], legs, grace_s=grace_s)
+        # Paced through this step's own budget (gap 52928edb3fc7): a
+        # rate_limited answer is waited out, not treated as the filing's
+        # refusal — the first live tick after the mirror's pacing landed
+        # ended here `could-not-run` on a real red.
+        result, err = pace.call(mcp_client.call, "human_required_enqueue", args)
         if err:
             refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": err})
             break
@@ -902,15 +1002,11 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     for item_key, item, sha, how in to_resolve:
         note = (f"re-run green at {receipt['at']}" if how == "re-run"
                 else f"superseded by {sha}, green at {receipt['at']}")
-        try:
-            result = mcp_client.call("human_required_resolve", {
-                "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
-            })
-        except Exception as exc:  # noqa: BLE001 — a refused resolve is a line; the item stays open and is retried
-            resolve_refused.append({"where": item_key, "item_id": item["id"], "error": str(exc)[:300]})
-            continue
-        err = _tool_error(result)
+        result, err = pace.call(mcp_client.call, "human_required_resolve", {
+            "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
+        })
         if err:
+            # A refused resolve is a line; the item stays open and is retried.
             resolve_refused.append({"where": item_key, "item_id": item["id"], "error": err})
             continue
         item["resolved"] = {"by": sha, "how": how, "at": receipt["at"]}
@@ -926,9 +1022,11 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         off_path.write_text(f"{offset}\n", encoding="utf-8")
     if resolve_refused:
         receipt["resolve_refused"] = resolve_refused
-    receipt.update(status="ok" if not refused else "could-not-run", filed=filed, appended=appended,
+    status = "ok" if not refused else ("paced" if pace.budget_spent else "could-not-run")
+    receipt.update(status=status, filed=filed, appended=appended,
                    resolved=resolved, refused=refused, skipped=skipped,
-                   new_offset=offset if not refused else receipt["offset"])
+                   new_offset=offset if not refused else receipt["offset"],
+                   remaining=to_file - len(filed), **pace.receipt())
     return _emit(receipt)
 
 
@@ -1118,7 +1216,7 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
         path.write_text(json.dumps(state, indent=2) + "\n")
     status = "ok" if complete else ("paced" if remaining and not refused else "partial")
     receipt.update(status=status, ran=True, resolved=resolved, refused=refused, remaining=remaining,
-                   paced=paced, recorded=complete)
+                   paced=paced, budget_spent=budget_spent, recorded=complete)
     return _emit(receipt)
 
 

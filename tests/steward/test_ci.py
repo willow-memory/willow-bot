@@ -264,13 +264,15 @@ def test_the_aggregate_alone_on_an_unfiled_head_is_still_filed(home, monkeypatch
 
 
 def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypatch):
+    """A refusal that is NOT the limiter (gap 52928edb3fc7 moved
+    rate_limited to pacing — see the pacing tests below)."""
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
     deposits.append_local(_row("willow-memory/willow-mcp", SHA2, 20, "lint", "failure", pr=550))
 
     def answer(name, inputs, n):
         if n == 2:
-            return {"error": "rate_limited", "retry_after": 3}
+            return {"error": "denied: human_required_enqueue not in tools_allowed"}
         return {"ok": True, "id": f"hr-{n}"}
 
     c = _Client(result=answer)
@@ -278,8 +280,10 @@ def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypat
     r = tick.run_ci()
     assert r["status"] == "could-not-run"
     assert [f["where"] for f in r["filed"]] == [f"{GROVE}#76"]
-    assert r["refused"] == [{"where": "willow-memory/willow-mcp#550", "legs": ["lint"], "error": "rate_limited"}]
+    assert r["refused"] == [{"where": "willow-memory/willow-mcp#550", "legs": ["lint"],
+                             "error": "denied: human_required_enqueue not in tools_allowed"}]
     assert r["new_offset"] == r["offset"]
+    assert r["remaining"] == 1 and r["budget_spent"] is False and r["paced"] == 0
     r2 = tick.run_ci()
     assert r2["status"] == "ok"
     assert [f["where"] for f in r2["filed"]] == ["willow-memory/willow-mcp#550"]

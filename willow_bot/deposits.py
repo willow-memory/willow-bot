@@ -64,8 +64,17 @@ def ci_outcome_record(
     html_url: str | None = None,
     sender_type: str = "",
     received_at: str | None = None,
+    head_branch: str | None = None,
 ) -> dict[str, Any]:
-    """Draft claim: how CI went for repo@sha (pass and fail both recorded)."""
+    """Draft claim: how CI went for repo@sha (pass and fail both recorded).
+
+    ``head_branch`` is the check suite's branch (gap 52928edb3fc7): for a
+    head with no PR (a release commit pushed to master) it is the only key
+    under which a *successor* head can be found, so the ci step can tell a
+    cancelled-because-superseded run from a stuck one. Empty when the
+    payload did not carry it — a row written before this field existed
+    reads the same as one GitHub sent without a suite.
+    """
     return {
         "kind": "ci_outcome",
         "lane": "draft",
@@ -73,6 +82,7 @@ def ci_outcome_record(
         "actor_type": sender_type or "unknown",
         "repo": repo,
         "head_sha": head_sha or "",
+        "head_branch": head_branch or "",
         "check_run_id": check_run_id,
         "check_name": check_name or "",
         "conclusion": conclusion or "",
@@ -309,6 +319,7 @@ def deposit_from_check_run_payload(payload: dict) -> dict[str, Any] | None:
     prs = check.get("pull_requests") or []
     pr_number = prs[0].get("number") if prs else None
     sender_type = str((payload.get("sender") or {}).get("type") or "")
+    suite = check.get("check_suite") if isinstance(check.get("check_suite"), dict) else {}
     rec = ci_outcome_record(
         repo=repo,
         head_sha=check.get("head_sha"),
@@ -319,5 +330,6 @@ def deposit_from_check_run_payload(payload: dict) -> dict[str, Any] | None:
         pr_number=pr_number,
         html_url=check.get("html_url"),
         sender_type=sender_type,
+        head_branch=suite.get("head_branch"),
     )
     return deposit_ci_outcome(rec)
