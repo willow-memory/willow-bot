@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.1](https://github.com/willow-memory/willow-bot/compare/v0.4.0...v0.4.1) (2026-09-21)
+
+
+### Fixed
+
+* **steward:** a partial scan is not a complete open set ([5b20564](https://github.com/willow-memory/willow-bot/commit/5b205641037ef33eb4fc4bd9d9bcb571c667b9a6))
+* **steward:** cancelled legs are never "CI red"; per-step limiter budgets; filed stuck items retire ([c402f31](https://github.com/willow-memory/willow-bot/commit/c402f316f74893687a1a82707cbafed1156fd31a))
+* **steward:** one-time backfill of stuck items filed before this build; resolve after append ([2f4f2a2](https://github.com/willow-memory/willow-bot/commit/2f4f2a20779a1f0a473dffdc4019177922fcbf95))
+* **steward:** run_ci residue — PR-less cancelled legs, moot on close, per-step pacing ([e58b3c0](https://github.com/willow-memory/willow-bot/commit/e58b3c006e9ffec464c3ed8b19457d726e991782))
+* **steward:** stuck items resolve on close or branch successor; pauses are not refusals ([26122d8](https://github.com/willow-memory/willow-bot/commit/26122d8df41682fe07caae5dca9a423f50e28de1))
+
 ## [0.4.0](https://github.com/willow-memory/willow-bot/compare/v0.3.0...v0.4.0) (2026-09-21)
 
 
