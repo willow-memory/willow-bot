@@ -339,7 +339,9 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     if envelope_id:
         state[_AUDIT_ENVELOPE_STATE_KEY] = envelope_id
     path.write_text(json.dumps(state, indent=2) + "\n")
-    receipt.update(status="ok" if not pace.budget_spent else "paced", dispatched=done, refused=refused,
+    # Same precedence as run_ci: a tool refusal outranks a pause (Loki FE91FF0E).
+    status = "could-not-run" if refused else ("paced" if pace.budget_spent else "ok")
+    receipt.update(status=status, dispatched=done, refused=refused,
                    remaining=len(still), envelope_id=envelope_id, envelope_resolved=resolved_this_tick,
                    **pace.receipt())
     return _emit(receipt)
@@ -954,40 +956,48 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # an item filed as stuck at tick N stayed open when the PR merged at
     # tick N+1, and no green head ever comes for a cancelled run): the PR
     # closed, or — for a PR-less head — a later head landed on its branch.
-    to_resolve: list[tuple[str, dict, str, str]] = []
-    for item_key, item in items.items():
-        if item.get("resolved"):
-            continue
-        pr_key = _ci_pr_key(item["repo"], item["pr"], item["head_sha"])
-        own_key = _ci_head_key(item["repo"], item["pr"], item["head_sha"])
-        expected = set((head_legs.get(own_key) or {}).keys())
-        own = head_legs.get(own_key) or {}
-        if _head_is_green(own, expected):
-            to_resolve.append((item_key, item, item["head_sha"], "re-run"))
-            continue
-        mine = (heads.get(pr_key) or {}).get(item["head_sha"])
-        found = False
-        for sha, at in (heads.get(pr_key) or {}).items():
-            if sha == item["head_sha"] or at is None or mine is None or at <= mine:
+    #
+    # Computed AFTER this tick's legs have joined their items (Loki
+    # FE91FF0E): a red and a close arriving in the same tick used to
+    # resolve the item moot with the red live, because the candidates were
+    # read before the filing loop set `stuck = False`. The MCP-off path
+    # calls it early only to report what it WOULD resolve.
+    def _resolve_candidates(filed_map: dict, filed_cancelled_map: dict) -> list[tuple[str, dict, str, str]]:
+        out: list[tuple[str, dict, str, str]] = []
+        for item_key, item in items.items():
+            if item.get("resolved"):
                 continue
-            if _head_is_green(head_legs.get(_ci_head_key(item["repo"], item["pr"], sha)) or {}, expected):
-                to_resolve.append((item_key, item, sha, "superseded"))
-                found = True
-                break
-        if found or not _item_is_stuck_only(item, filed_before, filed_cancelled_before):
-            continue
-        if item["pr"] and pr_key in closed:
-            how = "closed-merged" if closed[pr_key].get("merged") else "closed"
-            to_resolve.append((item_key, item, item["head_sha"], how))
-            continue
-        if not item["pr"] and item.get("branch"):
-            on_branch = heads.get(_ci_branch_key(item["repo"], item["branch"])) or {}
-            mine_b = on_branch.get(item["head_sha"])
-            later = [s for s, at in on_branch.items()
-                     if s != item["head_sha"] and at is not None and mine_b is not None and at > mine_b]
-            if later:
-                to_resolve.append((item_key, item, sorted(later, key=lambda s: on_branch[s])[-1],
-                                   "superseded-on-branch"))
+            pr_key = _ci_pr_key(item["repo"], item["pr"], item["head_sha"])
+            own_key = _ci_head_key(item["repo"], item["pr"], item["head_sha"])
+            expected = set((head_legs.get(own_key) or {}).keys())
+            own = head_legs.get(own_key) or {}
+            if _head_is_green(own, expected):
+                out.append((item_key, item, item["head_sha"], "re-run"))
+                continue
+            mine = (heads.get(pr_key) or {}).get(item["head_sha"])
+            found = False
+            for sha, at in (heads.get(pr_key) or {}).items():
+                if sha == item["head_sha"] or at is None or mine is None or at <= mine:
+                    continue
+                if _head_is_green(head_legs.get(_ci_head_key(item["repo"], item["pr"], sha)) or {}, expected):
+                    out.append((item_key, item, sha, "superseded"))
+                    found = True
+                    break
+            if found or not _item_is_stuck_only(item, filed_map, filed_cancelled_map):
+                continue
+            if item["pr"] and pr_key in closed:
+                how = "closed-merged" if closed[pr_key].get("merged") else "closed"
+                out.append((item_key, item, item["head_sha"], how))
+                continue
+            if not item["pr"] and item.get("branch"):
+                on_branch = heads.get(_ci_branch_key(item["repo"], item["branch"])) or {}
+                mine_b = on_branch.get(item["head_sha"])
+                later = [s for s, at in on_branch.items()
+                         if s != item["head_sha"] and at is not None and mine_b is not None and at > mine_b]
+                if later:
+                    out.append((item_key, item, sorted(later, key=lambda s: on_branch[s])[-1],
+                                "superseded-on-branch"))
+        return out
 
     def _persist() -> None:
         pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending)
@@ -1017,7 +1027,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — reds reported, not filed",
                        filed=[], appended=[], resolved=[], refused=[], skipped=skipped, new_offset=offset,
                        would_resolve=[{"where": k, "superseded_by": sha, "how": how}
-                                      for k, _, sha, how in to_resolve],
+                                      for k, _, sha, how in _resolve_candidates(filed_before, filed_cancelled_before)],
                        remaining=len(groups), **_Pacer.idle())
         return _emit(receipt)
 
@@ -1072,7 +1082,10 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                       "conclusions": [lg["conclusion"] for lg in legs], "id": item_id})
 
     resolved, resolve_refused = [], []
-    for item_key, item, sha, how in to_resolve:
+    # After the filing loop: this tick's reds have joined their items and
+    # cleared `stuck` where they landed, so a closed PR with a live red on
+    # it is not a candidate.
+    for item_key, item, sha, how in _resolve_candidates(filed_now, filed_cancelled_now):
         if pace.budget_spent:
             break  # the rest resolve next tick; the candidates are recomputed from state
         note = {
@@ -1177,8 +1190,10 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
     path = state_path()
     state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
     done = state.get("ci_legacy_cleared")
-    if done and not force:
-        receipt.update(status="ok", ran=False, detail=f"already cleared at {done.get('at')}", cleared_at=done.get("at"))
+    backfilled = state.get("ci_stuck_backfilled")
+    if done and backfilled and not force:
+        receipt.update(status="ok", ran=False, detail=f"already cleared at {done.get('at')}", cleared_at=done.get("at"),
+                       backfill={"ran": False, "detail": f"already backfilled at {backfilled.get('at')}"})
         return _emit(receipt)
     if not enable_mcp:
         receipt.update(status="absent", ran=False, detail="WILLOW_BOT_MCP not enabled — no list, no resolve")
@@ -1187,6 +1202,12 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
     from willow_bot.steward import mcp_client
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    if done and not force:
+        # The legacy pass is on record; only the stuck backfill is owed.
+        receipt.update(status="ok", ran=False, detail=f"already cleared at {done.get('at')}", cleared_at=done.get("at"))
+        receipt["backfill"] = _backfill_stuck_items(state, path, app, mcp_client.call, at=receipt["at"],
+                                                    build_sha=build_sha, force=force)
+        return _emit(receipt)
     try:
         listing = mcp_client.call("human_required_list", {
             "app_id": app, "kind": "review", "status": "open", "limit": _CI_LEGACY_LIST_LIMIT,
@@ -1301,7 +1322,103 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
     status = "ok" if complete else ("paced" if remaining and not refused else "partial")
     receipt.update(status=status, ran=True, resolved=resolved, refused=refused, remaining=remaining,
                    paced=paced, budget_spent=budget_spent, recorded=complete)
+    # State was re-read by the legacy pass above only to write its marker;
+    # the backfill reads and writes its own keys through the same file.
+    state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else state
+    receipt["backfill"] = _backfill_stuck_items(state, path, app, mcp_client.call, at=receipt["at"],
+                                                build_sha=build_sha, force=force)
     return _emit(receipt)
+
+
+def _backfill_stuck_items(state: dict, path: Path, app: str, call, *, at: str, build_sha: str | None,
+                          force: bool) -> dict:
+    """One-time, receipted, idempotent: resolve stuck-only items filed by
+    the build BEFORE this one whose PR has since closed (Loki FE91FF0E).
+
+    The tick's own route (``run_ci`` resolve-on-close) reads ``pr_closed``,
+    which the previous build never wrote — so #583's close webhook has
+    already passed and no future event will populate it, and
+    ``merged_synced`` holds none of the four stuck-only items open on the
+    live box. This pass reads what the box DOES know: ``pr_closed`` and
+    ``merged_synced`` (the deposit stream), then the bot's own unfiltered
+    scan (``state['open']``, trusted only through the scan record — the
+    same rule the legacy pass uses): a PR the scan does not list is closed
+    on GitHub. A PR-less item is not this pass's to judge — with a branch
+    on record the tick's successor route retires it; without one nothing
+    can, and the receipt says so (``kept: no branch on record``) rather
+    than leaving it silent. Recorded as ``ci_stuck_backfilled`` only when
+    the pass was clean and complete; ``force`` re-runs it.
+    """
+    out: dict = {"ran": True}
+    already = state.get("ci_stuck_backfilled")
+    if already and not force:
+        return {"ran": False, "detail": f"already backfilled at {already.get('at')}"}
+    items = {k: dict(v) for k, v in (state.get("ci_items") or {}).items() if isinstance(v, dict)}
+    filed = state.get("ci_filed") or {}
+    filed_cancelled = state.get("ci_filed_cancelled") or {}
+    closed = {k: v for k, v in (state.get("pr_closed") or {}).items() if isinstance(v, dict)}
+    merged_synced = set(state.get("merged_synced") or [])
+    scan = state.get("scan")
+    open_prs = state.get("open")
+    open_known = (isinstance(scan, dict) and scan.get("filters") == [] and isinstance(open_prs, list)
+                  and (open_prs != [] or scan.get("open") == 0))
+    open_set = set(open_prs or []) if open_known else set()
+
+    candidates = [(k, it) for k, it in items.items()
+                  if not it.get("resolved") and it.get("id") and _item_is_stuck_only(it, filed, filed_cancelled)]
+    out["candidates"] = len(candidates)
+    out["open_known"] = open_known
+    build = build_sha or "unknown sha"
+    resolved, kept, refused = [], [], []
+    to_resolve: list[tuple[str, dict, str, str]] = []
+    for key, item in candidates:
+        where = _ci_pr_key(item["repo"], item["pr"], item["head_sha"])
+        if not item["pr"]:
+            reason = (f"awaiting a successor on {item['branch']}" if item.get("branch")
+                      else "no branch on record")
+            kept.append({"item_id": item["id"], "where": where, "reason": reason})
+            continue
+        if where in closed:
+            why = "PR merged per deposit stream" if closed[where].get("merged") else "PR closed per deposit stream"
+        elif where in merged_synced:
+            why = "PR closed per host sync"
+        elif open_known and where not in open_set:
+            why = "PR not open per the bot's scan"
+        elif open_known:
+            kept.append({"item_id": item["id"], "where": where, "reason": "PR open"})
+            continue
+        else:
+            kept.append({"item_id": item["id"], "where": where,
+                         "reason": "open set unknown (no unfiltered scan on record)"})
+            continue
+        to_resolve.append((key, item, where, why))
+
+    pace = _Pacer(_MIRROR_TIME_BUDGET_S)
+    remaining = 0
+    for index, (key, item, where, why) in enumerate(to_resolve):
+        note = f"moot: {why}; stuck cancelled run, backfilled by the run_ci residue build ({build})"
+        result, err = pace.call(call, "human_required_resolve", {
+            "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
+        })
+        if err and pace.budget_spent:
+            remaining = len(to_resolve) - index
+            out["stopped"] = {"at": where, "reason": err}
+            break
+        if err:
+            refused.append({"item_id": item["id"], "where": where, "error": err})
+            continue
+        items[key]["resolved"] = {"by": item["head_sha"], "how": "backfill", "why": why, "at": at}
+        resolved.append({"item_id": item["id"], "where": where, "why": why})
+
+    complete = not refused and not remaining
+    state["ci_items"] = items
+    if complete:
+        state["ci_stuck_backfilled"] = {"at": at, "resolved": len(resolved), "kept": len(kept), "build_sha": build_sha}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2) + "\n")
+    out.update(resolved=resolved, kept=kept, refused=refused, remaining=remaining, recorded=complete,
+               **pace.receipt())
+    return out
 
 
 # ── the catch-up step: repair state after a missed webhook ───────────────────

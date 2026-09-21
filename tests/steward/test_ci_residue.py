@@ -560,3 +560,227 @@ def test_merged_synced_alone_reads_as_closed_not_merged(home, monkeypatch):
     state_path().write_text(json.dumps(state) + "\n")
     r = tick.run_ci()
     assert [(x["state"], x["closed"]) for x in r["cancelled"]] == [("moot", "closed")]
+
+
+# ── same-tick race: a red and a close together ───────────────────────────────
+
+def test_a_red_and_a_close_in_the_same_tick_do_not_resolve_the_item_moot(home, monkeypatch):
+    """Loki FE91FF0E low: candidates were read before this tick's legs
+    joined their items, so a red landing in the tick that observed the
+    close was resolved away with the red live."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 17, "lint", "cancelled", pr=592))
+    tick.run_ci()
+    monkeypatch.setattr(tick, "_ci_clock", _later(11))
+    tick.run_ci()  # filed stuck
+    _close(f"{MCP}#592", merged=True)
+    deposits.append_local(_row(MCP, PRSHA, 18, "test", "failure", pr=592))  # same tick as the close
+    r = tick.run_ci()
+    assert [a["check"] for a in r["appended"]] == ["test"]
+    assert r["resolved"] == [] and c.named("human_required_resolve") == []
+    assert json.loads(state_path().read_text())["ci_items"][f"{MCP}#592@{PRSHA}"]["stuck"] is False
+
+
+def test_an_old_build_stuck_item_with_a_red_this_tick_is_not_moot_either(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    state = json.loads(state_path().read_text())
+    state["ci_items"] = {f"{MCP}#593@{PRSHA}": {"id": "hr-old2", "repo": MCP, "pr": 593, "head_sha": PRSHA,
+                                                 "legs": ["lint"], "filed_at": "2026-09-20T23:46:00Z"}}
+    state["ci_filed_cancelled"] = {f"{PRSHA}:1": "hr-old2"}
+    state["ci_filed"] = {}
+    state["pr_closed"] = {f"{MCP}#593": {"at": "2026-09-21T00:00:00+00:00", "merged": True}}
+    state_path().write_text(json.dumps(state) + "\n")
+    deposits.append_local(_row(MCP, PRSHA, 19, "test", "failure", pr=593))
+    r = tick.run_ci()
+    assert [a["check"] for a in r["appended"]] == ["test"] and r["resolved"] == []
+
+
+def test_audit_status_precedence_matches_ci(home, monkeypatch):
+    """A tool refusal outranks a pause, on both steps (Loki FE91FF0E info)."""
+    t = _fake_time(monkeypatch)
+    monkeypatch.setattr(tick, "_AUDIT_TIME_BUDGET_S", 3.0)
+    inner = _Metered(lambda: t["now"], burst=1, retry_after=2)
+
+    def answer(name, inputs):
+        if inputs.get("summary", "").startswith("Audit x/y#1:"):
+            return {"error": "gate denied"}
+        return inner(name, inputs)
+
+    _use(monkeypatch, answer)
+    state = {"pending_audit": [{"repo_pr": f"x/y#{n}", "title": "t", "url": "u"} for n in (1, 2, 3, 4, 5)],
+             "audit_dispatched": {}, tick._AUDIT_ENVELOPE_STATE_KEY: "env-1"}
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    r = tick.run_audit()
+    assert r["refused"][0]["error"] == "gate denied"
+    assert r["status"] == "could-not-run"  # not "paced", even though the budget was also spent
+    assert r["budget_spent"] is True and "stopped" in r
+
+
+# ── the one-time backfill of stuck items filed by the build before ───────────
+
+def _old_stuck_item(state, where_key, item_id, *, pr, sha, repo=MCP, branch=None):
+    item = {"id": item_id, "repo": repo, "pr": pr, "head_sha": sha, "legs": ["test"],
+            "filed_at": "2026-09-20T23:46:00Z"}
+    if branch is not None:
+        item["branch"] = branch
+    state.setdefault("ci_items", {})[where_key] = item
+    state.setdefault("ci_filed_cancelled", {})[f"{sha}:{item_id}"] = item_id
+    state.setdefault("ci_filed", {})
+
+
+SHA583 = "915c73b" + "0" * 33
+SHA304 = "4a6d065" + "0" * 33
+SHAREL = "af6799a" + "0" * 33
+SHANES = "0464659" + "0" * 33
+
+
+def _live_box_state(state):
+    """The four stuck-only items Loki read on the box (Kart 7GVSQT42),
+    plus an unfiltered scan that still lists Nestor#304 as open."""
+    _old_stuck_item(state, f"{MCP}#583@{SHA583}", "ac816f29", pr=583, sha=SHA583)
+    _old_stuck_item(state, f"Die-Namic-Systems/Nestor#304@{SHA304}", "a1949d40", pr=304, sha=SHA304,
+                    repo="Die-Namic-Systems/Nestor")
+    _old_stuck_item(state, f"{MCP}@{SHAREL[:12]}@{SHAREL}", "b39bba93", pr=None, sha=SHAREL)
+    _old_stuck_item(state, f"Die-Namic-Systems/Nestor@{SHANES[:12]}@{SHANES}", "c9c76b99", pr=None,
+                    sha=SHANES, repo="Die-Namic-Systems/Nestor")
+    state["ci_legacy_cleared"] = {"at": "2026-09-20T23:12:32Z", "resolved": 163, "kept": 6, "build_sha": "c4deab5"}
+    state["merged_synced"] = ["some/other#1"]
+    state["scan"] = {"at": "2026-09-21T01:07:30Z", "open": 1, "filters": []}
+    state["open"] = ["Die-Namic-Systems/Nestor#304"]
+
+
+def _listing_client():
+    """A fake that also answers the legacy pass's queue listing (empty), so
+    `--force` — which re-runs both passes — can get to the backfill."""
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            return {"items": []}
+        return {"ok": True, "id": f"hr-{n}"}
+    return _Client(result=answer)
+
+
+def test_backfill_resolves_closed_stuck_items_and_names_the_orphans(home, monkeypatch):
+    c = _listing_client()
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    r = tick.run_ci_legacy_clear(build_sha="26122d8")
+    assert r["ran"] is False and r["detail"].startswith("already cleared")  # the legacy pass stays on record
+    b = r["backfill"]
+    assert b["ran"] is True and b["candidates"] == 4 and b["open_known"] is True
+    assert b["resolved"] == [{"item_id": "ac816f29", "where": f"{MCP}#583", "why": "PR not open per the bot's scan"}]
+    assert b["kept"] == [
+        {"item_id": "a1949d40", "where": "Die-Namic-Systems/Nestor#304", "reason": "PR open"},
+        {"item_id": "b39bba93", "where": f"{MCP}@{SHAREL[:12]}", "reason": "no branch on record"},
+        {"item_id": "c9c76b99", "where": f"Die-Namic-Systems/Nestor@{SHANES[:12]}", "reason": "no branch on record"},
+    ]
+    assert b["refused"] == [] and b["remaining"] == 0 and b["recorded"] is True
+    assert {"paced", "budget_spent", "calls"} <= set(b)
+    (res,) = c.named("human_required_resolve")
+    assert res["item_id"] == "ac816f29"
+    assert res["note"].startswith("moot: PR not open per the bot's scan; stuck cancelled run, backfilled")
+    saved = json.loads(state_path().read_text())
+    assert saved["ci_items"][f"{MCP}#583@{SHA583}"]["resolved"]["how"] == "backfill"
+    assert saved["ci_stuck_backfilled"] == {"at": r["at"], "resolved": 1, "kept": 3, "build_sha": "26122d8"}
+    # Once: the next tick does neither pass.
+    r2 = tick.run_ci_legacy_clear(build_sha="26122d8")
+    assert r2["ran"] is False and r2["backfill"] == {"ran": False, "detail": f"already backfilled at {r['at']}"}
+    assert len(c.named("human_required_resolve")) == 1
+    # --force re-runs it; the resolved item is no longer a candidate.
+    r3 = tick.run_ci_legacy_clear(build_sha="26122d8", force=True)
+    assert r3["backfill"]["ran"] is True and r3["backfill"]["candidates"] == 3 and r3["backfill"]["resolved"] == []
+
+
+def test_backfill_prefers_the_deposit_stream_words_over_the_scan(home, monkeypatch):
+    c = _Client()
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    state["pr_closed"] = {f"{MCP}#583": {"at": "2026-09-20T22:00:00+00:00", "merged": True}}
+    state["merged_synced"] = ["Die-Namic-Systems/Nestor#304"]
+    state["open"] = []
+    state["scan"] = {"at": "x", "open": 0, "filters": []}
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert [(x["item_id"], x["why"]) for x in b["resolved"]] == [
+        ("ac816f29", "PR merged per deposit stream"), ("a1949d40", "PR closed per host sync")]
+
+
+def test_backfill_keeps_everything_when_the_open_set_is_unknown(home, monkeypatch):
+    c = _Client()
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    state["scan"] = {"at": "x", "open": 0, "filters": ["loop"]}  # the old filtered scan: not trusted
+    state["open"] = []
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert b["open_known"] is False and b["resolved"] == []
+    assert {k["reason"] for k in b["kept"] if "#" in k["where"]} == {"open set unknown (no unfiltered scan on record)"}
+    assert c.named("human_required_resolve") == []
+
+
+def test_backfill_does_not_touch_red_items_or_stuck_items_with_a_branch(home, monkeypatch):
+    c = _Client()
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    # a red item on a closed PR: not a candidate
+    state["ci_items"][f"{MCP}#600@" + "e" * 40] = {"id": "hr-red", "repo": MCP, "pr": 600, "head_sha": "e" * 40,
+                                                    "legs": ["test"], "filed_at": "x"}
+    state["ci_filed"]["e" * 40 + ":1"] = "hr-red"
+    # a PR-less stuck item with a branch on record: the tick's route, not the backfill's
+    _old_stuck_item(state, f"{MCP}@{'f' * 12}@" + "f" * 40, "hr-branch", pr=None, sha="f" * 40, branch="master")
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert "hr-red" not in {x["item_id"] for x in b["resolved"] + b["kept"]}
+    assert {"item_id": "hr-branch", "where": f"{MCP}@{'f' * 12}", "reason": "awaiting a successor on master"} in b["kept"]
+
+
+def test_backfill_refusal_is_a_line_and_the_pass_is_not_recorded(home, monkeypatch):
+    def answer(name, inputs, n):
+        if name == "human_required_resolve":
+            return {"error": "gate denied"}
+        return {"ok": True, "id": f"hr-{n}"}
+
+    _use(monkeypatch, _Client(result=answer))
+    state = {}
+    _live_box_state(state)
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert b["refused"] == [{"item_id": "ac816f29", "where": f"{MCP}#583", "error": "gate denied"}]
+    assert b["recorded"] is False and "ci_stuck_backfilled" not in json.loads(state_path().read_text())
+    # and it runs again next tick
+    assert tick.run_ci_legacy_clear(build_sha="abc")["backfill"]["ran"] is True
+
+
+def test_backfill_runs_after_a_fresh_legacy_pass_too(home, monkeypatch):
+    """A box that has never run the legacy pass gets both in one step."""
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            return {"items": []}
+        return {"ok": True, "id": f"hr-{n}"}
+
+    c = _Client(result=answer)
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    del state["ci_legacy_cleared"]
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["ran"] is True and r["recorded"] is True
+    assert [x["item_id"] for x in r["backfill"]["resolved"]] == ["ac816f29"]
+    saved = json.loads(state_path().read_text())
+    assert "ci_legacy_cleared" in saved and "ci_stuck_backfilled" in saved
