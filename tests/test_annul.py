@@ -28,13 +28,24 @@ def home(tmp_path, monkeypatch):
 
 
 class _Client:
+    """A fake MCP: `store_delete` answers like the real one — {deleted: true}
+    only for an id a store_put landed, {deleted: false} otherwise, never an
+    error."""
+
     def __init__(self):
         self.calls = []
         self.n = 0
+        self.stored: set[str] = set()
 
     def __call__(self, name, inputs):
         self.calls.append((name, inputs))
         self.n += 1
+        if name == "store_put":
+            self.stored.add(inputs["record_id"])
+        if name == "store_delete":
+            hit = inputs["record_id"] in self.stored
+            self.stored.discard(inputs["record_id"])
+            return {"deleted": hit, "record_id": inputs["record_id"]}
         return {"ok": True, "id": f"hr-{self.n}"}
 
     def named(self, name):
@@ -126,18 +137,20 @@ def test_a_second_annul_of_the_same_row_is_already(home):
 
 def test_a_legacy_row_is_voided_by_record_id(home):
     leg = _legacy(FORGE, FIX, 5, "test", "failure", pr=4, url=URL)
+    _legacy(FORGE, FIX, 5, "test", "failure", pr=4, url=URL)  # a replay: same record_id, second row
     a = _row("x/y", REAL, 1, "test", "success", pr=9)
     dep.append_local(a)
     dep.append_local(dep.annul_record(voids=[], voids_legacy=[dep.record_id_for(leg)],
                                       reason="legacy fixture", authorization="x"))
     v = dep.verify_chain(dep.deposits_jsonl())
-    assert v["broken_at"] is None and v["legacy_head"] == 1
-    assert v["annulled_legacy"] == 1 and v["annulled"] == 0
+    assert v["broken_at"] is None and v["legacy_head"] == 2
+    # One id, two rows: the verifier says both numbers (Loki 717E236C).
+    assert v["annulled_legacy"] == 1 and v["annulled"] == 0 and v["annulled_rows"] == 2
     rows = dep.read_rows(dep.deposits_jsonl())
-    assert [voided for _, voided in rows] == [True, False, False]
+    assert [voided for _, voided in rows] == [True, True, False, False]
     # A legacy id not in the file is a break too.
     dep.append_local(dep.annul_record(voids=[], voids_legacy=["ci-nope-0"], reason="r", authorization="x"))
-    assert dep.verify_chain(dep.deposits_jsonl())["broken_at"] == 4
+    assert dep.verify_chain(dep.deposits_jsonl())["broken_at"] == 5
 
 
 def test_an_annul_row_is_never_itself_voided(home):
@@ -227,6 +240,35 @@ def test_mirror_retracts_a_voided_legacy_row_by_record_id(home, monkeypatch):
     assert r["annulled_mirrors"] == 1
 
 
+def test_mirror_counts_only_what_the_store_actually_deleted(home, monkeypatch):
+    """A legacy row the mirror never landed (offset was past it before the
+    mirror ever ran) is not retracted; a delete the store answers
+    {deleted: false} to is not counted (Loki 717E236C)."""
+    c = _Client()
+    _use(monkeypatch, c)
+    leg = _legacy(FORGE, FIX, 5, "test", "failure", pr=4, url=URL)
+    a = _row("x/y", REAL, 1, "test", "success", pr=9)
+    dep.append_local(a)
+    tick.run_mirror()  # lands both: leg (legacy) and a
+    # The store forgets `leg` out of band; the annul then finds nothing to delete.
+    c.stored.discard(dep.record_id_for(leg))
+    dep.append_local(dep.annul_record(voids=[], voids_legacy=[dep.record_id_for(leg)],
+                                      reason="legacy fixture", authorization="x"))
+    r = tick.run_mirror()
+    assert [d["record_id"] for d in c.named("store_delete")] == [dep.record_id_for(leg)]
+    assert r["annulled_mirrors"] == 0 and r["status"] == "ok"
+    # A legacy id the mirror has not reached yet (after its offset) is not
+    # retracted — nothing of it is in the store to retract.
+    c2 = _Client()
+    _use(monkeypatch, c2)
+    unlanded = _legacy(FORGE, FIX, 6, "lint", "failure", pr=4, url=URL)
+    dep.append_local(dep.annul_record(voids=[], voids_legacy=[dep.record_id_for(unlanded)],
+                                      reason="voided before it was mirrored", authorization="x"))
+    r3 = tick.run_mirror()
+    assert c2.named("store_delete") == [] and c2.named("store_put") == []
+    assert r3["annulled_mirrors"] == 0 and r3["annulled"] == 1
+
+
 # ── prune: a fully-voided head leaves ci_heads ───────────────────────────────
 
 def test_a_head_whose_every_deposit_is_voided_drops_out_of_ci_heads(home, monkeypatch):
@@ -284,6 +326,9 @@ def test_cli_dry_run_prints_the_plan_and_writes_nothing(home, capsys):
     assert out["voids_legacy"] == [dep.record_id_for(_row(FORGE, FIX, 5, "test", "failure"))]
     assert out["rows"][0]["html_url"] == URL and out["legacy_rows"][0]["check_run_id"] == 5
     assert out["already"] == []
+    # Every distinct (repo, head) the plan would void is named, with its row count.
+    assert out["heads"] == [{"repo": FORGE, "head_sha": FIX, "rows": 2}]
+    assert out["matchers"] == {"match": URL}
     assert dep.deposits_jsonl().read_text() == before
 
 
@@ -318,12 +363,56 @@ def test_cli_apply_refuses_without_reason_or_authorization(home, capsys):
     assert len(dep.deposits_jsonl().read_text().splitlines()) == 1
 
 
-def test_cli_match_is_the_row_not_a_neighbour(home, capsys):
-    """A substring that only appears in one row's line voids only that row."""
+def test_cli_matchers_are_scoped_and_anded(home, capsys):
+    """`--match`/`--url` see html_url only (a sha in the url does not count
+    as a sha match); `--sha` is a head prefix; `--repo` is exact; together
+    they AND (Loki 717E236C: an unscoped substring reached real rows)."""
     a = _row(FORGE, FIX, 11, "test", "failure", pr=4, url=URL)
-    b = _row(FORGE, REAL, 12, "test", "failure", pr=5)
-    dep.append_local(a)
-    dep.append_local(b)
-    tick.main(["annul", "--match", FIX])
+    b = _row(FORGE, REAL, 12, "test", "failure", pr=5, url=f"https://github.com/x/runs/{FIX}")
+    c = _row("other/repo", FIX, 13, "test", "failure", pr=6, url=URL)
+    for r in (a, b, c):
+        dep.append_local(r)
+    tick.main(["annul", "--sha", FIX[:12]])
     out = json.loads(capsys.readouterr().out)
-    assert out["voids"] == [a["row_hash"]] and out["count"] == 1
+    assert sorted(out["voids"]) == sorted([a["row_hash"], c["row_hash"]]) and out["count"] == 2
+    assert out["heads"] == [{"repo": FORGE, "head_sha": FIX, "rows": 1},
+                            {"repo": "other/repo", "head_sha": FIX, "rows": 1}]
+    tick.main(["annul", "--match", FIX])  # url substring: only b's url carries the sha
+    out = json.loads(capsys.readouterr().out)
+    assert out["voids"] == [b["row_hash"]]
+    tick.main(["annul", "--url", "example.invalid", "--repo", FORGE])
+    out = json.loads(capsys.readouterr().out)
+    assert out["voids"] == [a["row_hash"]] and out["matchers"] == {"url": "example.invalid", "repo": FORGE}
+    tick.main(["annul", "--repo", "nobody/nothing"])
+    assert json.loads(capsys.readouterr().out)["count"] == 0
+
+
+def test_cli_refuses_without_any_matcher(home, capsys):
+    dep.append_local(_row(FORGE, FIX, 11, "test", "failure", pr=4, url=URL))
+    assert tick.main(["annul", "--reason", "r", "--authorization", "x", "--apply"]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "refused" and "at least one" in out["detail"]
+    assert len(dep.deposits_jsonl().read_text().splitlines()) == 1
+
+
+def test_cli_apply_refuses_a_plan_spanning_heads_unless_allow_multi(home, capsys):
+    """The live-file lesson: `example.invalid` matched a second fixture head
+    (willows-grove @ prove0deadbe) beside Forge#4. The plan names both and
+    --apply stops until the operator says --allow-multi."""
+    a = _row(FORGE, FIX, 11, "test", "failure", pr=4, url=URL)
+    g = _row("willow-memory/willows-grove", "prove0deadbe" + "0" * 28, 900001, "prove-deposit", "success",
+             url="https://example.invalid/check/900001")
+    dep.append_local(a)
+    dep.append_local(g)
+    rc = tick.main(["annul", "--url", "example.invalid", "--reason", "fixtures", "--authorization", "x", "--apply"])
+    assert rc == 3
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "refused" and "2 distinct" in out["detail"]
+    assert [h["repo"] for h in out["heads"]] == [FORGE, "willow-memory/willows-grove"]
+    assert len(dep.deposits_jsonl().read_text().splitlines()) == 2
+    rc2 = tick.main(["annul", "--url", "example.invalid", "--reason", "fixtures", "--authorization", "x",
+                     "--apply", "--allow-multi"])
+    assert rc2 == 0
+    out2 = json.loads(capsys.readouterr().out)
+    assert out2["status"] == "applied" and sorted(out2["voids"]) == sorted([a["row_hash"], g["row_hash"]])
+    assert dep.verify_chain(dep.deposits_jsonl())["annulled_rows"] == 2

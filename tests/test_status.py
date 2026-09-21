@@ -8,7 +8,6 @@ every field, and one field's miss does not hide another field's data.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -225,6 +224,7 @@ def test_cursors_present_reports_each_value(home: Path):
         "ci_offset": 67890,
         "chain_tip": "abc123",
         "annulled": 0,
+        "annulled_rows": 0,
     }
 
 

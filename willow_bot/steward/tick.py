@@ -428,15 +428,23 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
             rec = json.loads(text)
             if is_annul(rec):
                 voids.take(rec)
+                # Only ids the mirror has landed (chained: by hash → id;
+                # legacy: by id, gated the same way) — and a retraction is
+                # counted only when the store says it deleted something
+                # (`store_delete` answers {deleted: false} on an unknown id
+                # with no error; Loki 717E236C).
                 retract = [mirrored_ids[h] for h in rec.get("voids") or [] if h in mirrored_ids]
-                retract += [v for v in rec.get("voids_legacy") or [] if isinstance(v, str)]
+                landed_ids = set(mirrored_ids.values())
+                retract += [v for v in rec.get("voids_legacy") or []
+                            if isinstance(v, str) and v in landed_ids and v not in retract]
                 for record_id in retract:
-                    _, err = pace.call(mcp_client.call, "store_delete",
-                                       {"app_id": app, "collection": COLLECTION, "record_id": record_id})
+                    result, err = pace.call(mcp_client.call, "store_delete",
+                                            {"app_id": app, "collection": COLLECTION, "record_id": record_id})
                     if err is not None:
                         failed = err
                         break
-                    annulled_mirrors += 1
+                    if isinstance(result, dict) and result.get("deleted") is True:
+                        annulled_mirrors += 1
                 if failed is not None:
                     break
                 offset = fh.tell()
@@ -488,8 +496,15 @@ def _mirrored_ids_by_hash(src: Path, offset: int) -> dict[str, str]:
                 rec = json.loads(line.decode("utf-8", errors="replace"))
             except json.JSONDecodeError:
                 continue
-            if isinstance(rec, dict) and not is_annul(rec) and isinstance(rec.get("row_hash"), str):
+            if not isinstance(rec, dict) or is_annul(rec):
+                continue
+            if isinstance(rec.get("row_hash"), str):
                 out[rec["row_hash"]] = record_id_for(rec)
+            else:
+                # A legacy row has no hash; its record_id is its only handle,
+                # keyed by itself so `values()` names it as landed.
+                rid = record_id_for(rec)
+                out[f"legacy:{rid}"] = rid
     return out
 
 
@@ -775,8 +790,27 @@ def _heads_fully_voided(src: Path, voids) -> set[tuple[str, str]]:
     return seen - live
 
 
+def _resolved_lines_owed(items: dict, state: dict) -> set[str]:
+    """Item keys of resolved items on a WATCHED PR whose `resolved` line has
+    not been sent yet — kept through the prune so the next tick can retry."""
+    from willow_bot.steward import pr_watch
+
+    table = pr_watch.load()
+    marks = state.get("ci_notified") or {}
+    owed: set[str] = set()
+    for key, item in items.items():
+        if not item.get("resolved") or not item.get("id"):
+            continue
+        if "resolved" in (marks.get(item["id"]) or {}):
+            continue
+        if pr_watch.watcher_for(item.get("repo", ""), item.get("pr"), table) is not None:
+            owed.add(key)
+    return owed
+
+
 def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending: dict,
-                    *, voided_heads: set[tuple[str, str]] | None = None) -> dict:
+                    *, voided_heads: set[tuple[str, str]] | None = None,
+                    keep_items: set[str] | None = None) -> dict:
     """Keep the four maps bounded (Loki, dispatch 82A7DB13, finding 4).
 
     A head is kept when it is the newest the bot has seen for its PR, the
@@ -814,8 +848,9 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
             if (it.get("repo", ""), it.get("head_sha", "")) in voided_heads:
                 del items[item_key]
     keep: dict[str, set[str]] = {}
-    for item in items.values():
-        if not item.get("resolved"):
+    keep_items = keep_items or set()
+    for item_key, item in items.items():
+        if not item.get("resolved") or item_key in keep_items:
             keep.setdefault(_ci_pr_key(item["repo"], item["pr"], item["head_sha"]), set()).add(item["head_sha"])
             if not item["pr"] and item.get("branch"):
                 # A stuck PR-less item resolves when a later head lands on
@@ -844,7 +879,7 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
         if head_key not in live_heads:
             del head_legs[head_key]
     for item_key in list(items):
-        if items[item_key].get("resolved"):
+        if items[item_key].get("resolved") and item_key not in keep_items:
             del items[item_key]
             dropped_items += 1
     out = {"heads": dropped_heads, "items": dropped_items}
@@ -1310,9 +1345,17 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         return out
 
     def _persist() -> None:
-        pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending, voided_heads=voided_heads)
+        # A resolved item whose `resolved` line is still owed to a watching
+        # seat stays one more tick (Loki 717E236C: a refused send at tick N
+        # was pruned at N+1 and never delivered); `ci_notified` is pruned
+        # with the items so it does not grow for the life of the file.
+        owed = _resolved_lines_owed(items, state)
+        pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending,
+                                 voided_heads=voided_heads, keep_items=owed)
         if pruned["heads"] or pruned["items"] or pruned.get("voided_heads"):
             receipt["pruned"] = pruned
+        live_ids = {it.get("id") for it in items.values() if it.get("id")}
+        state["ci_notified"] = {k: v for k, v in (state.get("ci_notified") or {}).items() if k in live_ids}
         state["ci_filed"] = filed_now
         state["ci_filed_cancelled"] = filed_cancelled_now
         state["ci_items"] = items
@@ -2370,31 +2413,46 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_annul(argv: list[str]) -> int:
-    """``willow-bot-steward annul --match <substring> --reason … --authorization <frank id> [--apply]``
+    """``willow-bot-steward annul [--url S] [--sha PREFIX] [--repo org/name] [--match S]
+    --reason … --authorization <frank id> [--apply] [--allow-multi] [--file F]``
 
     The honest correction of the chained deposits file (gap 9): rows are
     never rewritten; ONE ``annul`` row is appended naming what it voids.
-    Dry-run by default — prints the rows it would void (by hash, and by
-    record_id for legacy rows) and what is already voided, and writes
-    nothing. ``--apply`` appends the row. Refuses to apply with nothing to
-    void, without a reason, or without an authorization id.
+    Matchers are scoped and AND-ed (``--url``/``--match`` on ``html_url``
+    only, ``--sha`` a head prefix, ``--repo`` exact); at least one is
+    required. Dry-run by default — prints the rows it would void (by hash,
+    and by record_id for legacy rows), every distinct (repo, head) among
+    them, and what is already voided; writes nothing. ``--apply`` appends
+    the row and refuses when the plan spans more than one repo or head
+    unless ``--allow-multi`` says the operator read the list (Loki
+    717E236C: ``runs/1`` reached 395 real rows across eight repos). Also
+    refuses with nothing to void, without a reason, or without an
+    authorization id.
     """
     import argparse
 
     from willow_bot import deposits as dep
 
     parser = argparse.ArgumentParser(prog="willow-bot-steward annul", add_help=True)
-    parser.add_argument("--match", required=True,
-                        help="substring of the row's canonical JSON line (a sha, a url, a repo#pr)")
+    parser.add_argument("--url", default="", help="substring of html_url")
+    parser.add_argument("--match", default="", help="substring of html_url (alias of --url)")
+    parser.add_argument("--sha", default="", help="head_sha prefix")
+    parser.add_argument("--repo", default="", help="exact org/name")
     parser.add_argument("--reason", default="")
     parser.add_argument("--authorization", default="", help="the FRANK id that authorizes the correction")
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--allow-multi", action="store_true",
+                        help="apply even when the plan spans more than one (repo, head)")
     parser.add_argument("--file", default="", help="deposits file (default: the steward's own)")
     ns = parser.parse_args(argv)
 
     path = Path(ns.file) if ns.file else dep.deposits_jsonl()
-    plan = dep.annul_matches(path, match=ns.match)
+    plan = dep.annul_matches(path, match=ns.match, url=ns.url, sha=ns.sha, repo=ns.repo)
     out = {"event": "steward_annul", "file": str(path), "apply": bool(ns.apply), **plan}
+    if plan.get("error"):
+        out.update(status="refused", detail="give at least one of --url/--match, --sha, --repo")
+        print(json.dumps(out, indent=2))
+        return 2
     if not ns.apply:
         out["status"] = "dry-run"
         print(json.dumps(out, indent=2))
@@ -2407,6 +2465,12 @@ def run_annul(argv: list[str]) -> int:
         out.update(status="refused", detail="--reason and --authorization are required to apply")
         print(json.dumps(out, indent=2))
         return 2
+    if len(plan["heads"]) > 1 and not ns.allow_multi:
+        out.update(status="refused",
+                   detail=f"plan spans {len(plan['heads'])} distinct (repo, head) pairs — read `heads` and "
+                          "pass --allow-multi to void them all, or narrow with --repo/--sha")
+        print(json.dumps(out, indent=2))
+        return 3
     rec = dep.annul_record(voids=plan["voids"], voids_legacy=plan["voids_legacy"],
                            reason=ns.reason.strip(), authorization=ns.authorization.strip())
     written = dep.append_local(rec) if not ns.file else _append_to(path, rec)

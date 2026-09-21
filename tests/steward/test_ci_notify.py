@@ -229,11 +229,47 @@ def test_resolve_posts_a_follow_up_and_edits_the_comment(home, monkeypatch):
     assert "CI resolved:" in comments.calls[1]["body"]
     assert r["notified"][0]["kind"] == "resolved" and r["notified"][0]["comment"]["action"] == "updated"
     state = json.loads(state_path().read_text())
-    marks = state["ci_notified"][r["resolved"][0]["item_id"]]
-    assert "filed" in marks and "resolved" in marks
+    # The item was delivered both ways, so the prune took it AND its marks
+    # (Loki 717E236C: ci_notified used to outlive its items).
+    assert r["resolved"][0]["item_id"] not in state["ci_notified"]
+    assert not any(v.get("head_sha") == SHA for v in state["ci_items"].values())
     # And once more: nothing.
     r3 = tick.run_ci()
     assert r3["notified"] == [] and len(c.named("grove_send_message")) == 2
+
+
+def test_a_refused_resolved_line_survives_the_prune_and_is_delivered_next_tick(home, monkeypatch):
+    """Loki 717E236C: the item resolved at tick N, the `resolved` send was
+    refused, and the prune at the end of N dropped the item — the seat
+    heard 'CI red' and never 'CI resolved'. Now the item stays one tick."""
+    _prime()
+    _watch(RAT, 48)
+    base = time.time()
+    sends = {"refuse_resolved": True}
+
+    def refuse(name, inputs, n):
+        if name == "grove_send_message" and "CI resolved" in inputs["content"] and sends["refuse_resolved"]:
+            return {"error": "postgres_unavailable"}
+        return None
+
+    c = _Client(refuse=refuse)
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48, received_at=_iso(base)))
+    tick.run_ci()
+    deposits.append_local(_row(RAT, SHA2, 2, "lint", "success", pr=48, received_at=_iso(base + 60)))
+    r = tick.run_ci()
+    assert len(r["resolved"]) == 1
+    assert r["notified"][0]["kind"] == "resolved" and r["notified"][0]["state"] == "refused"
+    state = json.loads(state_path().read_text())
+    assert any(v.get("head_sha") == SHA and v.get("resolved") for v in state["ci_items"].values())
+    assert "resolved" not in state["ci_notified"][r["resolved"][0]["item_id"]]
+    sends["refuse_resolved"] = False
+    r2 = tick.run_ci()
+    assert r2["notified"][0]["kind"] == "resolved" and r2["notified"][0]["state"] == "sent"
+    assert [m["content"][:11] for m in c.named("grove_send_message")] == ["CI red: wil", "CI resolved", "CI resolved"]
+    state = json.loads(state_path().read_text())
+    assert not any(v.get("head_sha") == SHA for v in state["ci_items"].values())
+    assert r["resolved"][0]["item_id"] not in state["ci_notified"]
 
 
 # ── refusal → retried next tick ─────────────────────────────────────────────
