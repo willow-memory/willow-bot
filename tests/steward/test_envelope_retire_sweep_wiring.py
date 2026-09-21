@@ -64,7 +64,7 @@ def test_heartbeat_calls_envelope_retire_sweep_with_dry_run_false(home, monkeypa
 
 def test_heartbeat_mirrors_a_populated_sweep_with_its_rows(home, monkeypatch):
     populated = {
-        "state": "populated", "dry_run": False, "examined": 3,
+        "state": "populated", "dry_run": False, "examined": 3, "truncated": False,
         "retired": [{"id": "env-1", "verb": "git.push", "reason": "branch_gone"}],
         "kept_standing": 1,
         "kept_in_force": [{"id": "env-2", "verb": "pr.open", "why": "master still exists"}],
@@ -79,10 +79,27 @@ def test_heartbeat_mirrors_a_populated_sweep_with_its_rows(home, monkeypatch):
     assert e["outcome"] == "ok" and e["state"] == "populated"
     assert e["examined"] == 3
     assert e["kept_standing"] == 1
+    assert e["truncated"] is False
     assert e["retired"] == [{"id": "env-1", "verb": "git.push", "reason": "branch_gone"}]
     assert e["kept_in_force"] == [{"id": "env-2", "verb": "pr.open", "why": "master still exists"}]
-    assert e["unreachable"] == []
     assert e["dry_run"] is False
+
+
+def test_heartbeat_mirrors_unreachable_as_a_count_not_the_full_list(home, monkeypatch):
+    """Rework of Loki's LOW finding: a chronically-unreachable row must not
+    repeat, unbounded, in the JSONL every tick forever — only its count
+    rides the heartbeat entry."""
+    rows = [{"id": f"env-{i}", "verb": "git.push", "why": "unreachable"} for i in range(23)]
+    populated = {
+        "state": "populated", "dry_run": False, "examined": 23, "truncated": False,
+        "retired": [], "kept_standing": 0, "kept_in_force": [], "unreachable": rows,
+    }
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
+    assert e["unreachable_count"] == 23
+    assert "unreachable" not in e
 
 
 def test_heartbeat_mirrors_an_empty_sweep_as_empty(home, monkeypatch):
@@ -112,6 +129,50 @@ def test_heartbeat_reports_a_raising_sweep_as_could_not_run(home, monkeypatch):
     _patch_client(monkeypatch, call)
     e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
     assert e["outcome"] == "could-not-run" and "90s" in e["detail"]
+
+
+def test_heartbeat_marks_a_gate_denial_as_denied_not_ok(home, monkeypatch):
+    """Rework of Loki's LOW finding (probe 1SHYZKWT): a permission refusal
+    is an ordinary dict with no `state` field — mcp_client.call does not
+    raise on it, so it used to fall through to outcome="ok"."""
+    denial = {"error": "gate denied: 'hanuman' not permitted for 'envelope_retire_sweep'"}
+    _heartbeat_with(
+        monkeypatch, lambda n: denial if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
+    assert e["outcome"] == "denied"
+    assert "gate denied" in e["error"]
+    assert "state" not in e
+
+
+def test_a_three_state_result_with_error_in_a_sub_field_is_still_ok(home, monkeypatch):
+    """The denial guard keys on a top-level `error` with no `state` —
+    a normal three-state receipt that happens to carry per-row `why`/
+    `reason` text is not mistaken for a gate denial."""
+    populated = {"state": "populated", "dry_run": False, "examined": 1, "truncated": False,
+                 "retired": [], "kept_standing": 0,
+                 "kept_in_force": [{"id": "env-1", "why": "still active"}], "unreachable": []}
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
+    assert e["outcome"] == "ok"
+
+
+def test_narrowed_tool_list_preserves_envelope_retire_sweeps_dry_run_false(home, monkeypatch):
+    """Rework of Loki's LOW finding: WILLOW_BOT_STEWARD_TOOLS narrowing
+    used to hand every named tool bare {app_id}, silently dropping
+    envelope_retire_sweep's dry_run=False."""
+    monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "fleet_health,envelope_retire_sweep")
+    calls = heartbeat.curated_calls()
+    assert ("envelope_retire_sweep", {"dry_run": False, "app_id": "willow"}) in calls
+    assert ("fleet_health", {"app_id": "willow"}) in calls
+
+
+def test_narrowed_tool_list_still_bare_args_a_tool_this_module_does_not_curate(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "some_other_tool")
+    calls = heartbeat.curated_calls()
+    assert calls == [("some_other_tool", {"app_id": "willow"})]
 
 
 def test_retired_rows_never_leak_secrets_only_the_named_receipt_fields(home, monkeypatch):
