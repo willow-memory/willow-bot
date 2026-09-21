@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here.
 
+## [0.6.0](https://github.com/willow-memory/willow-bot/compare/v0.5.1...v0.6.0) (2026-09-21)
+
+
+### Added
+
+* **steward:** comment the CI failure block on a red PR and speak it to Grove — the plain CI-bot shape ([64fb757](https://github.com/willow-memory/willow-bot/commit/64fb7570524a96142b2750e059976c3e85d94c4d))
+* **steward:** file a CI-red PR comment with the job's failure block ([6e944a9](https://github.com/willow-memory/willow-bot/commit/6e944a9884963ed5f43ff6d1f4734820a707429d))
+
+
+### Fixed
+
+* **steward:** close Loki's fourth-audit limits on the CI-red comment ([84eca17](https://github.com/willow-memory/willow-bot/commit/84eca17543f75f2752f321b4cf2b7d4f561166d0))
+* **steward:** make the CI-red comment and Grove line owed until delivered ([5115a87](https://github.com/willow-memory/willow-bot/commit/5115a878e2178091c394fb9f80e6ef45d5f60cb5))
+* **steward:** re-fetch stripped legs, key re-runs by job id, split the Grove pacer, prune only what has landed ([61b525f](https://github.com/willow-memory/willow-bot/commit/61b525f968aeec54e71bae5bd6512d7533854c6b))
+* **steward:** stall instead of abandon the CI-red comment; free Grove from it ([69068a6](https://github.com/willow-memory/willow-bot/commit/69068a6c20a97d682f05426f5a7efebe9f493188))
+
 ## [0.5.1](https://github.com/willow-memory/willow-bot/compare/v0.5.0...v0.5.1) (2026-09-21)
 
 
