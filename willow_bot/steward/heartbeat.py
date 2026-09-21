@@ -42,11 +42,17 @@ _RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_
 # halves under one three-state (`tasks` and `leases`, each a receipt or None
 # when that half was blind); the numbers a reader needs sit one level down.
 # A half that is None mirrors nothing — the top-level `state`/`reason`
-# already says it was unreachable, and an absent key is not a zero.
+# already says it was unreachable, and an absent key is not a zero. Each
+# half's own `state` rides too, so a missing `tasks.held` reads as "that
+# half was None" only when `tasks.state` is also missing; a present
+# `tasks.state` with no `held` would be an upstream field rename, not a
+# blind half (Loki 09922563).
 _RECEIPT_NESTED_FIELDS = (
+    ("tasks", "state"),
     ("tasks", "held"),
     ("tasks", "counts"),
     ("tasks", "truncated"),
+    ("leases", "state"),
     ("leases", "requests"),
 )
 

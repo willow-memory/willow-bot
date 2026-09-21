@@ -231,13 +231,107 @@ def test_a_remembered_envelope_that_stopped_governing_is_forgotten(home, monkeyp
 
 def test_a_second_eambig_after_resolution_is_not_retried_forever(home, monkeypatch):
     """A tool that keeps answering EAMBIG even with the id named is a bug on
-    the other side; the step refuses once per PR and moves on."""
-    _state_with_pending(home, "o/r#1", "o/r#2")
+    the other side; the step refuses once per PR and moves on — bounded at
+    two calls per PR (resolve, then the named retry that refuses), and the
+    id that refused is not carried out of the tick."""
+    p = _state_with_pending(home, "o/r#1", "o/r#2")
+    calls = []
 
     def always_ambiguous(name, inputs):
+        calls.append(inputs.get("envelope_id"))
         return {"error": "EAMBIG", "envelopes": _ENVELOPES}
 
     _patch_client(monkeypatch, always_ambiguous)
     r = tick.run_audit()
     assert r["dispatched"] == [] and len(r["refused"]) == 2
     assert all("EAMBIG" in x["error"] for x in r["refused"])
+    assert calls == [None, "env-dispatch-8cabfd667263", None, "env-dispatch-8cabfd667263"]
+    assert r["envelope_id"] is None and r["envelope_resolved"] is False
+    assert tick._AUDIT_ENVELOPE_STATE_KEY not in json.loads(p.read_text())
+
+
+def test_a_named_retry_that_refuses_does_not_carry_the_id_out_of_the_tick(home, monkeypatch):
+    """One PR, so nothing behind it can clear the id by accident: resolve,
+    name it, get refused — the id must be gone at tick end."""
+    p = _state_with_pending(home, "o/r#1")
+    _patch_client(monkeypatch, lambda n, i: {"error": "EAMBIG", "envelopes": _ENVELOPES})
+    r = tick.run_audit()
+    assert r["dispatched"] == [] and r["envelope_id"] is None
+    assert tick._AUDIT_ENVELOPE_STATE_KEY not in json.loads(p.read_text())
+
+
+class _BoundsMoved:
+    """Planted: Loki 09922563. The remembered envelope's bounds changed (say
+    the auditor row was re-issued under a new id): naming the OLD id now
+    answers EAMBIG with a bounds mismatch and lists the current rows — the
+    branch that used to fall through, keep the stale id, and refuse every
+    PR every tick forever."""
+
+    def __init__(self, stale="env-dispatch-8cabfd667263", current="env-dispatch-NEW"):
+        self.stale, self.current, self.calls, self._n = stale, current, [], 0
+        self.envelopes = [dict(e) for e in _ENVELOPES]
+        for e in self.envelopes:
+            if e["envelope_id"] == stale:
+                e["envelope_id"] = current
+
+    def __call__(self, name, inputs):
+        self.calls.append((name, inputs))
+        eid = inputs.get("envelope_id")
+        if eid == self.stale:
+            return {"error": "EAMBIG: bounds mismatch", "fields": ["task_class"],
+                    "envelopes": self.envelopes}
+        if not eid:
+            return {"error": "EAMBIG", "envelopes": self.envelopes}
+        if eid != self.current:
+            return {"error": "ENOENT: envelope does not govern dispatch"}
+        self._n += 1
+        return {"dispatch_id": f"D{self._n}", "status": "pending"}
+
+
+def test_an_eambig_against_a_remembered_id_forgets_it_and_re_resolves(home, monkeypatch):
+    p = _state_with_pending(home, "o/r#1", "o/r#2", envelope_id="env-dispatch-8cabfd667263")
+    c = _BoundsMoved()
+    _patch_client(monkeypatch, c)
+    r = tick.run_audit()
+    # PR 1: named the stale id -> EAMBIG bounds mismatch -> forgotten, refused honestly.
+    assert r["refused"][0]["repo_pr"] == "o/r#1" and "bounds mismatch" in r["refused"][0]["error"]
+    # PR 2, same tick: no id now -> bare EAMBIG -> re-resolved to the current row -> lands.
+    assert r["dispatched"] == [{"repo_pr": "o/r#2", "dispatch_id": "D1"}]
+    assert r["envelope_id"] == "env-dispatch-NEW" and r["envelope_resolved"] is True
+    ids = [inputs.get("envelope_id") for _, inputs in c.calls]
+    assert ids == ["env-dispatch-8cabfd667263", None, "env-dispatch-NEW"]
+    st = json.loads(p.read_text())
+    assert st[tick._AUDIT_ENVELOPE_STATE_KEY] == "env-dispatch-NEW"
+    assert [i["repo_pr"] for i in st["pending_audit"]] == ["o/r#1"]
+    # next tick the stale-refused PR lands under the remembered current id, first call
+    c2 = _BoundsMoved()
+    _patch_client(monkeypatch, c2)
+    r2 = tick.run_audit()
+    assert r2["dispatched"][0]["repo_pr"] == "o/r#1" and len(c2.calls) == 1
+    assert c2.calls[0][1]["envelope_id"] == "env-dispatch-NEW"
+
+
+def test_a_lone_pr_refused_on_a_stale_id_is_re_resolved_next_tick_not_never(home, monkeypatch):
+    """The liveness half with nothing behind it in the queue: one PR, stale
+    id, EAMBIG — the id must not survive the tick."""
+    p = _state_with_pending(home, "o/r#1", envelope_id="env-dispatch-8cabfd667263")
+    _patch_client(monkeypatch, _BoundsMoved())
+    r = tick.run_audit()
+    assert r["dispatched"] == [] and r["envelope_id"] is None
+    assert tick._AUDIT_ENVELOPE_STATE_KEY not in json.loads(p.read_text())
+    _patch_client(monkeypatch, _BoundsMoved())
+    r2 = tick.run_audit()
+    assert r2["dispatched"][0]["repo_pr"] == "o/r#1" and r2["envelope_resolved"] is True
+
+
+def test_heartbeat_mirrors_each_halfs_own_state(home, monkeypatch):
+    """A None half and an upstream rename must read differently: the half's
+    `state` rides beside its numbers, so `tasks.state` present with no
+    `tasks.held` is a rename, and both absent is a blind half."""
+    reply = {"event": "net_authority_tick", "at": "t", "state": "populated",
+             "tasks": {"state": "populated", "held": 2, "counts": {}, "truncated": False},
+             "leases": None}
+    _heartbeat_with(monkeypatch, lambda n: reply if n == "net_authority_drain" else {"ok": True})
+    e = _tool_entry(heartbeat.run_heartbeat(), "net_authority_drain")
+    assert e["tasks.state"] == "populated" and e["tasks.held"] == 2
+    assert "leases.state" not in e and "leases.requests" not in e

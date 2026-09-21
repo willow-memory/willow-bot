@@ -287,11 +287,24 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
                     envelope_id = picked
                     resolved_this_tick = True
                     result = mcp_client.call("dispatch_send", {**args, "envelope_id": envelope_id})
-            elif err and err.startswith("ENOENT") and envelope_id:
-                # The remembered envelope no longer governs; forget it so the
-                # next refusal re-resolves. This PR stays pending with the
-                # reason; no second call this tick — the registry changed
-                # under us and one honest refusal beats a guessed retry.
+                    if _tool_error(result):
+                        # The id the tool itself just listed was refused when
+                        # named — same rule as below: a refused assertion is
+                        # not carried out of the tick, whatever the errno.
+                        envelope_id = None
+                        resolved_this_tick = False
+                        state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
+            elif err and envelope_id:
+                # A refusal while the remembered id was named — ENOENT (it
+                # no longer governs), EAMBIG (its bounds changed under us),
+                # or anything else. The id was this step's own assertion
+                # and the tool just refused it, so the assertion is gone
+                # whatever the errno (Loki 09922563: an EAMBIG here used to
+                # fall through, keep the id, and refuse every PR every tick
+                # forever). Forget it; this PR stays pending with the reason
+                # and the next refusal re-resolves from the tool's own list.
+                # No second call this tick — one honest refusal beats a
+                # guessed retry against a registry that moved.
                 envelope_id = None
                 state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
         except Exception as exc:  # noqa: BLE001 — a refused dispatch stays pending, with its reason
