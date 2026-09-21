@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.7.0](https://github.com/willow-memory/willow-bot/compare/v0.6.0...v0.7.0) (2026-09-21)
+
+
+### Added
+
+* **steward:** envelope retirement sweep runs on the tick ([6d0c414](https://github.com/willow-memory/willow-bot/commit/6d0c41410c9f64959d8a144d4c569512b06251d4))
+* **steward:** envelope retirement tick step ([6e13a87](https://github.com/willow-memory/willow-bot/commit/6e13a87fd382bcc310c8d1d79670c44d04a05afc))
+
+
+### Fixed
+
+* **steward:** rework envelope retirement tick per Loki's findings (9494D3AF) ([0a23ba2](https://github.com/willow-memory/willow-bot/commit/0a23ba20b948cb0c92e5b93655faeb7148f53c30))
+
 ## [0.6.0](https://github.com/willow-memory/willow-bot/compare/v0.5.1...v0.6.0) (2026-09-21)
 
 
