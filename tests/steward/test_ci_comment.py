@@ -158,9 +158,9 @@ def test_green_after_red_edits_the_comment_to_green(home, monkeypatch):
     assert f"green at {SHA2[:7]}" in body
 
 
-# ── log fetch 403 → receipt says actions:read missing, no comment ────────────
+# ── log fetch failure of any kind → the comment still posts, with a note ─────
 
-def test_log_fetch_403_names_actions_read_and_posts_no_comment(home, monkeypatch):
+def test_log_fetch_403_posts_the_comment_with_a_log_unavailable_note(home, monkeypatch):
     _prime()
     c = _Client()
     comments = _use(monkeypatch, c, fetch_log=lambda repo, job_id: (
@@ -168,9 +168,152 @@ def test_log_fetch_403_names_actions_read_and_posts_no_comment(home, monkeypatch
     deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
     r = tick.run_ci()
     entry = r["commented"][0]
-    assert entry["action"] == "skipped"
-    assert entry["reason"] == "missing permission: actions:read"
-    assert comments.calls == []
+    assert entry["action"] == "created"
+    assert len(comments.calls) == 1
+    body = comments.calls[0]["body"]
+    assert "log unavailable" in body and "actions:read" in body
+
+
+def test_log_fetch_rate_limited_is_not_named_a_permission_and_still_comments(home, monkeypatch):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c, fetch_log=lambda repo, job_id: (
+        None, {"status": "rate_limited", "detail": "GitHub rate limit fetching job logs"}))
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    entry = r["commented"][0]
+    assert entry["action"] == "created"
+    body = comments.calls[0]["body"]
+    assert "rate limited" in body
+    assert "actions:read" not in body
+
+
+# ── the comment is owed until it lands: a 502 is retried, not permanent ──────
+
+def test_comment_502_is_retried_next_tick_and_lands(home, monkeypatch):
+    _prime()
+    c = _Client()
+    calls: list[dict] = []
+
+    def _flaky(repo, pr_number, head_sha, body):
+        calls.append({"repo": repo, "pr": pr_number, "head_sha": head_sha, "body": body})
+        if len(calls) == 1:
+            return {"status": "could-not-run", "detail": "502 Bad Gateway", "action": "skipped"}
+        return {"status": "ok", "action": "created", "comment_id": 9,
+                "url": f"https://github.com/{repo}/pull/{pr_number}#c9"}
+
+    _use(monkeypatch, c, comments=_flaky)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r1 = tick.run_ci()
+    assert r1["commented"][0]["action"] == "skipped"
+    assert r1["commented"][0]["reason"] == "502 Bad Gateway"
+    # No new deposit on the next tick — the retry comes from the owed
+    # table, independent of `ci_filed`, which already remembers this leg.
+    r2 = tick.run_ci()
+    assert r2["commented"][0]["action"] == "created"
+    assert len(calls) == 2
+
+
+# ── broker independence: a refused/absent broker never blocks the comment ────
+
+def test_broker_refused_enqueue_does_not_prevent_the_comment(home, monkeypatch):
+    _prime()
+    c = _Client(refuse={"human_required_enqueue": "refused"})
+    comments = _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert len(comments.calls) == 1
+    assert r["commented"][0]["action"] == "created"
+    assert r["refused"]
+
+
+def test_broker_down_reports_spoke_unreachable_but_still_comments(home, monkeypatch):
+    _prime()
+    comments = _RedComments()
+    monkeypatch.setattr("willow_bot.pr_voice.upsert_ci_red_comment", comments)
+    monkeypatch.setattr(ci_log, "fetch_job_log", lambda repo, job_id: ("boring log\n", {"status": "ok"}))
+    monkeypatch.setattr(ci_log, "extract_failure_block",
+                        lambda text: {"block": "BOOM: assert False", "trimmed": False, "source": "pytest"})
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci(enable_mcp=False)
+    assert len(comments.calls) == 1
+    assert r["spoke"] == [{"channel": "willow", "state": "unreachable"}]
+
+
+# ── a second red job on a later tick keeps BOTH jobs in the body ─────────────
+
+def test_second_red_job_on_a_later_tick_keeps_both_jobs_in_the_body(home, monkeypatch):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
+    tick.run_ci()
+    deposits.append_local(_row(RAT, SHA, 2, "test", "failure", pr=48))
+    r2 = tick.run_ci()
+    assert r2["commented"][0]["action"] == "edited"
+    body = comments.calls[-1]["body"]
+    assert "**lint**" in body and "**test**" in body
+    assert "2 job(s)" in body
+
+
+# ── body cap: header and links survive, the failure block shrinks ───────────
+
+def test_body_is_capped_and_header_survives(home, monkeypatch):
+    _prime()
+    c = _Client()
+    big_block = "\n".join(f"line {i} " + "x" * 100 for i in range(2000))
+    comments = _use(monkeypatch, c,
+                    extract=lambda text: {"block": big_block, "trimmed": False, "source": "pytest"})
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    deposits.append_local(_row(RAT, SHA, 2, "lint", "failure", pr=48))
+    r = tick.run_ci()
+    body = comments.calls[-1]["body"]
+    assert len(body) <= tick.BODY_CHAR_CAP
+    assert body.startswith(f"CI red: {RAT}#48 @ {SHA[:7]}")
+    assert f"https://github.com/{RAT}/actions/runs/1/job/1" in body
+    assert f"https://github.com/{RAT}/actions/runs/1/job/2" in body
+    assert r["commented"][0]["action"] in ("created", "edited")
+
+
+# ── Grove line is owed until sent, and never sent twice ──────────────────────
+
+def test_grove_send_failure_is_retried_and_never_resent_after_success(home, monkeypatch):
+    _prime()
+    calls = {"n": 0}
+
+    def _client(name, inputs):
+        if name == "grove_send_message":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"error": "refused"}
+            return {"ok": True}
+        return {"ok": True, "id": "hr-1"}
+
+    _use(monkeypatch, _client)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r1 = tick.run_ci()
+    assert r1["spoke"] == [{"channel": "willow", "ok": False, "reason": "refused"}]
+    r2 = tick.run_ci()
+    assert r2["spoke"] == [{"channel": "willow", "ok": True}]
+    r3 = tick.run_ci()
+    assert r3["spoke"] == []
+    assert calls["n"] == 2
+
+
+# ── the Grove summary closes any fence/<details> its own trim leaves open ────
+
+def test_grove_summary_closes_an_open_fence_and_details_block(home, monkeypatch):
+    _prime()
+    c = _Client()
+    many_lines = "\n".join(f"failure line {i}" for i in range(200))
+    _use(monkeypatch, c, extract=lambda text: {"block": many_lines, "trimmed": False, "source": "pytest"})
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    sends = c.named("grove_send_message")
+    assert len(sends) == 1
+    content = sends[0]["content"]
+    assert content.count("```") % 2 == 0
+    assert content.count("<details>") == content.count("</details>")
 
 
 # ── PR-comment permission missing → named exactly, no crash ──────────────────

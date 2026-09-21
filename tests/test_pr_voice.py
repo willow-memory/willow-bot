@@ -386,12 +386,24 @@ def test_ci_red_comment_403_names_pull_requests_write_exactly(rec: _Recorder):
         _FakeResp(_payload=[]),
     ]
     rec.responses[("POST", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
-        _FakeResp(_status=403),
+        _FakeResp(_status=403, _payload={"message": "Resource not accessible by integration"}),
     ]
     receipt = pr_voice.upsert_ci_red_comment(REPO, PR, SHA, "body")
     assert receipt["status"] == "could-not-run"
     assert receipt["missing_permission"] == "pull_requests:write"
     assert receipt["action"] == "skipped"
+
+
+def test_ci_red_comment_403_rate_limited_is_not_named_a_permission(rec: _Recorder):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[]),
+    ]
+    resp = _FakeResp(_status=403, _payload={"message": "API rate limit exceeded"})
+    resp.headers = {"X-RateLimit-Remaining": "0"}
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [resp]
+    receipt = pr_voice.upsert_ci_red_comment(REPO, PR, SHA, "body")
+    assert receipt["status"] == "rate_limited"
+    assert "missing_permission" not in receipt
 
 
 def test_ci_red_comment_missing_head_sha_is_a_line_not_a_raise(rec: _Recorder):

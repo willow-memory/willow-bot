@@ -182,10 +182,12 @@ def upsert_ci_red_comment(repo: str, pr_number: int, head_sha: str, body: str) -
     whose ``action`` is ``created`` | ``edited`` | ``skipped`` — the exact
     vocabulary the tick's ``commented`` receipt line carries.
 
-    On a 403 while posting or editing, the receipt names
-    ``missing_permission: "pull_requests:write"`` exactly — the one
-    permission this call needs — checked against the response's own
-    status code, never guessed from GitHub's response text.
+    On a 403 while posting or editing, ``ci_log.classify_403`` decides
+    what it means: a rate limit (``X-RateLimit-Remaining`` / ``Retry-After``)
+    is reported as ``status: "rate_limited"``, never as a missing
+    permission; only GitHub's own "you can't do this" wording in the
+    response body names ``missing_permission: "pull_requests:write"``;
+    anything else is ``forbidden_unknown`` with the message quoted.
     """
     if not head_sha:
         return {"status": "could-not-run", "detail": "no head_sha", "action": "skipped"}
@@ -216,10 +218,21 @@ def upsert_ci_red_comment(repo: str, pr_number: int, head_sha: str, body: str) -
                 headers=headers, json={"body": full_body}, timeout=10,
             )
         if getattr(r, "status_code", None) == 403:
-            receipt.update(status="could-not-run", missing_permission="pull_requests:write",
-                           detail="GitHub 403 posting a PR comment — the App installation "
-                                  "lacks pull_requests:write",
-                           action="skipped")
+            from willow_bot.steward.ci_log import classify_403
+
+            cls = classify_403(r)
+            if cls["kind"] == "rate_limited":
+                receipt.update(status="rate_limited", detail="GitHub rate limit posting a PR comment",
+                               retry_after=cls.get("retry_after"), action="skipped")
+            elif cls["kind"] == "missing_permission":
+                receipt.update(status="could-not-run", missing_permission="pull_requests:write",
+                               detail=f"GitHub 403 ({cls['message']}) posting a PR comment — the App "
+                                      "installation lacks pull_requests:write",
+                               action="skipped")
+            else:
+                receipt.update(status="could-not-run", forbidden_unknown=True,
+                               detail=f"GitHub 403 posting a PR comment: {cls['message']}"[:400],
+                               action="skipped")
             return receipt
         r.raise_for_status()
         result = r.json()

@@ -13,6 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from willow_bot.steward import ci_comments
 from willow_bot.steward import inbox as inbox_mod
 from willow_bot.steward import merge as merge_mod
 from willow_bot.steward import scan as scan_mod
@@ -1001,31 +1002,99 @@ def _grove_sender() -> str:
 # to speak; a row there is read only as EXTRA context (never built here —
 # `_notify_watchers` above already carries that use of it), never as the
 # gate.
+#
+# Loki's audit of the first cut (dispatch E026CFE7) found the comment and
+# the Grove line fired exactly ONCE, from inside the same loop that filed
+# the review item through `human_required_enqueue`, AFTER the legs were
+# already marked `ci_filed` — so a 502, a refused broker, or the broker
+# being off made the silence permanent for that head, and a second red
+# leg on a later tick rewrote the comment from only the NEW leg (the
+# earlier job's block vanished). The fix lives in `ci_comments.py`: a
+# small, separately and atomically written table, keyed per
+# (repo, pr, head_sha), owed until it lands — independent of `ci_filed`,
+# `ci_items`, and whatever `human_required_enqueue` answers. Every leg
+# this head has ever shown a log for stays in that table, so the body is
+# always rebuilt from the FULL set, not just this tick's delta.
 
 _GROVE_CI_RED_REPO_PREFIX = "willow-memory/"
+BODY_CHAR_CAP = 60_000
 
 
-def _ci_red_body(where: str, head_sha: str, legs: list[dict]) -> str:
-    """One PR comment body for a head's failing legs: which jobs are red,
-    then each job's failure block (or why it has none) in a collapsible
-    fenced section. `legs` are the per-leg dicts `_ci_red_leg_info` built —
-    real failures only (no cancelled leg reaches here)."""
+def _head_tail_lines(lines: list[str], *, head_n: int = 60, tail_n: int = 60) -> list[str]:
+    """`lines` unchanged when short enough; otherwise the first `head_n`
+    and last `tail_n`, with a marker naming how many were dropped between
+    them — never a bare tail-only or head-only cut, which for a pytest
+    traceback drops either the failure or the summary."""
+    if len(lines) <= head_n + tail_n:
+        return lines
+    marker = f"... [{len(lines) - head_n - tail_n} lines trimmed] ..."
+    return lines[:head_n] + [marker] + lines[-tail_n:]
+
+
+def _ci_red_leg_lines(lg: dict) -> str:
     from willow_bot.steward import ci_log
 
-    lines = [f"CI red: {where} @ {head_sha[:7]} — {len(legs)} job(s):"]
+    block = lg.get("block")
+    if block:
+        notes = []
+        if lg.get("trimmed"):
+            notes.append(f"trimmed to the last {ci_log.TRIM_LINES} lines")
+        if lg.get("log_truncated"):
+            mb = ci_log.MAX_LOG_BYTES // (1024 * 1024)
+            notes.append(f"log truncated to the last {mb} MB")
+        note = f" ({', '.join(notes)})" if notes else ""
+        return f"<details><summary>{lg['check']}{note}</summary>\n\n```\n{block}\n```\n</details>\n"
+    if lg.get("missing_permission"):
+        return f"_{lg['check']}: log unavailable — missing `{lg['missing_permission']}`_\n"
+    if lg.get("rate_limited"):
+        return f"_{lg['check']}: log unavailable — rate limited, will retry_\n"
+    return f"_{lg['check']}: log unavailable ({lg.get('detail', 'unknown error')})_\n"
+
+
+def _ci_red_body(where: str, head_sha: str, legs: list[dict], *, cap: int = BODY_CHAR_CAP) -> str:
+    """One PR comment body for a head's failing legs: which jobs are red,
+    then each job's failure block (or why it has none) in a collapsible
+    fenced section. `legs` are the per-leg dicts `_ci_red_leg_info` built,
+    accumulated across every tick this head has been red — a log-fetch
+    failure of ANY kind (missing permission, rate limited, network) is
+    still one line in the body, never a reason to skip posting the whole
+    comment.
+
+    Hard-capped at `cap` chars against GitHub's 65,536-char comment limit
+    (a 480,974-char body from two legs' untrimmed blocks — Loki's audit,
+    P3 — 422'd and, before this build, was never retried). Header and
+    per-job links are never touched; only the failure BLOCKS shrink, in
+    two stages: first each block to its own head(60)+tail(60), then — if
+    still over — the rendered blocks section itself is cut, with a note.
+    """
+    header_lines = [f"CI red: {where} @ {head_sha[:7]} — {len(legs)} job(s):"]
+    header_lines += [f"- **{lg['check']}** ({lg['conclusion']}): {lg['url']}" for lg in legs]
+    header = "\n".join(header_lines) + "\n\n"
+
+    def _blocks(leg_list: list[dict]) -> str:
+        return "\n".join(_ci_red_leg_lines(lg) for lg in leg_list).rstrip() + "\n"
+
+    blocks = _blocks(legs)
+    body = (header + blocks).strip() + "\n"
+    if len(body) <= cap:
+        return body
+
+    trimmed_legs = []
     for lg in legs:
-        lines.append(f"- **{lg['check']}** ({lg['conclusion']}): {lg['url']}")
-    lines.append("")
-    for lg in legs:
-        block = lg.get("block")
-        if block:
-            note = f" (trimmed to the last {ci_log.TRIM_LINES} lines)" if lg.get("trimmed") else ""
-            lines.append(f"<details><summary>{lg['check']}{note}</summary>\n\n```\n{block}\n```\n</details>\n")
-        elif lg.get("missing_permission"):
-            lines.append(f"_{lg['check']}: log unavailable — missing `{lg['missing_permission']}`_\n")
-        else:
-            lines.append(f"_{lg['check']}: log unavailable ({lg.get('detail', 'unknown error')})_\n")
-    return "\n".join(lines).strip() + "\n"
+        lg2 = dict(lg)
+        if lg2.get("block"):
+            lg2["block"] = "\n".join(_head_tail_lines(lg2["block"].splitlines()))
+            lg2["trimmed"] = True
+        trimmed_legs.append(lg2)
+    blocks = _blocks(trimmed_legs)
+    body = (header + blocks).strip() + "\n"
+    if len(body) <= cap:
+        return body
+
+    note = "\n\n_body capped at {} chars; remaining failure detail omitted_\n".format(cap)
+    budget = max(cap - len(header) - len(note), 0)
+    body = (header + blocks[:budget] + note).strip() + "\n"
+    return body
 
 
 def _ci_red_green_body(where: str, head_sha: str, *, by: str, at: str) -> str:
@@ -1034,12 +1103,39 @@ def _ci_red_green_body(where: str, head_sha: str, *, by: str, at: str) -> str:
     return f"CI red: {where} @ {head_sha[:7]} — green at {by[:7]}\nresolved at {at}\n"
 
 
+def _close_open_blocks(text: str) -> str:
+    """Close a trailing open ``` fence or `<details>` block left by a
+    truncating cut — the Grove summary used to slice the comment body at
+    its first 10 lines with no regard for what those lines were IN THE
+    MIDDLE of (Loki's audit, finding 8: it routinely ended inside an open
+    fence)."""
+    if text.count("```") % 2 == 1:
+        text = text + "\n```"
+    opens = text.count("<details>") - text.count("</details>")
+    if opens > 0:
+        text = text + ("\n</details>" * opens)
+    return text
+
+
+def _grove_summary(body: str, pr_url: str) -> str:
+    """The Grove `#willow` line: head(60) + tail(60) of the comment body
+    (never a naive first-N cut), any fence or `<details>` left open by the
+    cut closed, then the PR link."""
+    lines = body.rstrip("\n").splitlines()
+    kept = _head_tail_lines(lines, head_n=60, tail_n=60)
+    text = _close_open_blocks("\n".join(kept).rstrip())
+    return f"{text}\n{pr_url}"
+
+
 def _ci_red_leg_info(repo: str, leg: dict) -> dict:
-    """`{check, conclusion, url, block?, trimmed?, source?} |
-    {..., missing_permission} | {..., detail}` — the job's log, extracted,
-    or the honest reason it has none. `leg["key"]` is `head_sha:check_run_id`
-    and GitHub Actions job ids and check-run ids share one id space, so the
-    check_run_id is a valid job id for the logs endpoint."""
+    """`{check, conclusion, url, block?, trimmed?, source?, log_truncated?}
+    | {..., missing_permission} | {..., rate_limited} | {..., detail}` —
+    the job's log, extracted, or the honest reason it has none. Never
+    raises, and never a reason by itself to skip the comment — the caller
+    always has a line to show for this leg. `leg["key"]` is
+    `head_sha:check_run_id` and GitHub Actions job ids and check-run ids
+    share one id space, so the check_run_id is a valid job id for the
+    logs endpoint."""
     from willow_bot.steward import ci_log
 
     job_id = leg["key"].rsplit(":", 1)[-1]
@@ -1048,94 +1144,149 @@ def _ci_red_leg_info(repo: str, leg: dict) -> dict:
     if log_receipt.get("missing_permission"):
         info["missing_permission"] = log_receipt["missing_permission"]
         return info
+    if log_receipt.get("status") == "rate_limited":
+        info["rate_limited"] = True
+        info["detail"] = log_receipt.get("detail", "rate limited")
+        return info
     if text is None:
         info["detail"] = log_receipt.get("detail", "unknown error")
         return info
     extracted = ci_log.extract_failure_block(text)
-    info.update(block=extracted["block"], trimmed=extracted["trimmed"], source=extracted["source"])
+    info.update(block=extracted["block"], trimmed=extracted["trimmed"], source=extracted["source"],
+                log_truncated=bool(log_receipt.get("truncated")))
     return info
 
 
-def _file_ci_red_comment(where: str, item_id: str, repo: str, pr: object, head_sha: str,
-                         legs: list[dict], *, state: dict, app: str, pace: "_Pacer", call,
-                         commented: list, spoke: list) -> None:
-    """Upsert the ONE failure-block comment for this head's newly-seen
-    legs, then — once, on first creation, for a willow-memory/* repo —
-    speak the first 10 lines and the PR link to Grove `#willow`.
-    Unconditional: no `pr_watch` lookup gates either action. Never raises;
-    every outcome is a line in `commented` (and `spoke`, when reached)."""
-    if not pr:
-        commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
-                          "action": "skipped", "reason": "no pr"})
-        return
-    real = [lg for lg in legs if lg["conclusion"] != _CI_CANCELLED]
-    if not real:
-        commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
-                          "action": "skipped", "reason": "stuck, no failing leg to show a log for"})
-        return
+def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list) -> None:
+    """Fold this tick's newly-seen legs into the durable owed table
+    (`ci_comments.py`), independent of whatever the filing loop's
+    `human_required_enqueue` call answers. A PR-less head or a stuck-only
+    (every leg cancelled) head has nothing to show a log for and never
+    gets an owed entry — reported directly here so the receipt still
+    carries a line for it, matching what the filing loop used to say."""
+    for head_key, legs in groups.items():
+        first = legs[0]
+        where = _ci_pr_key(first["repo"], first["pr"], first["head_sha"])
+        if not first["pr"]:
+            commented.append({"repo_pr": where, "head_sha": first["head_sha"], "comment_id": None,
+                              "action": "skipped", "reason": "no pr"})
+            continue
+        real = [lg for lg in legs if lg["conclusion"] != _CI_CANCELLED]
+        if not real:
+            commented.append({"repo_pr": where, "head_sha": first["head_sha"], "comment_id": None,
+                              "action": "skipped", "reason": "stuck, no failing leg to show a log for"})
+            continue
+        entry = ci_comments.entry_for(owed, head_key, repo=first["repo"], pr=first["pr"],
+                                      head_sha=first["head_sha"], where=where)
+        legs_table = entry.setdefault("legs", {})
+        for lg in real:
+            legs_table[lg["check"]] = _ci_red_leg_info(first["repo"], lg)
+        entry["pending_kind"] = "red"
+        cs = entry["comment"]
+        if cs["status"] != "pending":
+            cs["status"] = "pending"
+            cs["attempts"] = 0
+            cs["last_error"] = None
 
+
+def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str) -> None:
+    """A currently-`posted` (red) owed entry whose head has since gone
+    green — by re-run, or by a later head on the same PR — is queued for
+    a green edit. Reads only `heads`/`head_legs`, built from the bot's own
+    deposits regardless of whether the broker is up, so this never depends
+    on `ci_items` or a successful `human_required_resolve`."""
+    for entry in owed.values():
+        if not isinstance(entry, dict) or not entry.get("pr"):
+            continue
+        cs = entry.get("comment") or {}
+        if cs.get("status") != "posted":
+            continue
+        repo, pr, head_sha = entry["repo"], entry["pr"], entry["head_sha"]
+        expected = set(entry.get("legs") or {})
+        if not expected:
+            continue
+        pr_key = _ci_pr_key(repo, pr, head_sha)
+        own_key = _ci_head_key(repo, pr, head_sha)
+        own = head_legs.get(own_key) or {}
+        went_green_by = None
+        if _head_is_green(own, expected):
+            went_green_by = head_sha
+        else:
+            mine = (heads.get(pr_key) or {}).get(head_sha)
+            for sha, seen_at in (heads.get(pr_key) or {}).items():
+                if sha == head_sha or seen_at is None or mine is None or seen_at <= mine:
+                    continue
+                if _head_is_green(head_legs.get(_ci_head_key(repo, pr, sha)) or {}, expected):
+                    went_green_by = sha
+                    break
+        if went_green_by is None:
+            continue
+        entry["pending_kind"] = "green"
+        entry["green_by"] = went_green_by
+        entry["green_at"] = at
+        cs["status"] = "pending"
+        cs["attempts"] = 0
+        cs["last_error"] = None
+
+
+def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, enable_mcp: bool,
+                   commented: list, spoke: list) -> None:
+    """Retry every owed comment and Grove line that is due — new this
+    tick or carried over from any earlier one. The GitHub half never
+    needs `call`/`enable_mcp`; only the Grove half does, and when the
+    broker is down it is reported `unreachable` rather than silently
+    skipped."""
     from willow_bot import pr_voice
 
-    leg_infos = [_ci_red_leg_info(repo, lg) for lg in real]
-    missing = next((li["missing_permission"] for li in leg_infos if li.get("missing_permission")), None)
-    if missing:
-        commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
-                          "action": "skipped", "reason": f"missing permission: {missing}"})
-        return
+    for head_key in ci_comments.head_keys(owed):
+        entry = owed[head_key]
+        repo, pr, head_sha, where = entry["repo"], entry["pr"], entry["head_sha"], entry["where"]
+        cs = entry.get("comment") or {}
+        if ci_comments.due(cs, tick=tick):
+            if entry.get("pending_kind") == "green":
+                body = _ci_red_green_body(where, head_sha, by=entry.get("green_by", head_sha),
+                                          at=entry.get("green_at", ""))
+            else:
+                body = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
+            result = pr_voice.upsert_ci_red_comment(repo, int(pr), head_sha, body)
+            if result.get("status") == "ok":
+                new_status = "green" if entry.get("pending_kind") == "green" else "posted"
+                ci_comments.record_success(cs, status=new_status, tick=tick)
+                cs["comment_id"] = result.get("comment_id")
+                entry.pop("pending_kind", None)
+                commented.append({"repo_pr": where, "head_sha": head_sha,
+                                  "comment_id": result.get("comment_id"), "action": result.get("action"),
+                                  "reason": None})
+            else:
+                reason = (f"missing permission: {result['missing_permission']}"
+                         if result.get("missing_permission")
+                         else result.get("detail", "unknown error"))
+                ci_comments.record_failure(cs, error=reason, tick=tick)
+                commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
+                                  "action": "skipped", "reason": reason})
 
-    body = _ci_red_body(where, head_sha, leg_infos)
-    result = pr_voice.upsert_ci_red_comment(repo, int(pr), head_sha, body)
-    if result.get("status") != "ok":
-        reason = (f"missing permission: {result['missing_permission']}" if result.get("missing_permission")
-                  else result.get("detail", "unknown error"))
-        commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
-                          "action": "skipped", "reason": reason})
-        return
-    commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": result.get("comment_id"),
-                      "action": result.get("action"), "reason": None})
-    red_map = state.setdefault("ci_red_comment", {})
-    red_map[item_id] = {"repo": repo, "pr": int(pr), "head_sha": head_sha}
-    if result.get("action") != "created" or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX):
-        return
-    spoken = state.setdefault("ci_red_spoken", [])
-    if item_id in spoken:
-        return
-    pr_url = f"https://github.com/{repo}/pull/{pr}"
-    summary = "\n".join(body.splitlines()[:10]).rstrip() + f"\n{pr_url}"
-    send_result, err = pace.call(call, "grove_send_message", {
-        "app_id": app, "channel_name": "willow", "content": summary, "sender": _grove_sender(),
-    })
-    if err is None:
-        spoken.append(item_id)
-        spoke.append({"channel": "willow", "ok": True})
-    else:
-        spoke.append({"channel": "willow", "ok": False, "reason": err})
-
-
-def _edit_ci_red_green(item: dict, sha: str, at: str, *, state: dict, commented: list) -> None:
-    """On resolve, edit the head's own ci-red comment (if one was ever
-    created) to say it went green — never delete it. An item that never
-    got a comment (stuck-only, no permission, unwatched-for-comments PR)
-    has nothing to edit and is skipped silently: there is nothing false
-    left on the PR to correct."""
-    red_map = state.get("ci_red_comment") or {}
-    entry = red_map.get(item.get("id"))
-    if not entry:
-        return
-
-    from willow_bot import pr_voice
-
-    where = _ci_where(item)
-    body = _ci_red_green_body(where, entry["head_sha"], by=sha, at=at)
-    result = pr_voice.upsert_ci_red_comment(entry["repo"], entry["pr"], entry["head_sha"], body)
-    if result.get("status") == "ok":
-        commented.append({"repo_pr": where, "head_sha": entry["head_sha"],
-                          "comment_id": result.get("comment_id"), "action": result.get("action"), "reason": None})
-    else:
-        reason = (f"missing permission: {result['missing_permission']}" if result.get("missing_permission")
-                  else result.get("detail", "unknown error"))
-        commented.append({"repo_pr": where, "head_sha": entry["head_sha"], "comment_id": None,
-                          "action": "skipped", "reason": reason})
+        sp = entry.get("spoke") or {}
+        if sp.get("status") != "pending" or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX):
+            continue
+        if cs.get("status") not in ("posted", "green"):
+            continue  # nothing has actually landed on the PR yet to point Grove at
+        if not enable_mcp or call is None:
+            spoke.append({"channel": "willow", "state": "unreachable"})
+            continue
+        if not ci_comments.due(sp, tick=tick):
+            continue
+        pr_url = f"https://github.com/{repo}/pull/{pr}"
+        body_for_summary = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
+        summary = _grove_summary(body_for_summary, pr_url)
+        result, err = pace.call(call, "grove_send_message", {
+            "app_id": app, "channel_name": "willow", "content": summary, "sender": _grove_sender(),
+        })
+        if err is None:
+            ci_comments.record_success(sp, status="posted", tick=tick)
+            spoke.append({"channel": "willow", "ok": True})
+        else:
+            ci_comments.record_failure(sp, error=err, tick=tick)
+            spoke.append({"channel": "willow", "ok": False, "reason": err})
 
 
 def _ci_where(item: dict) -> str:
@@ -1438,6 +1589,30 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         groups.setdefault(_ci_head_key(leg["repo"], leg["pr"], leg["head_sha"]), []).append(leg)
     skipped = sum(1 for leg in red + stuck if leg["key"] in already)
 
+    # The CI-red comment and the Grove line: owed per (repo, pr, head_sha)
+    # until they land, in their OWN small atomically-written file
+    # (`ci_comments.py`), independent of `human_required_enqueue` and of
+    # whether the broker (WILLOW_BOT_MCP) is even enabled — a refused or
+    # absent broker never prevents the GitHub comment. Run before the
+    # filing loop below, whose own success or failure this no longer
+    # depends on.
+    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    pace = _Pacer(_CI_TIME_BUDGET_S)
+    call = None
+    if enable_mcp:
+        from willow_bot.steward import mcp_client
+
+        call = mcp_client.call
+    owed = ci_comments.load()
+    tick_n = ci_comments.next_tick(owed)
+    commented: list = []
+    spoke: list = []
+    _ci_owed_merge_new_legs(owed, groups, commented=commented)
+    _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"])
+    _ci_owed_drain(owed, tick=tick_n, app=app, pace=pace, call=call, enable_mcp=enable_mcp,
+                  commented=commented, spoke=spoke)
+    ci_comments.save(owed)
+
     # Resolve-on-green candidates. Two honest routes to "this item is done":
     # a LATER head for the same PR on which every leg the item's head
     # recorded has reported green (the item's leg set is the only expected
@@ -1505,8 +1680,8 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             receipt["pruned"] = pruned
         live_ids = {it.get("id") for it in items.values() if it.get("id")}
         state["ci_notified"] = {k: v for k, v in (state.get("ci_notified") or {}).items() if k in live_ids}
-        state["ci_red_comment"] = {k: v for k, v in (state.get("ci_red_comment") or {}).items() if k in live_ids}
-        state["ci_red_spoken"] = [k for k in (state.get("ci_red_spoken") or []) if k in live_ids]
+        state.pop("ci_red_comment", None)  # superseded by ci_comments.json (owed per head, not per item)
+        state.pop("ci_red_spoken", None)
         state["ci_filed"] = filed_now
         state["ci_filed_cancelled"] = filed_cancelled_now
         state["ci_items"] = items
@@ -1530,19 +1705,13 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         off_path.write_text(f"{offset}\n", encoding="utf-8")
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — reds reported, not filed",
                        filed=[], appended=[], resolved=[], refused=[], skipped=skipped, new_offset=offset,
-                       commented=[], spoke=[],
+                       commented=commented, spoke=spoke,
                        would_resolve=[{"where": k, "superseded_by": sha, "how": how}
                                       for k, _, sha, how in _resolve_candidates(filed_before, filed_cancelled_before)],
                        remaining=len(groups), **_Pacer.idle())
         return _emit(receipt)
 
-    from willow_bot.steward import mcp_client
-
-    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
     filed, appended, refused = [], [], []
-    commented: list = []
-    spoke: list = []
-    pace = _Pacer(_CI_TIME_BUDGET_S)
     to_file = sum(1 for hk in groups if not (items.get(hk) or {}).get("id"))
     for head_key, legs in groups.items():
         first = legs[0]
@@ -1559,16 +1728,13 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                     existing["stuck"] = False  # a red joined: no longer a stuck-only item
                 appended.append({"where": where, "check": lg["check"], "conclusion": lg["conclusion"],
                                  "id": existing["id"]})
-            _file_ci_red_comment(where, existing["id"], first["repo"], first["pr"], first["head_sha"],
-                                 legs, state=state, app=app, pace=pace, call=mcp_client.call,
-                                 commented=commented, spoke=spoke)
             continue
         args = _filing_args(app, where, first["head_sha"], legs, grace_s=grace_s)
         # Paced through this step's own budget (gap 52928edb3fc7): a
         # rate_limited answer is waited out, not treated as the filing's
         # refusal — the first live tick after the mirror's pacing landed
         # ended here `could-not-run` on a real red.
-        result, err = pace.call(mcp_client.call, "human_required_enqueue", args)
+        result, err = pace.call(call, "human_required_enqueue", args)
         if err:
             # A budget stop is a pause, not a refusal (Loki 095AF9DB): the
             # step stops here and says so under `stopped`; `refused` holds
@@ -1594,9 +1760,6 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                            "grace_min": int(round(grace_s / 60.0)) if grace_s else _CI_CANCELLED_GRACE_MIN_DEFAULT}
         filed.append({"where": where, "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
                       "conclusions": [lg["conclusion"] for lg in legs], "id": item_id})
-        _file_ci_red_comment(where, item_id, first["repo"], first["pr"], first["head_sha"],
-                             legs, state=state, app=app, pace=pace, call=mcp_client.call,
-                             commented=commented, spoke=spoke)
 
     resolved, resolve_refused = [], []
     # After the filing loop: this tick's reds have joined their items and
@@ -1612,7 +1775,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             "closed": f"moot: PR closed; stuck cancelled run at {receipt['at']}",
             "superseded-on-branch": f"superseded by {sha} on the same branch; stuck cancelled run at {receipt['at']}",
         }[how]
-        result, err = pace.call(mcp_client.call, "human_required_resolve", {
+        result, err = pace.call(call, "human_required_resolve", {
             "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
         })
         if err:
@@ -1624,7 +1787,10 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             continue
         item["resolved"] = {"by": sha, "how": how, "at": receipt["at"]}
         resolved.append({"where": item_key, "item_id": item["id"], "superseded_by": sha, "how": how})
-        _edit_ci_red_green(item, sha, receipt["at"], state=state, commented=commented)
+        # The head's own ci-red comment (if any) is edited to green by the
+        # owed table independently (`_ci_owed_detect_green`, driven off
+        # `heads`/`head_legs` — not off this review item), so nothing more
+        # is done here for it.
 
     # Tell the seat that opened the PR (sealed pair 11ccb0f7, part 1). The
     # steward's outbound half — file, label, human_required — reached
@@ -1637,7 +1803,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # on `sent`, so a refusal or a budget stop is retried next tick and a
     # re-tick never repeats a delivered line. Unwatched PRs: nothing.
     notified_now = _notify_watchers(
-        items, state, receipt, pace=pace, app=app, call=mcp_client.call,
+        items, state, receipt, pace=pace, app=app, call=call,
         just_filed={f["id"] for f in filed}, just_resolved={r["item_id"] for r in resolved},
         state_view={**state, "ci_items": items, "ci_filed": filed_now,
                     "ci_filed_cancelled": filed_cancelled_now},

@@ -41,13 +41,26 @@ class _Client:
         self.calls = []
         self.result = result
         self.n = 0
+        # `hr-N` ids number the human_required_* calls specifically — the
+        # CI-red comment/Grove line now run their own `grove_send_message`
+        # calls through this same fake client, independently of and
+        # interleaved with `human_required_enqueue`/`_resolve` (finding 2,
+        # dispatch E026CFE7), so a plain "Nth call of any kind" counter
+        # would renumber `hr-` ids out from under tests that never asked
+        # about Grove at all.
+        self._hr_n = 0
 
     def __call__(self, name, inputs):
         self.calls.append((name, inputs))
         self.n += 1
         if callable(self.result):
             return self.result(name, inputs, self.n)
-        return self.result if self.result is not None else {"ok": True, "id": f"hr-{self.n}"}
+        if self.result is not None:
+            return self.result
+        if name.startswith("human_required"):
+            self._hr_n += 1
+            return {"ok": True, "id": f"hr-{self._hr_n}"}
+        return {"ok": True}
 
     def named(self, name):
         return [i for n, i in self.calls if n == name]

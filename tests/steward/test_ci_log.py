@@ -104,10 +104,12 @@ def test_the_block_is_trimmed_to_the_last_120_lines_and_says_so():
 # ── fetch_job_log ─────────────────────────────────────────────────────────────
 
 class _Resp:
-    def __init__(self, *, status_code=200, chunks=(b"hello\n",)):
+    def __init__(self, *, status_code=200, chunks=(b"hello\n",), headers=None, body=None):
         self.status_code = status_code
         self._chunks = list(chunks)
         self.closed = False
+        self.headers = headers or {}
+        self._body = body if body is not None else {}
 
     def iter_content(self, chunk_size=65536):  # noqa: ARG002
         yield from self._chunks
@@ -115,6 +117,9 @@ class _Resp:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"http {self.status_code}")
+
+    def json(self):
+        return self._body
 
     def close(self):
         self.closed = True
@@ -143,11 +148,44 @@ def test_fetch_job_log_ok(monkeypatch):
 
 def test_fetch_job_log_403_names_actions_read_exactly(monkeypatch):
     _patch_auth(monkeypatch)
-    monkeypatch.setattr(ci_log.requests, "get", lambda *a, **k: _Resp(status_code=403))
+    resp = _Resp(status_code=403, body={"message": "Resource not accessible by integration"})
+    monkeypatch.setattr(ci_log.requests, "get", lambda *a, **k: resp)
     text, receipt = ci_log.fetch_job_log("x/y", 123)
     assert text is None
     assert receipt["missing_permission"] == "actions:read"
     assert receipt["status"] == "could-not-run"
+
+
+def test_fetch_job_log_403_rate_limited_is_not_named_a_permission(monkeypatch):
+    _patch_auth(monkeypatch)
+    resp = _Resp(status_code=403, headers={"X-RateLimit-Remaining": "0"},
+                 body={"message": "API rate limit exceeded"})
+    monkeypatch.setattr(ci_log.requests, "get", lambda *a, **k: resp)
+    text, receipt = ci_log.fetch_job_log("x/y", 123)
+    assert text is None
+    assert receipt["status"] == "rate_limited"
+    assert "missing_permission" not in receipt
+
+
+def test_fetch_job_log_403_retry_after_is_not_named_a_permission(monkeypatch):
+    _patch_auth(monkeypatch)
+    resp = _Resp(status_code=403, headers={"Retry-After": "30"}, body={"message": "secondary rate limit"})
+    monkeypatch.setattr(ci_log.requests, "get", lambda *a, **k: resp)
+    text, receipt = ci_log.fetch_job_log("x/y", 123)
+    assert text is None
+    assert receipt["status"] == "rate_limited"
+    assert "missing_permission" not in receipt
+
+
+def test_fetch_job_log_403_unknown_message_is_forbidden_unknown(monkeypatch):
+    _patch_auth(monkeypatch)
+    resp = _Resp(status_code=403, body={"message": "SAML enforcement required"})
+    monkeypatch.setattr(ci_log.requests, "get", lambda *a, **k: resp)
+    text, receipt = ci_log.fetch_job_log("x/y", 123)
+    assert text is None
+    assert "missing_permission" not in receipt
+    assert receipt["forbidden_unknown"] is True
+    assert "SAML enforcement required" in receipt["detail"]
 
 
 def test_fetch_job_log_404(monkeypatch):
@@ -175,3 +213,34 @@ def test_fetch_job_log_caps_at_max_bytes(monkeypatch):
     text, receipt = ci_log.fetch_job_log("x/y", 123)
     assert len(text.encode("utf-8")) <= ci_log.MAX_LOG_BYTES
     assert receipt["truncated"] is True
+
+
+def test_fetch_job_log_cap_keeps_the_tail_not_the_head(monkeypatch):
+    _patch_auth(monkeypatch)
+    # Three chunks bigger than the cap combined; only the LAST chunk's
+    # content (the pytest-summary-shaped needle) should survive.
+    noise = b"n" * (ci_log.MAX_LOG_BYTES)
+    needle = b"FAILURES: the actual pytest summary\n"
+    resp = _Resp(chunks=(noise, noise, needle))
+    monkeypatch.setattr(ci_log.requests, "get", lambda *a, **k: resp)
+    text, receipt = ci_log.fetch_job_log("x/y", 123)
+    assert receipt["truncated"] is True
+    assert text.endswith("FAILURES: the actual pytest summary\n")
+    assert text.count("n") < len(noise)  # the head noise was dropped, not kept whole
+
+
+def test_classify_403_rate_limit_header_wins_over_message():
+    resp = _Resp(status_code=403, headers={"X-RateLimit-Remaining": "0"},
+                 body={"message": "Resource not accessible by integration"})
+    assert ci_log.classify_403(resp)["kind"] == "rate_limited"
+
+
+def test_classify_403_known_message_names_the_permission():
+    resp = _Resp(status_code=403, body={"message": "Resource not accessible by integration"})
+    assert ci_log.classify_403(resp) == {"kind": "missing_permission",
+                                         "message": "Resource not accessible by integration"}
+
+
+def test_classify_403_unknown_message_is_forbidden_unknown():
+    resp = _Resp(status_code=403, body={"message": "something new"})
+    assert ci_log.classify_403(resp) == {"kind": "forbidden_unknown", "message": "something new"}

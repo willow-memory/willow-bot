@@ -23,6 +23,23 @@ a ruff ``file:line:col`` block, then a generic ``##[error]`` window —
 the same three rules willow-mcp's ``pr_checks_read`` uses. Nothing
 matching falls back to the log's own tail, named ``tail`` so a reader
 can tell "extracted" from "gave up and showed the end".
+
+The byte cap keeps the TAIL of the log, not the head (Loki's audit,
+finding 3 — the old head-kept cap handed a >5 MB log's mid-log noise to
+the extractor labelled ``source: "tail"`` while the real pytest
+``FAILURES`` block, which sits at the end of the log, was already gone).
+``fetch_job_log`` streams into a bounded buffer and drops from the FRONT
+whenever it grows past ``MAX_LOG_BYTES``, so what survives is always the
+log's own last ``MAX_LOG_BYTES`` bytes.
+
+A 403 is never guessed into a permission name from the status code
+alone: ``classify_403`` reads ``X-RateLimit-Remaining`` / ``Retry-After``
+first (a rate limit is a pause, not a missing permission) and otherwise
+the response body's own ``message`` — only GitHub's own wording for "you
+can't do this" (``Resource not accessible by integration`` / ``Not
+Found`` for a repo the App is not installed on) is reported as a named
+permission; anything else is ``forbidden_unknown`` with the message
+quoted, never invented.
 """
 from __future__ import annotations
 
@@ -115,14 +132,55 @@ def extract_failure_block(log_text: str) -> dict[str, Any]:
     return {"block": "\n".join(tail_lines), "trimmed": len(stripped.splitlines()) > TRIM_LINES, "source": "tail"}
 
 
+# GitHub's own wording for "the App cannot do this" — the ONLY body
+# messages a 403 is ever mapped to a named permission from. Anything else
+# (a rate limit, SAML enforcement, something new) is reported honestly as
+# `forbidden_unknown` rather than guessed into a permission that may not
+# be the actual problem.
+_KNOWN_PERMISSION_MESSAGES = frozenset({
+    "Resource not accessible by integration",
+    "Not Found",
+})
+
+
+def classify_403(resp: Any) -> dict[str, Any]:
+    """Distinguish a rate limit from a real permission denial on a 403,
+    and never invent a permission name from the status code alone.
+
+    Checked in order: (1) ``X-RateLimit-Remaining: 0`` or a ``Retry-After``
+    header — a limiter, not a permission problem, so this is
+    ``{"kind": "rate_limited", ...}`` and the caller should retry later;
+    (2) the response body's own ``message`` — only GitHub's own exact
+    wording for "you can't do this" (`_KNOWN_PERMISSION_MESSAGES`) maps to
+    ``{"kind": "missing_permission"}``; (3) anything else is
+    ``{"kind": "forbidden_unknown", "message": ...}`` — the message is
+    quoted, not interpreted, so a reader can judge for themselves.
+    """
+    headers = getattr(resp, "headers", None) or {}
+    remaining = headers.get("X-RateLimit-Remaining")
+    retry_after = headers.get("Retry-After")
+    if remaining == "0" or retry_after is not None:
+        return {"kind": "rate_limited", "retry_after": retry_after}
+    message = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            message = str(body.get("message") or "")
+    except Exception:  # noqa: BLE001 — an unparsable body is just an empty message
+        message = ""
+    if message in _KNOWN_PERMISSION_MESSAGES:
+        return {"kind": "missing_permission", "message": message}
+    return {"kind": "forbidden_unknown", "message": message or "403 with no message"}
+
+
 def fetch_job_log(repo: str, job_id: object) -> tuple[str | None, dict[str, Any]]:
     """The job's plain-text log, or ``(None, receipt)`` on any failure.
 
-    Three receipted outcomes beyond ``ok``: ``missing_permission`` ==
-    ``"actions:read"`` on a 403 (the one permission this endpoint can
-    need — never guessed from response text, always this exact call
-    site's own requirement); a 404 (job or log gone); anything else as
-    ``detail``. Never raises.
+    Receipted outcomes beyond ``ok``: ``missing_permission`` ==
+    ``"actions:read"`` on a 403 whose body names it exactly
+    (``classify_403``); ``status: "rate_limited"`` on a 403 that is
+    actually a rate limit (never named as a permission); a 404 (job or
+    log gone); anything else as ``detail``. Never raises.
     """
     receipt: dict[str, Any] = {"repo": repo, "job_id": job_id}
     try:
@@ -140,8 +198,17 @@ def fetch_job_log(repo: str, job_id: object) -> tuple[str | None, dict[str, Any]
         return None, receipt
     try:
         if resp.status_code == 403:
-            receipt.update(status="could-not-run", missing_permission="actions:read",
-                           detail="GitHub 403 fetching job logs — the App installation lacks actions:read")
+            cls = classify_403(resp)
+            if cls["kind"] == "rate_limited":
+                receipt.update(status="rate_limited", detail="GitHub rate limit fetching job logs",
+                               retry_after=cls.get("retry_after"))
+            elif cls["kind"] == "missing_permission":
+                receipt.update(status="could-not-run", missing_permission="actions:read",
+                               detail=f"GitHub 403 ({cls['message']}) fetching job logs — "
+                                      "the App installation lacks actions:read")
+            else:
+                receipt.update(status="could-not-run", forbidden_unknown=True,
+                               detail=f"GitHub 403 fetching job logs: {cls['message']}"[:400])
             return None, receipt
         if resp.status_code == 404:
             receipt.update(status="could-not-run", detail="job log not found (404)")
@@ -151,25 +218,21 @@ def fetch_job_log(repo: str, job_id: object) -> tuple[str | None, dict[str, Any]
         except Exception as exc:  # noqa: BLE001
             receipt.update(status="could-not-run", detail=str(exc)[:400])
             return None, receipt
-        chunks: list[bytes] = []
-        total = 0
+        # Keep the TAIL: a rolling buffer that drops from the FRONT once it
+        # grows past the cap, so what survives is always the log's own last
+        # MAX_LOG_BYTES bytes — the pytest FAILURES / short-summary block a
+        # CI log ends with, not whatever ran first.
+        buf = bytearray()
         truncated = False
         for chunk in resp.iter_content(chunk_size=_CHUNK):
             if not chunk:
                 continue
-            remaining = MAX_LOG_BYTES - total
-            if remaining <= 0:
+            buf.extend(chunk)
+            if len(buf) > MAX_LOG_BYTES:
                 truncated = True
-                break
-            if len(chunk) > remaining:
-                chunks.append(chunk[:remaining])
-                total += remaining
-                truncated = True
-                break
-            chunks.append(chunk)
-            total += len(chunk)
+                del buf[: len(buf) - MAX_LOG_BYTES]
     finally:
         resp.close()
-    text = b"".join(chunks).decode("utf-8", errors="replace")
-    receipt.update(status="ok", bytes=total, truncated=truncated)
+    text = bytes(buf).decode("utf-8", errors="replace")
+    receipt.update(status="ok", bytes=len(buf), truncated=truncated)
     return text, receipt
