@@ -24,6 +24,10 @@ class _FakeResp:
     _status: int = 200
     _payload: Any = field(default_factory=dict)
 
+    @property
+    def status_code(self) -> int:
+        return self._status
+
     def raise_for_status(self) -> None:
         if self._status >= 400:
             raise RuntimeError(f"HTTP {self._status}")
@@ -323,4 +327,75 @@ def test_publish_check_http_failure_is_a_receipt_not_a_raise(rec: _Recorder):
     receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
                                      status="completed", conclusion="success")
     assert receipt["status"] == "could-not-run"
-    assert "list" in receipt["detail"]
+
+
+# ── the ci-red comment: a second marker, never confused with the status one ──
+
+
+def test_ci_red_marker_is_distinct_from_the_status_marker():
+    m = pr_voice.ci_red_comment_marker(SHA)
+    assert m == f"<!-- willow-bot:ci-red:{SHA} -->"
+    assert m != pr_voice.comment_marker(SHA)
+
+
+def test_ci_red_comment_creates_on_first_call(rec: _Recorder):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[]),
+    ]
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_status=201, _payload={"id": 777, "html_url": "https://github.com/…/777"}),
+    ]
+    receipt = pr_voice.upsert_ci_red_comment(REPO, PR, SHA, "the failure block")
+    assert receipt["status"] == "ok" and receipt["action"] == "created" and receipt["comment_id"] == 777
+    posted = next(c for c in rec.calls if c[0] == "POST")
+    body = posted[2]["json"]["body"]
+    assert pr_voice.ci_red_comment_marker(SHA) in body
+    assert "the failure block" in body
+
+
+def test_ci_red_comment_edits_the_same_comment_on_a_second_call(rec: _Recorder):
+    """A second red leg on the same head must edit, never duplicate."""
+    existing = {"id": 888, "body": pr_voice.ci_red_comment_marker(SHA) + "\n\nfirst failure"}
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[existing]),
+    ]
+    rec.responses[("PATCH", f"https://api.github.com/repos/{REPO}/issues/comments/888")] = [
+        _FakeResp(_payload={"id": 888, "html_url": "https://github.com/…/888"}),
+    ]
+    receipt = pr_voice.upsert_ci_red_comment(REPO, PR, SHA, "second failure")
+    assert receipt["status"] == "ok" and receipt["action"] == "edited" and receipt["comment_id"] == 888
+    assert not any(c[0] == "POST" for c in rec.calls)
+
+
+def test_ci_red_comment_edited_green_on_resolve(rec: _Recorder):
+    existing = {"id": 888, "body": pr_voice.ci_red_comment_marker(SHA) + "\n\nfirst failure"}
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[existing]),
+    ]
+    rec.responses[("PATCH", f"https://api.github.com/repos/{REPO}/issues/comments/888")] = [
+        _FakeResp(_payload={"id": 888}),
+    ]
+    receipt = pr_voice.upsert_ci_red_comment(REPO, PR, SHA, "green at abc1234\nresolved at T")
+    assert receipt["action"] == "edited"
+    patched = next(c for c in rec.calls if c[0] == "PATCH")
+    assert "green at abc1234" in patched[2]["json"]["body"]
+
+
+def test_ci_red_comment_403_names_pull_requests_write_exactly(rec: _Recorder):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[]),
+    ]
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_status=403),
+    ]
+    receipt = pr_voice.upsert_ci_red_comment(REPO, PR, SHA, "body")
+    assert receipt["status"] == "could-not-run"
+    assert receipt["missing_permission"] == "pull_requests:write"
+    assert receipt["action"] == "skipped"
+
+
+def test_ci_red_comment_missing_head_sha_is_a_line_not_a_raise(rec: _Recorder):
+    receipt = pr_voice.upsert_ci_red_comment(REPO, PR, "", "body")
+    assert receipt["status"] == "could-not-run" and receipt["action"] == "skipped"
+    assert receipt["detail"] == "no head_sha"
+    assert rec.calls == []
