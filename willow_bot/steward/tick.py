@@ -246,10 +246,10 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     pending = list(state.get("pending_audit") or [])
     receipt["pending"] = len(pending)
     if not enable_mcp:
-        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no dispatch")
+        receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no dispatch", **_Pacer.idle())
         return _emit(receipt)
     if not pending:
-        receipt.update(status="ok", dispatched=[], refused=[])
+        receipt.update(status="ok", dispatched=[], refused=[], remaining=0, **_Pacer.idle())
         return _emit(receipt)
 
     from willow_bot.steward import mcp_client
@@ -284,6 +284,12 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
         if envelope_id:
             args["envelope_id"] = envelope_id
         result, err = pace.call(mcp_client.call, "dispatch_send", args)
+        if err and pace.budget_spent:
+            # A pause, not a refusal: the PR stays pending untouched and the
+            # step says where it stopped (Loki 095AF9DB).
+            receipt["stopped"] = {"at": key, "reason": err}
+            still.append(item)
+            continue
         if err and err.startswith("EAMBIG") and not envelope_id:
             # First refusal of the lifetime: the tool named the options.
             picked = _auditor_envelope_from(result.get("envelopes") if isinstance(result, dict) else None)
@@ -294,6 +300,10 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
                 envelope_id = picked
                 resolved_this_tick = True
                 result, err = pace.call(mcp_client.call, "dispatch_send", {**args, "envelope_id": envelope_id})
+                if err and pace.budget_spent:
+                    receipt["stopped"] = {"at": key, "reason": err}
+                    still.append(item)
+                    continue  # the id was listed, not refused; it is kept
                 if err:
                     # The id the tool itself just listed was refused when
                     # named — same rule as below: a refused assertion is
@@ -363,7 +373,8 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     receipt: dict = {"event": "steward_mirror", "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     src = deposits_jsonl()
     if not src.is_file():
-        receipt.update(status="ok", present=False, mirrored=0, detail=f"no deposits file at {src}")
+        receipt.update(status="ok", present=False, mirrored=0, detail=f"no deposits file at {src}",
+                       **_Pacer.idle())
         return _emit(receipt)
     off_path = _mirror_offset_path()
     offset = int(off_path.read_text().strip() or 0) if off_path.is_file() else 0
@@ -373,7 +384,7 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     receipt.update(present=True, offset=offset, size=size)
     if not enable_mcp:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — no store_put",
-                       behind=size - offset)
+                       behind=size - offset, **_Pacer.idle())
         return _emit(receipt)
 
     from willow_bot.steward import mcp_client
@@ -481,6 +492,13 @@ class _Pacer:
 
     def receipt(self) -> dict:
         return {"paced": self.paced, "budget_spent": self.budget_spent, "calls": self.calls}
+
+    @staticmethod
+    def idle() -> dict:
+        """The same three fields for a step that returned before it could
+        pace anything (MCP off, nothing to do): declared zeros, so a
+        reader never has to treat an absent field as 'did not pace'."""
+        return {"paced": 0, "budget_spent": False, "calls": 0}
 
 
 # ── the ci step: a red check reaches a seat ─────────────────────────────────
@@ -683,6 +701,10 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
     for item in items.values():
         if not item.get("resolved"):
             keep.setdefault(_ci_pr_key(item["repo"], item["pr"], item["head_sha"]), set()).add(item["head_sha"])
+            if not item["pr"] and item.get("branch"):
+                # A stuck PR-less item resolves when a later head lands on
+                # its branch — which needs its own head kept in the group.
+                keep.setdefault(_ci_branch_key(item["repo"], item["branch"]), set()).add(item["head_sha"])
     for leg in cancelled_pending.values():
         keep.setdefault(_ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"]), set()).add(leg["head_sha"])
         if not leg["pr"] and leg.get("head_branch"):
@@ -714,6 +736,20 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
 
 def _ci_head_key_from_pr(pr_key: str, head_sha: str) -> str:
     return f"{pr_key}@{head_sha}"
+
+
+def _item_is_stuck_only(item: dict, filed: dict, filed_cancelled: dict) -> bool:
+    """True when every leg this item ever filed was a cancellation. Items
+    this build files say so (``stuck: True``); items from the build before
+    carry no flag, so the answer is read from the two filed maps the way
+    voice reads them — the id appears under ``ci_filed_cancelled`` and
+    never under ``ci_filed``."""
+    if "stuck" in item:
+        return bool(item["stuck"])
+    item_id = item.get("id")
+    if not item_id:
+        return False
+    return item_id in filed_cancelled.values() and item_id not in filed.values()
 
 
 def _leg_of(rec: dict) -> dict:
@@ -794,7 +830,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     src = deposits_jsonl()
     if not src.is_file():
         receipt.update(status="ok", present=False, red=[], cancelled=[], filed=[], resolved=[],
-                       detail=f"no deposits file at {src}")
+                       detail=f"no deposits file at {src}", remaining=0, **_Pacer.idle())
         return _emit(receipt)
     off_path = _ci_offset_path()
     size = src.stat().st_size
@@ -877,11 +913,14 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     receipt["red"] = [_public(r) for r in red]
 
     grace_s = _ci_grace_s()
-    # Closure evidence: the inbox's durable `pr_closed` record, plus what
-    # the host sync already brought home as merged.
+    # Closure evidence: the inbox's durable `pr_closed` record (which knows
+    # merged from closed-without-merge), plus what the host sync brought
+    # home — `merged_synced` holds closed-not-merged PRs too (merge.py's
+    # pr_closed_not_merged), so a key known only from there is `closed`,
+    # not `merged` (Loki 095AF9DB).
     closed = {k: v for k, v in (state.get("pr_closed") or {}).items() if isinstance(v, dict)}
     for key in state.get("merged_synced") or []:
-        closed.setdefault(key, {"merged": True})
+        closed.setdefault(key, {"merged": None})
     decided = _decide_cancelled(cancelled_pending, heads, now=now, grace_s=grace_s, head_legs=head_legs,
                                 closed=closed)
     receipt["cancelled"] = [
@@ -908,6 +947,13 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # recorded has reported green (the item's leg set is the only expected
     # set the bot knows), or the SAME head re-run to green (every leg name
     # it ever recorded now reads green). Never on a single early green leg.
+    #
+    # A STUCK-ONLY item (every leg it filed was a cancellation — nothing
+    # failed, nothing finished) has two more honest routes, the same two
+    # that make a pending cancelled leg moot or superseded (Loki 095AF9DB:
+    # an item filed as stuck at tick N stayed open when the PR merged at
+    # tick N+1, and no green head ever comes for a cancelled run): the PR
+    # closed, or — for a PR-less head — a later head landed on its branch.
     to_resolve: list[tuple[str, dict, str, str]] = []
     for item_key, item in items.items():
         if item.get("resolved"):
@@ -920,12 +966,28 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             to_resolve.append((item_key, item, item["head_sha"], "re-run"))
             continue
         mine = (heads.get(pr_key) or {}).get(item["head_sha"])
+        found = False
         for sha, at in (heads.get(pr_key) or {}).items():
             if sha == item["head_sha"] or at is None or mine is None or at <= mine:
                 continue
             if _head_is_green(head_legs.get(_ci_head_key(item["repo"], item["pr"], sha)) or {}, expected):
                 to_resolve.append((item_key, item, sha, "superseded"))
+                found = True
                 break
+        if found or not _item_is_stuck_only(item, filed_before, filed_cancelled_before):
+            continue
+        if item["pr"] and pr_key in closed:
+            how = "closed-merged" if closed[pr_key].get("merged") else "closed"
+            to_resolve.append((item_key, item, item["head_sha"], how))
+            continue
+        if not item["pr"] and item.get("branch"):
+            on_branch = heads.get(_ci_branch_key(item["repo"], item["branch"])) or {}
+            mine_b = on_branch.get(item["head_sha"])
+            later = [s for s, at in on_branch.items()
+                     if s != item["head_sha"] and at is not None and mine_b is not None and at > mine_b]
+            if later:
+                to_resolve.append((item_key, item, sorted(later, key=lambda s: on_branch[s])[-1],
+                                   "superseded-on-branch"))
 
     def _persist() -> None:
         pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending)
@@ -955,7 +1017,8 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         receipt.update(status="absent", detail="WILLOW_BOT_MCP not enabled — reds reported, not filed",
                        filed=[], appended=[], resolved=[], refused=[], skipped=skipped, new_offset=offset,
                        would_resolve=[{"where": k, "superseded_by": sha, "how": how}
-                                      for k, _, sha, how in to_resolve])
+                                      for k, _, sha, how in to_resolve],
+                       remaining=len(groups), **_Pacer.idle())
         return _emit(receipt)
 
     from willow_bot.steward import mcp_client
@@ -975,6 +1038,8 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                 names = existing.setdefault("legs", [])
                 if lg["check"] not in names:  # a re-run under a new check_run_id is the same leg
                     names.append(lg["check"])
+                if lg["conclusion"] != _CI_CANCELLED:
+                    existing["stuck"] = False  # a red joined: no longer a stuck-only item
                 appended.append({"where": where, "check": lg["check"], "conclusion": lg["conclusion"],
                                  "id": existing["id"]})
             continue
@@ -985,7 +1050,13 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         # ended here `could-not-run` on a real red.
         result, err = pace.call(mcp_client.call, "human_required_enqueue", args)
         if err:
-            refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": err})
+            # A budget stop is a pause, not a refusal (Loki 095AF9DB): the
+            # step stops here and says so under `stopped`; `refused` holds
+            # only what the tool actually refused.
+            if pace.budget_spent:
+                receipt["stopped"] = {"at": where, "reason": err}
+            else:
+                refused.append({"where": where, "legs": [lg["check"] for lg in legs], "error": err})
             break
         item_id = (result.get("id") if isinstance(result, dict) else None) or "filed"
         names: list[str] = []
@@ -994,18 +1065,30 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             if lg["check"] not in names:
                 names.append(lg["check"])
         items[head_key] = {"id": item_id, "repo": first["repo"], "pr": first["pr"],
-                           "head_sha": first["head_sha"], "legs": names, "filed_at": receipt["at"]}
+                           "head_sha": first["head_sha"], "legs": names, "filed_at": receipt["at"],
+                           "stuck": all(lg["conclusion"] == _CI_CANCELLED for lg in legs),
+                           "branch": first["head_branch"]}
         filed.append({"where": where, "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
                       "conclusions": [lg["conclusion"] for lg in legs], "id": item_id})
 
     resolved, resolve_refused = [], []
     for item_key, item, sha, how in to_resolve:
-        note = (f"re-run green at {receipt['at']}" if how == "re-run"
-                else f"superseded by {sha}, green at {receipt['at']}")
+        if pace.budget_spent:
+            break  # the rest resolve next tick; the candidates are recomputed from state
+        note = {
+            "re-run": f"re-run green at {receipt['at']}",
+            "superseded": f"superseded by {sha}, green at {receipt['at']}",
+            "closed-merged": f"moot: PR merged; stuck cancelled run at {receipt['at']}",
+            "closed": f"moot: PR closed; stuck cancelled run at {receipt['at']}",
+            "superseded-on-branch": f"superseded by {sha} on the same branch; stuck cancelled run at {receipt['at']}",
+        }[how]
         result, err = pace.call(mcp_client.call, "human_required_resolve", {
             "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
         })
         if err:
+            if pace.budget_spent:
+                receipt.setdefault("stopped", {"at": item_key, "reason": err})
+                break
             # A refused resolve is a line; the item stays open and is retried.
             resolve_refused.append({"where": item_key, "item_id": item["id"], "error": err})
             continue
@@ -1017,15 +1100,16 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # enqueue-then-persist window — a crash between the two double-files
     # one head — is the same window the leg-per-item build had; not widened.)
     _persist()
-    if not refused:
+    held = bool(refused) or pace.budget_spent
+    if not held:
         off_path.parent.mkdir(parents=True, exist_ok=True)
         off_path.write_text(f"{offset}\n", encoding="utf-8")
     if resolve_refused:
         receipt["resolve_refused"] = resolve_refused
-    status = "ok" if not refused else ("paced" if pace.budget_spent else "could-not-run")
+    status = "could-not-run" if refused else ("paced" if pace.budget_spent else "ok")
     receipt.update(status=status, filed=filed, appended=appended,
                    resolved=resolved, refused=refused, skipped=skipped,
-                   new_offset=offset if not refused else receipt["offset"],
+                   new_offset=receipt["offset"] if held else offset,
                    remaining=to_file - len(filed), **pace.receipt())
     return _emit(receipt)
 

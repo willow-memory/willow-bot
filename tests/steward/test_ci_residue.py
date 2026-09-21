@@ -210,18 +210,6 @@ def test_cancelled_legs_on_a_pr_closed_without_merge_are_moot(home, monkeypatch)
     assert c.named("human_required_enqueue") == []
 
 
-def test_merged_synced_counts_as_closed_too(home, monkeypatch):
-    _prime()
-    c = _Client()
-    _use(monkeypatch, c)
-    deposits.append_local(_row(MCP, PRSHA, 30, "lint", "cancelled", pr=584))
-    state = json.loads(state_path().read_text())
-    state["merged_synced"] = [f"{MCP}#584"]
-    state_path().write_text(json.dumps(state) + "\n")
-    r = tick.run_ci()
-    assert [(x["state"], x["closed"]) for x in r["cancelled"]] == [("moot", "merged")]
-
-
 def test_a_red_leg_on_a_closed_pr_is_still_a_red(home, monkeypatch):
     """Moot is a cancelled-leg state only: a failure is a failure."""
     _prime()
@@ -365,7 +353,9 @@ def test_ci_stops_paced_at_its_own_budget_and_resumes(home, monkeypatch):
     r = tick.run_ci()
     assert r["status"] == "paced" and r["budget_spent"] is True
     assert 1 <= len(r["filed"]) < 3 and r["remaining"] == 3 - len(r["filed"])
-    assert r["refused"][0]["error"].startswith("rate_limited (paced")
+    # A pause is not a refusal (Loki 095AF9DB): status and `refused` agree.
+    assert r["refused"] == []
+    assert r["stopped"]["reason"].startswith("rate_limited (paced") and r["stopped"]["at"].startswith(MCP)
     assert r["new_offset"] == r["offset"]
     monkeypatch.setattr(tick, "_CI_TIME_BUDGET_S", 60.0)
     r2 = tick.run_ci()
@@ -402,8 +392,10 @@ def test_audit_budget_spent_leaves_the_rest_pending(home, monkeypatch):
     assert r["status"] == "paced" and r["budget_spent"] is True
     assert 1 <= len(r["dispatched"]) < 4
     assert r["remaining"] == 4 - len(r["dispatched"])
+    assert r["refused"] == [] and r["stopped"]["at"].startswith("x/y#")
     saved = json.loads(state_path().read_text())
     assert len(saved["pending_audit"]) == r["remaining"]
+    assert all("last_error" not in p for p in saved["pending_audit"])  # paused, not refused
     assert saved[tick._AUDIT_ENVELOPE_STATE_KEY] == "env-1"  # a limiter answer is not a refused id
 
 
@@ -423,6 +415,9 @@ def test_mirror_is_capped_in_calls_so_later_steps_keep_their_share(home, monkeyp
     assert r2["mirrored"] == 4 and r2["new_offset"] > r["new_offset"]
 
 
+THREE = {"paced", "budget_spent", "calls"}
+
+
 def test_every_paced_step_receipt_carries_the_three_fields(home, monkeypatch):
     _fake_time(monkeypatch)
     _use(monkeypatch, _Client())
@@ -430,6 +425,138 @@ def test_every_paced_step_receipt_carries_the_three_fields(home, monkeypatch):
     state_path().write_text(json.dumps({"pending_audit": [], "audit_dispatched": {}}) + "\n")
     deposits.append_local(_row(MCP, "a" * 40, 1, "test", "success", pr=1))
     for r in (tick.run_mirror(), tick.run_ci(), tick.run_audit()):
-        if r["status"] == "ok" and "dispatched" in r and not r["dispatched"]:
-            continue  # an empty audit returns before it paces anything
-        assert {"paced", "budget_spent"} <= set(r), r["event"]
+        assert THREE <= set(r), r["event"]
+    # The empty audit declared zeros rather than omitting the fields.
+    r = tick.run_audit()
+    assert r["dispatched"] == [] and (r["paced"], r["budget_spent"], r["calls"]) == (0, False, 0)
+
+
+def test_early_return_receipts_declare_the_three_fields_too(home, monkeypatch):
+    """Loki 095AF9DB: MCP-off and nothing-to-do returns used to omit them,
+    leaving a heartbeat reader to guess that absent meant 'did not pace'."""
+    _use(monkeypatch, _Client(result=lambda *a: (_ for _ in ()).throw(AssertionError("no calls"))))
+    # no deposits file at all
+    for r in (tick.run_mirror(), tick.run_ci()):
+        assert r["present"] is False and THREE <= set(r) and r["calls"] == 0, r["event"]
+    # MCP off, file present
+    monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
+    deposits.append_local(_row(MCP, "b" * 40, 2, "test", "failure", pr=2))
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps({"pending_audit": [{"repo_pr": "x/y#1", "title": "t", "url": "u"}],
+                                        "audit_dispatched": {}}) + "\n")
+    for r in (tick.run_mirror(), tick.run_ci(), tick.run_audit()):
+        assert r["status"] == "absent" and THREE <= set(r) and r["calls"] == 0, r["event"]
+
+
+# ── stuck-only items resolve when the PR closes or a successor lands ─────────
+
+def test_a_filed_stuck_item_resolves_when_the_pr_closes(home, monkeypatch):
+    """Loki 095AF9DB medium: filed as stuck at tick N, PR merged at N+1 —
+    the item used to stay open forever (no green head ever comes for a
+    cancelled run)."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 10, "title", "cancelled", pr=583))
+    tick.run_ci()
+    monkeypatch.setattr(tick, "_ci_clock", _later(11))
+    r = tick.run_ci()
+    (filed,) = r["filed"]
+    assert filed["conclusions"] == ["cancelled"]
+    assert json.loads(state_path().read_text())["ci_items"][f"{MCP}#583@{PRSHA}"]["stuck"] is True
+    _close(f"{MCP}#583", merged=True)
+    r2 = tick.run_ci()
+    assert r2["resolved"] == [{"where": f"{MCP}#583@{PRSHA}", "item_id": filed["id"],
+                               "superseded_by": PRSHA, "how": "closed-merged"}]
+    (res,) = c.named("human_required_resolve")
+    assert res["item_id"] == filed["id"] and res["note"].startswith("moot: PR merged; stuck cancelled run")
+    assert tick.run_ci()["resolved"] == []
+
+
+def test_a_filed_stuck_item_resolves_when_the_pr_closes_without_merge(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row("Die-Namic-Systems/Nestor", PRSHA, 11, "test", "cancelled", pr=302))
+    tick.run_ci()
+    monkeypatch.setattr(tick, "_ci_clock", _later(11))
+    tick.run_ci()
+    _close("Die-Namic-Systems/Nestor#302", merged=False)
+    r = tick.run_ci()
+    assert [x["how"] for x in r["resolved"]] == ["closed"]
+    assert c.named("human_required_resolve")[0]["note"].startswith("moot: PR closed;")
+
+
+def test_a_filed_stuck_prless_item_resolves_when_a_later_head_lands_on_its_branch(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    base = time.time()
+    deposits.append_local(_row(MCP, REL, 12, "test", "cancelled", branch="master", received_at=_iso(base)))
+    tick.run_ci()
+    monkeypatch.setattr(tick, "_ci_clock", lambda: base + 11 * 60)
+    r = tick.run_ci()
+    assert [x["state"] for x in r["cancelled"]] == ["stuck"] and len(r["filed"]) == 1
+    item = json.loads(state_path().read_text())["ci_items"][f"{MCP}@{REL[:12]}@{REL}"]
+    assert item["stuck"] is True and item["branch"] == "master"
+    deposits.append_local(_row(MCP, REL2, 13, "test", "success", branch="master", received_at=_iso(base + 12 * 60)))
+    r2 = tick.run_ci()
+    assert r2["resolved"] == [{"where": f"{MCP}@{REL[:12]}@{REL}", "item_id": r["filed"][0]["id"],
+                               "superseded_by": REL2, "how": "superseded-on-branch"}]
+    assert "on the same branch" in c.named("human_required_resolve")[0]["note"]
+
+
+def test_a_stuck_item_from_the_previous_build_is_recognised_by_the_filed_maps(home, monkeypatch):
+    """The three 23:46Z filings carry no `stuck` flag: their id sits in
+    ci_filed_cancelled and never in ci_filed."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    state = json.loads(state_path().read_text())
+    state["ci_items"] = {f"{MCP}#583@{PRSHA}": {"id": "hr-old", "repo": MCP, "pr": 583, "head_sha": PRSHA,
+                                                 "legs": ["title"], "filed_at": "2026-09-20T23:46:00Z"}}
+    state["ci_filed_cancelled"] = {f"{PRSHA}:1": "hr-old"}
+    state["ci_filed"] = {}
+    state["pr_closed"] = {f"{MCP}#583": {"at": "2026-09-21T00:00:00+00:00", "merged": True}}
+    state_path().write_text(json.dumps(state) + "\n")
+    r = tick.run_ci()
+    assert [(x["item_id"], x["how"]) for x in r["resolved"]] == [("hr-old", "closed-merged")]
+
+
+def test_a_red_item_on_a_closed_pr_does_not_resolve_by_closure(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 14, "test", "failure", pr=590))
+    tick.run_ci()
+    _close(f"{MCP}#590", merged=True)
+    r = tick.run_ci()
+    assert r["resolved"] == [] and c.named("human_required_resolve") == []
+
+
+def test_a_red_joining_a_stuck_item_makes_it_no_longer_stuck_only(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 15, "lint", "cancelled", pr=591))
+    tick.run_ci()
+    monkeypatch.setattr(tick, "_ci_clock", _later(11))
+    tick.run_ci()
+    deposits.append_local(_row(MCP, PRSHA, 16, "test", "failure", pr=591))
+    tick.run_ci()
+    assert json.loads(state_path().read_text())["ci_items"][f"{MCP}#591@{PRSHA}"]["stuck"] is False
+    _close(f"{MCP}#591", merged=True)
+    assert tick.run_ci()["resolved"] == []
+
+
+def test_merged_synced_alone_reads_as_closed_not_merged(home, monkeypatch):
+    """merge.py adds closed-not-merged PRs to merged_synced too; the word
+    must not claim more than the record knows (Loki 095AF9DB low)."""
+    _prime()
+    _use(monkeypatch, _Client())
+    deposits.append_local(_row(MCP, PRSHA, 30, "lint", "cancelled", pr=584))
+    state = json.loads(state_path().read_text())
+    state["merged_synced"] = [f"{MCP}#584"]
+    state_path().write_text(json.dumps(state) + "\n")
+    r = tick.run_ci()
+    assert [(x["state"], x["closed"]) for x in r["cancelled"]] == [("moot", "closed")]
