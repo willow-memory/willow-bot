@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.0](https://github.com/willow-memory/willow-bot/compare/v0.4.1...v0.5.0) (2026-09-21)
+
+
+### Added
+
+* **deposits:** annul rows — the honest correction of the chained file ([071aa75](https://github.com/willow-memory/willow-bot/commit/071aa75446238407b763c0b06fc703c3f8202161))
+* **steward:** CI red on a fleet-opened PR is posted to the opening seat and commented on the PR; annul rows void ledger entries without rewriting; tests never touch the live home ([6628ccf](https://github.com/willow-memory/willow-bot/commit/6628ccfb2e91d5f733ef21ab0b43350987c28a37))
+* **steward:** tell the seat that opened the PR when its CI goes red ([6b0ec29](https://github.com/willow-memory/willow-bot/commit/6b0ec29ecaa3bac9b19d0ac47740bc9290c9f1c4))
+
+
+### Fixed
+
+* **steward:** scoped annul matchers; a resolved line owed to a seat survives the prune ([4c2ee88](https://github.com/willow-memory/willow-bot/commit/4c2ee8884e5ad18852d3156d0e3411cb6f89c5e8))
+
 ## [0.4.1](https://github.com/willow-memory/willow-bot/compare/v0.4.0...v0.4.1) (2026-09-21)
 
 
