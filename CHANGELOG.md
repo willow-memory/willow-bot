@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.0](https://github.com/willow-memory/willow-bot/compare/v0.3.0...v0.4.0) (2026-09-21)
+
+
+### Added
+
+* **steward:** net_authority_drain on the tick beside seal_drain; audit dispatch names the auditor envelope ([c206379](https://github.com/willow-memory/willow-bot/commit/c206379d5432434f713dfe72810fbd1aebbe1dd7))
+* **steward:** tick calls net_authority_drain beside seal_drain; audit dispatch resolves the auditor envelope ([c4deab5](https://github.com/willow-memory/willow-bot/commit/c4deab5de7e395e58e6873f2cd6776bddaf6ecfe))
+
+
+### Fixed
+
+* **steward:** a remembered audit envelope that refuses is forgotten whatever the errno; halves carry their own state ([75d87ee](https://github.com/willow-memory/willow-bot/commit/75d87ee618980381adda58380bdcc60e7f00ac7b))
+
 ## [0.3.0](https://github.com/willow-memory/willow-bot/compare/v0.2.0...v0.3.0) (2026-09-20)
 
 
