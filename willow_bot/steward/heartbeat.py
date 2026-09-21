@@ -31,12 +31,24 @@ DEFAULT_CURATED: list[tuple[str, dict[str, Any]]] = [
     ("diagnostic_summary", {}),
     ("seal_drain", {}),
     ("net_authority_drain", {}),
+    # envelope_retire_sweep (sealed decision 83faa340; gap 4c7512c57a7e):
+    # revokes an active envelope whose bounds named a branch now merged and
+    # gone, or whose max_count FRANK shows spent. Same standing as the two
+    # above: mints no new authority, gate does not depend on it. dry_run
+    # False here — the steward tick IS the unattended sweep the sealed
+    # spec names; the desk calls the tool by hand with the True default to
+    # prove one pass without writing anything.
+    ("envelope_retire_sweep", {"dry_run": False}),
 ]
 
 # Result fields worth carrying into the receipt verbatim (small scalars /
 # short lists), so bot_status can show a tool's three-state without the
 # reader opening the tool's own journal. Everything else stays keys-only.
-_RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after")
+_RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after",
+                   # envelope_retire_sweep's own scalars/lists (small — the
+                   # register held 379 active rows when this was sealed).
+                   "examined", "kept_standing", "retired", "kept_in_force",
+                   "unreachable", "dry_run")
 
 # Nested fields, mirrored as dotted keys. net_authority_drain answers with two
 # halves under one three-state (`tasks` and `leases`, each a receipt or None
