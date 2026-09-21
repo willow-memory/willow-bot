@@ -179,6 +179,41 @@ def _audit_brief(item: dict) -> str:
     )
 
 
+#: The dispatch envelope an audit packet is sent under: the one whose bounds
+#: are exactly `{to_agents: loki, task_class: auditor}`. Remembered in state
+#: under this key once resolved, so the resolution costs one refused call
+#: per steward lifetime, not one per PR per tick.
+_AUDIT_ENVELOPE_STATE_KEY = "audit_envelope_id"
+_AUDIT_TASK_CLASS = "auditor"
+_AUDIT_TO_AGENT = "loki"
+
+
+def _auditor_envelope_from(envelopes: object) -> str | None:
+    """Pick the auditor envelope out of an EAMBIG's `envelopes` list.
+
+    willow-mcp names every active dispatch envelope on refusal, each with
+    its `envelope_id` and `bounds`. The one this step may cite has
+    `task_class == "auditor"` and `to_agents` naming loki — as a bare
+    string or as a member of a list, since both spellings exist in the
+    live registry (measured 2026-09-20: `to_agents: "loki"` on the auditor
+    row, lists elsewhere). Anything else is not ours to pick, whatever its
+    id looks like: never hardcode an envelope id.
+    """
+    if not isinstance(envelopes, list):
+        return None
+    for env in envelopes:
+        if not isinstance(env, dict):
+            continue
+        bounds = env.get("bounds") if isinstance(env.get("bounds"), dict) else {}
+        if bounds.get("task_class") != _AUDIT_TASK_CLASS:
+            continue
+        to = bounds.get("to_agents")
+        agents = [to] if isinstance(to, str) else (to if isinstance(to, list) else [])
+        if _AUDIT_TO_AGENT in agents and isinstance(env.get("envelope_id"), str):
+            return env["envelope_id"]
+    return None
+
+
 def run_audit(*, enable_mcp: bool | None = None) -> dict:
     """Dispatch every pending new PR to Loki as an audit packet.
 
@@ -190,6 +225,18 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     leaves it pending with the reason so the next tick tries again. Capped
     per tick so a cold start does not flood the desk. Honest absence when
     MCP is off.
+
+    The envelope is named, not assumed (gap b26c8232fa9d): with more than
+    one dispatch envelope active for the steward's seat, a bare
+    `dispatch_send` answers `EAMBIG` and lists them — measured 2026-09-20,
+    five of twenty-seven audits refused every tick, forever. On that
+    refusal the step picks the envelope whose bounds are the auditor's,
+    remembers it in state, and retries the same PR under it in the same
+    tick. If the list holds no auditor envelope the PR is refused with
+    `no auditor envelope`, which names the grant that is missing rather
+    than the ambiguity that is not the problem. A remembered id that stops
+    governing (`ENOENT` on a later tick — revoked, or the registry
+    re-issued) is forgotten so the next refusal re-resolves it.
     """
     if enable_mcp is None:
         enable_mcp = mcp_enabled()
@@ -209,21 +256,57 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
     dispatched = dict(state.get("audit_dispatched") or {})
+    envelope_id = state.get(_AUDIT_ENVELOPE_STATE_KEY) or None
+    resolved_this_tick = False
     done, refused, still = [], [], []
     for item in pending[:_AUDIT_PER_TICK]:
         key = item.get("repo_pr", "")
+        args = {
+            "app_id": app,
+            "to_app": _AUDIT_TO_AGENT,
+            "role": _AUDIT_TASK_CLASS,
+            "summary": f"Audit {key}: {item.get('title', '')}"[:200],
+            "assignment_md": _audit_brief(item),
+            "context_refs": [item.get("url", "")],
+            "reply_to": "willow",
+            "phase": "operate",
+            "priority": "normal",
+        }
+        if envelope_id:
+            args["envelope_id"] = envelope_id
         try:
-            result = mcp_client.call("dispatch_send", {
-                "app_id": app,
-                "to_app": "loki",
-                "role": "auditor",
-                "summary": f"Audit {key}: {item.get('title', '')}"[:200],
-                "assignment_md": _audit_brief(item),
-                "context_refs": [item.get("url", "")],
-                "reply_to": "willow",
-                "phase": "operate",
-                "priority": "normal",
-            })
+            result = mcp_client.call("dispatch_send", args)
+            err = _tool_error(result)
+            if err and err.startswith("EAMBIG") and not envelope_id:
+                # First refusal of the lifetime: the tool named the options.
+                picked = _auditor_envelope_from(result.get("envelopes"))
+                if picked is None:
+                    result = {"error": "no auditor envelope: none of the active dispatch "
+                                       "envelopes is bounded to task_class=auditor for loki"}
+                else:
+                    envelope_id = picked
+                    resolved_this_tick = True
+                    result = mcp_client.call("dispatch_send", {**args, "envelope_id": envelope_id})
+                    if _tool_error(result):
+                        # The id the tool itself just listed was refused when
+                        # named — same rule as below: a refused assertion is
+                        # not carried out of the tick, whatever the errno.
+                        envelope_id = None
+                        resolved_this_tick = False
+                        state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
+            elif err and envelope_id:
+                # A refusal while the remembered id was named — ENOENT (it
+                # no longer governs), EAMBIG (its bounds changed under us),
+                # or anything else. The id was this step's own assertion
+                # and the tool just refused it, so the assertion is gone
+                # whatever the errno (Loki 09922563: an EAMBIG here used to
+                # fall through, keep the id, and refuse every PR every tick
+                # forever). Forget it; this PR stays pending with the reason
+                # and the next refusal re-resolves from the tool's own list.
+                # No second call this tick — one honest refusal beats a
+                # guessed retry against a registry that moved.
+                envelope_id = None
+                state.pop(_AUDIT_ENVELOPE_STATE_KEY, None)
         except Exception as exc:  # noqa: BLE001 — a refused dispatch stays pending, with its reason
             item["last_error"] = str(exc)[:300]
             refused.append({"repo_pr": key, "error": item["last_error"]})
@@ -241,8 +324,11 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     still.extend(pending[_AUDIT_PER_TICK:])
     state["pending_audit"] = still
     state["audit_dispatched"] = dispatched
+    if envelope_id:
+        state[_AUDIT_ENVELOPE_STATE_KEY] = envelope_id
     path.write_text(json.dumps(state, indent=2) + "\n")
-    receipt.update(status="ok", dispatched=done, refused=refused, remaining=len(still))
+    receipt.update(status="ok", dispatched=done, refused=refused, remaining=len(still),
+                   envelope_id=envelope_id, envelope_resolved=resolved_this_tick)
     return _emit(receipt)
 
 
