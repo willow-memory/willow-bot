@@ -1055,6 +1055,11 @@ def _ci_red_leg_lines(lg: dict, *, char_budget: int | None = None) -> str:
         if lg.get("log_truncated"):
             mb = ci_log.MAX_LOG_BYTES // (1024 * 1024)
             notes.append(f"log truncated to the last {mb} MB")
+        if lg.get("refetch_failed_detail"):
+            # Loki's re-audit, LIMIT 1: a leg that already had a real
+            # block keeps it when a LATER re-fetch attempt fails — the
+            # note says the re-fetch failed, never that the log is gone.
+            notes.append(f"re-fetch failed: {lg['refetch_failed_detail']}; showing earlier log")
         if char_budget is not None and len(block) > char_budget:
             block = _head_tail_chars(block, char_budget)
             notes.append(f"block capped to {char_budget} chars")
@@ -1064,6 +1069,11 @@ def _ci_red_leg_lines(lg: dict, *, char_budget: int | None = None) -> str:
         return f"_{lg['check']}: log unavailable — missing `{lg['missing_permission']}`_\n"
     if lg.get("rate_limited"):
         return f"_{lg['check']}: log unavailable — rate limited, will retry_\n"
+    if lg.get("refetch_failed_detail"):
+        # No prior block to fall back on: honest this tick, but NOT stored
+        # under `detail` — see `_ci_owed_refetch_stripped` — so the next
+        # tick tries the fetch again instead of never again.
+        return f"_{lg['check']}: log unavailable ({lg['refetch_failed_detail']})_\n"
     return f"_{lg['check']}: log unavailable ({lg.get('detail', 'unknown error')})_\n"
 
 
@@ -1225,25 +1235,67 @@ def _ci_owed_refetch_stripped(entry: dict, *, errors: list | None = None) -> Non
     for a job whose real block the bot had thrown away minutes earlier.
     This runs on every leg in the table, not just this tick's delta, so a
     stripped leg is always given the chance to be whole again before the
-    comment is rebuilt. A re-fetch that itself fails is recorded as an
-    honest `log unavailable: <reason>`, never a silent falsehood."""
+    comment is rebuilt.
+
+    A re-fetch that itself fails is recorded as an honest
+    `log unavailable: <reason>`, never a silent falsehood — and, per
+    Loki's re-audit (LIMIT 1; probe H4), it must not become a PERMANENT
+    falsehood either. If the leg still carries a real `block` from an
+    earlier successful fetch (kept only when a leg that once had a block
+    is asked to refetch again and fails), that block is kept and the
+    rendered note says `(re-fetch failed: <reason>; showing earlier
+    log)`, not "log unavailable". If there is no prior block to fall back
+    on — the ordinary stripped-leg case — the failure reason is recorded
+    under `refetch_failed_detail`, NEVER under `detail`: a leg carrying
+    `detail` is `_ci_leg_needs_refetch`-ineligible forever, so storing a
+    transient 502 there would make it sticky for the life of the entry
+    (exactly what probe H4 caught). `refetch_failed_detail` renders the
+    same honest line THIS tick and leaves the leg eligible for another
+    real attempt next tick."""
     repo = entry.get("repo", "")
     legs_table = entry.get("legs") or {}
     for job_id, info in list(legs_table.items()):
         if not _ci_leg_needs_refetch(info):
             continue
+        leg_id = info.get("_leg_id", "")
+        key = leg_id.rsplit("::", 1)[0] if "::" in leg_id else leg_id
         try:
-            leg_id = info.get("_leg_id", "")
-            key = leg_id.rsplit("::", 1)[0] if "::" in leg_id else leg_id
             fake_leg = {"key": key, "check": info.get("check", ""), "conclusion": info.get("conclusion"),
                         "url": info.get("url", "")}
             refreshed = _ci_red_leg_info(repo, fake_leg)
-            refreshed["_leg_id"] = leg_id
-            legs_table[job_id] = refreshed
         except Exception as exc:  # noqa: BLE001 — a schema surprise on one leg must not kill the tick
             if errors is not None:
                 errors.append({"key": entry.get("where", job_id), "step": "refetch_stripped",
                                "error": str(exc)[:300]})
+            continue
+        if refreshed.get("block") or refreshed.get("missing_permission") or refreshed.get("rate_limited"):
+            refreshed["_leg_id"] = leg_id
+            legs_table[job_id] = refreshed
+            continue
+        reason = refreshed.get("detail", "unknown error")
+        if info.get("block"):
+            info["refetch_failed_detail"] = reason
+            continue
+        refreshed.pop("detail", None)
+        refreshed["_leg_id"] = leg_id
+        refreshed["refetch_failed_detail"] = reason
+        legs_table[job_id] = refreshed
+
+
+def _ci_job_id_newer(a: str, b: str) -> bool:
+    """True when GitHub Actions job/check-run id `a` is a NEWER run than
+    `b`. Ids are assigned in increasing order by GitHub, so a numeric
+    comparison — not the order two webhook deposits happened to land in
+    the same tick — is what decides which of two legs sharing a check
+    name is superseded (Loki's re-audit, LIMIT 3; probe C3 deposits job 9
+    then job 1 in one tick, and job 1, the numerically older id, must
+    still be the one marked superseded regardless of iteration order).
+    Falls back to a plain string comparison if either id is not a plain
+    integer, rather than raising."""
+    try:
+        return int(a) > int(b)
+    except (TypeError, ValueError):
+        return a > b
 
 
 def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list, errors: list | None = None) -> None:
@@ -1298,16 +1350,32 @@ def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list, errors
                 prior = legs_table.get(job_id)
                 if isinstance(prior, dict) and prior.get("superseded"):
                     continue  # a job id a newer run of this check replaced; never fetched again
+                this_leg_superseded = False
                 for other_id, other_info in legs_table.items():
                     if (other_id != job_id and isinstance(other_info, dict)
                             and other_info.get("check") == check_name and not other_info.get("superseded")):
-                        # This check has run again under a new job id — the
-                        # OLDER id for the same name is superseded: kept in
+                        # This check has run again under a new job id.
+                        # Supersession is decided by JOB ID ORDER, not by
+                        # which of the two happened to be iterated (or
+                        # deposited) first this tick (Loki's re-audit,
+                        # LIMIT 3; probe C3 deposits the newer id BEFORE
+                        # the older one in the same tick, and the older id
+                        # must still be the one superseded regardless).
+                        # The numerically OLDER id is superseded: kept in
                         # the table (for the record), never fetched or
                         # rendered again.
-                        other_info["superseded"] = True
-                        other_info.pop("block", None)
+                        if _ci_job_id_newer(job_id, other_id):
+                            other_info["superseded"] = True
+                            other_info.pop("block", None)
+                            changed = True
+                        else:
+                            this_leg_superseded = True
+                if this_leg_superseded:
+                    if not (isinstance(prior, dict) and prior.get("_leg_id") == leg_id):
+                        legs_table[job_id] = {"check": check_name, "conclusion": lg.get("conclusion"),
+                                              "url": lg.get("url", ""), "_leg_id": leg_id, "superseded": True}
                         changed = True
+                    continue
                 if isinstance(prior, dict) and prior.get("_leg_id") == leg_id:
                     # This exact leg was already fetched; nothing new to
                     # show from THIS tick's deposit. A block stripped
@@ -1338,7 +1406,20 @@ def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str, 
     green — by re-run, or by a later head on the same PR — is queued for
     a green edit. Reads only `heads`/`head_legs`, built from the bot's own
     deposits regardless of whether the broker is up, so this never depends
-    on `ci_items` or a successful `human_required_resolve`."""
+    on `ci_items` or a successful `human_required_resolve`.
+
+    Gated on `cs.get("status") != "posted"`, on purpose: a comment that is
+    still `pending` through a GitHub/Grove outage has never been posted at
+    all, so there is no comment here to edit green yet. Loki's re-audit
+    (LIMIT 4): if the head is already green by the time the outage clears,
+    the FIRST post for it is still the red body (the pending entry's
+    `pending_kind` stays `"red"`); this function flips it to green on the
+    very next tick once the comment is `posted`, and it is retired the
+    tick after that. Not a regression — pre-existing at 69068a6 — and
+    self-correcting within one extra tick; the PR comment is the durable
+    state carrier and never lands wrong for long. Grove only ever hears
+    the red block for this head (it is not told about the green edit),
+    which is a late alert, not a false state claim."""
     for head_key, entry in list(owed.items()):
         if not isinstance(entry, dict) or not entry.get("pr"):
             continue
@@ -1834,8 +1915,23 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         # by a permissions error rather than a test's corrupt-json fixture.
         # Skip the whole drain this tick; the file is left exactly as it
         # was for the next tick (once whatever broke the read is fixed).
+        #
+        # Loki's re-audit, LIMIT 2: a head first SEEN this tick (`groups`)
+        # is still filed into `ci_filed`/`ci_items` below — the filing
+        # loop does not know or care whether `ci_comments.json` is
+        # readable — so once this tick's webhook data is gone, that head
+        # never appears in `groups` again and, before this fix, was never
+        # owed a comment or Grove line: silent forever. The head's legs
+        # are recorded here in the tick's OWN state file
+        # (`ci_owed_deferred`, in `state`, not `ci_comments.json` — that
+        # file is precisely what is unreachable right now) so the next
+        # tick that CAN read the table folds them in as if newly seen.
+        deferred = state.setdefault("ci_owed_deferred", {})
+        for head_key, legs in groups.items():
+            deferred[head_key] = legs
         receipt["ci_comments_table"] = {"status": "unreachable", "reason": corrupt_reason,
-                                        "drain_skipped": True}
+                                        "drain_skipped": True,
+                                        "deferred": sorted(deferred.keys())}
     else:
         if corrupt_reason:
             # Never silently read a corrupt table as {} and forget every owed
@@ -1847,8 +1943,22 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             {"status": "unreadable", "reason": corrupt_reason, "quarantined": quarantined}
             if corrupt_reason else {"status": "ok"}
         )
+        # A head first seen while the table was unreachable (LIMIT 2,
+        # above) is owed now that it can be read again — folded into this
+        # tick's groups (a COPY, so the filing loop's own `groups` below
+        # is untouched: those legs were already filed, and re-adding them
+        # there would re-file, not just re-comment).
+        owed_deferred = state.pop("ci_owed_deferred", None) or {}
+        owed_groups = dict(groups)
+        for head_key, legs in owed_deferred.items():
+            bucket = list(owed_groups.get(head_key, []))
+            seen_keys = {lg.get("key") for lg in bucket}
+            bucket.extend(lg for lg in legs if lg.get("key") not in seen_keys)
+            owed_groups[head_key] = bucket
+        if owed_deferred:
+            receipt["ci_owed_deferred_recovered"] = sorted(owed_deferred.keys())
         tick_n = ci_comments.next_tick(owed)
-        _ci_owed_merge_new_legs(owed, groups, commented=commented, errors=drain_errors)
+        _ci_owed_merge_new_legs(owed, owed_groups, commented=commented, errors=drain_errors)
         _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"], errors=drain_errors)
         _ci_owed_drain(owed, tick=tick_n, app=app, grove_pace=grove_pace, call=call, enable_mcp=enable_mcp,
                       commented=commented, spoke=spoke, errors=drain_errors)

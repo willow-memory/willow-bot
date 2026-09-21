@@ -744,6 +744,123 @@ def test_broker_refused_rerun_of_same_check_is_one_extra_fetch_then_steady(home,
     assert len(comments.calls) == 2, "steady — no more flapping"
 
 
+# ── a re-fetch that itself fails must never be permanently sticky ───────────
+
+def test_refetch_failure_is_never_permanently_sticky(home, monkeypatch):
+    """Loki's re-audit, LIMIT 1 (probe H4): the commit that fixed HIGH
+    finding 1 claimed a re-fetch failure 'keeps the prior leg's real
+    block if a re-fetch itself fails' — untrue as shipped: a stripped leg
+    has no block to keep, and the failure used to be recorded under
+    `detail`, which makes `_ci_leg_needs_refetch` skip that leg FOREVER —
+    a transient 502 turned into a permanent 'log unavailable' for a job
+    whose real log the bot could still get later. The failure must be
+    rendered honestly THIS tick and leave the leg eligible for another
+    real attempt next tick."""
+    _prime()
+    c = _Client()
+    calls: dict[str, int] = {}
+
+    def _fetch(repo, job_id):
+        calls[job_id] = calls.get(job_id, 0) + 1
+        if job_id == "1" and calls[job_id] == 2:
+            return None, {"status": "error", "detail": "502 on refetch"}
+        return "boring log\n", {"status": "ok"}
+
+    comments = _use(monkeypatch, c, fetch_log=_fetch)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()  # comment + Grove land; job 1's block is stripped afterward
+    owed, _ = ci_comments.load()
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    assert all(not v.get("block") for v in entry["legs"].values())
+
+    # Tick 2: a new leg (job 2, "lint") flips the comment back to
+    # `pending`, which triggers a refetch of job 1's stripped leg — and
+    # this refetch fails with a 502.
+    deposits.append_local(_row(RAT, SHA, 2, "lint", "failure", pr=48))
+    tick.run_ci()
+    body = comments.calls[-1]["body"]
+    assert "_test: log unavailable (502 on refetch)_" in body
+    owed, _ = ci_comments.load()
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    job1 = entry["legs"]["1"]
+    assert "detail" not in job1, "a transient refetch failure must never be stored under `detail`"
+    assert job1["refetch_failed_detail"] == "502 on refetch"
+
+    # Tick 3: a third leg forces another refetch pass; the log endpoint
+    # is healthy again for job 1 — it must be retried, not skipped
+    # forever because of a `detail` a failed attempt would otherwise
+    # have left behind.
+    deposits.append_local(_row(RAT, SHA, 3, "types", "failure", pr=48))
+    tick.run_ci()
+    body3 = comments.calls[-1]["body"]
+    assert "BOOM: assert False" in body3
+    assert "log unavailable (502 on refetch)" not in body3
+
+
+# ── supersession is by job id order, not deposit/iteration order ────────────
+
+def test_supersession_is_by_job_id_order_not_deposit_order(home, monkeypatch):
+    """Loki's re-audit, LIMIT 3 (probe C3): the code marked whichever leg
+    the loop iterated to SECOND as superseded, which happened to match
+    job-id order only because real re-run webhooks arrive after their
+    original. Two legs for the same check name landing in ONE tick,
+    newest job id deposited FIRST, must still supersede the numerically
+    OLDER id (1) and keep the newer one (9) — not the other way around."""
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 9, "test", "failure", pr=48))
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    owed, _ = ci_comments.load()
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    legs = entry["legs"]
+    assert legs["1"].get("superseded") is True, "the numerically older id must be superseded"
+    assert not legs["9"].get("superseded"), "the numerically newer id must survive"
+    body = comments.calls[-1]["body"]
+    assert body.count("**test**") == 1, "only the surviving (newer) leg is rendered"
+
+
+# ── a head first seen on an unreachable-table tick is not lost forever ──────
+
+def test_head_seen_during_unreachable_tick_is_owed_once_the_table_returns(home, monkeypatch):
+    """Loki's re-audit, LIMIT 2 (probe G2): the filing loop files a head's
+    legs (`ci_filed`) regardless of whether `ci_comments.json` can be
+    read; once that tick's webhook data is gone, a head seen only during
+    the unreachable tick used to never regroup into the owed table — no
+    comment, no Grove line, ever, with only `drain_skipped` in the
+    receipt to show for it. The head must be recorded in the tick's own
+    state file and folded back in once the table is readable again."""
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    p = ci_comments.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({}), encoding="utf-8")
+
+    real_read_text = Path.read_text
+
+    def _denied(self, *a, **kw):
+        if self == p:
+            raise PermissionError(13, "Permission denied")
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _denied)
+    deposits.append_local(_row(RAT, SHA2, 48, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert r["ci_comments_table"]["status"] == "unreachable"
+    assert r["ci_comments_table"]["deferred"], "the new head must be named on the receipt, not silently lost"
+    assert len(comments.calls) == 0
+
+    monkeypatch.setattr(Path, "read_text", real_read_text)
+    r2 = tick.run_ci()
+    assert r2["ci_comments_table"]["status"] == "ok"
+    assert r2.get("ci_owed_deferred_recovered"), "the recovered head must be named on the receipt"
+    assert len(comments.calls) == 1, "the head owed a comment once the table is readable again"
+    owed, _ = ci_comments.load()
+    assert any(e.get("head_sha") == SHA2 for e in owed.values() if isinstance(e, dict))
+
+
 # ── the Grove summary caps by characters, not lines ──────────────────────────
 
 def test_grove_summary_is_capped_by_characters_not_lines(home, monkeypatch):

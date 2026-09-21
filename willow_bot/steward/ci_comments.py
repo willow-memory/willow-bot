@@ -327,7 +327,17 @@ def prune_old(owed: dict[str, Any], *, now_epoch: float, max_age_days: float = M
     head's legs were already in ``ci_filed``, so nothing ever regrouped
     them). This is now only a backstop for the one status
     (``green``) that should already be gone via ``retire_check``, never a
-    way to forget something still broken. Returns ``[{key, reason}]``."""
+    way to forget something still broken. Returns ``[{key, reason}]``.
+
+    Loki's re-audit (LIMIT 5): the flip side of never pruning anything
+    still active is that a ``posted`` entry whose PR-closed webhook was
+    MISSED (so ``retire_check`` never sees ``where`` in ``closed``, and
+    the comment itself never turns ``green`` because nothing ever asked
+    GitHub about it again) is never pruned here either — it lives
+    forever, ``stalled``-probed on the schedule ``stalled_report`` uses.
+    Bounded in practice only because a comment this old has had its
+    ``block``s stripped (``strip_blocks``), so each surviving entry is
+    small; still an unbounded list length, not an unbounded size."""
     cutoff = now_epoch - max_age_days * 86400
     pruned: list[dict[str, Any]] = []
     for head_key in head_keys(owed):
