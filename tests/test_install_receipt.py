@@ -17,6 +17,15 @@ import pytest
 from willow_bot import install_receipt
 
 
+@pytest.fixture(autouse=True)
+def _willow_home(tmp_path, monkeypatch):
+    """Every marker write in this file lands under a throwaway
+    WILLOW_HOME, never the live operator home — the whole point of gap
+    f982a9be2eac is that the marker must not touch shared state outside
+    the sandbox any more than it touches the checkout."""
+    monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "wh"))
+
+
 def _git(cwd: Path, *args: str) -> None:
     """Run a git command against `cwd`. Errors here are test failures."""
     subprocess.run(["git", "-C", str(cwd), *args],
@@ -196,7 +205,8 @@ def test_diverged_refuses_refresh(tmp_path):
 def test_install_ok_writes_stamp_with_head_commit(tmp_path, monkeypatch):
     """When a .venv/bin/pip exists and returns 0, the receipt marks
     install=ok and installed_commit equals the current HEAD after any
-    fast-forward. The stamp file lives at .willow-bot-installed.commit."""
+    fast-forward. The stamp lives under $WILLOW_HOME/willow-bot/installs/
+    — never inside the checkout (gap f982a9be2eac)."""
     upstream = _init_upstream(tmp_path)
     root = _fresh_checkout(tmp_path, upstream)
     # Fake a .venv/bin/pip that does nothing successful.
@@ -209,9 +219,13 @@ def test_install_ok_writes_stamp_with_head_commit(tmp_path, monkeypatch):
     assert receipt["state"] == "ok"
     assert receipt.get("install") == "ok"
     assert receipt["installed_commit"] == receipt["checkout_commit"]
-    stamp = root / ".willow-bot-installed.commit"
+    stamp = Path(receipt["marker_path"])
+    assert str(tmp_path / "wh") in str(stamp)
+    assert not str(stamp).startswith(str(root))
     assert stamp.is_file()
     assert stamp.read_text(encoding="utf-8").strip() == receipt["installed_commit"]
+    # And the checkout itself carries nothing — the whole point.
+    assert not (root / ".willow-bot-installed.commit").is_file()
 
 
 def test_install_failed_when_pip_returns_nonzero(tmp_path):
@@ -224,14 +238,17 @@ def test_install_failed_when_pip_returns_nonzero(tmp_path):
     receipt = install_receipt.refresh_editable(root, "main", do_install=True)
     assert receipt["state"] == "install_failed"
     assert "pip broke" in receipt["detail"] or "pip:" in receipt["detail"]
-    # Stamp NOT written on failure — a seat reading the stamp trusts it.
+    # Stamp NOT written on failure — a seat reading the stamp trusts it —
+    # wherever it would have landed, new location or legacy.
+    assert not Path(receipt["marker_path"]).is_file()
     assert not (root / ".willow-bot-installed.commit").is_file()
 
 
-def test_installed_before_reads_prior_stamp(tmp_path):
-    """A tick that ran the install earlier left a stamp; this call
-    reads it into `installed_before` so drift is visible before we
-    overwrite it with the current commit."""
+def test_installed_before_reads_prior_stamp_legacy_fallback(tmp_path):
+    """A checkout stamped by a build from before the marker moved out of
+    the tree still carries its old in-checkout stamp; `installed_before`
+    reads it as a one-release fallback so drift is visible before the
+    (new-location) overwrite."""
     upstream = _init_upstream(tmp_path)
     root = _fresh_checkout(tmp_path, upstream)
     (root / ".willow-bot-installed.commit").write_text("old-sha\n", encoding="utf-8")
@@ -239,8 +256,62 @@ def test_installed_before_reads_prior_stamp(tmp_path):
     assert receipt["installed_before"] == "old-sha"
 
 
+def test_legacy_marker_is_removed_after_a_successful_refresh(tmp_path):
+    """An old checkout's in-checkout stamp is read once and then cleaned
+    up the first time a refresh succeeds under the new marker location —
+    it is never read again after that (gap f982a9be2eac)."""
+    upstream = _init_upstream(tmp_path)
+    root = _fresh_checkout(tmp_path, upstream)
+    legacy = root / ".willow-bot-installed.commit"
+    legacy.write_text("stale-sha\n", encoding="utf-8")
+    pip = root / ".venv" / "bin" / "pip"
+    pip.parent.mkdir(parents=True)
+    pip.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pip.chmod(0o755)
+
+    receipt = install_receipt.refresh_editable(root, "main", do_install=True)
+    assert receipt["state"] == "ok"
+    assert receipt["installed_before"] == "stale-sha"
+    assert not legacy.is_file()
+    stamp = Path(receipt["marker_path"])
+    assert stamp.is_file()
+    assert stamp.read_text(encoding="utf-8").strip() == receipt["installed_commit"]
+
+
 def test_read_installed_commit_returns_none_when_missing(tmp_path):
     assert install_receipt.read_installed_commit(tmp_path) is None
+
+
+def test_marker_path_is_named_from_the_remote_owner_repo(tmp_path):
+    upstream = _init_upstream(tmp_path)
+    root = _fresh_checkout(tmp_path, upstream)
+    marker = install_receipt.marker_path(root)
+    assert marker.parent == tmp_path / "wh" / "willow-bot" / "installs"
+    assert marker.suffix == ".commit"
+
+
+# ── the dirty check ignores untracked noise ───────────────────────────────
+
+
+def test_untracked_marker_and_scratch_file_do_not_dirty_the_tree(tmp_path):
+    """The install marker (however it got there) and any other untracked
+    file must never themselves refuse a refresh — only a modified or
+    staged TRACKED file does (gap f982a9be2eac)."""
+    upstream = _init_upstream(tmp_path)
+    root = _fresh_checkout(tmp_path, upstream)
+    (root / ".willow-bot-installed.commit").write_text("sha\n", encoding="utf-8")
+    (root / "scratch.txt").write_text("not tracked\n", encoding="utf-8")
+    receipt = install_receipt.refresh_editable(root, "main", do_install=False)
+    assert receipt["state"] == "ok"
+
+
+def test_a_modified_tracked_file_still_refuses_alongside_untracked_noise(tmp_path):
+    upstream = _init_upstream(tmp_path)
+    root = _fresh_checkout(tmp_path, upstream)
+    (root / ".willow-bot-installed.commit").write_text("sha\n", encoding="utf-8")
+    (root / "README").write_text("dirty\n", encoding="utf-8")
+    receipt = install_receipt.refresh_editable(root, "main", do_install=False)
+    assert receipt["state"] == "dirty"
 
 
 # ── do_install=False knob (a caller wanting only the state) ───────────────

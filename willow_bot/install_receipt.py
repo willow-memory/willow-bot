@@ -8,6 +8,19 @@ their tree checked out from under them, and a receipt only ever said
 the editable install only when it is safe to do so, and returns a
 receipt whose ``state`` names distinctly what it found:
 
+Gap ``f982a9be2eac``: the module used to write its own stamp,
+``.willow-bot-installed.commit``, straight into the checkout root — an
+untracked file the dirty check then read back through plain ``git
+status --porcelain``, so the stamp made the checkout look dirty to
+itself and a checkout that had ever refreshed once could never refresh
+again. The stamp now lives under ``$WILLOW_HOME/willow-bot/installs/``
+(one file per remote, named from ``origin``'s ``owner/repo``), and the
+dirty check (``_worktree_is_clean``) looks at TRACKED files only
+(``--untracked-files=no``) so an unrelated untracked file never blocks
+a refresh either. A checkout that still carries the old in-checkout
+stamp has it read once (``read_installed_commit``'s one-release
+fallback) and removed the next time a refresh succeeds.
+
 - ``missing_checkout`` — the path is not a git tree
 - ``dirty`` — the working tree carries uncommitted changes
 - ``on_feature_branch`` — HEAD is not on the default branch (an agent
@@ -22,10 +35,10 @@ receipt whose ``state`` names distinctly what it found:
   fast-forwarded to remote, and ``pip install -e .`` succeeded; the
   receipt records the installed commit
 
-The receipt also carries ``checkout_commit`` (HEAD after any pull) and
+The receipt also carries ``checkout_commit`` (HEAD after any pull),
 ``installed_commit`` (the commit the ``pip install -e .`` marked into
-a sidecar ``.willow-bot-installed.commit`` file). A future tick reading
-this receipt tells drift by comparing the two.
+the stamp), and ``marker_path`` (where that stamp lives). A future
+tick reading this receipt tells drift by comparing the two commits.
 
 Never opens a network socket outside a single bounded ``git fetch``,
 never switches branches, never creates a venv. If a venv is present at
@@ -35,9 +48,12 @@ never switches branches, never creates a venv. If a venv is present at
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from willow_bot.paths import bot_dir
 
 log = logging.getLogger("willow-bot.install_receipt")
 
@@ -45,6 +61,11 @@ log = logging.getLogger("willow-bot.install_receipt")
 _GIT_TIMEOUT_S = 30
 _FETCH_TIMEOUT_S = 60
 _PIP_TIMEOUT_S = 300
+
+#: Legacy stamp name, once written straight into the checkout root
+#: (gap f982a9be2eac). Kept as a constant so the writer's cleanup and
+#: the reader's one-release fallback name the exact same file.
+_LEGACY_MARKER_NAME = ".willow-bot-installed.commit"
 
 
 def _git(root: Path, *args: str, timeout: int = _GIT_TIMEOUT_S) -> subprocess.CompletedProcess:
@@ -73,7 +94,11 @@ def _head_sha(root: Path) -> str | None:
 
 
 def _worktree_is_clean(root: Path) -> bool:
-    proc = _git(root, "status", "--porcelain=v1")
+    """Tracked files only (gap f982a9be2eac): an untracked file — the
+    bot's own former in-checkout install marker, a build artifact, a
+    stray scratch file — must never itself refuse a refresh. A modified
+    or staged TRACKED file still does."""
+    proc = _git(root, "status", "--porcelain", "--untracked-files=no")
     if proc.returncode != 0:
         return False  # cannot tell → treat as not-clean; refuse to refresh
     return proc.stdout.strip() == ""
@@ -135,28 +160,88 @@ def _run_editable_install(root: Path, pip: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _legacy_marker_path(root: Path) -> Path:
+    """Where the stamp used to live, straight in the checkout root."""
+    return root / _LEGACY_MARKER_NAME
+
+
+def _repo_slug(root: Path) -> str | None:
+    """``<owner>__<repo>`` read from ``origin``'s remote URL, or None
+    when it cannot be resolved (no remote, no git). Handles both
+    ``git@host:owner/repo.git`` and ``https://host/owner/repo.git``
+    shapes; a trailing ``.git`` is stripped."""
+    proc = _git(root, "remote", "get-url", "origin")
+    if proc.returncode != 0:
+        return None
+    url = proc.stdout.strip()
+    if not url:
+        return None
+    if url.endswith(".git"):
+        url = url[:-4]
+    parts = [p for p in re.split(r"[:/]", url) if p]
+    if len(parts) < 2:
+        return None
+    owner, repo = parts[-2], parts[-1]
+    if not owner or not repo:
+        return None
+    return f"{owner}__{repo}"
+
+
+def marker_path(root: Path) -> Path:
+    """Where this checkout's install stamp lives now: one file per
+    remote under ``$WILLOW_HOME/willow-bot/installs/``, so the stamp
+    never touches — and never dirties — the checkout it describes
+    (gap f982a9be2eac). Falls back to the legacy in-checkout path only
+    when ``origin`` cannot be resolved (no remote configured) — the
+    stamp still has to live somewhere."""
+    slug = _repo_slug(root)
+    if slug:
+        return bot_dir() / "installs" / f"{slug}.commit"
+    return _legacy_marker_path(root)
+
+
 def _write_installed_stamp(root: Path, commit: str) -> Path:
     """Sidecar stamp with the commit sha ``pip install -e .`` was run
     on. A tick reading the stamp tells drift when HEAD moves without a
     reinstall (an editable install still resolves entrypoints from the
     source at import time, but a new dependency in pyproject.toml only
-    takes effect after a re-run of pip)."""
-    path = root / ".willow-bot-installed.commit"
+    takes effect after a re-run of pip). Lives under ``$WILLOW_HOME``
+    now, never in the checkout (gap f982a9be2eac); a legacy in-checkout
+    stamp left over from before that move is removed here, on the
+    first successful write after the upgrade, so an old checkout
+    cleans itself."""
+    path = marker_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(commit + "\n", encoding="utf-8")
+    legacy = _legacy_marker_path(root)
+    if legacy != path and legacy.is_file():
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
     return path
 
 
 def read_installed_commit(root: Path) -> str | None:
     """Return the recorded install commit for this checkout, or None if
     the stamp is missing (never installed, or installed by a step older
-    than this module)."""
-    path = root / ".willow-bot-installed.commit"
-    if not path.is_file():
-        return None
-    try:
-        return path.read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
+    than this module). Reads the ``$WILLOW_HOME`` marker first; a
+    checkout upgraded from before the marker moved out of the tree
+    still has its old in-checkout stamp, read as a one-release
+    fallback."""
+    path = marker_path(root)
+    if path.is_file():
+        try:
+            return path.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+    legacy = _legacy_marker_path(root)
+    if legacy != path and legacy.is_file():
+        try:
+            return legacy.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+    return None
 
 
 def refresh_editable(
@@ -192,6 +277,7 @@ def refresh_editable(
     receipt["branch"] = branch
     receipt["checkout_commit"] = _head_sha(repo_dir)
     receipt["installed_before"] = read_installed_commit(repo_dir)
+    receipt["marker_path"] = str(marker_path(repo_dir))
 
     if not _worktree_is_clean(repo_dir):
         receipt.update(state="dirty",
