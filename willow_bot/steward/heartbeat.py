@@ -14,22 +14,41 @@ from typing import Any
 from willow_bot.steward.config import willow_home
 
 
-# Status verbs plus the seal watch tick. None of these publish dew or seal
-# anything: seal_drain mirrors a HUMAN's Nestor seal onto its SOIL record
-# (willow-mcp seal_handler.on_seal) and advances a local offset — sealed
-# decision 72292afd, "the seal watch runs on the same tick as the bot".
+# Status verbs plus the two seal-driven ticks. None of these publish dew or
+# seal anything: seal_drain mirrors a HUMAN's Nestor seal onto its SOIL
+# record (willow-mcp seal_handler.on_seal) and advances a local offset —
+# sealed decision 72292afd, "the seal watch runs on the same tick as the
+# bot". net_authority_drain is its sibling for egress (sealed c8572a92 +
+# 6b305258, willow-mcp #582/#584): for every task held on network authority
+# whose pair the operator sealed, it asks the uid-994 signer for the
+# envelope and releases the row — the seal is the operator's yes; this
+# tick is only the hand. Gap 6031199ac4e1: the drain had no caller on the
+# tick and the first sealed row sat held until the operator typed it.
 DEFAULT_CURATED: list[tuple[str, dict[str, Any]]] = [
     ("fleet_health", {}),
     ("commitment_surface", {}),
     ("human_required_list", {}),
     ("diagnostic_summary", {}),
     ("seal_drain", {}),
+    ("net_authority_drain", {}),
 ]
 
 # Result fields worth carrying into the receipt verbatim (small scalars /
 # short lists), so bot_status can show a tool's three-state without the
 # reader opening the tool's own journal. Everything else stays keys-only.
 _RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after")
+
+# Nested fields, mirrored as dotted keys. net_authority_drain answers with two
+# halves under one three-state (`tasks` and `leases`, each a receipt or None
+# when that half was blind); the numbers a reader needs sit one level down.
+# A half that is None mirrors nothing — the top-level `state`/`reason`
+# already says it was unreachable, and an absent key is not a zero.
+_RECEIPT_NESTED_FIELDS = (
+    ("tasks", "held"),
+    ("tasks", "counts"),
+    ("tasks", "truncated"),
+    ("leases", "requests"),
+)
 
 
 def _app_id() -> str:
@@ -95,6 +114,10 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
                 for field in _RECEIPT_FIELDS:
                     if field in result:
                         entry[field] = result[field]
+                for outer, inner in _RECEIPT_NESTED_FIELDS:
+                    half = result.get(outer)
+                    if isinstance(half, dict) and inner in half:
+                        entry[f"{outer}.{inner}"] = half[inner]
             else:
                 entry["result_preview"] = str(result)[:240]
         except Exception as exc:  # noqa: BLE001

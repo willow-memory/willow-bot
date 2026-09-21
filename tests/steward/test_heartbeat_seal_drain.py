@@ -62,6 +62,10 @@ def test_receipt_carries_the_drain_three_state(tmp_path: Path, monkeypatch, caps
             "results": {"upgraded": 1, "already": 0, "unmatched": 2, "skipped": 0, "error": 0},
             "upgraded": ["pair-9"], "offset_after": 1234, "ledger": "/x/ledger.jsonl",
         },
+        # Its sibling rides after it on the tick (gap 6031199ac4e1); pinned
+        # in test_net_drain_wiring.py, answered here so the pass is whole.
+        "net_authority_drain": {"state": "empty", "tasks": {"state": "empty", "held": 0},
+                                "leases": {"state": "empty", "requests": 0}},
     }
 
     _stub_client(monkeypatch, lambda name, args: answers[name])
@@ -81,7 +85,8 @@ def test_receipt_carries_the_drain_three_state(tmp_path: Path, monkeypatch, caps
 
     # And it is in the journal the same way.
     line = (tmp_path / "w" / "willow-bot" / "steward_heartbeat.jsonl").read_text().splitlines()[-1]
-    assert json.loads(line)["tools"][-1]["state"] == "populated"
+    journal = next(t for t in json.loads(line)["tools"] if t["tool"] == "seal_drain")
+    assert journal["state"] == "populated"
 
 
 def test_unreachable_drain_is_visible_not_collapsed(tmp_path: Path, monkeypatch) -> None:
