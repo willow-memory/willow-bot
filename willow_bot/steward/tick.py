@@ -1031,7 +1031,24 @@ def _head_tail_lines(lines: list[str], *, head_n: int = 60, tail_n: int = 60) ->
     return lines[:head_n] + [marker] + lines[-tail_n:]
 
 
-def _ci_red_leg_lines(lg: dict) -> str:
+def _head_tail_chars(text: str, budget: int) -> str:
+    """Like `_head_tail_lines`, but on characters — used to fit ONE leg's
+    failure block into its own share of the body cap. Never a bare tail
+    cut: the marker names how many chars were dropped between the kept
+    head and tail."""
+    if budget <= 0:
+        return ""
+    if len(text) <= budget:
+        return text
+    half = max(budget // 2, 1)
+    head, tail = text[:half], text[-half:]
+    dropped = len(text) - len(head) - len(tail)
+    if dropped <= 0:
+        return text[:budget]
+    return f"{head}\n... [{dropped} chars trimmed] ...\n{tail}"
+
+
+def _ci_red_leg_lines(lg: dict, *, char_budget: int | None = None) -> str:
     from willow_bot.steward import ci_log
 
     block = lg.get("block")
@@ -1042,6 +1059,9 @@ def _ci_red_leg_lines(lg: dict) -> str:
         if lg.get("log_truncated"):
             mb = ci_log.MAX_LOG_BYTES // (1024 * 1024)
             notes.append(f"log truncated to the last {mb} MB")
+        if char_budget is not None and len(block) > char_budget:
+            block = _head_tail_chars(block, char_budget)
+            notes.append(f"block capped to {char_budget} chars")
         note = f" ({', '.join(notes)})" if notes else ""
         return f"<details><summary>{lg['check']}{note}</summary>\n\n```\n{block}\n```\n</details>\n"
     if lg.get("missing_permission"):
@@ -1049,6 +1069,15 @@ def _ci_red_leg_lines(lg: dict) -> str:
     if lg.get("rate_limited"):
         return f"_{lg['check']}: log unavailable — rate limited, will retry_\n"
     return f"_{lg['check']}: log unavailable ({lg.get('detail', 'unknown error')})_\n"
+
+
+def _leg_char_budget(header: str, n_legs: int, *, cap: int = BODY_CHAR_CAP) -> int:
+    """`cap` split evenly across legs, after the header's own space —
+    never below a 4,000-char floor even when a head has many legs, so a
+    leg with a lot of jobs still shows SOMETHING useful per job rather
+    than a sliver."""
+    n_legs = max(n_legs, 1)
+    return max((cap - len(header)) // n_legs, 4_000)
 
 
 def _ci_red_body(where: str, head_sha: str, legs: list[dict], *, cap: int = BODY_CHAR_CAP) -> str:
@@ -1062,39 +1091,43 @@ def _ci_red_body(where: str, head_sha: str, legs: list[dict], *, cap: int = BODY
 
     Hard-capped at `cap` chars against GitHub's 65,536-char comment limit
     (a 480,974-char body from two legs' untrimmed blocks — Loki's audit,
-    P3 — 422'd and, before this build, was never retried). Header and
-    per-job links are never touched; only the failure BLOCKS shrink, in
-    two stages: first each block to its own head(60)+tail(60), then — if
-    still over — the rendered blocks section itself is cut, with a note.
+    P3 — 422'd and, before this build, was never retried).
+
+    Loki's re-audit (P3 cap-shape finding): `ci_log._trim` already caps
+    every REAL block at 120 lines, so a stage that only shrinks blocks
+    over 120 lines never fires on real traffic, and the fallback raw
+    character cut left an open ``` fence and an open `<details>` with the
+    cap note rendered inside them. So the only shrink stage now is a
+    PER-LEG character budget (`_leg_char_budget`) applied before
+    rendering — every block is capped whether or not it needed the ci_log
+    trim — and `_close_open_blocks` runs on the assembled body (not just
+    the Grove summary) so a hard cut, if the per-leg budgets still don't
+    fit, never leaves a dangling fence or an unclosed section.
     """
     header_lines = [f"CI red: {where} @ {head_sha[:7]} — {len(legs)} job(s):"]
     header_lines += [f"- **{lg['check']}** ({lg['conclusion']}): {lg['url']}" for lg in legs]
     header = "\n".join(header_lines) + "\n\n"
 
-    def _blocks(leg_list: list[dict]) -> str:
-        return "\n".join(_ci_red_leg_lines(lg) for lg in leg_list).rstrip() + "\n"
+    budget = _leg_char_budget(header, len(legs), cap=cap)
+    blocks = "\n".join(_ci_red_leg_lines(lg, char_budget=budget) for lg in legs).rstrip() + "\n"
 
-    blocks = _blocks(legs)
     body = (header + blocks).strip() + "\n"
     if len(body) <= cap:
-        return body
+        return _close_open_blocks(body.rstrip("\n")) + "\n"
 
-    trimmed_legs = []
-    for lg in legs:
-        lg2 = dict(lg)
-        if lg2.get("block"):
-            lg2["block"] = "\n".join(_head_tail_lines(lg2["block"].splitlines()))
-            lg2["trimmed"] = True
-        trimmed_legs.append(lg2)
-    blocks = _blocks(trimmed_legs)
-    body = (header + blocks).strip() + "\n"
-    if len(body) <= cap:
-        return body
-
-    note = "\n\n_body capped at {} chars; remaining failure detail omitted_\n".format(cap)
-    budget = max(cap - len(header) - len(note), 0)
-    body = (header + blocks[:budget] + note).strip() + "\n"
-    return body
+    # Per-leg budgets alone did not fit (e.g. many legs, or wrapper
+    # overhead) — a last, raw character cut of the rendered blocks,
+    # closed before the cap note is appended so the note never lands
+    # inside a re-opened fence or <details>. Shrinks the cut window until
+    # the closed body actually fits, rather than trusting one guess.
+    note = f"\n\n_body capped at {cap} chars; remaining failure detail omitted_\n"
+    trim_budget = max(cap - len(header) - len(note), 0)
+    while True:
+        closed_blocks = _close_open_blocks(blocks[:trim_budget].rstrip("\n"))
+        body = (header + closed_blocks).strip() + note
+        if len(body) <= cap or trim_budget <= 0:
+            return body
+        trim_budget = max(trim_budget - 200, 0)
 
 
 def _ci_red_green_body(where: str, head_sha: str, *, by: str, at: str) -> str:
@@ -1157,13 +1190,23 @@ def _ci_red_leg_info(repo: str, leg: dict) -> dict:
     return info
 
 
-def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list) -> None:
+def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list, errors: list | None = None) -> None:
     """Fold this tick's newly-seen legs into the durable owed table
     (`ci_comments.py`), independent of whatever the filing loop's
     `human_required_enqueue` call answers. A PR-less head or a stuck-only
     (every leg cancelled) head has nothing to show a log for and never
     gets an owed entry — reported directly here so the receipt still
-    carries a line for it, matching what the filing loop used to say."""
+    carries a line for it, matching what the filing loop used to say.
+
+    Loki's re-audit (broker-refused-every-tick finding): a leg the filing
+    loop never got to mark `ci_filed` (a refused `human_required_enqueue`)
+    is regrouped every tick, so this used to re-fetch the job log and
+    reset a `posted` comment to `pending` (attempts back to 0, defeating
+    the backoff) EVERY tick for a leg that had not actually changed. A
+    leg is now identified by `(job_id, conclusion)`; only a leg that is
+    new to the entry or whose id changed (a re-run, a new conclusion) is
+    re-fetched, and the comment is reset to `pending` only when at least
+    one leg actually changed."""
     for head_key, legs in groups.items():
         first = legs[0]
         where = _ci_pr_key(first["repo"], first["pr"], first["head_sha"])
@@ -1176,117 +1219,166 @@ def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list) -> Non
             commented.append({"repo_pr": where, "head_sha": first["head_sha"], "comment_id": None,
                               "action": "skipped", "reason": "stuck, no failing leg to show a log for"})
             continue
-        entry = ci_comments.entry_for(owed, head_key, repo=first["repo"], pr=first["pr"],
-                                      head_sha=first["head_sha"], where=where)
-        legs_table = entry.setdefault("legs", {})
-        for lg in real:
-            legs_table[lg["check"]] = _ci_red_leg_info(first["repo"], lg)
-        entry["pending_kind"] = "red"
-        cs = entry["comment"]
-        if cs["status"] != "pending":
-            cs["status"] = "pending"
-            cs["attempts"] = 0
-            cs["last_error"] = None
+        try:
+            entry = ci_comments.entry_for(owed, head_key, repo=first["repo"], pr=first["pr"],
+                                          head_sha=first["head_sha"], where=where)
+            legs_table = entry.setdefault("legs", {})
+            changed = False
+            for lg in real:
+                # A plain string, not a tuple: `_leg_id` round-trips through
+                # `ci_comments.save`/`load` (JSON has no tuple type — a
+                # tuple would silently come back as a list and never equal
+                # itself again, re-fetching and resetting EVERY tick).
+                leg_id = f"{lg.get('key')}::{lg.get('conclusion')}"
+                prior = legs_table.get(lg["check"])
+                if isinstance(prior, dict) and prior.get("_leg_id") == leg_id:
+                    continue  # this exact leg was already fetched; nothing new to show
+                info = _ci_red_leg_info(first["repo"], lg)
+                info["_leg_id"] = leg_id
+                legs_table[lg["check"]] = info
+                changed = True
+            entry["pending_kind"] = "red"
+            cs = entry["comment"]
+            if changed and cs["status"] not in ("pending", "stalled"):
+                cs["status"] = "pending"
+                cs["attempts"] = 0
+                cs["last_error"] = None
+                cs.pop("paused_until", None)
+        except Exception as exc:  # noqa: BLE001 — a schema surprise on one head must not kill the tick
+            if errors is not None:
+                errors.append({"key": head_key, "step": "merge_new_legs", "error": str(exc)[:300]})
 
 
-def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str) -> None:
+def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str, errors: list | None = None) -> None:
     """A currently-`posted` (red) owed entry whose head has since gone
     green — by re-run, or by a later head on the same PR — is queued for
     a green edit. Reads only `heads`/`head_legs`, built from the bot's own
     deposits regardless of whether the broker is up, so this never depends
     on `ci_items` or a successful `human_required_resolve`."""
-    for entry in owed.values():
+    for head_key, entry in list(owed.items()):
         if not isinstance(entry, dict) or not entry.get("pr"):
             continue
-        cs = entry.get("comment") or {}
-        if cs.get("status") != "posted":
-            continue
-        repo, pr, head_sha = entry["repo"], entry["pr"], entry["head_sha"]
-        expected = set(entry.get("legs") or {})
-        if not expected:
-            continue
-        pr_key = _ci_pr_key(repo, pr, head_sha)
-        own_key = _ci_head_key(repo, pr, head_sha)
-        own = head_legs.get(own_key) or {}
-        went_green_by = None
-        if _head_is_green(own, expected):
-            went_green_by = head_sha
-        else:
-            mine = (heads.get(pr_key) or {}).get(head_sha)
-            for sha, seen_at in (heads.get(pr_key) or {}).items():
-                if sha == head_sha or seen_at is None or mine is None or seen_at <= mine:
-                    continue
-                if _head_is_green(head_legs.get(_ci_head_key(repo, pr, sha)) or {}, expected):
-                    went_green_by = sha
-                    break
-        if went_green_by is None:
-            continue
-        entry["pending_kind"] = "green"
-        entry["green_by"] = went_green_by
-        entry["green_at"] = at
-        cs["status"] = "pending"
-        cs["attempts"] = 0
-        cs["last_error"] = None
+        try:
+            cs = entry.get("comment") or {}
+            if cs.get("status") != "posted":
+                continue
+            repo, pr, head_sha = entry["repo"], entry["pr"], entry["head_sha"]
+            expected = set(entry.get("legs") or {})
+            if not expected:
+                continue
+            pr_key = _ci_pr_key(repo, pr, head_sha)
+            own_key = _ci_head_key(repo, pr, head_sha)
+            own = head_legs.get(own_key) or {}
+            went_green_by = None
+            if _head_is_green(own, expected):
+                went_green_by = head_sha
+            else:
+                mine = (heads.get(pr_key) or {}).get(head_sha)
+                for sha, seen_at in (heads.get(pr_key) or {}).items():
+                    if sha == head_sha or seen_at is None or mine is None or seen_at <= mine:
+                        continue
+                    if _head_is_green(head_legs.get(_ci_head_key(repo, pr, sha)) or {}, expected):
+                        went_green_by = sha
+                        break
+            if went_green_by is None:
+                continue
+            entry["pending_kind"] = "green"
+            entry["green_by"] = went_green_by
+            entry["green_at"] = at
+            cs["status"] = "pending"
+            cs["attempts"] = 0
+            cs["last_error"] = None
+            cs.pop("paused_until", None)
+        except Exception as exc:  # noqa: BLE001 — a schema surprise on one head must not kill the tick
+            if errors is not None:
+                errors.append({"key": head_key, "step": "detect_green", "error": str(exc)[:300]})
 
 
 def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, enable_mcp: bool,
-                   commented: list, spoke: list) -> None:
+                   commented: list, spoke: list, errors: list | None = None) -> None:
     """Retry every owed comment and Grove line that is due — new this
     tick or carried over from any earlier one. The GitHub half never
     needs `call`/`enable_mcp`; only the Grove half does, and when the
     broker is down it is reported `unreachable` rather than silently
-    skipped."""
+    skipped.
+
+    Loki's re-audit, HIGH finding: the Grove line used to be gated on the
+    comment's own status (`posted`/`green`) — a GitHub outage silenced
+    Grove too, even though the Grove line needs nothing from GitHub: it
+    is built straight from the entry's own legs and the PR URL. That gate
+    is gone; the two channels are now fully independent, each with its
+    own `due()`/backoff/stall state.
+
+    A `rate_limited` result from GitHub is not a failure: it does not
+    call `record_failure` (no attempt burned) — `record_rate_limited`
+    honours `Retry-After` instead. Every per-entry step is guarded so a
+    schema surprise on one head cannot kill the whole drain for every
+    other head this tick."""
     from willow_bot import pr_voice
 
     for head_key in ci_comments.head_keys(owed):
         entry = owed[head_key]
-        repo, pr, head_sha, where = entry["repo"], entry["pr"], entry["head_sha"], entry["where"]
-        cs = entry.get("comment") or {}
-        if ci_comments.due(cs, tick=tick):
-            if entry.get("pending_kind") == "green":
-                body = _ci_red_green_body(where, head_sha, by=entry.get("green_by", head_sha),
-                                          at=entry.get("green_at", ""))
-            else:
-                body = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
-            result = pr_voice.upsert_ci_red_comment(repo, int(pr), head_sha, body)
-            if result.get("status") == "ok":
-                new_status = "green" if entry.get("pending_kind") == "green" else "posted"
-                ci_comments.record_success(cs, status=new_status, tick=tick)
-                cs["comment_id"] = result.get("comment_id")
-                entry.pop("pending_kind", None)
-                commented.append({"repo_pr": where, "head_sha": head_sha,
-                                  "comment_id": result.get("comment_id"), "action": result.get("action"),
-                                  "reason": None})
-            else:
-                reason = (f"missing permission: {result['missing_permission']}"
-                         if result.get("missing_permission")
-                         else result.get("detail", "unknown error"))
-                ci_comments.record_failure(cs, error=reason, tick=tick)
-                commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
-                                  "action": "skipped", "reason": reason})
+        try:
+            repo, pr, head_sha, where = entry["repo"], entry["pr"], entry["head_sha"], entry["where"]
+            cs = entry.get("comment") or {}
+            if ci_comments.due(cs, tick=tick):
+                if entry.get("pending_kind") == "green":
+                    body = _ci_red_green_body(where, head_sha, by=entry.get("green_by", head_sha),
+                                              at=entry.get("green_at", ""))
+                else:
+                    body = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
+                result = pr_voice.upsert_ci_red_comment(repo, int(pr), head_sha, body)
+                if result.get("status") == "ok":
+                    new_status = "green" if entry.get("pending_kind") == "green" else "posted"
+                    ci_comments.record_success(cs, status=new_status, tick=tick)
+                    cs["comment_id"] = result.get("comment_id")
+                    entry.pop("pending_kind", None)
+                    commented.append({"repo_pr": where, "head_sha": head_sha,
+                                      "comment_id": result.get("comment_id"), "action": result.get("action"),
+                                      "reason": None})
+                elif result.get("status") == "rate_limited":
+                    ci_comments.record_rate_limited(cs, retry_after=result.get("retry_after"), tick=tick)
+                    commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
+                                      "action": "skipped",
+                                      "reason": f"rate limited, paused until tick {cs.get('paused_until')}"})
+                else:
+                    reason = (f"missing permission: {result['missing_permission']}"
+                             if result.get("missing_permission")
+                             else result.get("detail", "unknown error"))
+                    ci_comments.record_failure(cs, error=reason, tick=tick)
+                    commented.append({"repo_pr": where, "head_sha": head_sha, "comment_id": None,
+                                      "action": "skipped", "reason": reason})
 
-        sp = entry.get("spoke") or {}
-        if sp.get("status") != "pending" or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX):
-            continue
-        if cs.get("status") not in ("posted", "green"):
-            continue  # nothing has actually landed on the PR yet to point Grove at
-        if not enable_mcp or call is None:
-            spoke.append({"channel": "willow", "state": "unreachable"})
-            continue
-        if not ci_comments.due(sp, tick=tick):
-            continue
-        pr_url = f"https://github.com/{repo}/pull/{pr}"
-        body_for_summary = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
-        summary = _grove_summary(body_for_summary, pr_url)
-        result, err = pace.call(call, "grove_send_message", {
-            "app_id": app, "channel_name": "willow", "content": summary, "sender": _grove_sender(),
-        })
-        if err is None:
-            ci_comments.record_success(sp, status="posted", tick=tick)
-            spoke.append({"channel": "willow", "ok": True})
-        else:
-            ci_comments.record_failure(sp, error=err, tick=tick)
-            spoke.append({"channel": "willow", "ok": False, "reason": err})
+            sp = entry.get("spoke") or {}
+            if sp.get("status") not in ("pending", "stalled") or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX):
+                continue
+            if not enable_mcp or call is None:
+                spoke.append({"channel": "willow", "state": "unreachable"})
+                continue
+            if not ci_comments.due(sp, tick=tick):
+                continue
+            pr_url = f"https://github.com/{repo}/pull/{pr}"
+            body_for_summary = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
+            summary = _grove_summary(body_for_summary, pr_url)
+            result, err = pace.call(call, "grove_send_message", {
+                "app_id": app, "channel_name": "willow", "content": summary, "sender": _grove_sender(),
+            })
+            if err is None:
+                ci_comments.record_success(sp, status="posted", tick=tick)
+                if cs.get("status") in ("posted", "green"):
+                    # Both channels have now landed at least once for this
+                    # head — the failure blocks are only needed to build a
+                    # comment/Grove body, and this entry is done doing that
+                    # until something ABOUT it changes (a new leg, a green
+                    # edit), which re-fetches anyway (`_ci_owed_merge_new_legs`).
+                    ci_comments.strip_blocks(entry)
+                spoke.append({"channel": "willow", "ok": True})
+            else:
+                ci_comments.record_failure(sp, error=err, tick=tick)
+                spoke.append({"channel": "willow", "ok": False, "reason": err})
+        except Exception as exc:  # noqa: BLE001 — one head's surprise must not stop the whole drain
+            if errors is not None:
+                errors.append({"key": head_key, "step": "drain", "error": str(exc)[:300]})
 
 
 def _ci_where(item: dict) -> str:
@@ -1603,14 +1695,33 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         from willow_bot.steward import mcp_client
 
         call = mcp_client.call
-    owed = ci_comments.load()
+    owed, corrupt_reason = ci_comments.load()
+    quarantined = None
+    if corrupt_reason:
+        # Never silently read a corrupt table as {} and forget every owed
+        # head with no trace (Loki's re-audit, drain-guard finding): move
+        # the unreadable file aside and start a fresh table, with a
+        # receipt line naming exactly what happened.
+        quarantined = ci_comments.quarantine_corrupt()
+    receipt["ci_comments_table"] = (
+        {"status": "unreadable", "reason": corrupt_reason, "quarantined": quarantined}
+        if corrupt_reason else {"status": "ok"}
+    )
     tick_n = ci_comments.next_tick(owed)
     commented: list = []
     spoke: list = []
-    _ci_owed_merge_new_legs(owed, groups, commented=commented)
-    _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"])
+    drain_errors: list = []
+    _ci_owed_merge_new_legs(owed, groups, commented=commented, errors=drain_errors)
+    _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"], errors=drain_errors)
     _ci_owed_drain(owed, tick=tick_n, app=app, pace=pace, call=call, enable_mcp=enable_mcp,
-                  commented=commented, spoke=spoke)
+                  commented=commented, spoke=spoke, errors=drain_errors)
+    receipt["stalled"] = ci_comments.stalled_report(owed)
+    if drain_errors:
+        receipt["ci_comments_errors"] = drain_errors
+    retired = ci_comments.retire_check(owed, closed=closed, tick=tick_n)
+    retired += ci_comments.prune_old(owed, now_epoch=now)
+    if retired:
+        receipt["retired"] = retired
     ci_comments.save(owed)
 
     # Resolve-on-green candidates. Two honest routes to "this item is done":

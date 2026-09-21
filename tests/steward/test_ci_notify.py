@@ -123,6 +123,18 @@ SHA = "632225cbe7980e169929d2ca0cc2d89ea15eedf6"
 SHA2 = "9a61076c01b294fa18e59750ba09841d25aedc88"
 
 
+def _watcher_sends(c):
+    """This file tests the WATCHER's own Grove line (`_notify_watchers`,
+    one line, no newline). Since dispatch E026CFE7's re-audit, the
+    steward ALSO sends an unconditional, independent CI-red Grove line
+    per red head through `ci_comments` (fix: Grove no longer waits on the
+    GitHub comment landing) — a multi-line message (header + failure
+    blocks + PR url) that fires regardless of a watch row. Filter it out
+    here so these tests keep checking only what they were written to
+    check."""
+    return [m for m in c.named("grove_send_message") if "\n" not in m["content"]]
+
+
 # ── the watch file ───────────────────────────────────────────────────────────
 
 def test_watch_reads_the_row_the_broker_wrote(home):
@@ -154,7 +166,7 @@ def test_filed_red_on_a_watched_pr_is_told_to_the_seat_and_the_pr(home, monkeypa
     deposits.append_local(_row(RAT, SHA, 2, "test", "failure", pr=48))
     r = tick.run_ci()
     assert len(r["filed"]) == 1
-    sends = c.named("grove_send_message")
+    sends = _watcher_sends(c)
     assert len(sends) == 1
     msg = sends[0]
     assert msg["channel_name"] == "willow" and msg["sender"] == "willow-bot" and msg["app_id"] == "willow"
@@ -180,7 +192,7 @@ def test_a_re_tick_does_not_repeat_a_delivered_line(home, monkeypatch):
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
     tick.run_ci()
     r2 = tick.run_ci()
-    assert len(c.named("grove_send_message")) == 1
+    assert len(_watcher_sends(c)) == 1
     assert len(comments.calls) == 1
     assert r2["notified"] == [] and r2["notified_counts"]["sent"] == 0
 
@@ -195,7 +207,7 @@ def test_a_second_red_leg_joining_the_item_does_not_resend(home, monkeypatch):
     deposits.append_local(_row(RAT, SHA, 2, "test", "failure", pr=48))
     r2 = tick.run_ci()
     assert len(r2["appended"]) == 1
-    assert len(c.named("grove_send_message")) == 1
+    assert len(_watcher_sends(c)) == 1
 
 
 # ── stuck wording ────────────────────────────────────────────────────────────
@@ -231,7 +243,7 @@ def test_resolve_posts_a_follow_up_and_edits_the_comment(home, monkeypatch):
     deposits.append_local(_row(RAT, SHA2, 2, "lint", "success", pr=48, received_at=_iso(base + 60)))
     r = tick.run_ci()
     assert len(r["resolved"]) == 1 and r["resolved"][0]["how"] == "superseded"
-    sends = c.named("grove_send_message")
+    sends = _watcher_sends(c)
     assert len(sends) == 2
     assert sends[1]["content"] == f"CI resolved: {RAT}#48 @ {SHA[:7]} — superseded by {SHA2[:7]}, green"
     # The comment on the RED head is edited to say so — same head, second write.
@@ -245,7 +257,7 @@ def test_resolve_posts_a_follow_up_and_edits_the_comment(home, monkeypatch):
     assert not any(v.get("head_sha") == SHA for v in state["ci_items"].values())
     # And once more: nothing.
     r3 = tick.run_ci()
-    assert r3["notified"] == [] and len(c.named("grove_send_message")) == 2
+    assert r3["notified"] == [] and len(_watcher_sends(c)) == 2
 
 
 def test_a_refused_resolved_line_survives_the_prune_and_is_delivered_next_tick(home, monkeypatch):
@@ -276,7 +288,7 @@ def test_a_refused_resolved_line_survives_the_prune_and_is_delivered_next_tick(h
     sends["refuse_resolved"] = False
     r2 = tick.run_ci()
     assert r2["notified"][0]["kind"] == "resolved" and r2["notified"][0]["state"] == "sent"
-    assert [m["content"][:11] for m in c.named("grove_send_message")] == ["CI red: wil", "CI resolved", "CI resolved"]
+    assert [m["content"][:11] for m in _watcher_sends(c)] == ["CI red: wil", "CI resolved", "CI resolved"]
     state = json.loads(state_path().read_text())
     assert not any(v.get("head_sha") == SHA for v in state["ci_items"].values())
     assert r["resolved"][0]["item_id"] not in state["ci_notified"]
@@ -300,7 +312,7 @@ def test_a_refused_grove_send_is_a_line_and_retried_next_tick(home, monkeypatch)
     c.refuse = None
     r2 = tick.run_ci()
     assert r2["notified"][0]["state"] == "sent"
-    assert len(c.named("grove_send_message")) == 2 and len(c.named("human_required_enqueue")) == 1
+    assert len(_watcher_sends(c)) == 2 and len(c.named("human_required_enqueue")) == 1
 
 
 def test_a_refused_pr_comment_is_reported_but_the_seat_was_told(home, monkeypatch):
@@ -349,7 +361,7 @@ def test_an_unwatched_pr_is_skipped_and_said_only_when_filed(home, monkeypatch):
     r = tick.run_ci()
     assert r["notified"] == [{"item_id": r["filed"][0]["id"], "where": f"{RAT}#48", "kind": "filed",
                               "state": "skipped", "reason": "no watch row"}]
-    assert c.named("grove_send_message") == [] and comments.calls == []
+    assert _watcher_sends(c) == [] and comments.calls == []
     r2 = tick.run_ci()
     assert r2["notified"] == []
 
@@ -372,7 +384,7 @@ def test_the_sender_and_channel_come_from_the_row_and_the_env(home, monkeypatch)
     _use(monkeypatch, c)
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
     tick.run_ci()
-    msg = c.named("grove_send_message")[0]
+    msg = _watcher_sends(c)[0]
     assert msg["channel_name"] == "hanuman" and msg["sender"] == "steward"
 
 

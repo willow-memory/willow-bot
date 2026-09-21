@@ -9,12 +9,15 @@ and the MCP client are fakes; nothing here reaches the network.
 """
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 import pytest
 
 from willow_bot import deposits
-from willow_bot.steward import ci_log, tick
+from willow_bot.steward import ci_comments, ci_log, tick
+from willow_bot.steward.config import state_path
 
 
 @pytest.fixture
@@ -342,8 +345,8 @@ def test_grove_is_told_unconditionally_for_a_willow_memory_repo_with_no_watch_ro
     assert len(sends) == 1
     assert sends[0]["channel_name"] == "willow"
     assert f"https://github.com/{RAT}/pull/48" in sends[0]["content"]
-    # first 10 lines only
-    assert len(sends[0]["content"].splitlines()) <= 11
+    # head(60) + tail(60) of the body, not a naive first-N-lines cut
+    assert len(sends[0]["content"].splitlines()) <= 121
 
 
 def test_grove_is_not_told_for_a_non_willow_memory_repo(home, monkeypatch):
@@ -395,3 +398,180 @@ def test_prless_head_skips_comment_with_reason(home, monkeypatch):
     assert r["commented"] == [{"repo_pr": f"{RAT}@{SHA[:12]}", "head_sha": SHA,
                                "comment_id": None, "action": "skipped", "reason": "no pr"}]
     assert r["spoke"] == []
+
+
+# ── Loki's re-audit (dispatch E026CFE7, second pass): never abandon ──────────
+# a GitHub outage stalls the comment, never abandons it, and never silences
+# Grove (which needs nothing from GitHub) while it waits.
+
+def test_github_down_45_ticks_then_up_lands_within_12_never_abandons(home, monkeypatch):
+    _prime()
+    c = _Client()
+    wall = {"tick": 0}
+    UP_AFTER = 45  # GitHub is down for this many of THIS test's own ticks
+
+    def _flaky(repo, pr_number, head_sha, body):
+        if wall["tick"] <= UP_AFTER:
+            return {"status": "could-not-run", "detail": "502 Bad Gateway", "action": "skipped"}
+        return {"status": "ok", "action": "created", "comment_id": 42,
+                "url": f"https://github.com/{repo}/pull/{pr_number}#c42"}
+
+    _use(monkeypatch, c, comments=_flaky)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+
+    wall["tick"] = 1
+    first = tick.run_ci()
+    # Grove hears immediately — it never waited on the comment landing.
+    assert first["spoke"] == [{"channel": "willow", "ok": True}]
+
+    saw_stalled = False
+    landed_at = None
+    for i in range(2, UP_AFTER + ci_comments.STALL_PROBE_TICKS + 4):
+        wall["tick"] = i
+        r = tick.run_ci()
+        if any(x["channel"] == "comment" and x["attempts"] >= ci_comments.MAX_ATTEMPTS
+               for x in r["stalled"]):
+            saw_stalled = True
+        created = [e for e in r["commented"] if e["action"] == "created"]
+        if created:
+            landed_at = i
+            break
+    assert saw_stalled, "a long outage must read `stalled` on the receipt, never silence"
+    assert landed_at is not None, "GitHub coming back must eventually post the comment — never abandoned"
+    assert landed_at <= UP_AFTER + ci_comments.STALL_PROBE_TICKS + 3
+
+
+# ── a rate limit is a pause, not a failure ────────────────────────────────────
+
+def test_rate_limited_does_not_burn_an_attempt_and_honours_retry_after(home, monkeypatch):
+    _prime()
+    c = _Client()
+    calls: list = []
+
+    def _flaky(repo, pr_number, head_sha, body):
+        calls.append(1)
+        if len(calls) == 1:
+            return {"status": "rate_limited", "detail": "GitHub rate limit posting a PR comment",
+                    "retry_after": "900", "action": "skipped"}
+        return {"status": "ok", "action": "created", "comment_id": 7,
+                "url": f"https://github.com/{repo}/pull/{pr_number}#c7"}
+
+    _use(monkeypatch, c, comments=_flaky)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+
+    r1 = tick.run_ci()
+    assert r1["commented"][0]["action"] == "skipped"
+    assert "rate limited" in r1["commented"][0]["reason"]
+    owed, _ = ci_comments.load()
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    assert entry["comment"]["attempts"] == 0, "a rate limit must never increment attempts"
+
+    # retry_after=900s at the 300s default interval is 3 ticks — paused
+    # through ticks 2 and 3, due again at tick 4.
+    tick.run_ci()
+    tick.run_ci()
+    assert len(calls) == 1, "still paused; must not retry before Retry-After elapses"
+    r4 = tick.run_ci()
+    assert len(calls) == 2
+    assert r4["commented"][0]["action"] == "created"
+
+
+# ── broker refused: re-fetch/reset only on a genuinely new leg ───────────────
+
+def test_broker_refused_every_tick_fetches_and_edits_once(home, monkeypatch):
+    _prime()
+    c = _Client(refuse={"human_required_enqueue": "refused"})
+    fetch_calls = {"n": 0}
+
+    def _fetch(repo, job_id):
+        fetch_calls["n"] += 1
+        return "boring log\n", {"status": "ok"}
+
+    comments = _use(monkeypatch, c, fetch_log=_fetch)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    for _ in range(4):
+        tick.run_ci()
+    assert fetch_calls["n"] == 1
+    assert len(comments.calls) == 1
+
+
+# ── body cap through the REAL ci_log trim, per-leg budgets, balanced fences ──
+
+def test_body_char_cap_via_real_trim_leaves_balanced_fences(home, monkeypatch):
+    _prime()
+    c = _Client()
+    huge_line = "line " + ("x" * 4000)
+    log_text = (
+        "________________________________ FAILURES _________________________________\n"
+        + "\n".join(huge_line for _ in range(2000))
+        + "\n=== 1 failed in 1s ===\n"
+    )
+    comments = _use(monkeypatch, c, fetch_log=lambda repo, job_id: (log_text, {"status": "ok"}),
+                    extract=ci_log.extract_failure_block)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    deposits.append_local(_row(RAT, SHA, 2, "lint", "failure", pr=48))
+    r = tick.run_ci()
+    body = comments.calls[-1]["body"]
+    assert len(body) <= tick.BODY_CHAR_CAP
+    assert body.count("```") % 2 == 0
+    assert body.count("<details>") == body.count("</details>")
+    if "_body capped at" in body:
+        prefix = body[: body.index("_body capped at")]
+        assert prefix.count("```") % 2 == 0
+        assert prefix.count("<details>") == prefix.count("</details>")
+    assert r["commented"][0]["action"] in ("created", "edited")
+
+
+# ── retirement: green retires after one tick, a closed PR retires at once ────
+
+def test_green_entry_is_retired_after_one_tick(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
+    tick.run_ci()
+    deposits.append_local(_row(RAT, SHA2, 2, "lint", "success", pr=48))
+    tick.run_ci()  # this tick edits the comment to green
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed) != [], "retires the NEXT tick, not the same one"
+    r3 = tick.run_ci()
+    owed2, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed2) == []
+    assert r3.get("retired")
+
+
+def test_pr_closed_retires_the_entry_immediately(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed) != []
+    st = state_path()
+    state = json.loads(st.read_text())
+    state["pr_closed"] = {f"{RAT}#48": {"at": "2026-09-21T00:00:00+00:00", "merged": True}}
+    st.write_text(json.dumps(state))
+    r = tick.run_ci()
+    owed2, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed2) == []
+    assert r.get("retired")
+
+
+# ── the drain: guarded, and a corrupt table is quarantined, never {} ─────────
+
+def test_corrupt_owed_table_is_quarantined_not_silently_forgotten(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    p = ci_comments.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{not json", encoding="utf-8")
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert r["ci_comments_table"]["status"] == "unreadable"
+    quarantined = r["ci_comments_table"]["quarantined"]
+    assert quarantined and Path(quarantined).name.startswith("ci_comments.json.corrupt-")
+    assert Path(quarantined).read_text(encoding="utf-8") == "{not json"
+    assert p.exists()
+    assert r["commented"][0]["action"] == "created"

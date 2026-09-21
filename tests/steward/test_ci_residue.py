@@ -358,6 +358,13 @@ def test_ci_paces_through_the_limiter_instead_of_refusing(home, monkeypatch):
 
 def test_ci_stops_paced_at_its_own_budget_and_resumes(home, monkeypatch):
     _prime()
+    # This test is about the FILING loop's own pacer budget
+    # (human_required_enqueue), not the independent CI-red Grove line
+    # (`ci_comments`, unconditional per red head since dispatch E026CFE7's
+    # re-audit) — both share one `_Pacer` per tick by design, so leaving
+    # the Grove prefix matched here would make this test about THAT
+    # contention instead of the one it is named for.
+    monkeypatch.setattr(tick, "_GROVE_CI_RED_REPO_PREFIX", "no-match/")
     t = _fake_time(monkeypatch)
     monkeypatch.setattr(tick, "_CI_TIME_BUDGET_S", 3.0)
     c = _Metered(lambda: t["now"], burst=1, retry_after=2)
