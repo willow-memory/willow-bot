@@ -154,6 +154,101 @@ def upsert_status_comment(
     return receipt
 
 
+# ── the CI-red comment ───────────────────────────────────────────────────────
+#
+# A second, distinct marker from the status comment above: this one carries
+# the failure block the steward pulled from the job log (`steward.ci_log`),
+# not the terse audit/CI-red-count summary `upsert_status_comment` carries.
+# The two never collide on the same PR because they key on different marker
+# text; a head with both a status comment and a ci-red comment gets two
+# comments, each independently idempotent on its own marker.
+
+CI_RED_MARKER_PREFIX = "<!-- willow-bot:ci-red:"
+CI_RED_MARKER_SUFFIX = " -->"
+
+
+def ci_red_comment_marker(head_sha: str) -> str:
+    return f"{CI_RED_MARKER_PREFIX}{head_sha}{CI_RED_MARKER_SUFFIX}"
+
+
+def _has_ci_red_marker(body: str, head_sha: str) -> bool:
+    if not body:
+        return False
+    return ci_red_comment_marker(head_sha) in body
+
+
+def upsert_ci_red_comment(repo: str, pr_number: int, head_sha: str, body: str) -> dict[str, Any]:
+    """Post or edit the ONE per-head-sha CI-red comment. Returns a receipt
+    whose ``action`` is ``created`` | ``edited`` | ``skipped`` — the exact
+    vocabulary the tick's ``commented`` receipt line carries.
+
+    On a 403 while posting or editing, ``ci_log.classify_403`` decides
+    what it means: a rate limit (``X-RateLimit-Remaining`` / ``Retry-After``)
+    is reported as ``status: "rate_limited"``, never as a missing
+    permission; only GitHub's own "you can't do this" wording in the
+    response body names ``missing_permission: "pull_requests:write"``;
+    anything else is ``forbidden_unknown`` with the message quoted.
+    """
+    if not head_sha:
+        return {"status": "could-not-run", "detail": "no head_sha", "action": "skipped"}
+    receipt: dict[str, Any] = {"repo": repo, "pr": pr_number, "head_sha": head_sha}
+    marker = ci_red_comment_marker(head_sha)
+    full_body = f"{marker}\n\n{body}".strip() + "\n"
+    try:
+        headers = github_app._auth_headers(repo)
+    except Exception as exc:  # noqa: BLE001
+        receipt.update(status="could-not-run", detail=f"auth: {exc}"[:400], action="skipped")
+        return receipt
+    try:
+        comments = _list_pr_comments(repo, pr_number, headers)
+    except Exception as exc:  # noqa: BLE001
+        receipt.update(status="could-not-run", detail=f"list: {exc}"[:400], action="skipped")
+        return receipt
+
+    existing = next((c for c in comments if _has_ci_red_marker(c.get("body", ""), head_sha)), None)
+    try:
+        if existing:
+            r = requests.patch(
+                f"https://api.github.com/repos/{repo}/issues/comments/{existing['id']}",
+                headers=headers, json={"body": full_body}, timeout=10,
+            )
+        else:
+            r = requests.post(
+                f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments",
+                headers=headers, json={"body": full_body}, timeout=10,
+            )
+        if getattr(r, "status_code", None) == 403:
+            from willow_bot.steward.ci_log import classify_403
+
+            cls = classify_403(r)
+            if cls["kind"] == "rate_limited":
+                receipt.update(status="rate_limited", detail="GitHub rate limit posting a PR comment",
+                               retry_after=cls.get("retry_after"), action="skipped")
+            elif cls["kind"] == "missing_permission":
+                receipt.update(status="could-not-run", missing_permission="pull_requests:write",
+                               detail=f"GitHub 403 ({cls['message']}) posting a PR comment — the App "
+                                      "installation lacks pull_requests:write",
+                               action="skipped")
+            else:
+                receipt.update(status="could-not-run", forbidden_unknown=True,
+                               detail=f"GitHub 403 posting a PR comment: {cls['message']}"[:400],
+                               action="skipped")
+            return receipt
+        r.raise_for_status()
+        result = r.json()
+        if existing:
+            receipt.update(status="ok", action="edited", comment_id=int(result.get("id", existing["id"])),
+                           url=result.get("html_url", existing.get("html_url", "")))
+        else:
+            receipt.update(status="ok", action="created", comment_id=int(result.get("id", 0)),
+                           url=result.get("html_url", ""))
+    except Exception as exc:  # noqa: BLE001
+        receipt.update(status="could-not-run",
+                       detail=f"{'update' if existing else 'create'}: {exc}"[:400],
+                       action="skipped")
+    return receipt
+
+
 # ── checks ──────────────────────────────────────────────────────────────────
 
 

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import pytest
 
 from willow_bot import deposits, pr_voice
-from willow_bot.steward import pr_watch, tick, voice
+from willow_bot.steward import ci_log, pr_watch, tick, voice
 from willow_bot.steward.config import state_path
 
 
@@ -37,6 +37,13 @@ class _Client:
         self.calls = []
         self.refuse = refuse  # tool name -> error string, or callable(name, inputs, n)
         self.n = 0
+        # `hr-N` numbers the human_required_* calls specifically — the
+        # CI-red comment/Grove line now make their own `grove_send_message`
+        # calls through this same fake client, interleaved with
+        # `human_required_enqueue`/`_resolve` (finding 2, dispatch
+        # E026CFE7), so a plain "Nth call of any kind" id would renumber
+        # `hr-` ids out from under tests that never asked about Grove.
+        self._hr_n = 0
 
     def __call__(self, name, inputs):
         self.calls.append((name, inputs))
@@ -47,7 +54,10 @@ class _Client:
                 return out
         elif isinstance(self.refuse, dict) and name in self.refuse:
             return {"error": self.refuse[name]}
-        return {"ok": True, "id": f"hr-{self.n}"}
+        if name.startswith("human_required"):
+            self._hr_n += 1
+            return {"ok": True, "id": f"hr-{self._hr_n}"}
+        return {"ok": True}
 
     def named(self, name):
         return [i for n, i in self.calls if n == name]
@@ -69,10 +79,40 @@ class _Comments:
                 "comment_id": 1, "url": f"https://github.com/{repo}/pull/{pr_number}#c1"}
 
 
+class _RedComments:
+    """A fake `pr_voice.upsert_ci_red_comment` — one marked row per head.
+    Loki's re-audit finding (b): before this, every test here that filed a
+    red head ran the REAL `ci_log.fetch_job_log` / `upsert_ci_red_comment`
+    (auth failing first, no network reached in the sandbox) — masked by
+    the pre-branch gate, not exercised on purpose. This file is not about
+    the CI-red comment/block (`test_ci_comment.py` is); faking it here
+    just keeps these tests deterministic and off the network."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        self._by_head: dict[str, int] = {}
+        self._next_id = 1
+
+    def __call__(self, repo, pr_number, head_sha, body):
+        self.calls.append({"repo": repo, "pr": pr_number, "head_sha": head_sha, "body": body})
+        if head_sha in self._by_head:
+            return {"status": "ok", "action": "edited", "comment_id": self._by_head[head_sha],
+                    "url": f"https://github.com/{repo}/pull/{pr_number}#c{self._by_head[head_sha]}"}
+        cid = self._next_id
+        self._next_id += 1
+        self._by_head[head_sha] = cid
+        return {"status": "ok", "action": "created", "comment_id": cid,
+                "url": f"https://github.com/{repo}/pull/{pr_number}#c{cid}"}
+
+
 def _use(monkeypatch, client, comments=None):
     monkeypatch.setattr("willow_bot.steward.mcp_client.call", client)
     comments = comments if comments is not None else _Comments()
     monkeypatch.setattr(pr_voice, "upsert_status_comment", comments)
+    monkeypatch.setattr(pr_voice, "upsert_ci_red_comment", _RedComments())
+    monkeypatch.setattr(ci_log, "fetch_job_log", lambda repo, job_id: ("boring log\n", {"status": "ok"}))
+    monkeypatch.setattr(ci_log, "extract_failure_block",
+                        lambda text: {"block": "BOOM: assert False", "trimmed": False, "source": "pytest"})
     return comments
 
 
@@ -113,6 +153,27 @@ SHA = "632225cbe7980e169929d2ca0cc2d89ea15eedf6"
 SHA2 = "9a61076c01b294fa18e59750ba09841d25aedc88"
 
 
+def _watcher_sends(c):
+    """This file tests the WATCHER's own Grove line (`_notify_watchers`,
+    one line, no newline). Since dispatch E026CFE7's re-audit, the
+    steward ALSO sends an unconditional, independent CI-red Grove line
+    per red head through `ci_comments` (fix: Grove no longer waits on the
+    GitHub comment landing) — a multi-line message (header + failure
+    blocks + PR url). Loki's re-audit (probe J) found the two used to
+    double up in the same channel for a "filed" red/stuck item; the
+    watcher's own one-liner now steps aside for it (`willow-memory/*`
+    repos, `#willow` channel, a non-stuck "filed" item), so this filter
+    (kept for the block, which still shows up in the same fake client)
+    still isolates what these tests were written to check."""
+    return [m for m in c.named("grove_send_message") if "\n" not in m["content"]]
+
+
+def _block_sends(c):
+    """The steward's own unconditional CI-red Grove block — the multi-line
+    counterpart `_watcher_sends` filters out."""
+    return [m for m in c.named("grove_send_message") if "\n" in m["content"]]
+
+
 # ── the watch file ───────────────────────────────────────────────────────────
 
 def test_watch_reads_the_row_the_broker_wrote(home):
@@ -133,9 +194,14 @@ def test_watch_absent_or_malformed_reads_as_empty(home):
     assert list(pr_watch.load()) == ["b#2"]
 
 
-# ── filed red on a watched PR → one Grove message + one PR comment ───────────
+# ── filed red on a watched PR → one Grove message (the block) + one PR comment
 
 def test_filed_red_on_a_watched_pr_is_told_to_the_seat_and_the_pr(home, monkeypatch):
+    """Loki's re-audit, probe J: a watched PR used to hear the watcher's
+    one-liner AND the steward's own CI-red Grove block, twice into
+    #willow for one red head. The block (the real failure detail) is the
+    one Grove voice now; the watcher's line steps aside for it, and the
+    PR's own status comment is still kept current."""
     _prime()
     _watch(RAT, 48)
     c = _Client()
@@ -144,20 +210,20 @@ def test_filed_red_on_a_watched_pr_is_told_to_the_seat_and_the_pr(home, monkeypa
     deposits.append_local(_row(RAT, SHA, 2, "test", "failure", pr=48))
     r = tick.run_ci()
     assert len(r["filed"]) == 1
-    sends = c.named("grove_send_message")
-    assert len(sends) == 1
-    msg = sends[0]
-    assert msg["channel_name"] == "willow" and msg["sender"] == "willow-bot" and msg["app_id"] == "willow"
-    assert msg["content"] == (f"CI red: {RAT}#48 @ {SHA[:7]} — lint, test — "
-                              f"https://github.com/{RAT}/actions/runs/1/job/1")
-    # The PR comment carries the same line, once, keyed on the head.
+    assert _watcher_sends(c) == [], "the one-liner steps aside for the block"
+    blocks = _block_sends(c)
+    assert len(blocks) == 1
+    assert blocks[0]["channel_name"] == "willow" and blocks[0]["sender"] == "willow-bot"
+    assert f"https://github.com/{RAT}/pull/48" in blocks[0]["content"]
+    # The status comment (a SEPARATE mechanism from the CI-red comment)
+    # still carries the CI line, once, keyed on the head.
     assert len(comments.calls) == 1
     assert comments.calls[0]["head_sha"] == SHA and comments.calls[0]["pr"] == 48
-    assert msg["content"] in comments.calls[0]["body"]
     line = r["notified"][0]
-    assert line["state"] == "sent" and line["kind"] == "filed" and line["channel"] == "#willow"
+    assert line["state"] == "skipped" and line["kind"] == "filed" and line["channel"] == "#willow"
+    assert line["reason"] == "ci-red block covers this channel"
     assert line["comment"]["state"] == "sent" and line["comment"]["action"] == "created"
-    assert r["notified_counts"] == {"sent": 1, "refused": 0, "skipped": 0, "stopped": 0}
+    assert r["notified_counts"] == {"sent": 0, "refused": 0, "skipped": 1, "stopped": 0}
     state = json.loads(state_path().read_text())
     assert "filed" in state["ci_notified"][r["filed"][0]["id"]]
 
@@ -170,7 +236,7 @@ def test_a_re_tick_does_not_repeat_a_delivered_line(home, monkeypatch):
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
     tick.run_ci()
     r2 = tick.run_ci()
-    assert len(c.named("grove_send_message")) == 1
+    assert _watcher_sends(c) == [], "suppressed in favour of the block, and never repeated either way"
     assert len(comments.calls) == 1
     assert r2["notified"] == [] and r2["notified_counts"]["sent"] == 0
 
@@ -185,7 +251,7 @@ def test_a_second_red_leg_joining_the_item_does_not_resend(home, monkeypatch):
     deposits.append_local(_row(RAT, SHA, 2, "test", "failure", pr=48))
     r2 = tick.run_ci()
     assert len(r2["appended"]) == 1
-    assert len(c.named("grove_send_message")) == 1
+    assert _watcher_sends(c) == []
 
 
 # ── stuck wording ────────────────────────────────────────────────────────────
@@ -221,9 +287,13 @@ def test_resolve_posts_a_follow_up_and_edits_the_comment(home, monkeypatch):
     deposits.append_local(_row(RAT, SHA2, 2, "lint", "success", pr=48, received_at=_iso(base + 60)))
     r = tick.run_ci()
     assert len(r["resolved"]) == 1 and r["resolved"][0]["how"] == "superseded"
-    sends = c.named("grove_send_message")
-    assert len(sends) == 2
-    assert sends[1]["content"] == f"CI resolved: {RAT}#48 @ {SHA[:7]} — superseded by {SHA2[:7]}, green"
+    # The "filed" one-liner stepped aside for the CI-red block (probe J);
+    # "resolved" is a different kind and is unaffected — the block never
+    # speaks again once posted, so this follow-up is still the only word
+    # of the resolve reaching Grove.
+    sends = _watcher_sends(c)
+    assert len(sends) == 1
+    assert sends[0]["content"] == f"CI resolved: {RAT}#48 @ {SHA[:7]} — superseded by {SHA2[:7]}, green"
     # The comment on the RED head is edited to say so — same head, second write.
     assert [x["head_sha"] for x in comments.calls] == [SHA, SHA]
     assert "CI resolved:" in comments.calls[1]["body"]
@@ -235,7 +305,7 @@ def test_resolve_posts_a_follow_up_and_edits_the_comment(home, monkeypatch):
     assert not any(v.get("head_sha") == SHA for v in state["ci_items"].values())
     # And once more: nothing.
     r3 = tick.run_ci()
-    assert r3["notified"] == [] and len(c.named("grove_send_message")) == 2
+    assert r3["notified"] == [] and len(_watcher_sends(c)) == 1
 
 
 def test_a_refused_resolved_line_survives_the_prune_and_is_delivered_next_tick(home, monkeypatch):
@@ -266,7 +336,10 @@ def test_a_refused_resolved_line_survives_the_prune_and_is_delivered_next_tick(h
     sends["refuse_resolved"] = False
     r2 = tick.run_ci()
     assert r2["notified"][0]["kind"] == "resolved" and r2["notified"][0]["state"] == "sent"
-    assert [m["content"][:11] for m in c.named("grove_send_message")] == ["CI red: wil", "CI resolved", "CI resolved"]
+    # The "filed" one-liner stepped aside for the CI-red block (probe J);
+    # only the two "resolved" attempts (refused, then sent) are the
+    # watcher's own sends here.
+    assert [m["content"][:11] for m in _watcher_sends(c)] == ["CI resolved", "CI resolved"]
     state = json.loads(state_path().read_text())
     assert not any(v.get("head_sha") == SHA for v in state["ci_items"].values())
     assert r["resolved"][0]["item_id"] not in state["ci_notified"]
@@ -275,8 +348,11 @@ def test_a_refused_resolved_line_survives_the_prune_and_is_delivered_next_tick(h
 # ── refusal → retried next tick ─────────────────────────────────────────────
 
 def test_a_refused_grove_send_is_a_line_and_retried_next_tick(home, monkeypatch):
+    # A channel other than #willow: this test is about the WATCHER's own
+    # send-refusal/retry mechanics, not the CI-red block that now covers
+    # #willow for a filed item on a willow-memory/* repo (probe J).
     _prime()
-    _watch(RAT, 48)
+    _watch(RAT, 48, channel="#ops")
     c = _Client(refuse={"grove_send_message": "postgres_unavailable"})
     comments = _use(monkeypatch, c)
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
@@ -290,12 +366,14 @@ def test_a_refused_grove_send_is_a_line_and_retried_next_tick(home, monkeypatch)
     c.refuse = None
     r2 = tick.run_ci()
     assert r2["notified"][0]["state"] == "sent"
-    assert len(c.named("grove_send_message")) == 2 and len(c.named("human_required_enqueue")) == 1
+    assert len(_watcher_sends(c)) == 2 and len(c.named("human_required_enqueue")) == 1
 
 
 def test_a_refused_pr_comment_is_reported_but_the_seat_was_told(home, monkeypatch):
+    # A channel other than #willow: this is about the WATCHER's own send
+    # succeeding while the STATUS comment fails, not the CI-red block.
     _prime()
-    _watch(RAT, 48)
+    _watch(RAT, 48, channel="#ops")
     c = _Client()
     _use(monkeypatch, c, _Comments(ok=False))
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
@@ -306,8 +384,10 @@ def test_a_refused_pr_comment_is_reported_but_the_seat_was_told(home, monkeypatc
 
 
 def test_a_spent_budget_stops_the_notification_and_retries(home, monkeypatch):
+    # A channel other than #willow: this is about the WATCHER's own
+    # budget-stop/retry mechanics, not the CI-red block.
     _prime()
-    _watch(RAT, 48)
+    _watch(RAT, 48, channel="#ops")
 
     def refuse(name, inputs, n):
         if name == "grove_send_message":
@@ -339,7 +419,7 @@ def test_an_unwatched_pr_is_skipped_and_said_only_when_filed(home, monkeypatch):
     r = tick.run_ci()
     assert r["notified"] == [{"item_id": r["filed"][0]["id"], "where": f"{RAT}#48", "kind": "filed",
                               "state": "skipped", "reason": "no watch row"}]
-    assert c.named("grove_send_message") == [] and comments.calls == []
+    assert _watcher_sends(c) == [] and comments.calls == []
     r2 = tick.run_ci()
     assert r2["notified"] == []
 
@@ -362,7 +442,7 @@ def test_the_sender_and_channel_come_from_the_row_and_the_env(home, monkeypatch)
     _use(monkeypatch, c)
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
     tick.run_ci()
-    msg = c.named("grove_send_message")[0]
+    msg = _watcher_sends(c)[0]
     assert msg["channel_name"] == "hanuman" and msg["sender"] == "steward"
 
 

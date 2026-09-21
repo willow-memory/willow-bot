@@ -41,13 +41,26 @@ class _Client:
         self.calls = []
         self.result = result
         self.n = 0
+        # `hr-N` ids number the human_required_* calls specifically — the
+        # CI-red comment/Grove line now run their own `grove_send_message`
+        # calls through this same fake client, independently of and
+        # interleaved with `human_required_enqueue`/`_resolve` (finding 2,
+        # dispatch E026CFE7), so a plain "Nth call of any kind" counter
+        # would renumber `hr-` ids out from under tests that never asked
+        # about Grove at all.
+        self._hr_n = 0
 
     def __call__(self, name, inputs):
         self.calls.append((name, inputs))
         self.n += 1
         if callable(self.result):
             return self.result(name, inputs, self.n)
-        return self.result if self.result is not None else {"ok": True, "id": f"hr-{self.n}"}
+        if self.result is not None:
+            return self.result
+        if name.startswith("human_required"):
+            self._hr_n += 1
+            return {"ok": True, "id": f"hr-{self._hr_n}"}
+        return {"ok": True}
 
     def named(self, name):
         return [i for n, i in self.calls if n == name]
@@ -187,7 +200,10 @@ def test_one_item_per_head_naming_every_red_leg(home, monkeypatch):
     assert state["ci_filed"] == {f"{SHA}:1": "hr-1", f"{SHA}:3": "hr-1"}
     assert state["ci_items"][f"{GROVE}#76@{SHA}"]["id"] == "hr-1"
     r2 = tick.run_ci()
-    assert r2["red"] == [] and r2["filed"] == [] and len(c.calls) == 1
+    # `c.calls` also carries the steward's own independent CI-red Grove
+    # line (`ci_comments`, unconditional per red head since dispatch
+    # E026CFE7's re-audit) — count filings specifically, not every call.
+    assert r2["red"] == [] and r2["filed"] == [] and len(c.named("human_required_enqueue")) == 1
 
 
 def test_a_redelivered_completion_is_not_filed_twice(home, monkeypatch):
@@ -199,7 +215,7 @@ def test_a_redelivered_completion_is_not_filed_twice(home, monkeypatch):
     deposits.append_local(_row(GROVE, SHA, 1, "title", "failure"))
     r = tick.run_ci()
     assert len(r["red"]) == 1 and r["filed"] == [] and r["appended"] == [] and r["skipped"] == 1
-    assert len(c.calls) == 1
+    assert len(c.named("human_required_enqueue")) == 1
 
 
 def test_a_new_leg_on_a_filed_head_joins_its_item(home, monkeypatch):
@@ -270,8 +286,12 @@ def test_a_refusal_holds_the_offset_and_retries_only_the_unfiled(home, monkeypat
     _seed()
     deposits.append_local(_row("willow-memory/willow-mcp", SHA2, 20, "lint", "failure", pr=550))
 
+    denied = {"once": False}
+
     def answer(name, inputs, n):
-        if n == 2:
+        if (name == "human_required_enqueue" and "#550" in inputs.get("title", "")
+                and not denied["once"]):
+            denied["once"] = True
             return {"error": "denied: human_required_enqueue not in tools_allowed"}
         return {"ok": True, "id": f"hr-{n}"}
 
@@ -557,10 +577,18 @@ def test_a_refused_resolve_is_reported_and_retried(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     _seed()
 
+    resolve_calls = {"n": 0}
+    hr_n = {"n": 0}
+
     def answer(name, inputs, n):
-        if name == "human_required_resolve" and n == 2:
-            return {"error": "unknown_item"}
-        return {"ok": True, "id": f"hr-{n}"}
+        if name == "human_required_resolve":
+            resolve_calls["n"] += 1
+            if resolve_calls["n"] == 1:
+                return {"error": "unknown_item"}
+        if name.startswith("human_required"):
+            hr_n["n"] += 1
+            return {"ok": True, "id": f"hr-{hr_n['n']}"}
+        return {"ok": True}
 
     c = _Client(result=answer)
     _use(monkeypatch, c)
