@@ -80,11 +80,19 @@ def run_once(*, do_host_sync: bool | None = None, scan_filters: list[str] | None
 
     state = _load_or_init_state(path, keys)
     # The scan receipt: how many PRs the bot sees open, under which filters,
-    # at what time. An unfiltered scan that finds nothing says so rather
-    # than leaving an empty list to be mistaken for "no PRs are open" —
-    # and the legacy clear trusts `open` only through this record.
+    # at what time, and what it could NOT list. An unfiltered scan that
+    # finds nothing says so rather than leaving an empty list to be
+    # mistaken for "no PRs are open" — and the legacy clear and the stuck
+    # backfill trust `open` only through this record. `errors` is the
+    # scan's own incompleteness (fleet.last_scan_errors: a repo, org or
+    # user whose listing failed and was skipped); a consumer reading "not
+    # in the open set" as "closed on GitHub" must refuse for those
+    # (gap 52928edb3fc7, Loki 25CBCB13).
+    from willow_bot.steward import fleet as fleet_mod
+
     state["scan"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                     "open": len(keys), "filters": filters}
+                     "open": len(keys), "filters": filters,
+                     "errors": list(fleet_mod.last_scan_errors)}
     path.write_text(json.dumps(state, indent=2) + "\n")
     scan_receipt: dict = {"event": "steward_scan", **state["scan"]}
     if not keys:
@@ -740,6 +748,43 @@ def _ci_head_key_from_pr(pr_key: str, head_sha: str) -> str:
     return f"{pr_key}@{head_sha}"
 
 
+def _scan_open_set(state: dict) -> tuple[bool, set[str], list[str]]:
+    """``(open_known, open_set, scan_errors)`` — the bot's own view of which
+    PRs are open, trusted only through the scan record ``run_once`` writes:
+    an UNFILTERED scan (before the argv fix the unit's scan ran under the
+    filter ``['loop']`` and wrote ``open = []`` every tick — gap
+    1045a4056d11 — and an empty list from that path is "the scan saw
+    nothing", not "no PRs are open"). ``scan_errors`` is what that scan
+    could not list (``repo:``/``org:``/``user:`` keys from
+    ``fleet.last_scan_errors``); ``open_known`` says the scan ran unfiltered,
+    NOT that it completed — a consumer must ask ``_scan_incomplete_for``
+    before reading absence as closure (Loki 25CBCB13). A record from a build
+    that did not write ``errors`` reads as no errors, as it always has."""
+    scan = state.get("scan")
+    open_prs = state.get("open")
+    open_known = (isinstance(scan, dict) and scan.get("filters") == [] and isinstance(open_prs, list)
+                  and (open_prs != [] or scan.get("open") == 0))
+    open_set = set(open_prs or []) if open_known else set()
+    errors = [e for e in ((scan or {}).get("errors") or []) if isinstance(e, str)] if isinstance(scan, dict) else []
+    return open_known, open_set, errors
+
+
+def _scan_incomplete_for(where: str, scan_errors: list[str]) -> str | None:
+    """The scan-error key that covers ``where`` (``owner/repo#num`` or
+    ``owner/repo@sha``), or None when the scan listed that repo: a
+    ``repo:owner/repo`` failure, or an ``org:owner`` / ``user:owner`` page
+    failure that may have dropped the repo from the fleet list entirely."""
+    repo = where.split("#", 1)[0].split("@", 1)[0]
+    owner = repo.split("/", 1)[0]
+    for key in scan_errors:
+        kind, _, name = key.partition(":")
+        if kind == "repo" and name == repo:
+            return key
+        if kind in ("org", "user") and name == owner:
+            return key
+    return None
+
+
 def _item_is_stuck_only(item: dict, filed: dict, filed_cancelled: dict) -> bool:
     """True when every leg this item ever filed was a cancellation. Items
     this build files say so (``stuck: True``); items from the build before
@@ -1246,11 +1291,7 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
     # scan ran under the filter `['loop']` and wrote `open = []` every tick
     # (gap 1045a4056d11); an empty list from that path is not "no PRs are
     # open", it is "the scan saw nothing", and every real red is kept.
-    scan = state.get("scan")
-    open_prs = state.get("open")
-    open_known = (isinstance(scan, dict) and scan.get("filters") == [] and isinstance(open_prs, list)
-                  and (open_prs != [] or scan.get("open") == 0))
-    open_set = set(open_prs or []) if open_known else set()
+    open_known, open_set, scan_errors = _scan_open_set(state)
     merged = set(state.get("merged_synced") or [])
     kept: list[dict] = []
     to_clear: list[tuple[dict, str]] = []
@@ -1269,8 +1310,15 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
         if where in open_set:
             kept.append({"item_id": str(item.get("id")), "title": title, "reason": "real red on an open PR"})
             continue
+        incomplete = _scan_incomplete_for(where, scan_errors)
+        if incomplete:
+            # The scan could not list this repo, so "not in the open set" is
+            # not "closed" (Loki 25CBCB13). Kept; re-examined next tick.
+            kept.append({"item_id": str(item.get("id")), "title": title, "reason": f"scan incomplete for {incomplete}"})
+            continue
         to_clear.append((item, "PR merged" if where in merged else "PR closed without merge"))
-    receipt.update(listed=len(rows), legacy=len(legacy), kept=kept, open_known=open_known)
+    receipt.update(listed=len(rows), legacy=len(legacy), kept=kept, open_known=open_known,
+                   scan_errors=scan_errors)
     build = build_sha or "unknown sha"
     notes = {
         "cancelled run": f"superseded by the run_ci collapse build ({build}): cancelled run, not a failure",
@@ -1313,7 +1361,10 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
             break
     # Recorded as cleared only when the pass was clean AND complete, so a
     # partial pass runs again next tick for the remainder — never a hand pass.
-    complete = not refused and not remaining
+    # An item kept because the scan could not list its repo is not decided
+    # either way; the pass re-examines it next tick, so it is not recorded.
+    scan_held = any(k["reason"].startswith("scan incomplete for ") for k in kept)
+    complete = not refused and not remaining and not scan_held
     if complete:
         state["ci_legacy_cleared"] = {"at": receipt["at"], "resolved": len(resolved), "kept": len(kept),
                                       "build_sha": build_sha}
@@ -1358,16 +1409,13 @@ def _backfill_stuck_items(state: dict, path: Path, app: str, call, *, at: str, b
     filed_cancelled = state.get("ci_filed_cancelled") or {}
     closed = {k: v for k, v in (state.get("pr_closed") or {}).items() if isinstance(v, dict)}
     merged_synced = set(state.get("merged_synced") or [])
-    scan = state.get("scan")
-    open_prs = state.get("open")
-    open_known = (isinstance(scan, dict) and scan.get("filters") == [] and isinstance(open_prs, list)
-                  and (open_prs != [] or scan.get("open") == 0))
-    open_set = set(open_prs or []) if open_known else set()
+    open_known, open_set, scan_errors = _scan_open_set(state)
 
     candidates = [(k, it) for k, it in items.items()
                   if not it.get("resolved") and it.get("id") and _item_is_stuck_only(it, filed, filed_cancelled)]
     out["candidates"] = len(candidates)
     out["open_known"] = open_known
+    out["scan_errors"] = scan_errors
     build = build_sha or "unknown sha"
     resolved, kept, refused = [], [], []
     to_resolve: list[tuple[str, dict, str, str]] = []
@@ -1382,11 +1430,18 @@ def _backfill_stuck_items(state: dict, path: Path, app: str, call, *, at: str, b
             why = "PR merged per deposit stream" if closed[where].get("merged") else "PR closed per deposit stream"
         elif where in merged_synced:
             why = "PR closed per host sync"
-        elif open_known and where not in open_set:
-            why = "PR not open per the bot's scan"
-        elif open_known:
+        elif open_known and where in open_set:
             kept.append({"item_id": item["id"], "where": where, "reason": "PR open"})
             continue
+        elif open_known and _scan_incomplete_for(where, scan_errors):
+            # Absent from a scan that could not list this repo is not
+            # "closed" (Loki 25CBCB13). Kept, and the pass is not recorded
+            # while any item is held this way, so it re-examines next tick.
+            kept.append({"item_id": item["id"], "where": where,
+                         "reason": f"scan incomplete for {_scan_incomplete_for(where, scan_errors)}"})
+            continue
+        elif open_known:
+            why = "PR not open per the bot's scan"
         else:
             kept.append({"item_id": item["id"], "where": where,
                          "reason": "open set unknown (no unfiltered scan on record)"})
@@ -1410,7 +1465,8 @@ def _backfill_stuck_items(state: dict, path: Path, app: str, call, *, at: str, b
         items[key]["resolved"] = {"by": item["head_sha"], "how": "backfill", "why": why, "at": at}
         resolved.append({"item_id": item["id"], "where": where, "why": why})
 
-    complete = not refused and not remaining
+    scan_held = any(k["reason"].startswith("scan incomplete for ") for k in kept)
+    complete = not refused and not remaining and not scan_held
     state["ci_items"] = items
     if complete:
         state["ci_stuck_backfilled"] = {"at": at, "resolved": len(resolved), "kept": len(kept), "build_sha": build_sha}

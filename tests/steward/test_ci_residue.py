@@ -21,8 +21,10 @@ from datetime import datetime, timezone
 
 import pytest
 
+import subprocess
+
 from willow_bot import deposits
-from willow_bot.steward import inbox, tick
+from willow_bot.steward import fleet, inbox, tick
 from willow_bot.steward.config import state_path
 
 
@@ -763,6 +765,150 @@ def test_backfill_refusal_is_a_line_and_the_pass_is_not_recorded(home, monkeypat
     assert b["recorded"] is False and "ci_stuck_backfilled" not in json.loads(state_path().read_text())
     # and it runs again next tick
     assert tick.run_ci_legacy_clear(build_sha="abc")["backfill"]["ran"] is True
+
+
+# ── a partial scan is not a complete open set (Loki 25CBCB13) ────────────────
+
+def _gh(monkeypatch, *, orgs, repos_by_org, pulls_by_repo, fail_repos=(), fail_orgs=()):
+    """A fake `gh api`: org repo pages, per-repo pulls, and named failures."""
+    def api(path):
+        if path.startswith("/orgs/"):
+            org = path[len("/orgs/"):].split("/", 1)[0]
+            if org in fail_orgs:
+                raise subprocess.CalledProcessError(1, "gh")
+            return [] if "page=2" in path else [{"full_name": r} for r in repos_by_org.get(org, [])]
+        if path.startswith("/users/"):
+            return []
+        if path.startswith("repos/"):
+            repo = path[len("repos/"):].split("/pulls", 1)[0]
+            if repo in fail_repos:
+                raise subprocess.CalledProcessError(1, "gh")
+            return [{"number": n, "title": "t", "html_url": "u"} for n in pulls_by_repo.get(repo, [])]
+        raise AssertionError(path)
+
+    monkeypatch.setattr(fleet, "gh_api", api)
+    monkeypatch.setattr(fleet, "fleet_orgs", lambda: tuple(orgs))
+    monkeypatch.setenv("LOKI_PR_WATCH_SKIP_USER", "1")
+
+
+def test_fleet_records_what_the_scan_could_not_list(monkeypatch):
+    _gh(monkeypatch, orgs=("willow-memory", "Die-Namic-Systems", "forge-play"),
+        repos_by_org={"willow-memory": [MCP, "willow-memory/willow-bot"], "Die-Namic-Systems": ["Die-Namic-Systems/Nestor"]},
+        pulls_by_repo={MCP: [583], "willow-memory/willow-bot": [40], "Die-Namic-Systems/Nestor": [304]},
+        fail_repos=(MCP,), fail_orgs=("forge-play",))
+    rows = list(fleet.iter_open_pulls())
+    assert [(r, n) for r, n, _, _ in rows] == [("Die-Namic-Systems/Nestor", 304), ("willow-memory/willow-bot", 40)]
+    assert fleet.last_scan_errors == ["org:forge-play", f"repo:{MCP}"]
+    # A clean scan clears the record.
+    _gh(monkeypatch, orgs=("willow-memory",), repos_by_org={"willow-memory": [MCP]}, pulls_by_repo={MCP: [583]})
+    assert [(r, n) for r, n, _, _ in fleet.iter_open_pulls()] == [(MCP, 583)]
+    assert fleet.last_scan_errors == []
+
+
+def test_run_once_copies_scan_errors_into_the_scan_record(home, monkeypatch, capsys):
+    monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
+    monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
+    _gh(monkeypatch, orgs=("willow-memory", "Die-Namic-Systems"),
+        repos_by_org={"willow-memory": [MCP], "Die-Namic-Systems": ["Die-Namic-Systems/Nestor"]},
+        pulls_by_repo={MCP: [583], "Die-Namic-Systems/Nestor": [304]}, fail_repos=(MCP,))
+    assert tick.run_once(do_host_sync=False) == 0
+    saved = json.loads(state_path().read_text())
+    assert saved["open"] == ["Die-Namic-Systems/Nestor#304"]
+    assert saved["scan"]["filters"] == [] and saved["scan"]["errors"] == [f"repo:{MCP}"]
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.startswith("{")]
+    (scan_line,) = [ln for ln in lines if ln["event"] == "steward_scan"]
+    assert scan_line["errors"] == [f"repo:{MCP}"]
+
+
+def test_scan_incomplete_for_matches_repo_org_and_user_keys():
+    assert tick._scan_incomplete_for(f"{MCP}#583", [f"repo:{MCP}"]) == f"repo:{MCP}"
+    assert tick._scan_incomplete_for(f"{MCP}@af6799a00000", ["org:willow-memory"]) == "org:willow-memory"
+    assert tick._scan_incomplete_for("rudi193-cmd/terpsi-music#16", ["user:rudi193-cmd"]) == "user:rudi193-cmd"
+    assert tick._scan_incomplete_for(f"{MCP}#583", ["repo:willow-memory/willow-bot", "org:forge-play"]) is None
+    assert tick._scan_incomplete_for(f"{MCP}#583", []) is None
+
+
+def test_backfill_holds_items_whose_repo_the_scan_could_not_list(home, monkeypatch):
+    """The live-box shape with one difference: the scan that ran this tick
+    could not list willow-memory/willow-mcp. #583 is absent from `open`
+    for the wrong reason and must not be retired; the pass is not recorded,
+    so it re-examines next tick."""
+    c = _listing_client()
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    state["scan"]["errors"] = [f"repo:{MCP}"]
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert b["open_known"] is True and b["scan_errors"] == [f"repo:{MCP}"]
+    assert b["resolved"] == [] and c.named("human_required_resolve") == []
+    assert {"item_id": "ac816f29", "where": f"{MCP}#583", "reason": f"scan incomplete for repo:{MCP}"} in b["kept"]
+    assert b["recorded"] is False and "ci_stuck_backfilled" not in json.loads(state_path().read_text())
+    # Next tick: the scan listed the repo and #583 is still not open → resolved, recorded.
+    state = json.loads(state_path().read_text())
+    state["scan"]["errors"] = []
+    state_path().write_text(json.dumps(state) + "\n")
+    b2 = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert [x["item_id"] for x in b2["resolved"]] == ["ac816f29"] and b2["recorded"] is True
+
+
+def test_backfill_org_failure_covers_every_repo_in_the_org(home, monkeypatch):
+    _use(monkeypatch, _listing_client())
+    state = {}
+    _live_box_state(state)
+    state["open"] = []
+    state["scan"] = {"at": "x", "open": 0, "filters": [], "errors": ["org:Die-Namic-Systems"]}
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert [x["item_id"] for x in b["resolved"]] == ["ac816f29"]  # willow-memory was listed
+    assert {"item_id": "a1949d40", "where": "Die-Namic-Systems/Nestor#304",
+            "reason": "scan incomplete for org:Die-Namic-Systems"} in b["kept"]
+    assert b["recorded"] is False
+
+
+def test_backfill_deposit_stream_still_wins_over_an_incomplete_scan(home, monkeypatch):
+    """pr_closed is GitHub's own word for the PR; a scan failure on its repo
+    does not make that unknown."""
+    c = _listing_client()
+    _use(monkeypatch, c)
+    state = {}
+    _live_box_state(state)
+    state["scan"]["errors"] = [f"repo:{MCP}"]
+    state["pr_closed"] = {f"{MCP}#583": {"at": "2026-09-20T22:00:00+00:00", "merged": True}}
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    b = tick.run_ci_legacy_clear(build_sha="abc")["backfill"]
+    assert [(x["item_id"], x["why"]) for x in b["resolved"]] == [("ac816f29", "PR merged per deposit stream")]
+    assert b["recorded"] is True
+
+
+def test_legacy_pass_holds_a_red_whose_repo_the_scan_could_not_list(home, monkeypatch):
+    """The same exposure pre-existed in the legacy clear; fixed in the
+    shared helper, so it holds and does not record either."""
+    def answer(name, inputs, n):
+        if name == "human_required_list":
+            return {"items": [
+                {"id": "leg-1", "kind": "review", "status": "open", "source_ref": "https://github.com/x/j/1",
+                 "title": f"CI red: {MCP}#583 — test failure"},
+                {"id": "leg-2", "kind": "review", "status": "open", "source_ref": "https://github.com/x/j/2",
+                 "title": "CI red: Die-Namic-Systems/Nestor#300 — test failure"},
+            ]}
+        return {"ok": True, "id": f"hr-{n}"}
+
+    c = _Client(result=answer)
+    _use(monkeypatch, c)
+    state = {"scan": {"at": "x", "open": 1, "filters": [], "errors": [f"repo:{MCP}"]},
+             "open": ["Die-Namic-Systems/Nestor#304"], "merged_synced": []}
+    state_path().parent.mkdir(parents=True, exist_ok=True)
+    state_path().write_text(json.dumps(state) + "\n")
+    r = tick.run_ci_legacy_clear(build_sha="abc")
+    assert r["scan_errors"] == [f"repo:{MCP}"]
+    assert [k["item_id"] for k in r["kept"]] == ["leg-1"]
+    assert r["kept"][0]["reason"] == f"scan incomplete for repo:{MCP}"
+    assert [x["item_id"] for x in r["resolved"]] == ["leg-2"]  # Nestor was listed; #300 is not open
+    assert r["recorded"] is False and "ci_legacy_cleared" not in json.loads(state_path().read_text())
 
 
 def test_backfill_runs_after_a_fresh_legacy_pass_too(home, monkeypatch):
