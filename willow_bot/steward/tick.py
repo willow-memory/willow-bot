@@ -1018,24 +1018,20 @@ def _grove_sender() -> str:
 
 _GROVE_CI_RED_REPO_PREFIX = "willow-memory/"
 BODY_CHAR_CAP = 60_000
-
-
-def _head_tail_lines(lines: list[str], *, head_n: int = 60, tail_n: int = 60) -> list[str]:
-    """`lines` unchanged when short enough; otherwise the first `head_n`
-    and last `tail_n`, with a marker naming how many were dropped between
-    them — never a bare tail-only or head-only cut, which for a pytest
-    traceback drops either the failure or the summary."""
-    if len(lines) <= head_n + tail_n:
-        return lines
-    marker = f"... [{len(lines) - head_n - tail_n} lines trimmed] ..."
-    return lines[:head_n] + [marker] + lines[-tail_n:]
+# A Grove `#willow` line, not another 60k-char PR comment — capped by
+# CHARACTERS (Loki's re-audit: a 60-line head/tail cut on a real body of
+# 4 KB-wide lines let a 59,864-char message straight through, because the
+# cut counted LINES, and a wrapped pytest failure line is one very long
+# line).
+GROVE_SUMMARY_CHAR_CAP = 4_000
 
 
 def _head_tail_chars(text: str, budget: int) -> str:
-    """Like `_head_tail_lines`, but on characters — used to fit ONE leg's
-    failure block into its own share of the body cap. Never a bare tail
-    cut: the marker names how many chars were dropped between the kept
-    head and tail."""
+    """`text` unchanged when short enough; otherwise the first and last
+    `budget // 2` characters, with a marker naming how many were dropped
+    between them — never a bare tail-only cut. Used both to fit ONE leg's
+    failure block into its own share of the body cap, and to cap the
+    Grove summary by characters rather than lines."""
     if budget <= 0:
         return ""
     if len(text) <= budget:
@@ -1151,12 +1147,15 @@ def _close_open_blocks(text: str) -> str:
 
 
 def _grove_summary(body: str, pr_url: str) -> str:
-    """The Grove `#willow` line: head(60) + tail(60) of the comment body
-    (never a naive first-N cut), any fence or `<details>` left open by the
-    cut closed, then the PR link."""
-    lines = body.rstrip("\n").splitlines()
-    kept = _head_tail_lines(lines, head_n=60, tail_n=60)
-    text = _close_open_blocks("\n".join(kept).rstrip())
+    """The Grove `#willow` line: the comment body capped by CHARACTERS
+    (head+tail, never a naive first-N cut) at `GROVE_SUMMARY_CHAR_CAP` —
+    never a line-based cut. Loki's re-audit: a 60-line head/tail cut let a
+    real 59,815-char body straight through as a 59,864-char Grove message,
+    because every line in a wrapped pytest failure block can run to 4 KB;
+    "60 lines" was no cap at all on traffic shaped like that. Any fence or
+    `<details>` left open by the cut is closed, then the PR link."""
+    text = _head_tail_chars(body.rstrip("\n"), GROVE_SUMMARY_CHAR_CAP)
+    text = _close_open_blocks(text.rstrip())
     return f"{text}\n{pr_url}"
 
 
@@ -1188,6 +1187,63 @@ def _ci_red_leg_info(repo: str, leg: dict) -> dict:
     info.update(block=extracted["block"], trimmed=extracted["trimmed"], source=extracted["source"],
                 log_truncated=bool(log_receipt.get("truncated")))
     return info
+
+
+def _ci_leg_needs_refetch(info: object) -> bool:
+    """True for a leg whose stored info carries no failure block AND no
+    recorded reason it has none — the exact shape ``strip_blocks`` (or an
+    entry surviving to be rebuilt after a prune) leaves behind. Rendering
+    a leg like this as-is prints a bare ``log unavailable (unknown
+    error)`` for a job whose log the bot already had and threw away on
+    purpose (Loki's re-audit, HIGH finding 1)."""
+    return (isinstance(info, dict) and "_leg_id" in info and not info.get("superseded")
+            and not info.get("block") and not info.get("missing_permission")
+            and not info.get("rate_limited") and "detail" not in info)
+
+
+def _ci_active_legs(entry: dict) -> list[dict]:
+    """Every leg in `entry["legs"]` still worth rendering — excludes any
+    leg a newer job id for the same check name has superseded (Loki's
+    re-audit, HIGH finding 2). Superseded legs are kept in the table
+    (never re-fetched, never rendered again) rather than deleted, so the
+    table itself still shows what happened."""
+    return [v for v in (entry.get("legs") or {}).values() if isinstance(v, dict) and not v.get("superseded")]
+
+
+def _ci_owed_refetch_stripped(entry: dict, *, errors: list | None = None) -> None:
+    """Re-fetch any leg in `entry["legs"]` whose block was stripped (or
+    lost across a prune-and-rebuild) BEFORE the body is rendered from it.
+
+    Loki's re-audit, HIGH finding 1: `strip_blocks` drops every leg's
+    block once both channels land, to keep the owed table small; a LATER
+    leg on the same head used to rebuild the body straight from that
+    table without re-fetching the stripped one first — `tick.py`'s own
+    comment claimed `_ci_owed_merge_new_legs` "re-fetches anyway", but
+    that function only looks at legs newly reported THIS tick, and a
+    stripped leg with nothing new to report is never among them, so the
+    PR comment was edited to `_test: log unavailable (unknown error)_`
+    for a job whose real block the bot had thrown away minutes earlier.
+    This runs on every leg in the table, not just this tick's delta, so a
+    stripped leg is always given the chance to be whole again before the
+    comment is rebuilt. A re-fetch that itself fails is recorded as an
+    honest `log unavailable: <reason>`, never a silent falsehood."""
+    repo = entry.get("repo", "")
+    legs_table = entry.get("legs") or {}
+    for job_id, info in list(legs_table.items()):
+        if not _ci_leg_needs_refetch(info):
+            continue
+        try:
+            leg_id = info.get("_leg_id", "")
+            key = leg_id.rsplit("::", 1)[0] if "::" in leg_id else leg_id
+            fake_leg = {"key": key, "check": info.get("check", ""), "conclusion": info.get("conclusion"),
+                        "url": info.get("url", "")}
+            refreshed = _ci_red_leg_info(repo, fake_leg)
+            refreshed["_leg_id"] = leg_id
+            legs_table[job_id] = refreshed
+        except Exception as exc:  # noqa: BLE001 — a schema surprise on one leg must not kill the tick
+            if errors is not None:
+                errors.append({"key": entry.get("where", job_id), "step": "refetch_stripped",
+                               "error": str(exc)[:300]})
 
 
 def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list, errors: list | None = None) -> None:
@@ -1225,17 +1281,45 @@ def _ci_owed_merge_new_legs(owed: dict, groups: dict, *, commented: list, errors
             legs_table = entry.setdefault("legs", {})
             changed = False
             for lg in real:
+                # Keyed by the check_run/job id, not the check NAME: a
+                # re-run of the same check is a NEW leg id sharing the
+                # old one's name, and two ids sharing one name-keyed slot
+                # used to overwrite each other every tick for as long as
+                # both stayed unfiled — one 5 MB-capable log fetch and one
+                # comment edit per tick, forever (Loki's re-audit, HIGH
+                # finding 2, probe C2: a refused broker plus a re-run).
                 # A plain string, not a tuple: `_leg_id` round-trips through
                 # `ci_comments.save`/`load` (JSON has no tuple type — a
                 # tuple would silently come back as a list and never equal
                 # itself again, re-fetching and resetting EVERY tick).
+                job_id = str(lg.get("key", "")).rsplit(":", 1)[-1]
                 leg_id = f"{lg.get('key')}::{lg.get('conclusion')}"
-                prior = legs_table.get(lg["check"])
+                check_name = lg["check"]
+                prior = legs_table.get(job_id)
+                if isinstance(prior, dict) and prior.get("superseded"):
+                    continue  # a job id a newer run of this check replaced; never fetched again
+                for other_id, other_info in legs_table.items():
+                    if (other_id != job_id and isinstance(other_info, dict)
+                            and other_info.get("check") == check_name and not other_info.get("superseded")):
+                        # This check has run again under a new job id — the
+                        # OLDER id for the same name is superseded: kept in
+                        # the table (for the record), never fetched or
+                        # rendered again.
+                        other_info["superseded"] = True
+                        other_info.pop("block", None)
+                        changed = True
                 if isinstance(prior, dict) and prior.get("_leg_id") == leg_id:
-                    continue  # this exact leg was already fetched; nothing new to show
+                    # This exact leg was already fetched; nothing new to
+                    # show from THIS tick's deposit. A block stripped
+                    # since then is rebuilt at render time
+                    # (`_ci_owed_refetch_stripped`), not here — a leg with
+                    # an unfiled broker replaying the SAME webhook event
+                    # every tick (Loki's re-audit, HIGH finding 2) must
+                    # never re-fetch just because its block is gone.
+                    continue
                 info = _ci_red_leg_info(first["repo"], lg)
                 info["_leg_id"] = leg_id
-                legs_table[lg["check"]] = info
+                legs_table[job_id] = info
                 changed = True
             entry["pending_kind"] = "red"
             cs = entry["comment"]
@@ -1263,7 +1347,10 @@ def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str, 
             if cs.get("status") != "posted":
                 continue
             repo, pr, head_sha = entry["repo"], entry["pr"], entry["head_sha"]
-            expected = set(entry.get("legs") or {})
+            # `entry["legs"]` is keyed by job id, not check name, since the
+            # re-run flap fix — the expected set for green detection is
+            # still names (matching `head_legs`), one per still-active leg.
+            expected = {v.get("check") for v in _ci_active_legs(entry) if v.get("check")}
             if not expected:
                 continue
             pr_key = _ci_pr_key(repo, pr, head_sha)
@@ -1294,8 +1381,8 @@ def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str, 
                 errors.append({"key": head_key, "step": "detect_green", "error": str(exc)[:300]})
 
 
-def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, enable_mcp: bool,
-                   commented: list, spoke: list, errors: list | None = None) -> None:
+def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", call,
+                   enable_mcp: bool, commented: list, spoke: list, errors: list | None = None) -> None:
     """Retry every owed comment and Grove line that is due — new this
     tick or carried over from any earlier one. The GitHub half never
     needs `call`/`enable_mcp`; only the Grove half does, and when the
@@ -1309,9 +1396,15 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, ena
     is gone; the two channels are now fully independent, each with its
     own `due()`/backoff/stall state.
 
-    A `rate_limited` result from GitHub is not a failure: it does not
-    call `record_failure` (no attempt burned) — `record_rate_limited`
-    honours `Retry-After` instead. Every per-entry step is guarded so a
+    `grove_pace` is this drain's OWN `_Pacer`, never the filing loop's
+    (Loki's re-audit, MEDIUM finding 3): sharing one pacer let a hot
+    limiter's Grove waits burn the same wall-clock deadline the filing
+    loop needed, starving `human_required_enqueue` for a tick by chat
+    lines (probe I). A `rate_limited` result — from GitHub, or from
+    `grove_pace` itself giving up on its own budget — is not a failure:
+    neither calls `record_failure` (no attempt burned) —
+    `record_rate_limited` honours `Retry-After` (or, for the pacer's own
+    give-up, one tick) instead. Every per-entry step is guarded so a
     schema surprise on one head cannot kill the whole drain for every
     other head this tick."""
     from willow_bot import pr_voice
@@ -1326,7 +1419,8 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, ena
                     body = _ci_red_green_body(where, head_sha, by=entry.get("green_by", head_sha),
                                               at=entry.get("green_at", ""))
                 else:
-                    body = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
+                    _ci_owed_refetch_stripped(entry, errors=errors)
+                    body = _ci_red_body(where, head_sha, _ci_active_legs(entry))
                 result = pr_voice.upsert_ci_red_comment(repo, int(pr), head_sha, body)
                 if result.get("status") == "ok":
                     new_status = "green" if entry.get("pending_kind") == "green" else "posted"
@@ -1358,9 +1452,9 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, ena
             if not ci_comments.due(sp, tick=tick):
                 continue
             pr_url = f"https://github.com/{repo}/pull/{pr}"
-            body_for_summary = _ci_red_body(where, head_sha, list((entry.get("legs") or {}).values()))
+            body_for_summary = _ci_red_body(where, head_sha, _ci_active_legs(entry))
             summary = _grove_summary(body_for_summary, pr_url)
-            result, err = pace.call(call, "grove_send_message", {
+            result, err = grove_pace.call(call, "grove_send_message", {
                 "app_id": app, "channel_name": "willow", "content": summary, "sender": _grove_sender(),
             })
             if err is None:
@@ -1370,9 +1464,17 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, pace: "_Pacer", call, ena
                     # head — the failure blocks are only needed to build a
                     # comment/Grove body, and this entry is done doing that
                     # until something ABOUT it changes (a new leg, a green
-                    # edit), which re-fetches anyway (`_ci_owed_merge_new_legs`).
+                    # edit, a prune-and-rebuild), which re-fetches anyway
+                    # (`_ci_owed_refetch_stripped`, called above).
                     ci_comments.strip_blocks(entry)
                 spoke.append({"channel": "willow", "ok": True})
+            elif err.startswith("rate_limited"):
+                # The pacer's own give-up (budget/cap spent) reads exactly
+                # like GitHub's rate limit to this entry: a pause, never a
+                # failure (Loki's re-audit, MEDIUM finding 3, probe F2 —
+                # the 403-burns-an-attempt defect, transposed to Grove).
+                ci_comments.record_rate_limited(sp, retry_after=None, tick=tick)
+                spoke.append({"channel": "willow", "ok": False, "reason": err, "rate_limited": True})
             else:
                 ci_comments.record_failure(sp, error=err, tick=tick)
                 spoke.append({"channel": "willow", "ok": False, "reason": err})
@@ -1425,10 +1527,21 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
 
     Three-state per attempt: `sent` (Grove took it; marker written),
     `refused` (the tool refused or the PR comment could not land; no
-    marker, retried next tick), `skipped` (no watch row / no PR — said only
-    for items filed or resolved THIS tick, so an unwatched fleet does not
-    fill every receipt), `stopped` (this step's budget ran out first; no
-    marker, retried next tick).
+    marker, retried next tick), `skipped` (no watch row / no PR / the
+    steward's own CI-red Grove block already covers this channel for a
+    "filed" item — said only for items filed or resolved THIS tick, so an
+    unwatched fleet does not fill every receipt), `stopped` (this step's
+    budget ran out first; no marker, retried next tick).
+
+    Loki's re-audit, MEDIUM finding, probe J: for a "filed" (red/stuck)
+    item whose repo the steward's own `ci_comments` drain speaks for
+    unconditionally, into this SAME channel, a watched PR used to hear
+    BOTH this one-liner AND that multi-line failure-summary block — two
+    Grove messages for one red head. The block carries the actual failure
+    detail; this one-liner steps aside for it rather than doubling the
+    voice. A "resolved" item is unaffected — the block never speaks again
+    once posted (Loki's re-audit, finding K), so the follow-up here is
+    still the only word of it.
     """
     from willow_bot.steward import pr_watch
 
@@ -1451,6 +1564,15 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
             return
         channel = str(watcher.get("channel") or "")
         entry["channel"] = channel
+        if (kind == "filed" and not item.get("stuck")
+                and str(item.get("repo") or "").startswith(_GROVE_CI_RED_REPO_PREFIX)
+                and channel.lstrip("#") == "willow"):
+            entry.update(state="skipped", reason="ci-red block covers this channel")
+            entry["comment"] = _comment_on_pr(item, state_view, at=receipt["at"])
+            notified.setdefault(item_id, {})[kind] = receipt["at"]
+            lines.append(entry)
+            counts["skipped"] += 1
+            return
         if pace.budget_spent:
             entry.update(state="stopped", reason="ci budget spent")
             lines.append(entry)
@@ -1689,7 +1811,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # filing loop below, whose own success or failure this no longer
     # depends on.
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
-    pace = _Pacer(_CI_TIME_BUDGET_S)
+    grove_pace = _Pacer(_CI_TIME_BUDGET_S)
     call = None
     if enable_mcp:
         from willow_bot.steward import mcp_client
@@ -1697,32 +1819,47 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         call = mcp_client.call
     owed, corrupt_reason = ci_comments.load()
     quarantined = None
-    if corrupt_reason:
-        # Never silently read a corrupt table as {} and forget every owed
-        # head with no trace (Loki's re-audit, drain-guard finding): move
-        # the unreadable file aside and start a fresh table, with a
-        # receipt line naming exactly what happened.
-        quarantined = ci_comments.quarantine_corrupt()
-    receipt["ci_comments_table"] = (
-        {"status": "unreadable", "reason": corrupt_reason, "quarantined": quarantined}
-        if corrupt_reason else {"status": "ok"}
-    )
-    tick_n = ci_comments.next_tick(owed)
     commented: list = []
     spoke: list = []
     drain_errors: list = []
-    _ci_owed_merge_new_legs(owed, groups, commented=commented, errors=drain_errors)
-    _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"], errors=drain_errors)
-    _ci_owed_drain(owed, tick=tick_n, app=app, pace=pace, call=call, enable_mcp=enable_mcp,
-                  commented=commented, spoke=spoke, errors=drain_errors)
+    retired: list = []
+    unreachable = bool(corrupt_reason) and corrupt_reason.startswith("unreachable")
+    if unreachable:
+        # Loki's re-audit, MEDIUM finding 4: an unreadable-but-PRESENT
+        # table (EACCES, EIO, ...) is not a missing one. Merging,
+        # draining, retiring, pruning, and above all `save()`'s own
+        # `os.replace` over a table this process never actually read
+        # would each silently forget every owed head — the exact silent
+        # `{}` this module's docstring claims to have removed, reachable
+        # by a permissions error rather than a test's corrupt-json fixture.
+        # Skip the whole drain this tick; the file is left exactly as it
+        # was for the next tick (once whatever broke the read is fixed).
+        receipt["ci_comments_table"] = {"status": "unreachable", "reason": corrupt_reason,
+                                        "drain_skipped": True}
+    else:
+        if corrupt_reason:
+            # Never silently read a corrupt table as {} and forget every owed
+            # head with no trace (Loki's re-audit, drain-guard finding): move
+            # the unreadable file aside and start a fresh table, with a
+            # receipt line naming exactly what happened.
+            quarantined = ci_comments.quarantine_corrupt()
+        receipt["ci_comments_table"] = (
+            {"status": "unreadable", "reason": corrupt_reason, "quarantined": quarantined}
+            if corrupt_reason else {"status": "ok"}
+        )
+        tick_n = ci_comments.next_tick(owed)
+        _ci_owed_merge_new_legs(owed, groups, commented=commented, errors=drain_errors)
+        _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"], errors=drain_errors)
+        _ci_owed_drain(owed, tick=tick_n, app=app, grove_pace=grove_pace, call=call, enable_mcp=enable_mcp,
+                      commented=commented, spoke=spoke, errors=drain_errors)
+        if drain_errors:
+            receipt["ci_comments_errors"] = drain_errors
+        retired = ci_comments.retire_check(owed, closed=closed, tick=tick_n)
+        retired += ci_comments.prune_old(owed, now_epoch=now)
+        if retired:
+            receipt["retired"] = retired
+        ci_comments.save(owed)
     receipt["stalled"] = ci_comments.stalled_report(owed)
-    if drain_errors:
-        receipt["ci_comments_errors"] = drain_errors
-    retired = ci_comments.retire_check(owed, closed=closed, tick=tick_n)
-    retired += ci_comments.prune_old(owed, now_epoch=now)
-    if retired:
-        receipt["retired"] = retired
-    ci_comments.save(owed)
 
     # Resolve-on-green candidates. Two honest routes to "this item is done":
     # a LATER head for the same PR on which every leg the item's head
@@ -1822,6 +1959,11 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                        remaining=len(groups), **_Pacer.idle())
         return _emit(receipt)
 
+    # The filing loop's OWN pacer — constructed here, not reused from the
+    # Grove drain above, so its wall-clock deadline starts fresh from NOW
+    # rather than from whatever the drain's own pacing already spent
+    # (Loki's re-audit, MEDIUM finding 3).
+    pace = _Pacer(_CI_TIME_BUDGET_S)
     filed, appended, refused = [], [], []
     to_file = sum(1 for hk in groups if not (items.get(hk) or {}).get("id"))
     for head_key, legs in groups.items():

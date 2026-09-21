@@ -575,3 +575,190 @@ def test_corrupt_owed_table_is_quarantined_not_silently_forgotten(home, monkeypa
     assert Path(quarantined).read_text(encoding="utf-8") == "{not json"
     assert p.exists()
     assert r["commented"][0]["action"] == "created"
+
+
+# ── unreadable (not missing, not corrupt-json) table: skip, never replace ────
+
+def test_unreadable_table_skips_the_drain_and_is_never_overwritten(home, monkeypatch):
+    """Loki's re-audit, MEDIUM finding 4: `load()` used to catch EVERY
+    `OSError` (including EACCES/EIO on a file that is there and fine, just
+    unreadable right now) the same way it catches a missing file —
+    `({}, None)` — so the receipt read `ci_comments_table: ok` and the
+    next `save()` happily `os.replace`'d a fresh empty table over the one
+    it never actually read. Simulate an unreadable-but-present file by
+    monkeypatching `Path.read_text` to raise a permission error."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    p = ci_comments.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"some#head": {"repo": "x/y", "pr": 1, "head_sha": "a" * 40, "where": "x/y#1",
+                                           "legs": {}, "comment": ci_comments._sub(), "spoke": ci_comments._sub(),
+                                           "_created_at": time.time()}}), encoding="utf-8")
+
+    real_read_text = Path.read_text
+
+    def _denied(self, *a, **kw):
+        if self == p:
+            raise PermissionError(13, "Permission denied")
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _denied)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert r["ci_comments_table"]["status"] == "unreachable"
+    assert r["ci_comments_table"]["drain_skipped"] is True
+    monkeypatch.setattr(Path, "read_text", real_read_text)
+    # The file on disk is untouched — never blown away by a save() over a
+    # table this process could not read.
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "some#head" in on_disk and len(on_disk) == 1
+
+
+def test_save_sweeps_a_leftover_tmp_sibling(home):
+    p = ci_comments.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    stray = p.parent / ".ci_comments.abc123.tmp"
+    stray.write_text("half-written", encoding="utf-8")
+    ci_comments.save({})
+    assert not stray.exists()
+
+
+# ── prune vs forever: only a green/closed entry ages out, never a live one ──
+
+def test_stalled_entry_survives_the_14_day_prune_and_is_still_probed(home, monkeypatch):
+    _prime()
+    c = _Client()
+
+    def _flaky(repo, pr_number, head_sha, body):
+        return {"status": "could-not-run", "detail": "502 Bad Gateway", "action": "skipped"}
+
+    _use(monkeypatch, c, comments=_flaky)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    entry = None
+    for _ in range(60):  # backoff grows with attempts; MAX_ATTEMPTS ticks alone is not enough clock
+        tick.run_ci()
+        owed, _ = ci_comments.load()
+        entry = owed[ci_comments.head_keys(owed)[0]]
+        if entry["comment"]["status"] == "stalled":
+            break
+    assert entry["comment"]["status"] == "stalled"
+    entry["_created_at"] = time.time() - 15 * 86400
+    ci_comments.save(owed)
+    r = tick.run_ci()
+    assert not r.get("retired")
+    owed2, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed2) != [], "a still-stalled entry must never be pruned by age alone"
+    assert any(x["channel"] == "comment" for x in r["stalled"]), "and must still be probed"
+
+
+def test_a_green_entry_past_14_days_is_pruned_with_a_reason(home, monkeypatch):
+    owed = {}
+    entry = ci_comments.entry_for(owed, "x/y#1@" + "a" * 40, repo="x/y", pr=1, head_sha="a" * 40, where="x/y#1")
+    ci_comments.record_success(entry["comment"], status="green", tick=1)
+    entry["_created_at"] = time.time() - 15 * 86400
+    pruned = ci_comments.prune_old(owed, now_epoch=time.time())
+    assert pruned == [{"key": "x/y#1@" + "a" * 40, "reason": pruned[0]["reason"]}]
+    assert "green" in pruned[0]["reason"]
+    assert owed == {}
+
+
+def test_a_row_without_created_at_gets_one_on_load(home):
+    p = ci_comments.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"x/y#1@" + "a" * 40: {"repo": "x/y", "pr": 1, "head_sha": "a" * 40,
+                                                    "where": "x/y#1", "legs": {},
+                                                    "comment": ci_comments._sub(), "spoke": ci_comments._sub()}}),
+                encoding="utf-8")
+    owed, corrupt = ci_comments.load()
+    assert corrupt is None
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    assert isinstance(entry.get("_created_at"), (int, float))
+
+
+# ── strip_blocks + a later leg: the first leg's real block must survive ──────
+
+def test_stripped_block_is_refetched_before_a_later_leg_rewrites_the_body(home, monkeypatch):
+    """Loki's re-audit, HIGH finding 1: once both channels land,
+    `strip_blocks` drops every leg's block (to keep the owed table small).
+    A second red job on the same head used to rebuild the body straight
+    from the (now block-less) table and edit the PR comment to
+    `_test: log unavailable (unknown error)_` for the FIRST job — a
+    falsehood: the bot had that block minutes earlier and threw it away
+    on purpose, not because the fetch failed. The body must re-fetch a
+    stripped leg before rendering it again."""
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()  # comment + Grove land; test's block is stripped afterward
+    owed, _ = ci_comments.load()
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    assert entry["comment"]["status"] == "posted"
+    assert all(not v.get("block") for v in entry["legs"].values())  # stripped
+
+    deposits.append_local(_row(RAT, SHA, 2, "lint", "failure", pr=48))
+    r2 = tick.run_ci()
+    assert r2["commented"][0]["action"] == "edited"
+    body = comments.calls[-1]["body"]
+    assert "**test**" in body and "**lint**" in body
+    assert "BOOM: assert False" in body, "the FIRST job's real block must be back, not 'log unavailable'"
+    assert "log unavailable" not in body
+
+
+# ── refused broker + a re-run of the same check: no forever flap ────────────
+
+def test_broker_refused_rerun_of_same_check_is_one_extra_fetch_then_steady(home, monkeypatch):
+    """Loki's re-audit, HIGH finding 2, probe C2: a refused broker (so
+    neither leg is ever marked `ci_filed`) plus a re-run of the SAME check
+    (new job id, same name) used to flap the owed table forever — the
+    table was keyed by check NAME, so the two job ids overwrote each
+    other every tick, one 5 MB-capable log fetch and one comment edit per
+    tick for the length of the outage. Keyed by job id: the re-run costs
+    exactly one more fetch and one more edit, then nothing, ever again,
+    for as long as the broker keeps refusing."""
+    _prime()
+    c = _Client(refuse={"human_required_enqueue": "refused"})
+    fetch_calls = {"n": 0}
+
+    def _fetch(repo, job_id):
+        fetch_calls["n"] += 1
+        return "boring log\n", {"status": "ok"}
+
+    comments = _use(monkeypatch, c, fetch_log=_fetch)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    assert fetch_calls["n"] == 1 and len(comments.calls) == 1
+
+    # A re-run of the SAME check: new job id 9, same name "test", broker
+    # still refusing (job 1's webhook event replays too — the offset never
+    # advanced past it while filing stays refused).
+    deposits.append_local(_row(RAT, SHA, 9, "test", "failure", pr=48))
+    tick.run_ci()
+    assert fetch_calls["n"] == 2, "one extra fetch for the new job id"
+    assert len(comments.calls) == 2, "one extra edit"
+
+    for _ in range(10):
+        tick.run_ci()
+    assert fetch_calls["n"] == 2, "steady — the superseded job id is never fetched again"
+    assert len(comments.calls) == 2, "steady — no more flapping"
+
+
+# ── the Grove summary caps by characters, not lines ──────────────────────────
+
+def test_grove_summary_is_capped_by_characters_not_lines(home, monkeypatch):
+    """Loki's re-audit: a 60-line head+tail cut let a real body through
+    untouched when its lines were each several KB wide (a wrapped pytest
+    failure) — 59,864 characters into a chat channel. The cap must bind
+    on characters."""
+    _prime()
+    c = _Client()
+    huge_block = "\n".join("x" * 4000 for _ in range(60))  # ~240k chars, 60 "lines"
+    _use(monkeypatch, c, extract=lambda text: {"block": huge_block, "trimmed": False, "source": "pytest"})
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    sends = [m for m in c.named("grove_send_message")]
+    assert len(sends) == 1
+    # The cap plus the PR url and close-block slack — nowhere near the
+    # ~240k-char body a line-based cut would have let through untouched.
+    assert len(sends[0]["content"]) <= tick.GROVE_SUMMARY_CHAR_CAP + 500

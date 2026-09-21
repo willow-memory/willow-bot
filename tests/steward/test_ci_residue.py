@@ -353,18 +353,22 @@ def test_ci_paces_through_the_limiter_instead_of_refusing(home, monkeypatch):
     assert r["status"] == "ok" and r["refused"] == []
     assert [f["where"] for f in r["filed"]] == [f"{MCP}#601", f"{MCP}#602", f"{MCP}#603"]
     assert r["paced"] >= 2 and r["budget_spent"] is False and r["remaining"] == 0
-    assert r["calls"] == len(c.calls)
+    # `r["calls"]` is the FILING loop's own pacer count — since the CI-red
+    # Grove line now paces through its OWN `_Pacer` (Loki's re-audit,
+    # MEDIUM finding 3), the two are no longer the same number; the filing
+    # pacer's count must still match exactly its own calls to the fake.
+    assert r["calls"] == len(c.named("human_required_enqueue"))
 
 
 def test_ci_stops_paced_at_its_own_budget_and_resumes(home, monkeypatch):
     _prime()
     # This test is about the FILING loop's own pacer budget
-    # (human_required_enqueue), not the independent CI-red Grove line
-    # (`ci_comments`, unconditional per red head since dispatch E026CFE7's
-    # re-audit) — both share one `_Pacer` per tick by design, so leaving
-    # the Grove prefix matched here would make this test about THAT
-    # contention instead of the one it is named for.
-    monkeypatch.setattr(tick, "_GROVE_CI_RED_REPO_PREFIX", "no-match/")
+    # (human_required_enqueue). The CI-red Grove line (`ci_comments`,
+    # unconditional per red head since dispatch E026CFE7's re-audit) now
+    # paces through its OWN `_Pacer` (Loki's re-audit, MEDIUM finding 3),
+    # so leaving the Grove prefix matched here no longer makes this test
+    # about that contention — the filing loop gets a fresh pacer built
+    # right before it runs, independent of whatever the Grove drain spent.
     t = _fake_time(monkeypatch)
     monkeypatch.setattr(tick, "_CI_TIME_BUDGET_S", 3.0)
     c = _Metered(lambda: t["now"], burst=1, retry_after=2)
@@ -382,6 +386,44 @@ def test_ci_stops_paced_at_its_own_budget_and_resumes(home, monkeypatch):
     r2 = tick.run_ci()
     assert r2["status"] == "ok" and r2["remaining"] == 0
     assert len({f["where"] for f in r["filed"] + r2["filed"]}) == 3
+
+
+def test_ci_owed_grove_drain_has_its_own_pacer_and_never_burns_an_attempt_on_it(home, monkeypatch):
+    """Loki's re-audit, MEDIUM finding 3: the CI-red Grove line used to
+    share the filing loop's own `_Pacer` — and so its wall-clock deadline
+    — with `human_required_enqueue`; a hot limiter's Grove waits could
+    exhaust that shared budget before the filing loop got to spend any of
+    it (probe I: paced, filed 0, remaining 3, grove sends 4, enqueues 1).
+    The Grove drain now gets its own `_Pacer`, and a rate-limited answer
+    from IT is mapped to `record_rate_limited`, never `record_failure`
+    (probe F2: the 403-burns-an-attempt defect, transposed to Grove) — so
+    neither the filing loop's completion nor the Grove spoke's attempt
+    count is at the mercy of the other."""
+    _prime()
+    t = _fake_time(monkeypatch)
+    monkeypatch.setattr(tick, "_CI_TIME_BUDGET_S", 3.0)
+    c = _Metered(lambda: t["now"], burst=1, retry_after=2)
+    _use(monkeypatch, c)
+    for i, pr in enumerate((621, 622, 623)):
+        deposits.append_local(_row(MCP, f"{i}" * 40, 90 + i, "test", "failure", pr=pr))
+    r = tick.run_ci()
+    # The filing loop gets its own fresh budget regardless of what the
+    # Grove drain spent on its — it must not be left starved at 0 filed.
+    assert r["status"] in ("ok", "paced")
+    assert r["refused"] == []
+    assert len(r["filed"]) >= 1
+
+    from willow_bot.steward import ci_comments
+
+    owed, _ = ci_comments.load()
+    for entry in owed.values():
+        if not isinstance(entry, dict):
+            continue
+        spoke = entry.get("spoke") or {}
+        # A hot limiter may well leave the Grove line `pending` (paused)
+        # rather than `posted` — but it must never look like a real
+        # failure: a pacer rate-limit is a pause, not an attempt burned.
+        assert spoke.get("attempts", 0) == 0
 
 
 def test_audit_paces_through_the_limiter_and_keeps_its_envelope(home, monkeypatch):

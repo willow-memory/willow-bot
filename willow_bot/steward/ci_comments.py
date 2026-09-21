@@ -72,22 +72,45 @@ def path() -> Path:
 def load() -> tuple[dict[str, Any], str | None]:
     """``(state, corrupt_reason)``. ``corrupt_reason`` is ``None`` on a
     clean load — including a missing file, which is not corruption — and
-    a short string when the file existed but was not a readable JSON
-    object. A corrupt table is never silently read as ``{}`` and kept:
-    the caller (``run_ci``) calls ``quarantine_corrupt()`` to rename it
-    aside and starts a fresh table, with a receipt line saying so, rather
-    than forgetting every owed head with no trace."""
+    a short string otherwise. Two different shapes of trouble, told apart
+    by prefix:
+
+    * ``"invalid json: ..."`` / ``"not a json object"`` — the file is
+      there and readable but not a good table; the caller
+      (``run_ci``) calls ``quarantine_corrupt()`` to rename it aside and
+      starts a fresh table, with a receipt line saying so.
+    * ``"unreachable: ..."`` — the file could not be READ at all (EACCES,
+      EIO, ENOTDIR, ...). Loki's re-audit: the prior version caught every
+      ``OSError`` here, including these, and returned ``({}, None)`` —
+      indistinguishable from a missing file — so the receipt read
+      ``ci_comments_table: ok`` and the next ``save()`` happily
+      ``os.replace``'d a fresh empty table over one it never actually
+      read (keys before: [head], keys after: [], no ``.corrupt`` file:
+      the exact silent-``{}`` this module's docstring says it removed).
+      Only a genuinely MISSING file (``FileNotFoundError``) is "nothing to
+      forget"; every other read failure must stop the caller from ever
+      calling ``save()`` this tick, not just relabel the receipt.
+
+    Every entry missing ``_created_at`` (any row written before that field
+    existed) is given one here, in memory — so it starts aging under
+    ``prune_old`` instead of living forever ungoverned; the caller's
+    ``save()`` (when it runs) is what makes it durable."""
     p = path()
     try:
         raw = p.read_text(encoding="utf-8")
-    except OSError:
+    except FileNotFoundError:
         return {}, None
+    except OSError as exc:
+        return {}, f"unreachable: {exc}"[:200]
     try:
         data = json.loads(raw)
     except ValueError as exc:
         return {}, f"invalid json: {exc}"[:200]
     if not isinstance(data, dict):
         return {}, "not a json object"
+    for key, entry in data.items():
+        if key != _TICK_KEY and isinstance(entry, dict) and "_created_at" not in entry:
+            entry["_created_at"] = time.time()
     return data, None
 
 
@@ -111,9 +134,18 @@ def quarantine_corrupt() -> str | None:
 def save(state: dict[str, Any]) -> None:
     """Atomic write: same-directory temp file, then ``os.replace`` — a
     reader never sees a half-written file, and a crash mid-write leaves
-    the previous good version in place."""
+    the previous good version in place. A crash BETWEEN ``mkstemp`` and
+    ``os.replace`` on an earlier run leaves a ``.ci_comments.<rand>.tmp``
+    sibling that nothing else cleans up (Loki's re-audit); swept here,
+    before writing a new one, rather than left to accumulate for the life
+    of the install."""
     p = path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    for stray in p.parent.glob(".ci_comments.*.tmp"):
+        try:
+            stray.unlink()
+        except OSError:
+            pass
     fd, tmp_name = tempfile.mkstemp(dir=str(p.parent), prefix=".ci_comments.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -250,43 +282,65 @@ def strip_blocks(entry: dict[str, Any]) -> None:
             info.pop("block", None)
 
 
-def retire_check(owed: dict[str, Any], *, closed: dict[str, Any], tick: int) -> list[str]:
+def retire_check(owed: dict[str, Any], *, closed: dict[str, Any], tick: int) -> list[dict[str, Any]]:
     """Remove entries that are done: the PR has closed or merged (``where``
     — ``repo#pr`` — is a key in ``closed``), or the comment has read
     ``green`` for at least one full tick (giving the same tick's Grove
     line, if any, a chance to be read from the entry before it vanishes).
-    Returns the head keys retired this call."""
-    retired: list[str] = []
+    Returns ``[{key, reason}]`` for every head retired this call —
+    ``reason`` is ``"pr merged"``, ``"pr closed"``, or ``"green"``, so a
+    human reading the receipt does not have to guess which of the two
+    honest ways this entry finished."""
+    retired: list[dict[str, Any]] = []
     for head_key in head_keys(owed):
         entry = owed[head_key]
         where = entry.get("where")
         cs = entry.get("comment") or {}
-        drop = bool(where) and where in closed
-        if not drop and cs.get("status") == "green":
+        reason = None
+        if bool(where) and where in closed:
+            reason = "pr merged" if closed[where].get("merged") else "pr closed"
+        elif cs.get("status") == "green":
             retire_at = entry.get("_retire_at_tick")
             if retire_at is None:
                 entry["_retire_at_tick"] = tick + 1
             elif tick >= retire_at:
-                drop = True
-        if drop:
+                reason = "green"
+        if reason:
             del owed[head_key]
-            retired.append(head_key)
+            retired.append({"key": head_key, "reason": reason})
     return retired
 
 
-def prune_old(owed: dict[str, Any], *, now_epoch: float, max_age_days: float = MAX_ENTRY_AGE_DAYS) -> list[str]:
-    """Drop entries older than ``max_age_days`` regardless of status — the
-    backstop for a head that never resolves (a stalled comment on a PR
-    that is never closed, a Grove-less repo). Returns the head keys
-    pruned."""
+def prune_old(owed: dict[str, Any], *, now_epoch: float, max_age_days: float = MAX_ENTRY_AGE_DAYS) -> list[dict[str, Any]]:
+    """Drop entries older than ``max_age_days`` whose comment has already
+    gone ``green`` — a defensive backstop for a green entry
+    ``retire_check`` somehow missed, never the primary path for removing
+    one. A still ``pending``/``posted``/``stalled`` comment — the
+    still-active, still-being-probed shape — survives this regardless of
+    age and keeps being probed every tick.
+
+    Loki's re-audit: the prior version dropped ANY entry past
+    ``max_age_days`` regardless of status, with a receipt line
+    (``retired: [key]``) indistinguishable from a genuine green/closed
+    retirement — so a month-long GitHub outage silently lost its comment
+    at day 14, and GitHub coming back afterward posted nothing (the
+    head's legs were already in ``ci_filed``, so nothing ever regrouped
+    them). This is now only a backstop for the one status
+    (``green``) that should already be gone via ``retire_check``, never a
+    way to forget something still broken. Returns ``[{key, reason}]``."""
     cutoff = now_epoch - max_age_days * 86400
-    pruned: list[str] = []
+    pruned: list[dict[str, Any]] = []
     for head_key in head_keys(owed):
         entry = owed[head_key]
         created = entry.get("_created_at")
-        if isinstance(created, (int, float)) and created < cutoff:
-            del owed[head_key]
-            pruned.append(head_key)
+        if not isinstance(created, (int, float)) or created >= cutoff:
+            continue
+        cs_status = (entry.get("comment") or {}).get("status")
+        if cs_status != "green":
+            continue  # pending/posted/stalled — still active; never pruned by age alone
+        del owed[head_key]
+        pruned.append({"key": head_key,
+                       "reason": f"aged out at {max_age_days:g}d past green (comment=green)"})
     return pruned
 
 
