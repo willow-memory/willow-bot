@@ -31,12 +31,30 @@ DEFAULT_CURATED: list[tuple[str, dict[str, Any]]] = [
     ("diagnostic_summary", {}),
     ("seal_drain", {}),
     ("net_authority_drain", {}),
+    # envelope_retire_sweep (sealed decision 83faa340; gap 4c7512c57a7e):
+    # revokes an active envelope whose bounds named a branch now merged and
+    # gone, or whose max_count FRANK shows spent. Same standing as the two
+    # above: mints no new authority, gate does not depend on it. dry_run
+    # False here — the steward tick IS the unattended sweep the sealed
+    # spec names; the desk calls the tool by hand with the True default to
+    # prove one pass without writing anything.
+    ("envelope_retire_sweep", {"dry_run": False}),
 ]
 
 # Result fields worth carrying into the receipt verbatim (small scalars /
 # short lists), so bot_status can show a tool's three-state without the
 # reader opening the tool's own journal. Everything else stays keys-only.
-_RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after")
+_RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after",
+                   "examined", "kept_standing", "retired", "kept_in_force",
+                   "dry_run", "truncated")
+
+#: `unreachable` is deliberately NOT in `_RECEIPT_FIELDS` above (rework of
+#: Loki's LOW finding on BAA43543/9494D3AF: "23 permanently-unreachable
+#: rows are echoed into the heartbeat JSONL every tick" — a chronically
+#: unreachable row repeats unbounded forever with no new information after
+#: the first tick). Only its COUNT is carried, via this map
+#: (`result[key]` -> `entry[value]`, `len(...)` not the list itself).
+_COUNT_ONLY_FIELDS = {"unreachable": "unreachable_count"}
 
 # Nested fields, mirrored as dotted keys. net_authority_drain answers with two
 # halves under one three-state (`tasks` and `leases`, each a receipt or None
@@ -65,14 +83,30 @@ def _receipts_path() -> Path:
     return willow_home() / "willow-bot" / "steward_heartbeat.jsonl"
 
 
+#: Fast lookup of each curated tool's own args (e.g. envelope_retire_sweep's
+#: `dry_run: False`), keyed by name — used below so narrowing the curated
+#: list via WILLOW_BOT_STEWARD_TOOLS does not silently drop a known tool's
+#: non-default args (rework of Loki's LOW finding on BAA43543/9494D3AF: an
+#: env-narrowed list handed every named tool bare `{app_id}`, which for
+#: envelope_retire_sweep meant losing `dry_run=False` and calling it with
+#: the tool's own True default instead — a dry run standing in for the live
+#: tick with no error, no receipt difference an operator would notice at a
+#: glance).
+_DEFAULT_ARGS_BY_NAME = dict(DEFAULT_CURATED)
+
+
 def curated_calls() -> list[tuple[str, dict[str, Any]]]:
     raw = os.environ.get("WILLOW_BOT_STEWARD_TOOLS", "").strip()
-    if not raw:
-        app = _app_id()
-        return [(name, {**args, "app_id": app}) for name, args in DEFAULT_CURATED]
-    # comma-separated tool names; each gets app_id only
     app = _app_id()
-    return [(n.strip(), {"app_id": app}) for n in raw.split(",") if n.strip()]
+    if not raw:
+        return [(name, {**args, "app_id": app}) for name, args in DEFAULT_CURATED]
+    # comma-separated tool names: a name this module knows keeps its own
+    # curated args (so dry_run=False etc. survive narrowing); an unknown
+    # name gets bare {app_id}, same as before.
+    return [
+        (n.strip(), {**_DEFAULT_ARGS_BY_NAME.get(n.strip(), {}), "app_id": app})
+        for n in raw.split(",") if n.strip()
+    ]
 
 
 def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
@@ -111,6 +145,21 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
         entry: dict[str, Any] = {"tool": name, "args_keys": sorted(args)}
         try:
             result = mcp_client.call(name, args)
+            # A gate/permission refusal comes back as an ordinary dict
+            # (mcp_client.call does not raise on it), shaped {"error": ...}
+            # with no three-state "state" field — the verb-absent /
+            # transport-failure case (an exception) is already honest via
+            # "could-not-run" below; this is the other way a call can fail
+            # without raising. Rework of Loki's LOW finding on
+            # BAA43543/9494D3AF: this used to fall straight through to
+            # outcome="ok" with nothing but {"error"} in result_keys — a
+            # denied call read identically to a successful one at a glance.
+            if isinstance(result, dict) and "error" in result and "state" not in result:
+                entry["outcome"] = "denied"
+                entry["error"] = str(result["error"])[:300]
+                entry["result_keys"] = sorted(result.keys())[:20]
+                receipt["tools"].append(entry)
+                continue
             entry["outcome"] = "ok"
             # Keep receipt small — summarize, but carry the three-state
             # fields through so the journal says what happened, not just
@@ -120,6 +169,10 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
                 for field in _RECEIPT_FIELDS:
                     if field in result:
                         entry[field] = result[field]
+                for src, dest in _COUNT_ONLY_FIELDS.items():
+                    val = result.get(src)
+                    if isinstance(val, list):
+                        entry[dest] = len(val)
                 for outer, inner in _RECEIPT_NESTED_FIELDS:
                     half = result.get(outer)
                     if isinstance(half, dict) and inner in half:
