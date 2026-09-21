@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.5.1](https://github.com/willow-memory/willow-bot/compare/v0.5.0...v0.5.1) (2026-09-21)
+
+
+### Fixed
+
+* **steward:** the install marker lives under WILLOW_HOME and never dirties the checkout ([da98330](https://github.com/willow-memory/willow-bot/commit/da98330109a616b4d2efc857e4ba75cee40d4ca7))
+* **steward:** the install marker lives under WILLOW_HOME and never dirties the checkout ([74f1457](https://github.com/willow-memory/willow-bot/commit/74f14572c7653ccd88bc7da90220189bbfe9f7a4))
+
 ## [0.5.0](https://github.com/willow-memory/willow-bot/compare/v0.4.1...v0.5.0) (2026-09-21)
 
 
