@@ -376,7 +376,8 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     re-run is an overwrite, not a duplicate), and advances the offset only
     past rows that landed. Capped per tick. Honest absence when MCP is off.
     """
-    from willow_bot.deposits import COLLECTION, deposits_jsonl, record_id_for
+    from willow_bot.deposits import (COLLECTION, deposits_jsonl, is_annul, record_id_for,
+                                     void_set_before)
 
     if enable_mcp is None:
         enable_mcp = mcp_enabled()
@@ -401,7 +402,17 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
 
     app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
     mirrored, failed = 0, None
+    annulled_skipped, annulled_mirrors = 0, 0
     pace = _Pacer(_MIRROR_TIME_BUDGET_S, calls=_MIRROR_CALLS_PER_TICK)
+    # Voided rows (gap 9) never reach the store — the void set is built over
+    # the whole file first, so a row voided by an annul later in this same
+    # window is skipped too. An annul row met in the window also retracts
+    # any copy the mirror landed BEFORE the annul (`store_delete` by the
+    # voided row's record_id — the store keys mirrored rows that way, so
+    # the id is derivable from the file); `mirrored_ids` maps only rows
+    # before the offset, which is exactly what has been mirrored.
+    voids = void_set_before(src)
+    mirrored_ids = _mirrored_ids_by_hash(src, offset)
     with src.open("rb") as fh:
         fh.seek(offset)
         while mirrored < _MIRROR_PER_TICK:
@@ -415,6 +426,33 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
                 offset = fh.tell()
                 continue
             rec = json.loads(text)
+            if is_annul(rec):
+                voids.take(rec)
+                # Only ids the mirror has landed (chained: by hash → id;
+                # legacy: by id, gated the same way) — and a retraction is
+                # counted only when the store says it deleted something
+                # (`store_delete` answers {deleted: false} on an unknown id
+                # with no error; Loki 717E236C).
+                retract = [mirrored_ids[h] for h in rec.get("voids") or [] if h in mirrored_ids]
+                landed_ids = set(mirrored_ids.values())
+                retract += [v for v in rec.get("voids_legacy") or []
+                            if isinstance(v, str) and v in landed_ids and v not in retract]
+                for record_id in retract:
+                    result, err = pace.call(mcp_client.call, "store_delete",
+                                            {"app_id": app, "collection": COLLECTION, "record_id": record_id})
+                    if err is not None:
+                        failed = err
+                        break
+                    if isinstance(result, dict) and result.get("deleted") is True:
+                        annulled_mirrors += 1
+                if failed is not None:
+                    break
+                offset = fh.tell()
+                continue
+            if voids.voided(rec):
+                annulled_skipped += 1
+                offset = fh.tell()
+                continue
             args = {"app_id": app, "collection": COLLECTION, "record": rec,
                     "record_id": record_id_for(rec), "deviation": 0}
             # willow-mcp meters every app at 60/min with a burst of 10 and
@@ -432,10 +470,42 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     off_path.write_text(f"{offset}\n", encoding="utf-8")
     behind = size - offset
     status = "ok" if failed is None else ("paced" if pace.budget_spent else "could-not-run")
-    receipt.update(status=status, mirrored=mirrored, new_offset=offset, behind=behind, **pace.receipt())
+    receipt.update(status=status, mirrored=mirrored, new_offset=offset, behind=behind,
+                   annulled=annulled_skipped, annulled_mirrors=annulled_mirrors, **pace.receipt())
     if failed is not None:
         receipt["detail"] = failed
     return _emit(receipt)
+
+
+def _mirrored_ids_by_hash(src: Path, offset: int) -> dict[str, str]:
+    """``row_hash → record_id`` for every chained row BEFORE ``offset`` —
+    the rows the mirror has already landed (its offset only advances past
+    rows that did). An annul met later can retract them by id. Rows after
+    the offset are never mirrored once voided, so they are not needed."""
+    from willow_bot.deposits import is_annul, record_id_for
+
+    out: dict[str, str] = {}
+    if not src.is_file() or offset <= 0:
+        return out
+    with src.open("rb") as fh:
+        while fh.tell() < offset:
+            line = fh.readline()
+            if not line:
+                break
+            try:
+                rec = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict) or is_annul(rec):
+                continue
+            if isinstance(rec.get("row_hash"), str):
+                out[rec["row_hash"]] = record_id_for(rec)
+            else:
+                # A legacy row has no hash; its record_id is its only handle,
+                # keyed by itself so `values()` names it as landed.
+                rid = record_id_for(rec)
+                out[f"legacy:{rid}"] = rid
+    return out
 
 
 # Pacing knobs, module-level so a test can shrink them. The store meters at
@@ -697,7 +767,50 @@ def _head_is_green(later_legs: dict, expected: set[str]) -> bool:
     return all(c in _CI_GREEN for c in later_legs.values()) and "success" in later_legs.values()
 
 
-def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending: dict) -> dict:
+def _heads_fully_voided(src: Path, voids) -> set[tuple[str, str]]:
+    """``(repo, head_sha)`` for every head whose EVERY deposit in the file
+    is voided under ``voids``. Read once per annul met (rare). A head with
+    one honest row left is not voided — it stays."""
+    from willow_bot.deposits import is_annul
+
+    live: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str]] = set()
+    with src.open("rb") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict) or is_annul(rec) or not rec.get("head_sha"):
+                continue
+            key = (rec.get("repo", ""), rec["head_sha"])
+            seen.add(key)
+            if not voids.voided(rec):
+                live.add(key)
+    return seen - live
+
+
+def _resolved_lines_owed(items: dict, state: dict) -> set[str]:
+    """Item keys of resolved items on a WATCHED PR whose `resolved` line has
+    not been sent yet — kept through the prune so the next tick can retry."""
+    from willow_bot.steward import pr_watch
+
+    table = pr_watch.load()
+    marks = state.get("ci_notified") or {}
+    owed: set[str] = set()
+    for key, item in items.items():
+        if not item.get("resolved") or not item.get("id"):
+            continue
+        if "resolved" in (marks.get(item["id"]) or {}):
+            continue
+        if pr_watch.watcher_for(item.get("repo", ""), item.get("pr"), table) is not None:
+            owed.add(key)
+    return owed
+
+
+def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending: dict,
+                    *, voided_heads: set[tuple[str, str]] | None = None,
+                    keep_items: set[str] | None = None) -> dict:
     """Keep the four maps bounded (Loki, dispatch 82A7DB13, finding 4).
 
     A head is kept when it is the newest the bot has seen for its PR, the
@@ -706,10 +819,38 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
     are dropped (``ci_filed`` still remembers their legs, so a
     re-delivered completion never re-files). The resolve loop is then
     unresolved-items × kept-heads, a handful per PR. Returns counts.
+
+    ``voided_heads`` (gap 9): a head whose every deposit an annul voided is
+    dropped from every group it sits in — even as a PR's newest head, even
+    with a pending cancelled leg — and its items are dropped too: nothing
+    honest was ever filed for it. ``ci_filed`` keeps its keys (a re-read
+    of the voided rows is skipped before it could file, so the marker is
+    inert).
     """
+    voided_heads = voided_heads or set()
+    dropped_voided = 0
+    if voided_heads:
+        for pr_key in list(heads):
+            seen = heads[pr_key]
+            repo = pr_key.split("#")[0].split("@")[0].split("~")[0]
+            for sha in list(seen):
+                if (repo, sha) in voided_heads:
+                    del seen[sha]
+                    dropped_voided += 1
+            if not seen:
+                del heads[pr_key]
+        for key in list(cancelled_pending):
+            leg = cancelled_pending[key]
+            if (leg.get("repo", ""), leg.get("head_sha", "")) in voided_heads:
+                del cancelled_pending[key]
+        for item_key in list(items):
+            it = items[item_key]
+            if (it.get("repo", ""), it.get("head_sha", "")) in voided_heads:
+                del items[item_key]
     keep: dict[str, set[str]] = {}
-    for item in items.values():
-        if not item.get("resolved"):
+    keep_items = keep_items or set()
+    for item_key, item in items.items():
+        if not item.get("resolved") or item_key in keep_items:
             keep.setdefault(_ci_pr_key(item["repo"], item["pr"], item["head_sha"]), set()).add(item["head_sha"])
             if not item["pr"] and item.get("branch"):
                 # A stuck PR-less item resolves when a later head lands on
@@ -738,10 +879,13 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
         if head_key not in live_heads:
             del head_legs[head_key]
     for item_key in list(items):
-        if items[item_key].get("resolved"):
+        if items[item_key].get("resolved") and item_key not in keep_items:
             del items[item_key]
             dropped_items += 1
-    return {"heads": dropped_heads, "items": dropped_items}
+    out = {"heads": dropped_heads, "items": dropped_items}
+    if dropped_voided:
+        out["voided_heads"] = dropped_voided
+    return out
 
 
 def _ci_head_key_from_pr(pr_key: str, head_sha: str) -> str:
@@ -838,6 +982,142 @@ def _filing_args(app: str, where: str, head_sha: str, legs: list[dict], *, grace
     }
 
 
+_GROVE_SENDER_ENV = "WILLOW_BOT_GROVE_SENDER"
+_GROVE_SENDER_DEFAULT = "willow-bot"
+
+
+def _grove_sender() -> str:
+    return os.environ.get(_GROVE_SENDER_ENV, "").strip() or _GROVE_SENDER_DEFAULT
+
+
+def _ci_where(item: dict) -> str:
+    return _ci_pr_key(item.get("repo", ""), item.get("pr"), item.get("head_sha", ""))
+
+
+def _ci_line_filed(item: dict) -> str:
+    """The one line the seat reads. `CI red: repo#pr @ sha7 — leg, leg —
+    url`; a stuck-only item says `CI stuck:` and why (nothing failed,
+    nothing superseded it)."""
+    where = _ci_where(item)
+    sha7 = (item.get("head_sha") or "")[:7]
+    legs = ", ".join(item.get("legs") or [])
+    url = item.get("url") or ""
+    tail = f" — {url}" if url else ""
+    if item.get("stuck"):
+        minutes = item.get("grace_min") or _CI_CANCELLED_GRACE_MIN_DEFAULT
+        return f"CI stuck: {where} @ {sha7} — {legs} cancelled, no successor after {minutes} min{tail}"
+    return f"CI red: {where} @ {sha7} — {legs}{tail}"
+
+
+def _ci_line_resolved(item: dict) -> str:
+    where = _ci_where(item)
+    sha7 = (item.get("head_sha") or "")[:7]
+    done = item.get("resolved") or {}
+    how = done.get("how") or "resolved"
+    by = (done.get("by") or "")[:7]
+    why = {
+        "re-run": "re-run green",
+        "superseded": f"superseded by {by}, green",
+        "closed-merged": "PR merged",
+        "closed": "PR closed",
+        "superseded-on-branch": f"superseded by {by} on the same branch",
+    }.get(how, how)
+    return f"CI resolved: {where} @ {sha7} — {why}"
+
+
+def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer", app: str, call,
+                     just_filed: set[str], just_resolved: set[str], state_view: dict) -> dict:
+    """One Grove message per (item, filed|resolved) to the seat that opened
+    the PR, plus the bot's per-head PR comment kept current — for WATCHED
+    PRs only. Returns the new `ci_notified` table; fills `receipt["notified"]`
+    and `receipt["notified_counts"]`.
+
+    Three-state per attempt: `sent` (Grove took it; marker written),
+    `refused` (the tool refused or the PR comment could not land; no
+    marker, retried next tick), `skipped` (no watch row / no PR — said only
+    for items filed or resolved THIS tick, so an unwatched fleet does not
+    fill every receipt), `stopped` (this step's budget ran out first; no
+    marker, retried next tick).
+    """
+    from willow_bot.steward import pr_watch
+
+    notified: dict = {k: dict(v) for k, v in (state.get("ci_notified") or {}).items()
+                      if isinstance(v, dict)}
+    table = pr_watch.load()
+    sender = _grove_sender()
+    lines: list[dict] = []
+    counts = {"sent": 0, "refused": 0, "skipped": 0, "stopped": 0}
+
+    def _say(kind: str, item: dict, line: str) -> None:
+        item_id = item.get("id") or ""
+        watcher = pr_watch.watcher_for(item.get("repo", ""), item.get("pr"), table)
+        entry: dict = {"item_id": item_id, "where": _ci_where(item), "kind": kind}
+        if watcher is None:
+            if item_id in just_filed or item_id in just_resolved:
+                entry.update(state="skipped", reason="no watch row" if item.get("pr") else "no pr")
+                lines.append(entry)
+                counts["skipped"] += 1
+            return
+        channel = str(watcher.get("channel") or "")
+        entry["channel"] = channel
+        if pace.budget_spent:
+            entry.update(state="stopped", reason="ci budget spent")
+            lines.append(entry)
+            counts["stopped"] += 1
+            return
+        result, err = pace.call(call, "grove_send_message", {
+            "app_id": app, "channel_name": channel.lstrip("#"), "content": line, "sender": sender,
+        })
+        if err:
+            entry.update(state="stopped" if pace.budget_spent else "refused", reason=err)
+            lines.append(entry)
+            counts["stopped" if pace.budget_spent else "refused"] += 1
+            return
+        entry["state"] = "sent"
+        entry["comment"] = _comment_on_pr(item, state_view, at=receipt["at"])
+        notified.setdefault(item_id, {})[kind] = receipt["at"]
+        lines.append(entry)
+        counts["sent"] += 1
+
+    for item in items.values():
+        item_id = item.get("id")
+        if not item_id or item_id == "filed":
+            continue
+        marks = notified.get(item_id) or {}
+        if item.get("resolved"):
+            if "resolved" not in marks:
+                _say("resolved", item, _ci_line_resolved(item))
+            continue
+        if "filed" not in marks:
+            _say("filed", item, _ci_line_filed(item))
+
+    receipt["notified"] = lines
+    receipt["notified_counts"] = counts
+    return notified
+
+
+def _comment_on_pr(item: dict, state_view: dict, *, at: str) -> dict:
+    """Keep the bot's ONE per-head status comment current with the CI line
+    (acfd27ae3259 item 1). Same marker, same body builder as the voice
+    step, so the two writers converge on one comment per head sha — never
+    a second comment. Direct GitHub call (App token), not the limiter.
+    Three-state receipt, never raises."""
+    if not item.get("pr"):
+        return {"state": "skipped", "reason": "no pr"}
+    try:
+        from willow_bot import pr_voice
+        from willow_bot.steward import voice
+
+        key = f"{item['repo']}#{item['pr']}"
+        body = voice._status_comment_body(key, item["head_sha"], state_view, at=at)
+        result = pr_voice.upsert_status_comment(item["repo"], int(item["pr"]), item["head_sha"], body)
+    except Exception as exc:  # noqa: BLE001 — a comment that cannot land is a line, not a raise
+        return {"state": "refused", "reason": f"{type(exc).__name__}: {exc}"[:300]}
+    if result.get("status") == "ok":
+        return {"state": "sent", "action": result.get("action"), "url": result.get("url", "")}
+    return {"state": "refused", "reason": str(result.get("detail", ""))[:300]}
+
+
 def run_ci(*, enable_mcp: bool | None = None) -> dict:
     """File every red head the bot deposited since the last tick — one
     review item per (repo, pr, head_sha) — hold cancelled legs until a
@@ -913,6 +1193,15 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     now = _ci_clock()
 
     # Read first: every row is in the receipt whether or not it can be filed.
+    # Voided rows (an `annul` row names them; gap 9) are skipped and
+    # counted. The void set is built over the WHOLE file before the pass:
+    # an annul follows what it voids, and a row read before its annul in
+    # the same pass would already have been filed.
+    from willow_bot.deposits import is_annul, void_set_before
+
+    voids = void_set_before(src)
+    annulled_skipped = 0
+    voided_heads: set[tuple[str, str]] = set()
     red: list[dict] = []
     scanned = 0
     with src.open("rb") as fh:
@@ -928,6 +1217,16 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                 try:
                     rec = json.loads(text)
                 except json.JSONDecodeError:
+                    rec = None
+                if isinstance(rec, dict) and is_annul(rec):
+                    # The heads this annul empties: every head whose every
+                    # deposit is now voided drops out of `ci_heads` on this
+                    # tick's prune (Loki 346276F9: PR-less groups never
+                    # pruned — a fixture head is exactly that case).
+                    voided_heads.update(_heads_fully_voided(src, voids))
+                    rec = None
+                elif isinstance(rec, dict) and voids.voided(rec):
+                    annulled_skipped += 1
                     rec = None
                 if isinstance(rec, dict) and rec.get("head_sha"):
                     leg = _leg_of(rec)
@@ -958,6 +1257,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                 scanned += 1
             offset = fh.tell()
     receipt["red"] = [_public(r) for r in red]
+    receipt["annulled"] = annulled_skipped
 
     grace_s = _ci_grace_s()
     # Closure evidence: the inbox's durable `pr_closed` record (which knows
@@ -1045,9 +1345,17 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         return out
 
     def _persist() -> None:
-        pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending)
-        if pruned["heads"] or pruned["items"]:
+        # A resolved item whose `resolved` line is still owed to a watching
+        # seat stays one more tick (Loki 717E236C: a refused send at tick N
+        # was pruned at N+1 and never delivered); `ci_notified` is pruned
+        # with the items so it does not grow for the life of the file.
+        owed = _resolved_lines_owed(items, state)
+        pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending,
+                                 voided_heads=voided_heads, keep_items=owed)
+        if pruned["heads"] or pruned["items"] or pruned.get("voided_heads"):
             receipt["pruned"] = pruned
+        live_ids = {it.get("id") for it in items.values() if it.get("id")}
+        state["ci_notified"] = {k: v for k, v in (state.get("ci_notified") or {}).items() if k in live_ids}
         state["ci_filed"] = filed_now
         state["ci_filed_cancelled"] = filed_cancelled_now
         state["ci_items"] = items
@@ -1119,10 +1427,14 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             _remember(lg, item_id)
             if lg["check"] not in names:
                 names.append(lg["check"])
+        causes = [lg for lg in legs if lg["check"] not in _CI_AGGREGATE_CHECKS] or legs
         items[head_key] = {"id": item_id, "repo": first["repo"], "pr": first["pr"],
                            "head_sha": first["head_sha"], "legs": names, "filed_at": receipt["at"],
                            "stuck": all(lg["conclusion"] == _CI_CANCELLED for lg in legs),
-                           "branch": first["head_branch"]}
+                           "branch": first["head_branch"],
+                           # The line the seat and the PR comment read (pair 11ccb0f7).
+                           "url": causes[0]["url"] or legs[0]["url"],
+                           "grace_min": int(round(grace_s / 60.0)) if grace_s else _CI_CANCELLED_GRACE_MIN_DEFAULT}
         filed.append({"where": where, "head_sha": first["head_sha"], "legs": [lg["check"] for lg in legs],
                       "conclusions": [lg["conclusion"] for lg in legs], "id": item_id})
 
@@ -1152,6 +1464,24 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             continue
         item["resolved"] = {"by": sha, "how": how, "at": receipt["at"]}
         resolved.append({"where": item_key, "item_id": item["id"], "superseded_by": sha, "how": how})
+
+    # Tell the seat that opened the PR (sealed pair 11ccb0f7, part 1). The
+    # steward's outbound half — file, label, human_required — reached
+    # nobody live: ratatosk #48 went red two minutes after the desk opened
+    # it (2026-09-21) and the desk heard from the operator. For every item
+    # on a WATCHED PR (a row in pr_watch.json, written by pr_open_execute)
+    # post one Grove message to the watcher's channel when the item is
+    # filed and one when it resolves, and keep the bot's per-head PR
+    # comment saying the same. Markers in `ci_notified` are written only
+    # on `sent`, so a refusal or a budget stop is retried next tick and a
+    # re-tick never repeats a delivered line. Unwatched PRs: nothing.
+    notified_now = _notify_watchers(
+        items, state, receipt, pace=pace, app=app, call=mcp_client.call,
+        just_filed={f["id"] for f in filed}, just_resolved={r["item_id"] for r in resolved},
+        state_view={**state, "ci_items": items, "ci_filed": filed_now,
+                    "ci_filed_cancelled": filed_cancelled_now},
+    )
+    state["ci_notified"] = notified_now
 
     # On a refusal the offset stays where a retry can find the row; what was
     # filed before it is remembered in ci_filed so the retry skips it. (The
@@ -2073,11 +2403,93 @@ def main(argv: list[str] | None = None) -> int:
         return inbox_mod.ingest(Path(args[1]))
     if args[0] == "scan":
         return scan_mod.main()
+    if args[0] == "annul":
+        return run_annul(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|voice|status|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
+
+
+def run_annul(argv: list[str]) -> int:
+    """``willow-bot-steward annul [--url S] [--sha PREFIX] [--repo org/name] [--match S]
+    --reason … --authorization <frank id> [--apply] [--allow-multi] [--file F]``
+
+    The honest correction of the chained deposits file (gap 9): rows are
+    never rewritten; ONE ``annul`` row is appended naming what it voids.
+    Matchers are scoped and AND-ed (``--url``/``--match`` on ``html_url``
+    only, ``--sha`` a head prefix, ``--repo`` exact); at least one is
+    required. Dry-run by default — prints the rows it would void (by hash,
+    and by record_id for legacy rows), every distinct (repo, head) among
+    them, and what is already voided; writes nothing. ``--apply`` appends
+    the row and refuses when the plan spans more than one repo or head
+    unless ``--allow-multi`` says the operator read the list (Loki
+    717E236C: ``runs/1`` reached 395 real rows across eight repos). Also
+    refuses with nothing to void, without a reason, or without an
+    authorization id.
+    """
+    import argparse
+
+    from willow_bot import deposits as dep
+
+    parser = argparse.ArgumentParser(prog="willow-bot-steward annul", add_help=True)
+    parser.add_argument("--url", default="", help="substring of html_url")
+    parser.add_argument("--match", default="", help="substring of html_url (alias of --url)")
+    parser.add_argument("--sha", default="", help="head_sha prefix")
+    parser.add_argument("--repo", default="", help="exact org/name")
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--authorization", default="", help="the FRANK id that authorizes the correction")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--allow-multi", action="store_true",
+                        help="apply even when the plan spans more than one (repo, head)")
+    parser.add_argument("--file", default="", help="deposits file (default: the steward's own)")
+    ns = parser.parse_args(argv)
+
+    path = Path(ns.file) if ns.file else dep.deposits_jsonl()
+    plan = dep.annul_matches(path, match=ns.match, url=ns.url, sha=ns.sha, repo=ns.repo)
+    out = {"event": "steward_annul", "file": str(path), "apply": bool(ns.apply), **plan}
+    if plan.get("error"):
+        out.update(status="refused", detail="give at least one of --url/--match, --sha, --repo")
+        print(json.dumps(out, indent=2))
+        return 2
+    if not ns.apply:
+        out["status"] = "dry-run"
+        print(json.dumps(out, indent=2))
+        return 0
+    if not plan["count"]:
+        out.update(status="refused", detail="nothing to void (already voided or no match)")
+        print(json.dumps(out, indent=2))
+        return 1
+    if not ns.reason.strip() or not ns.authorization.strip():
+        out.update(status="refused", detail="--reason and --authorization are required to apply")
+        print(json.dumps(out, indent=2))
+        return 2
+    if len(plan["heads"]) > 1 and not ns.allow_multi:
+        out.update(status="refused",
+                   detail=f"plan spans {len(plan['heads'])} distinct (repo, head) pairs — read `heads` and "
+                          "pass --allow-multi to void them all, or narrow with --repo/--sha")
+        print(json.dumps(out, indent=2))
+        return 3
+    rec = dep.annul_record(voids=plan["voids"], voids_legacy=plan["voids_legacy"],
+                           reason=ns.reason.strip(), authorization=ns.authorization.strip())
+    written = dep.append_local(rec) if not ns.file else _append_to(path, rec)
+    out.update(status="applied", row_hash=rec["row_hash"], written=str(written))
+    print(json.dumps(out, indent=2))
+    return 0
+
+
+def _append_to(path: Path, rec: dict) -> Path:
+    """append_local against an explicit file (tests / an operator copy):
+    same chaining, computed from that file's own tail."""
+    from willow_bot import deposits as dep
+
+    prev = dep._last_chained_hash_from_tail(path) or dep.GENESIS_HASH
+    rec["prev_hash"] = prev
+    rec["row_hash"] = dep.compute_row_hash(rec, prev)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    return path
 
 
 if __name__ == "__main__":

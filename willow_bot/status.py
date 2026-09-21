@@ -243,8 +243,29 @@ def _read_cursors() -> dict[str, Any]:
     ci = _read_int_file(_deposits_dir() / "ci.offset")
     tip = _read_str_file(_deposits_dir() / "ci_outcomes.chain.tip")
     if mirror is None and ci is None and tip is None:
-        return {"status": "empty", "mirror_offset": None, "ci_offset": None, "chain_tip": None}
-    return {"status": "populated", "mirror_offset": mirror, "ci_offset": ci, "chain_tip": tip}
+        return {"status": "empty", "mirror_offset": None, "ci_offset": None, "chain_tip": None,
+                "annulled": 0, "annulled_rows": 0}
+    ids, rows = _count_annulled()
+    return {"status": "populated", "mirror_offset": mirror, "ci_offset": ci, "chain_tip": tip,
+            "annulled": ids, "annulled_rows": rows}
+
+
+def _count_annulled() -> tuple[int, int]:
+    """(ids voided, rows voided) by annul rows in the deposits file (gap 9).
+    Two numbers for one act because a legacy record_id is not unique
+    (Loki 717E236C: 6 legacy ids covered 9 rows). Ids come from a needle
+    scan of annul lines; rows need one full read."""
+    from willow_bot.deposits import read_rows, void_set_before
+
+    path = _deposits_dir() / "ci_outcomes.jsonl"
+    if not path.is_file():
+        return 0, 0
+    voids = void_set_before(path)
+    ids = len(voids.hashes) + len(voids.legacy_ids)
+    if not ids:
+        return 0, 0
+    rows = sum(1 for _, voided in read_rows(path) if voided)
+    return ids, rows
 
 
 # ── sync (last successful sweep) ─────────────────────────────────────────
