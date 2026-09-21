@@ -224,6 +224,7 @@ def test_cursors_present_reports_each_value(home: Path):
         "mirror_offset": 12345,
         "ci_offset": 67890,
         "chain_tip": "abc123",
+        "annulled": 0,
     }
 
 

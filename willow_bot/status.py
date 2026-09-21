@@ -243,8 +243,25 @@ def _read_cursors() -> dict[str, Any]:
     ci = _read_int_file(_deposits_dir() / "ci.offset")
     tip = _read_str_file(_deposits_dir() / "ci_outcomes.chain.tip")
     if mirror is None and ci is None and tip is None:
-        return {"status": "empty", "mirror_offset": None, "ci_offset": None, "chain_tip": None}
-    return {"status": "populated", "mirror_offset": mirror, "ci_offset": ci, "chain_tip": tip}
+        return {"status": "empty", "mirror_offset": None, "ci_offset": None, "chain_tip": None,
+                "annulled": 0}
+    return {"status": "populated", "mirror_offset": mirror, "ci_offset": ci, "chain_tip": tip,
+            "annulled": _count_annulled()}
+
+
+def _count_annulled() -> int:
+    """Rows voided by annul rows in the deposits file (gap 9) — the count a
+    reader of the status needs beside the tip. Needle scan; only annul
+    lines are parsed, so a long file costs one pass of bytes, not JSON."""
+    from willow_bot.deposits import void_set_before
+
+    path = _deposits_dir() / "ci_outcomes.jsonl"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    voids = void_set_before(path, size)
+    return len(voids.hashes) + len(voids.legacy_ids)
 
 
 # ── sync (last successful sweep) ─────────────────────────────────────────

@@ -216,12 +216,24 @@ def verify_chain(path: Path) -> dict[str, Any]:
         "verified": 0,
         "broken_at": None,
         "tip": None,
+        "annul_rows": 0,
+        "annulled": 0,
+        "annulled_legacy": 0,
     }
     if not path.is_file():
         return receipt
 
     prev_hash: str | None = None  # None until we see the first chained row
     lineno = 0
+    # Annul bookkeeping: every hash seen so far (a void must name one of
+    # them — a void that names nothing in the file is a break, never a
+    # silent no-op), every legacy record id seen so far, and what is
+    # already voided (a second annul naming it is `already`, reported).
+    seen_hashes: set[str] = set()
+    seen_legacy_ids: set[str] = set()
+    voided: set[str] = set()
+    voided_legacy: set[str] = set()
+    already: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as fh:
         for raw in fh:
             lineno += 1
@@ -239,11 +251,34 @@ def verify_chain(path: Path) -> dict[str, Any]:
                 receipt["broken_at"] = lineno
                 receipt["detail"] = f"line {lineno} is not an object"
                 return receipt
+            if is_annul(rec):
+                receipt["annul_rows"] += 1
+                for v in rec.get("voids") or []:
+                    if v not in seen_hashes:
+                        receipt["broken_at"] = lineno
+                        receipt["detail"] = f"line {lineno} annuls row_hash={str(v)[:12]}… which is not in the file before it"
+                        return receipt
+                    if v in voided:
+                        already.append({"line": lineno, "row_hash": v})
+                    else:
+                        voided.add(v)
+                        receipt["annulled"] += 1
+                for v in rec.get("voids_legacy") or []:
+                    if v not in seen_legacy_ids:
+                        receipt["broken_at"] = lineno
+                        receipt["detail"] = f"line {lineno} annuls legacy record_id={v} which is not in the file before it"
+                        return receipt
+                    if v in voided_legacy:
+                        already.append({"line": lineno, "record_id": v})
+                    else:
+                        voided_legacy.add(v)
+                        receipt["annulled_legacy"] += 1
             stored_row = rec.get("row_hash")
             stored_prev = rec.get("prev_hash")
             if not (isinstance(stored_row, str) and isinstance(stored_prev, str)):
                 if prev_hash is None:
                     receipt["legacy_head"] = lineno
+                    seen_legacy_ids.add(record_id_for(rec))
                     continue
                 # A legacy row appearing INSIDE the chain (after chained
                 # rows started) is a break — a chain cannot resume from a
@@ -271,10 +306,169 @@ def verify_chain(path: Path) -> dict[str, Any]:
                                       f"does not match recomputed={recomputed[:12]}…")
                 return receipt
             prev_hash = stored_row
+            seen_hashes.add(stored_row)
             receipt["verified"] += 1
 
     receipt["tip"] = prev_hash
+    if already:
+        receipt["already"] = already
     return receipt
+
+
+# ── annul: the honest correction of a chained file ───────────────────────────
+#
+# The chain is never rewritten. When rows must not be read as fact — the
+# 200 test-fixture rows for forge-play/Forge#4 @ cc9aab19… that a suite run
+# with the operator's WILLOW_HOME inherited wrote into the LIVE file on
+# 2026-09-21 (gap 9) — an `annul` row is APPENDED through `append_local` like
+# any other, so it is chained and verifies. It names what it voids (by
+# row_hash; legacy unhashed rows by record_id), why, and under what
+# authorization (a FRANK id). Readers skip voided rows; the verifier counts
+# them and treats a void that names nothing in the file as a break.
+
+KIND_ANNUL = "annul"
+
+
+def annul_record(*, voids: list[str], reason: str, authorization: str,
+                 voids_legacy: list[str] | None = None) -> dict[str, Any]:
+    """An annul row. ``voids`` are row_hashes of chained rows; ``voids_legacy``
+    are ``record_id_for`` ids of unhashed legacy rows (the only handle they
+    have). Both lists are sorted and de-duplicated so the row's hash is
+    independent of the order the caller found them in."""
+    return {
+        "kind": KIND_ANNUL,
+        "lane": "draft",
+        "deposited_by": "willows-bot",
+        "voids": sorted(set(v for v in voids if isinstance(v, str) and v)),
+        "voids_legacy": sorted(set(v for v in (voids_legacy or []) if isinstance(v, str) and v)),
+        "reason": reason or "",
+        "authorization": authorization or "",
+        "annulled_at": _now(),
+    }
+
+
+def is_annul(rec: dict[str, Any]) -> bool:
+    return isinstance(rec, dict) and rec.get("kind") == KIND_ANNUL
+
+
+def is_legacy(rec: dict[str, Any]) -> bool:
+    """A row written before the chain existed: no row_hash."""
+    return not isinstance(rec.get("row_hash"), str)
+
+
+class VoidSet:
+    """What the file's annul rows have voided. An annul always comes AFTER
+    the rows it voids (a later row's hash does not exist yet when the annul
+    is appended), so every reader builds the set over the WHOLE file first
+    (`void_set_before(path)`) and then walks its own window — a reader that
+    met the row first and the annul second would already have acted on
+    the row."""
+
+    def __init__(self) -> None:
+        self.hashes: set[str] = set()
+        self.legacy_ids: set[str] = set()
+
+    def take(self, rec: dict[str, Any]) -> None:
+        if is_annul(rec):
+            self.hashes.update(v for v in rec.get("voids") or [] if isinstance(v, str))
+            self.legacy_ids.update(v for v in rec.get("voids_legacy") or [] if isinstance(v, str))
+
+    def voided(self, rec: dict[str, Any]) -> bool:
+        """True when ``rec`` has been voided by an annul seen so far. An annul
+        row is never itself voided."""
+        if is_annul(rec):
+            return False
+        h = rec.get("row_hash")
+        if isinstance(h, str) and h in self.hashes:
+            return True
+        return is_legacy(rec) and record_id_for(rec) in self.legacy_ids
+
+
+_ANNUL_NEEDLE = b'"kind":"annul"'
+
+
+def void_set_before(path: Path, offset: int | None = None) -> VoidSet:
+    """Every void named by an annul row before ``offset`` — the whole file
+    when ``offset`` is None, which is what readers want. Cheap: only lines
+    carrying the annul needle are parsed, so a long file costs one pass of
+    bytes, not JSON."""
+    voids = VoidSet()
+    if not path.is_file():
+        return voids
+    if offset is None:
+        offset = path.stat().st_size
+    if offset <= 0:
+        return voids
+    with path.open("rb") as fh:
+        while fh.tell() < offset:
+            line = fh.readline()
+            if not line:
+                break
+            if _ANNUL_NEEDLE not in line:
+                continue
+            try:
+                rec = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                voids.take(rec)
+    return voids
+
+
+def read_rows(path: Path) -> list[tuple[dict[str, Any], bool]]:
+    """Every JSON row of the file in order, each paired with whether it is
+    voided by any annul in the file. Annul rows are returned too (never
+    voided) so a caller can see the corrections."""
+    out: list[tuple[dict[str, Any], bool]] = []
+    if not path.is_file():
+        return out
+    voids = void_set_before(path)
+    with path.open("r", encoding="utf-8") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            out.append((rec, voids.voided(rec)))
+    return out
+
+
+def annul_matches(path: Path, *, match: str) -> dict[str, Any]:
+    """Dry-run for the CLI: the rows whose JSON line contains ``match``
+    (substring; an exact field value like a sha or url is the honest key),
+    split into what an annul would void by hash and by legacy record id,
+    and what is already voided (``already``). Reads only."""
+    by_hash: list[dict[str, Any]] = []
+    legacy: list[dict[str, Any]] = []
+    already: list[dict[str, Any]] = []
+    for rec, voided in read_rows(path):
+        if is_annul(rec):
+            continue
+        line = json.dumps(rec, separators=(",", ":"), sort_keys=True)
+        if match not in line:
+            continue
+        summary = {"repo": rec.get("repo"), "head_sha": (rec.get("head_sha") or "")[:12],
+                   "check_run_id": rec.get("check_run_id"), "check_name": rec.get("check_name"),
+                   "conclusion": rec.get("conclusion"), "html_url": rec.get("html_url"),
+                   "record_id": record_id_for(rec)}
+        if voided:
+            already.append(summary)
+        elif is_legacy(rec):
+            legacy.append(summary)
+        else:
+            by_hash.append({**summary, "row_hash": rec["row_hash"]})
+    return {
+        "match": match,
+        "voids": [r["row_hash"] for r in by_hash],
+        "voids_legacy": [r["record_id"] for r in legacy],
+        "rows": by_hash, "legacy_rows": legacy, "already": already,
+        "count": len(by_hash) + len(legacy), "already_count": len(already),
+    }
 
 
 def deposit_ci_outcome(rec: dict[str, Any]) -> dict[str, Any]:
