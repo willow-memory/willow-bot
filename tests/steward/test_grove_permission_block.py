@@ -40,10 +40,11 @@ def home(tmp_path, monkeypatch):
 
 
 class _Client:
-    def __init__(self, *, grove_error="sender_forbidden", enqueue_error=None):
+    def __init__(self, *, grove_error="sender_forbidden", enqueue_error=None, resolve_error=None):
         self.calls: list[tuple[str, dict]] = []
         self.grove_error = grove_error
         self.enqueue_error = enqueue_error
+        self.resolve_error = resolve_error
         self.n = 0
 
     def __call__(self, name, inputs):
@@ -53,6 +54,8 @@ class _Client:
             return {"error": self.grove_error}
         if name == "human_required_enqueue" and self.enqueue_error:
             return {"error": self.enqueue_error}
+        if name == "human_required_resolve" and self.resolve_error:
+            return {"error": self.resolve_error}
         return {"ok": True, "id": f"hr-{self.n}"}
 
     def named(self, name):
@@ -372,3 +375,71 @@ def test_unblock_without_a_filed_item_still_releases_cleanly(home, monkeypatch):
 
     owed2, _ = ci_comments.load()
     assert ci_comments.human_required_row(owed2, dedup_key) is None
+
+
+# ── Loki 67536D9A C5: a refused resolve is surfaced, not dropped silently ──
+
+def test_a_refused_resolve_is_surfaced_on_the_spoke_receipt(home, monkeypatch):
+    """Under willow-bot pre-4326FDFE, human_required_resolve can itself be
+    gate denied (the resolve group has not landed yet) — the item stays
+    open in the queue with an already-released dedupe key. That must be
+    VISIBLE on the receipt, not a silent no-op (the earlier cut dropped
+    the reply on the floor)."""
+    _prime()
+    c = _Client(grove_error="sender_forbidden",
+               resolve_error="gate denied: 'willow-bot' not permitted for 'human_required_resolve'.")
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+
+    c.grove_error = None
+    manifest = Path(home) / "mcp_apps" / "willow-bot" / "manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"app_id": "willow-bot", "permissions": ["grove_write"]}),
+                        encoding="utf-8")
+    r = tick.run_ci()
+
+    assert r["spoke"][0]["ok"] is True
+    assert "gate denied" in r["spoke"][0]["human_required_unresolved"]
+    # The dedupe key is still released even though resolve itself failed —
+    # a later refusal must not stay stuck deduped against a stale item.
+    owed, _ = ci_comments.load()
+    assert ci_comments.human_required_row(owed, "willow-bot::willow") is None
+
+
+def test_success_with_nothing_to_resolve_carries_no_extra_key(home, monkeypatch):
+    """The common case (never blocked, or resolve succeeds) must not grow
+    the receipt shape — 'human_required_unresolved' only appears when
+    there is something to report."""
+    _prime()
+    c = _Client(grove_error=None)
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert r["spoke"] == [{"channel": "willow", "grove_sender": "willow-bot", "ok": True}]
+    assert "human_required_unresolved" not in r["spoke"][0]
+
+
+# ── Loki 67536D9A C4: the enqueue retry is paced to one call per tick ──────
+
+def test_enqueue_retry_is_one_call_per_tick_not_one_per_blocked_head(home, monkeypatch):
+    """Ten heads blocked on the SAME (identity, channel) with a refused
+    enqueue must cost ONE refused human_required_enqueue call this tick,
+    not ten — the identity/grant problem is one problem, not N."""
+    _prime()
+    c = _Client(grove_error="sender_forbidden", enqueue_error="postgres_unavailable")
+    _use(monkeypatch, c)
+    for n in range(10):
+        deposits.append_local(_row(RAT, "c" * 39 + str(n), n + 1, "test", "failure", pr=200 + n))
+    tick.run_ci()
+
+    grove_refuses = [i for i in c.named("human_required_enqueue") if i["title"].startswith("Grove refuses")]
+    assert len(grove_refuses) == 1, "one enqueue attempt per tick regardless of how many heads are blocked"
+
+    owed, _ = ci_comments.load()
+    assert len(ci_comments.blocked_report(owed)) == 10, "all ten heads are still individually blocked"
+
+    # And the SAME cap holds on a later tick, still refused.
+    tick.run_ci()
+    grove_refuses2 = [i for i in c.named("human_required_enqueue") if i["title"].startswith("Grove refuses")]
+    assert len(grove_refuses2) == 2, "one more attempt this tick, still not one per head"

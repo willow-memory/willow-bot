@@ -43,13 +43,16 @@ Environment=WILLOW_BOT_MCP_INHERIT_ENV=1
 #      and is signed.
 # Reinstalling this template before both land makes every one of those
 # calls EPERM as willow-bot — the sweep, the seal drains, and the
-# human_required queue all go dark, not just Grove. Until then, an
-# installed unit should keep setting WILLOW_BOT_MCP_APP_ID=willow and
-# WILLOW_HUMAN_ORCHESTRATOR=1 explicitly (the pre-163b9a70 shape) in its
-# own env file — this template's CODE-LEVEL default has already moved to
-# willow-bot (willow_bot/steward/config.py:STEWARD_APP_ID), so an
-# installed unit that wants the old identity now has to say so, not just
-# omit a line.
+# human_required queue all go dark, not just Grove.
+#
+# The CODE-LEVEL default (willow_bot/steward/config.py:app_id()) stays
+# "willow" — main's existing behavior, unchanged — precisely so an
+# ALREADY-INSTALLED unit (no WILLOW_BOT_MCP_APP_ID line, still carrying
+# WILLOW_HUMAN_ORCHESTRATOR=1) keeps working exactly as it does today
+# after a merge + pull + restart, no matter when this branch lands. The
+# Environment= line below is what actually switches the identity; it
+# takes effect only once THIS FILE is re-rendered and reinstalled — which
+# is the one-time act to hold off on until both items above are true.
 Environment=WILLOW_BOT_MCP_APP_ID=willow-bot
 Environment=WILLOW_BOT_STEWARD_INTERVAL=300
 # Non-secret overrides and the WILLOW_* the spawned server needs (PG, keyring,

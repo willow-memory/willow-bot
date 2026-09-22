@@ -1543,7 +1543,7 @@ def _file_or_retry_human_required(owed: dict, *, app: str, channel: str, error: 
     ci_comments.mark_human_required_filed(owed, dedup_key, item_id=item_id)
 
 
-def _release_and_resolve_human_required(owed: dict, *, app: str, channel: str, call) -> None:
+def _release_and_resolve_human_required(owed: dict, *, app: str, channel: str, call) -> str | None:
     """A block just cleared (a successful send landed): release the
     dedupe key so a LATER new refusal on this (identity, channel) files a
     fresh item, and resolve the queue item this block filed, if any (Loki
@@ -1551,18 +1551,28 @@ def _release_and_resolve_human_required(owed: dict, *, app: str, channel: str, c
     hold ``human_required_resolve`` — plausible under a fresh willow-bot
     principal pre-4326FDFE — the item is left open in the queue; the
     dedupe key is released regardless, which is the part that actually
-    matters for not staying silently stuck."""
+    matters for not staying silently stuck.
+
+    Returns ``None`` when there was nothing to resolve or the resolve
+    succeeded; otherwise the refusal reason (Loki 67536D9A C5: a refused
+    ``human_required_resolve`` used to be dropped with no receipt line at
+    all — the desk item stays open with an already-released dedupe key,
+    invisible). The caller folds a non-``None`` return into the spoke
+    receipt so the interim (pre-4326FDFE) case is at least visible."""
     dedup_key = _grove_human_required_dedup_key(app, channel)
     item_id = ci_comments.release_human_required(owed, dedup_key)
     if not item_id:
-        return
+        return None
     try:
-        call("human_required_resolve", {
+        result = call("human_required_resolve", {
             "app_id": app, "item_id": item_id, "status": "resolved",
             "note": "Grove send succeeded — the grant this item asked for is confirmed.",
         })
-    except Exception:  # noqa: BLE001 — best-effort; the dedupe key is already released
-        pass
+    except Exception as exc:  # noqa: BLE001 — best-effort; the dedupe key is already released
+        return str(exc)[:300]
+    if isinstance(result, dict) and result.get("error"):
+        return str(result["error"])[:300]
+    return None
 
 
 def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", call,
@@ -1592,6 +1602,12 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
     schema surprise on one head cannot kill the whole drain for every
     other head this tick."""
     from willow_bot import pr_voice
+
+    # Loki 67536D9A C4: the enqueue retry loop below runs once per BLOCKED
+    # head — paced to one attempt per (identity, channel) PER TICK here, so
+    # N blocked heads sharing one dedup key (the pre-manifest willow-bot
+    # case) cost one refused enqueue call this tick, not N.
+    _enqueue_retried_this_tick: set[str] = set()
 
     for head_key in ci_comments.head_keys(owed):
         entry = owed[head_key]
@@ -1642,10 +1658,13 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
             # enqueue call itself must not cost 48 ticks on top of
             # whatever already blocked the send.
             if sp.get("status") == "blocked":
-                _file_or_retry_human_required(
-                    owed, app=app, channel="willow", error=sp.get("last_error") or "blocked",
-                    where=where, call=call,
-                )
+                dedup_key = _grove_human_required_dedup_key(app, "willow")
+                if dedup_key not in _enqueue_retried_this_tick:
+                    _enqueue_retried_this_tick.add(dedup_key)
+                    _file_or_retry_human_required(
+                        owed, app=app, channel="willow", error=sp.get("last_error") or "blocked",
+                        where=where, call=call,
+                    )
 
             fingerprint = _manifest_fingerprint(app)
             if not ci_comments.due(sp, tick=tick, manifest_fingerprint=fingerprint):
@@ -1660,9 +1679,12 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                 # (Loki 738DB24E F2): no willow-mcp call is made at all.
                 reason = f"sender_mismatch: WILLOW_BOT_GROVE_SENDER={mismatch!r} != app_id={sender!r}"
                 ci_comments.record_blocked(sp, error=reason, tick=tick, manifest_fingerprint=fingerprint)
-                _file_or_retry_human_required(
-                    owed, app=app, channel="willow", error=reason, where=where, call=call,
-                )
+                dedup_key = _grove_human_required_dedup_key(app, "willow")
+                if dedup_key not in _enqueue_retried_this_tick:
+                    _enqueue_retried_this_tick.add(dedup_key)
+                    _file_or_retry_human_required(
+                        owed, app=app, channel="willow", error=reason, where=where, call=call,
+                    )
                 spoke.append({**spoke_receipt, "ok": False, "reason": reason, "blocked": True})
                 continue
 
@@ -1678,8 +1700,8 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
             # written for comes straight from this line, not a guess.
             if err is None:
                 ci_comments.record_success(sp, status="posted", tick=tick)
-                if was_blocked:
-                    _release_and_resolve_human_required(owed, app=app, channel="willow", call=call)
+                unresolved = (_release_and_resolve_human_required(owed, app=app, channel="willow", call=call)
+                             if was_blocked else None)
                 if cs.get("status") in ("posted", "green"):
                     # Both channels have now landed at least once for this
                     # head — the failure blocks are only needed to build a
@@ -1688,7 +1710,10 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                     # edit, a prune-and-rebuild), which re-fetches anyway
                     # (`_ci_owed_refetch_stripped`, called above).
                     ci_comments.strip_blocks(entry)
-                spoke.append({**spoke_receipt, "ok": True})
+                ok_receipt = {**spoke_receipt, "ok": True}
+                if unresolved:
+                    ok_receipt["human_required_unresolved"] = unresolved
+                spoke.append(ok_receipt)
             elif err.startswith("rate_limited"):
                 # The pacer's own give-up (budget/cap spent) reads exactly
                 # like GitHub's rate limit to this entry: a pause, never a
@@ -1705,9 +1730,12 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                 # (identity, channel), deduped so every red head from the
                 # same blocked identity is not its own ticket.
                 ci_comments.record_blocked(sp, error=err, tick=tick, manifest_fingerprint=fingerprint)
-                _file_or_retry_human_required(
-                    owed, app=app, channel="willow", error=err, where=where, call=call,
-                )
+                dedup_key = _grove_human_required_dedup_key(app, "willow")
+                if dedup_key not in _enqueue_retried_this_tick:
+                    _enqueue_retried_this_tick.add(dedup_key)
+                    _file_or_retry_human_required(
+                        owed, app=app, channel="willow", error=err, where=where, call=call,
+                    )
                 spoke.append({**spoke_receipt, "ok": False, "reason": err, "blocked": True})
             else:
                 ci_comments.record_failure(sp, error=err, tick=tick)
