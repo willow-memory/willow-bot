@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.7.1](https://github.com/willow-memory/willow-bot/compare/v0.7.0...v0.7.1) (2026-09-22)
+
+
+### Fixed
+
+* **steward:** cap the receipts file, sort the sample, count upgraded (Loki 7C899577) ([071ef4c](https://github.com/willow-memory/willow-bot/commit/071ef4c6ed6217b23b6acdfa3deaa6fba52eb98a))
+* **steward:** the heartbeat can carry a receipt too large to read back ([b15e3d2](https://github.com/willow-memory/willow-bot/commit/b15e3d2b231f0a99d03d18ee60011a92e9ffd73f))
+* **steward:** the heartbeat carries a summary the status reader can read; full receipts go to their own file ([e581b9b](https://github.com/willow-memory/willow-bot/commit/e581b9bc5ffa77bb00889c83d6d622652222370d))
+
 ## [0.7.0](https://github.com/willow-memory/willow-bot/compare/v0.6.0...v0.7.0) (2026-09-21)
 
 
