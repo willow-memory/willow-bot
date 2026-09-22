@@ -187,9 +187,14 @@ def test_the_steward_unit_template_carries_the_wiring():
     text = (repo / "systemd" / "willow-bot-steward.service.template").read_text(encoding="utf-8")
     assert "ExecStart=@VENV_BIN@/willow-bot-steward loop" in text
     assert "Environment=WILLOW_BOT_MCP=1" in text
-    # envelope_apply-gated tools refuse a non-orchestrator host; the first
-    # live sweep said so. Short fix until the bot has its own seat.
-    assert "Environment=WILLOW_HUMAN_ORCHESTRATOR=1" in text
+    # Sealed 163b9a70: the steward is its own principal (app_id=willow-bot),
+    # never the human orchestrator seat — this template no longer sets
+    # WILLOW_HUMAN_ORCHESTRATOR; see the header comment above this line in
+    # the template itself for the willow-mcp-side dependency (packet
+    # 4326FDFE) that must land before an installed unit can actually use
+    # this identity.
+    assert "Environment=WILLOW_BOT_MCP_APP_ID=willow-bot" in text
+    assert "Environment=WILLOW_HUMAN_ORCHESTRATOR=1" not in text
     assert "@VAULT_BOX@/secrets/willow-bot.env" in text
     assert "WILLOW_BOT_MCP_COMMAND=" in text
     import re

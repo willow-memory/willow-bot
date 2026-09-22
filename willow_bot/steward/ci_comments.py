@@ -40,6 +40,20 @@ GitHub outage silenced the Grove line too (it was gated on the comment
 having landed) and never resumed once GitHub came back, with no receipt
 line saying so. ``stalled`` keeps being probed forever, once every
 ``STALL_PROBE_TICKS`` ticks, and any later success resumes it.
+
+A FOURTH sub-state, ``blocked``, is distinct from ``stalled``: both are
+"stopped retrying for now", but for opposite reasons. ``stalled`` means
+the network/GitHub/Grove was flaky ``MAX_ATTEMPTS`` times in a row and
+might clear on its own any tick; ``blocked`` means a single refusal named
+the identity/grant as wrong (``sender_forbidden``, a ``"gate denied: ..."``
+manifest refusal — Loki 9778E096 F2/F4's classification), and nothing about
+retrying sooner changes that answer. ``blocked`` charges exactly the ONE
+attempt that surfaced it, never climbs toward ``MAX_ATTEMPTS``, and is
+probed far less eagerly than ``stalled`` (``BLOCKED_PROBE_TICKS``, or
+immediately when the caller's own manifest fingerprint has changed since
+the block was recorded — see ``due()``). Like ``stalled``, it is never
+abandoned; unlike ``stalled``, a tick spent NOT probing a blocked entry is
+the correct behavior, not a gap to close.
 """
 from __future__ import annotations
 
@@ -61,8 +75,18 @@ MAX_ATTEMPTS = 10
 # "never silently abandon" — GitHub coming back after a long outage used
 # to get zero further attempts and no receipt line).
 STALL_PROBE_TICKS = 12
+# `blocked` is probed far less eagerly than `stalled`: a permission wall
+# (a missing grant) changes on an operator's own schedule, not GitHub's or
+# Grove's — hammering it every 12 ticks like a flaky network call would
+# just be noise. 48 ticks is ~4h at the steward's 300s default interval;
+# still probed forever (never abandoned, same rule as `stalled`), and a
+# manifest fingerprint change (see `due()`) re-probes immediately
+# regardless of this cadence — the steward does not have to WAIT out the
+# full window once the operator has actually granted the fix.
+BLOCKED_PROBE_TICKS = 48
 MAX_ENTRY_AGE_DAYS = 14
 _TICK_KEY = "_tick"
+_HUMAN_REQUIRED_KEY = "_human_required"
 
 
 def path() -> Path:
@@ -162,9 +186,13 @@ def save(state: dict[str, Any]) -> None:
 
 def head_keys(state: dict[str, Any]) -> list[str]:
     """Every real head-entry key in `state`, sorted — excludes the
-    internal tick counter so a caller can iterate entries without
-    reaching into this module's private storage shape."""
-    return sorted(k for k, v in state.items() if k != _TICK_KEY and isinstance(v, dict))
+    internal tick counter and the human_required dedupe table so a caller
+    can iterate entries without reaching into this module's private
+    storage shape."""
+    return sorted(
+        k for k, v in state.items()
+        if k not in (_TICK_KEY, _HUMAN_REQUIRED_KEY) and isinstance(v, dict)
+    )
 
 
 def next_tick(state: dict[str, Any]) -> int:
@@ -203,8 +231,9 @@ def _interval_s() -> float:
         return 300.0
 
 
-def due(sub: dict[str, Any], *, tick: int) -> bool:
-    """A ``pending`` or ``stalled`` sub-state is due for another attempt.
+def due(sub: dict[str, Any], *, tick: int, manifest_fingerprint: str | None = None) -> bool:
+    """A ``pending``, ``stalled``, or ``blocked`` sub-state is due for
+    another attempt.
 
     ``pending``: never tried, or enough ticks have passed since the last
     attempt — backoff grows with the attempt count (capped at 8) so a
@@ -215,10 +244,28 @@ def due(sub: dict[str, Any], *, tick: int) -> bool:
     many tries were made and why the last one failed, and a later success
     (GitHub back up) resumes it via ``record_success``.
 
+    ``blocked`` (``record_blocked``): due either every ``BLOCKED_PROBE_TICKS``
+    (the periodic fallback, so a grant that lands is discovered eventually
+    even if nothing else notices), OR immediately when ``manifest_fingerprint``
+    (the caller's OWN manifest, read fresh by the caller each tick — a
+    steward CAN read its own manifest) differs from the fingerprint stored
+    when the block was recorded — a grant landing is visible the very next
+    tick, not just on the next scheduled probe. Passing ``None`` for
+    ``manifest_fingerprint`` (e.g. a caller that has no manifest to read)
+    falls back to the periodic cadence only.
+
     A ``paused_until`` tick (set by ``record_rate_limited`` to honour a
     GitHub ``Retry-After``) blocks any attempt before that tick regardless
     of backoff — a rate limit is a scheduled wait, not a retry to race."""
     status = sub.get("status")
+    if status == "blocked":
+        last = sub.get("last_attempt_tick")
+        if last is None:
+            return True
+        if (manifest_fingerprint is not None
+                and sub.get("blocked_manifest_fingerprint") != manifest_fingerprint):
+            return True
+        return (tick - int(last)) >= BLOCKED_PROBE_TICKS
     if status not in ("pending", "stalled"):
         return False
     paused_until = sub.get("paused_until")
@@ -240,17 +287,154 @@ def record_success(sub: dict[str, Any], *, status: str, tick: int) -> None:
     sub["last_error"] = None
     sub["last_attempt_tick"] = tick
     sub.pop("paused_until", None)
+    sub.pop("blocked_manifest_fingerprint", None)
 
 
 def record_failure(sub: dict[str, Any], *, error: str, tick: int) -> None:
     """A real failure (502, timeout, missing permission, ...) — counts
     toward ``MAX_ATTEMPTS``. Never a rate limit; use
-    ``record_rate_limited`` for that, which does not burn an attempt."""
+    ``record_rate_limited`` for that, which does not burn an attempt. Never
+    a permission-class refusal either; use ``record_blocked`` for that —
+    see ``is_permission_error``."""
     sub["attempts"] = int(sub.get("attempts") or 0) + 1
     sub["last_error"] = error[:400]
     sub["last_attempt_tick"] = tick
     if sub["attempts"] >= MAX_ATTEMPTS:
         sub["status"] = "stalled"
+
+
+# ── permission-class refusals: blocked, not retried into a wall ────────────
+#
+# Enumerated from willow-mcp's own grove_tools.py error surface (its module
+# docstring), not guessed. A `grove_send_message` refusal is one of two
+# shapes:
+#
+#   permission-class — the identity/grant is wrong; retrying with the same
+#   caller gets the same answer every time:
+#     * "sender_forbidden" (`_resolve_sender_checked`): an explicit
+#       `sender` that differs from the caller's own resolved
+#       `grove_sender`, without `grove_relay` (this repo's own defect,
+#       Loki 9778E096 F2 — the steward passes `sender=_grove_sender()`
+#       while calling as `app_id=willow`, which never equals it).
+#     * a `"gate denied: ..."` string (`_gate_denied`): the manifest lacks
+#       `grove_write`/`grove_send_message`.
+#
+#   transient — a network/DB hiccup, or the pacer's own rate limiting,
+#   that may clear on its own and is handled elsewhere
+#   (`record_rate_limited`) or by the existing `record_failure` cap:
+#     * "postgres_unavailable", "grove_unavailable"
+#     * "rate_limited" (never reaches here — `_Pacer`/`due()` intercept it
+#       first; see tick.py)
+#     * anything this module has not seen yet — the safe default is to
+#       keep retrying via `record_failure`, not to silently stop.
+#
+# A THIRD reason reaches `record_blocked` without ever calling
+# `grove_send_message` at all: `"sender_mismatch"` (tick.py) — a
+# `WILLOW_BOT_GROVE_SENDER` override that disagrees with the caller's own
+# `app_id`. Loki 738DB24E F2: the earlier cut substituted the app_id for a
+# disagreeing override and SENT anyway, which on the interim box config
+# (app_id=willow, override=willow-bot) posted to Grove as `willow` — the
+# human trust-root seat — with willow-mcp's own gate accepting it, since
+# `sender == caller` is always free. A mismatch must never send; it is
+# detected and blocked before the call is made.
+def is_permission_error(error: str | None) -> bool:
+    if not error:
+        return False
+    return error == "sender_forbidden" or error.startswith("gate denied")
+
+
+def record_blocked(sub: dict[str, Any], *, error: str, tick: int,
+                    manifest_fingerprint: str | None = None) -> None:
+    """A permission-class refusal: terminal for this sub-state until the
+    reason changes. Charges exactly the ONE attempt that surfaced it —
+    never climbs toward ``MAX_ATTEMPTS``/``stalled``. ``manifest_fingerprint``
+    (when the caller can read its own manifest) is stored so ``due()`` can
+    re-probe the moment it changes, rather than waiting out
+    ``BLOCKED_PROBE_TICKS``."""
+    sub["status"] = "blocked"
+    sub["attempts"] = int(sub.get("attempts") or 0) + 1
+    sub["last_error"] = error[:400]
+    sub["last_attempt_tick"] = tick
+    sub["blocked_manifest_fingerprint"] = manifest_fingerprint
+    sub.pop("paused_until", None)
+
+
+def blocked_report(owed: dict[str, Any]) -> list[dict[str, Any]]:
+    """``[{key, channel, attempts, last_error}]`` for every sub-state
+    currently ``blocked`` — the same shape ``stalled_report`` carries, read
+    by the heartbeat's ``problems`` list and ``status.py``'s ``notifier``
+    field so a permission wall shows up where the desk looks, not just in
+    the tick receipt."""
+    out: list[dict[str, Any]] = []
+    for head_key in head_keys(owed):
+        entry = owed[head_key]
+        where = entry.get("where", head_key)
+        for channel in ("comment", "spoke"):
+            sub = entry.get(channel)
+            if isinstance(sub, dict) and sub.get("status") == "blocked":
+                out.append({"key": where, "channel": channel,
+                            "attempts": sub.get("attempts"), "last_error": sub.get("last_error")})
+    return out
+
+
+# ── human_required dedup: durable in the SAME file as the entries it
+# describes, so one atomic `save()` keeps both in sync and there is no
+# second state file to fall out of step with this one. Keyed on
+# "<app_id>::<channel>" — ten blocked heads from the same identity on the
+# same channel are one filed item, not ten (the assignment's dedup
+# requirement); a different (identity, channel) pair files its own.
+#
+# Loki 738DB24E F3/F4: the dedupe table is a small state machine per key,
+# not a flat "filed" set — `human_required_enqueue`'s own result decides
+# whether the key is actually filed:
+#   {"status": "filed", "item_id": <str|None>, "last_error": None}
+#     — the enqueue call succeeded; no re-attempt until `release` (F4).
+#   {"status": "could_not_run", "item_id": None, "last_error": <str>}
+#     — the enqueue call itself errored/refused (gate denied, rate_limited,
+#       pg down — including the SAME 'gate denied' this branch can itself
+#       be a symptom of). NOT filed: the desk item never landed, so a
+#       caller must retry the enqueue, not treat this as done.
+# `release_human_required` (called on a successful un-block) pops the row
+# entirely — a LATER new refusal on the same (identity, channel), after a
+# grant was revoked or a sender renamed, files a fresh item rather than
+# staying silently deduped against one that no longer describes anything.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def human_required_row(state: dict[str, Any], dedup_key: str) -> dict[str, Any] | None:
+    table = state.get(_HUMAN_REQUIRED_KEY)
+    if not isinstance(table, dict):
+        return None
+    row = table.get(dedup_key)
+    return row if isinstance(row, dict) else None
+
+
+def human_required_is_filed(state: dict[str, Any], dedup_key: str) -> bool:
+    row = human_required_row(state, dedup_key)
+    return bool(row and row.get("status") == "filed")
+
+
+def mark_human_required_filed(state: dict[str, Any], dedup_key: str, *, item_id: str | None) -> None:
+    table = state.setdefault(_HUMAN_REQUIRED_KEY, {})
+    table[dedup_key] = {"status": "filed", "item_id": item_id, "last_error": None}
+
+
+def mark_human_required_could_not_run(state: dict[str, Any], dedup_key: str, *, error: str) -> None:
+    table = state.setdefault(_HUMAN_REQUIRED_KEY, {})
+    table[dedup_key] = {"status": "could_not_run", "item_id": None, "last_error": (error or "")[:400]}
+
+
+def release_human_required(state: dict[str, Any], dedup_key: str) -> str | None:
+    """Pop the dedupe row for ``dedup_key`` (a block just cleared) and
+    return its ``item_id``, if any, so the caller can resolve the actual
+    queue item. Returns ``None`` both when there was no row and when the
+    row never made it past ``could_not_run`` — either way there is nothing
+    to resolve, only something to stop deduping against."""
+    table = state.get(_HUMAN_REQUIRED_KEY)
+    if not isinstance(table, dict):
+        return None
+    row = table.pop(dedup_key, None)
+    return row.get("item_id") if isinstance(row, dict) else None
 
 
 def record_rate_limited(sub: dict[str, Any], *, retry_after: object, tick: int) -> None:

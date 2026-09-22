@@ -29,14 +29,31 @@ Environment="WILLOW_BOT_MCP_COMMAND=@VAULT_BOX@/venvs/willow-mcp/bin/python -m w
 # of the MCP SDK's minimal env, which drops anything else the env file
 # carries (NESTOR_*, for one).
 Environment=WILLOW_BOT_MCP_INHERIT_ENV=1
-# The steward speaks to its spawned server as app_id=willow (the seat), and
-# the tools gated as envelope_apply — gitsync_sweep, git_pull_execute —
-# refuse unless the server is a human-orchestrator host: the first live
-# sweep answered "orchestrator_human_required" (2026-09-15 00:28Z). This
-# is the honest short fix and it is load-bearing to say so: the right one is
-# the bot's OWN seat with envelope_apply granted (INSTALL.md, "narrow
-# steward manifest later"), at which point this line goes.
-Environment=WILLOW_HUMAN_ORCHESTRATOR=1
+# The steward speaks to its spawned server as its OWN principal (sealed
+# 163b9a70): app_id=willow-bot, never the human orchestrator seat.
+#
+# *** DO NOT re-render/reinstall this template (`scripts/install-service.sh
+# willow-bot-steward`) until BOTH of these have landed: ***
+#   1. willow-mcp packet 4326FDFE — the orchestrator-scoped verbs this tick
+#      calls (gitsync_sweep, git_pull_execute, human_required_list/enqueue,
+#      seal_drain, net_authority_drain, envelope_retire_sweep, ...) accept
+#      willow-bot as a named second principal, each under its own
+#      permission group — NOT WILLOW_HUMAN_ORCHESTRATOR.
+#   2. mcp_apps/willow-bot/manifest.json exists (that packet's deliverable)
+#      and is signed.
+# Reinstalling this template before both land makes every one of those
+# calls EPERM as willow-bot — the sweep, the seal drains, and the
+# human_required queue all go dark, not just Grove.
+#
+# The CODE-LEVEL default (willow_bot/steward/config.py:app_id()) stays
+# "willow" — main's existing behavior, unchanged — precisely so an
+# ALREADY-INSTALLED unit (no WILLOW_BOT_MCP_APP_ID line, still carrying
+# WILLOW_HUMAN_ORCHESTRATOR=1) keeps working exactly as it does today
+# after a merge + pull + restart, no matter when this branch lands. The
+# Environment= line below is what actually switches the identity; it
+# takes effect only once THIS FILE is re-rendered and reinstalled — which
+# is the one-time act to hold off on until both items above are true.
+Environment=WILLOW_BOT_MCP_APP_ID=willow-bot
 Environment=WILLOW_BOT_STEWARD_INTERVAL=300
 # Non-secret overrides and the WILLOW_* the spawned server needs (PG, keyring,
 # store root) come from the same env file the webhook unit reads.

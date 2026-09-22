@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from willow_bot.steward.config import app_id as _resolve_app_id
 from willow_bot.steward.config import willow_home
+from willow_bot.steward.ci_comments import blocked_report as _ci_blocked_report
+from willow_bot.steward.ci_comments import load as _ci_comments_load
 
 
 # Status verbs plus the two seal-driven ticks. None of these publish dew or
@@ -97,11 +100,30 @@ _RECEIPT_NESTED_FIELDS = (
 
 
 def _app_id() -> str:
-    return os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    return _resolve_app_id()
 
 
 def _receipts_path() -> Path:
     return willow_home() / "willow-bot" / "steward_heartbeat.jsonl"
+
+
+def _blocked_problems() -> list[dict[str, Any]]:
+    """Every ci_comments sub-state currently ``blocked`` on a
+    permission-class Grove refusal, named as a problem. Best-effort: an
+    unreadable/corrupt ci_comments table reports zero problems here rather
+    than raising — ``ci_comments.load``'s own corrupt-table handling
+    already surfaces that failure through the tick receipt; the heartbeat
+    is not the place to raise it a second time."""
+    try:
+        owed, corrupt = _ci_comments_load()
+    except Exception:  # noqa: BLE001 — best-effort read, never blocks the heartbeat
+        return []
+    if corrupt:
+        return []
+    return [
+        {"kind": "notifier_blocked", **item}
+        for item in _ci_blocked_report(owed)
+    ]
 
 
 def _full_receipts_path() -> Path:
@@ -206,6 +228,12 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
         "event": "steward_heartbeat",
         "at": datetime.now(timezone.utc).isoformat(),
         "tools": [],
+        # Beside "tools" (curated MCP verbs), a permission-class Grove
+        # refusal blocks a ci_comments (repo#pr@head_sha, comment|spoke)
+        # sub-state whether or not THIS pass talks to MCP — local durable
+        # state the heartbeat surfaces regardless, so the desk sees it via
+        # bot_status without reading the steward_ci receipt by hand.
+        "problems": _blocked_problems(),
     }
 
     if not enable_mcp:

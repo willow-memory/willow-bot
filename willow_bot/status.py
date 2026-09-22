@@ -56,6 +56,7 @@ from willow_bot.paths import (
     webhook_inbox_dir as _inbox_dir,
     willow_home as _willow_home,
 )
+from willow_bot.steward import ci_comments as _ci_comments
 
 
 _JOURNAL_TAIL = 5  # last N receipts included in the journal excerpt
@@ -334,6 +335,28 @@ def _read_last_successful_sync() -> dict[str, Any]:
             "detail": "no successful sweep in the tail read"}
 
 
+# ── notifier (permission-class Grove refusals, ci_comments' `blocked`) ────
+
+
+def _read_notifier() -> dict[str, Any]:
+    """Blocked ci_comments sub-states (permission-class Grove refusals —
+    ``sender_forbidden``, a manifest ``gate denied`` string) — the same
+    three-state contract as every other field. ``empty`` when nothing is
+    blocked (including a fresh install that has never ticked); unreachable
+    only when the underlying ci_comments table itself could not be
+    read/parsed (``ci_comments.load``'s own corrupt/unreachable split)."""
+    try:
+        owed, corrupt = _ci_comments.load()
+    except Exception as exc:  # noqa: BLE001 — the read itself is what failed
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    if corrupt:
+        return {"status": "unreachable", "detail": corrupt}
+    blocked = _ci_comments.blocked_report(owed)
+    if not blocked:
+        return {"status": "empty"}
+    return {"status": "populated", "blocked": blocked}
+
+
 # ── the surface ──────────────────────────────────────────────────────────
 
 
@@ -351,4 +374,5 @@ def report() -> dict[str, Any]:
         "inbox": _read_inbox_depth(),
         "cursors": _read_cursors(),
         "sync": _read_last_successful_sync(),
+        "notifier": _read_notifier(),
     }

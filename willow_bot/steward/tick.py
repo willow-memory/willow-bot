@@ -17,7 +17,8 @@ from willow_bot.steward import ci_comments
 from willow_bot.steward import inbox as inbox_mod
 from willow_bot.steward import merge as merge_mod
 from willow_bot.steward import scan as scan_mod
-from willow_bot.steward.config import host_sync_enabled, state_path
+from willow_bot.steward.config import app_id as _resolve_app_id, host_sync_enabled, state_path
+from willow_bot.steward.config import manifest_fingerprint as _manifest_fingerprint
 
 
 _DEFAULT_PROMPT = (
@@ -263,7 +264,7 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
 
     from willow_bot.steward import mcp_client
 
-    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    app = _resolve_app_id()
     dispatched = dict(state.get("audit_dispatched") or {})
     envelope_id = state.get(_AUDIT_ENVELOPE_STATE_KEY) or None
     resolved_this_tick = False
@@ -401,7 +402,7 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
 
     from willow_bot.steward import mcp_client
 
-    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    app = _resolve_app_id()
     mirrored, failed = 0, None
     annulled_skipped, annulled_mirrors = 0, 0
     pace = _Pacer(_MIRROR_TIME_BUDGET_S, calls=_MIRROR_CALLS_PER_TICK)
@@ -984,11 +985,36 @@ def _filing_args(app: str, where: str, head_sha: str, legs: list[dict], *, grace
 
 
 _GROVE_SENDER_ENV = "WILLOW_BOT_GROVE_SENDER"
-_GROVE_SENDER_DEFAULT = "willow-bot"
 
 
 def _grove_sender() -> str:
-    return os.environ.get(_GROVE_SENDER_ENV, "").strip() or _GROVE_SENDER_DEFAULT
+    """The Grove ``sender`` the steward posts as — always its own resolved
+    ``app_id`` (sealed 163b9a70: one source of truth). Never call this to
+    decide WHETHER to send when ``WILLOW_BOT_GROVE_SENDER`` disagrees with
+    the app_id — see ``_grove_sender_mismatch`` for that; sending under a
+    disagreeing name is refused entirely, not silently corrected, so this
+    function never has to lie about who it posted as."""
+    return _resolve_app_id()
+
+
+def _grove_sender_mismatch() -> str | None:
+    """``None`` when there is no ``WILLOW_BOT_GROVE_SENDER`` override, or
+    it already agrees with the resolved ``app_id``. Otherwise the
+    disagreeing override value itself — the caller MUST refuse to send at
+    all (Loki 738DB24E F2, second half of 9778E096 F2): the first cut of
+    this fix substituted the app_id for a disagreeing override and sent
+    anyway, which under the interim box config the deploy template itself
+    prescribes (app_id=willow, WILLOW_BOT_GROVE_SENDER=willow-bot left over
+    from before this fix) posted every CI-red line to #willow AS the
+    identity ``willow`` — the human trust-root seat, not the bot — because
+    willow-mcp's own gate accepts a caller posting as its own resolved
+    identity for free. A mismatch is a configuration problem to surface
+    and fix, never a reason to speak as someone else."""
+    app = _resolve_app_id()
+    override = os.environ.get(_GROVE_SENDER_ENV, "").strip()
+    if override and override != app:
+        return override
+    return None
 
 
 # ── the CI-red comment: the failure block itself, and an unconditional word
@@ -1462,6 +1488,93 @@ def _ci_owed_detect_green(owed: dict, heads: dict, head_legs: dict, *, at: str, 
                 errors.append({"key": head_key, "step": "detect_green", "error": str(exc)[:300]})
 
 
+def _grove_human_required_dedup_key(app: str, channel: str) -> str:
+    """One key per (identity, channel) — sender always equals app_id in
+    this model (``_grove_sender``/F2), so the identity half is the app_id
+    itself, never a separately-tracked sender name."""
+    return f"{app}::{channel}"
+
+
+def _file_or_retry_human_required(owed: dict, *, app: str, channel: str, error: str,
+                                  where: str, call) -> None:
+    """File one ``human_required_enqueue`` item naming the exact fix for a
+    permission-class (or sender-mismatch) Grove refusal — identity,
+    channel, and the grant it lacks — the first time this (identity,
+    channel) pair is seen blocked. Deduped in the SAME ci_comments table
+    the blocked sub-state itself lives in, so ten red heads from one
+    blocked identity file one item, not ten, and the dedup survives a
+    restart the same way the blocked state does.
+
+    Loki 738DB24E F3: the earlier cut discarded the enqueue call's own
+    result and marked the key filed regardless — including on a
+    ``{"error": "gate denied", ...}`` reply, which this very code path can
+    itself provoke (a pre-manifest willow-bot has neither grove_write NOR
+    human_required_enqueue). That permanently hid the desk item behind a
+    dedupe key nothing had actually filed. Now: the key is marked
+    ``filed`` (with the returned item id, for F4's resolve step) ONLY on a
+    clean, non-error result; any other outcome — a raised exception or an
+    ``{"error": ...}`` reply — is recorded ``could_not_run`` and is NOT
+    treated as filed, so THIS SAME function retries it on a later call
+    (the caller invokes it every tick for a still-blocked entry,
+    independent of the Grove resend's own slower probe cadence — a broker
+    hiccup should not cost ``BLOCKED_PROBE_TICKS``)."""
+    dedup_key = _grove_human_required_dedup_key(app, channel)
+    if ci_comments.human_required_is_filed(owed, dedup_key):
+        return
+    title = f"Grove refuses '{app}' on #{channel} ({error})"
+    summary = (
+        f"grove_send_message refused app_id '{app}' (posting as itself, the "
+        f"only shape that ever sends) on channel '{channel}' with '{error}'. "
+        f"First seen on {where}. Fix: grant this identity grove_write for "
+        f"this channel."
+    )
+    try:
+        result = call("human_required_enqueue", {
+            "app_id": app, "kind": "review", "title": title[:200], "summary": summary,
+            "priority": "normal", "source_ref": where,
+        })
+    except Exception as exc:  # noqa: BLE001 — not filed; retried next tick
+        ci_comments.mark_human_required_could_not_run(owed, dedup_key, error=str(exc)[:400])
+        return
+    if isinstance(result, dict) and result.get("error"):
+        ci_comments.mark_human_required_could_not_run(owed, dedup_key, error=str(result["error"])[:400])
+        return
+    item_id = result.get("id") if isinstance(result, dict) else None
+    ci_comments.mark_human_required_filed(owed, dedup_key, item_id=item_id)
+
+
+def _release_and_resolve_human_required(owed: dict, *, app: str, channel: str, call) -> str | None:
+    """A block just cleared (a successful send landed): release the
+    dedupe key so a LATER new refusal on this (identity, channel) files a
+    fresh item, and resolve the queue item this block filed, if any (Loki
+    738DB24E F4). Best-effort: if the steward's manifest does not (yet)
+    hold ``human_required_resolve`` — plausible under a fresh willow-bot
+    principal pre-4326FDFE — the item is left open in the queue; the
+    dedupe key is released regardless, which is the part that actually
+    matters for not staying silently stuck.
+
+    Returns ``None`` when there was nothing to resolve or the resolve
+    succeeded; otherwise the refusal reason (Loki 67536D9A C5: a refused
+    ``human_required_resolve`` used to be dropped with no receipt line at
+    all — the desk item stays open with an already-released dedupe key,
+    invisible). The caller folds a non-``None`` return into the spoke
+    receipt so the interim (pre-4326FDFE) case is at least visible."""
+    dedup_key = _grove_human_required_dedup_key(app, channel)
+    item_id = ci_comments.release_human_required(owed, dedup_key)
+    if not item_id:
+        return None
+    try:
+        result = call("human_required_resolve", {
+            "app_id": app, "item_id": item_id, "status": "resolved",
+            "note": "Grove send succeeded — the grant this item asked for is confirmed.",
+        })
+    except Exception as exc:  # noqa: BLE001 — best-effort; the dedupe key is already released
+        return str(exc)[:300]
+    if isinstance(result, dict) and result.get("error"):
+        return str(result["error"])[:300]
+    return None
+
+
 def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", call,
                    enable_mcp: bool, commented: list, spoke: list, errors: list | None = None) -> None:
     """Retry every owed comment and Grove line that is due — new this
@@ -1489,6 +1602,12 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
     schema surprise on one head cannot kill the whole drain for every
     other head this tick."""
     from willow_bot import pr_voice
+
+    # Loki 67536D9A C4: the enqueue retry loop below runs once per BLOCKED
+    # head — paced to one attempt per (identity, channel) PER TICK here, so
+    # N blocked heads sharing one dedup key (the pre-manifest willow-bot
+    # case) cost one refused enqueue call this tick, not N.
+    _enqueue_retried_this_tick: set[str] = set()
 
     for head_key in ci_comments.head_keys(owed):
         entry = owed[head_key]
@@ -1525,21 +1644,64 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                                       "action": "skipped", "reason": reason})
 
             sp = entry.get("spoke") or {}
-            if sp.get("status") not in ("pending", "stalled") or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX):
+            if (sp.get("status") not in ("pending", "stalled", "blocked")
+                    or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX)):
                 continue
             if not enable_mcp or call is None:
                 spoke.append({"channel": "willow", "state": "unreachable"})
                 continue
-            if not ci_comments.due(sp, tick=tick):
+
+            # A not-yet-filed human_required item is retried EVERY tick
+            # this entry is blocked — independent of the Grove resend's
+            # own slower due()/BLOCKED_PROBE_TICKS cadence below (Loki
+            # 738DB24E F3): filing is cheap, and a broker hiccup on the
+            # enqueue call itself must not cost 48 ticks on top of
+            # whatever already blocked the send.
+            if sp.get("status") == "blocked":
+                dedup_key = _grove_human_required_dedup_key(app, "willow")
+                if dedup_key not in _enqueue_retried_this_tick:
+                    _enqueue_retried_this_tick.add(dedup_key)
+                    _file_or_retry_human_required(
+                        owed, app=app, channel="willow", error=sp.get("last_error") or "blocked",
+                        where=where, call=call,
+                    )
+
+            fingerprint = _manifest_fingerprint(app)
+            if not ci_comments.due(sp, tick=tick, manifest_fingerprint=fingerprint):
                 continue
+
+            sender = _grove_sender()
+            spoke_receipt = {"channel": "willow", "grove_sender": sender}
+            mismatch = _grove_sender_mismatch()
+            if mismatch is not None:
+                # Refuse outright — never substitute the app_id and send
+                # under its name as though the override had been honored
+                # (Loki 738DB24E F2): no willow-mcp call is made at all.
+                reason = f"sender_mismatch: WILLOW_BOT_GROVE_SENDER={mismatch!r} != app_id={sender!r}"
+                ci_comments.record_blocked(sp, error=reason, tick=tick, manifest_fingerprint=fingerprint)
+                dedup_key = _grove_human_required_dedup_key(app, "willow")
+                if dedup_key not in _enqueue_retried_this_tick:
+                    _enqueue_retried_this_tick.add(dedup_key)
+                    _file_or_retry_human_required(
+                        owed, app=app, channel="willow", error=reason, where=where, call=call,
+                    )
+                spoke.append({**spoke_receipt, "ok": False, "reason": reason, "blocked": True})
+                continue
+
             pr_url = f"https://github.com/{repo}/pull/{pr}"
             body_for_summary = _ci_red_body(where, head_sha, _ci_active_legs(entry))
             summary = _grove_summary(body_for_summary, pr_url)
+            was_blocked = sp.get("status") == "blocked"
             result, err = grove_pace.call(call, "grove_send_message", {
-                "app_id": app, "channel_name": "willow", "content": summary, "sender": _grove_sender(),
+                "app_id": app, "channel_name": "willow", "content": summary, "sender": sender,
             })
+            # Every attempt's receipt line names the identity and channel it
+            # used, win or lose (assignment step 5) — the pair a grant gets
+            # written for comes straight from this line, not a guess.
             if err is None:
                 ci_comments.record_success(sp, status="posted", tick=tick)
+                unresolved = (_release_and_resolve_human_required(owed, app=app, channel="willow", call=call)
+                             if was_blocked else None)
                 if cs.get("status") in ("posted", "green"):
                     # Both channels have now landed at least once for this
                     # head — the failure blocks are only needed to build a
@@ -1548,17 +1710,36 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                     # edit, a prune-and-rebuild), which re-fetches anyway
                     # (`_ci_owed_refetch_stripped`, called above).
                     ci_comments.strip_blocks(entry)
-                spoke.append({"channel": "willow", "ok": True})
+                ok_receipt = {**spoke_receipt, "ok": True}
+                if unresolved:
+                    ok_receipt["human_required_unresolved"] = unresolved
+                spoke.append(ok_receipt)
             elif err.startswith("rate_limited"):
                 # The pacer's own give-up (budget/cap spent) reads exactly
                 # like GitHub's rate limit to this entry: a pause, never a
                 # failure (Loki's re-audit, MEDIUM finding 3, probe F2 —
                 # the 403-burns-an-attempt defect, transposed to Grove).
                 ci_comments.record_rate_limited(sp, retry_after=None, tick=tick)
-                spoke.append({"channel": "willow", "ok": False, "reason": err, "rate_limited": True})
+                spoke.append({**spoke_receipt, "ok": False, "reason": err, "rate_limited": True})
+            elif ci_comments.is_permission_error(err):
+                # A permission-class refusal is terminal for THIS
+                # (head, channel) until the reason changes — one attempt,
+                # then quiet (`due()` re-probes on BLOCKED_PROBE_TICKS or a
+                # manifest fingerprint change, never every tick). File it
+                # where the desk reads: one human_required item per
+                # (identity, channel), deduped so every red head from the
+                # same blocked identity is not its own ticket.
+                ci_comments.record_blocked(sp, error=err, tick=tick, manifest_fingerprint=fingerprint)
+                dedup_key = _grove_human_required_dedup_key(app, "willow")
+                if dedup_key not in _enqueue_retried_this_tick:
+                    _enqueue_retried_this_tick.add(dedup_key)
+                    _file_or_retry_human_required(
+                        owed, app=app, channel="willow", error=err, where=where, call=call,
+                    )
+                spoke.append({**spoke_receipt, "ok": False, "reason": err, "blocked": True})
             else:
                 ci_comments.record_failure(sp, error=err, tick=tick)
-                spoke.append({"channel": "willow", "ok": False, "reason": err})
+                spoke.append({**spoke_receipt, "ok": False, "reason": err})
         except Exception as exc:  # noqa: BLE001 — one head's surprise must not stop the whole drain
             if errors is not None:
                 errors.append({"key": head_key, "step": "drain", "error": str(exc)[:300]})
@@ -1891,7 +2072,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # absent broker never prevents the GitHub comment. Run before the
     # filing loop below, whose own success or failure this no longer
     # depends on.
-    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    app = _resolve_app_id()
     grove_pace = _Pacer(_CI_TIME_BUDGET_S)
     call = None
     if enable_mcp:
@@ -1970,6 +2151,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             receipt["retired"] = retired
         ci_comments.save(owed)
     receipt["stalled"] = ci_comments.stalled_report(owed)
+    receipt["blocked"] = ci_comments.blocked_report(owed)
 
     # Resolve-on-green candidates. Two honest routes to "this item is done":
     # a LATER head for the same PR on which every leg the item's head
@@ -2267,7 +2449,7 @@ def run_ci_legacy_clear(*, enable_mcp: bool | None = None, build_sha: str | None
 
     from willow_bot.steward import mcp_client
 
-    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    app = _resolve_app_id()
     if done and not force:
         # The legacy pass is on record; only the stuck backfill is owed.
         receipt.update(status="ok", ran=False, detail=f"already cleared at {done.get('at')}", cleared_at=done.get("at"))
@@ -2741,7 +2923,7 @@ def run_sweep(*, enable_mcp: bool | None = None) -> dict:
     try:
         from willow_bot.steward import mcp_client
 
-        app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+        app = _resolve_app_id()
         result = mcp_client.call("gitsync_sweep", {"app_id": app, "project": "fleet"})
     except Exception as exc:  # noqa: BLE001 — a failed sweep is a line, not a dead loop
         receipt.update(status="could-not-run", detail=str(exc)[:400])
@@ -2895,7 +3077,7 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
 
     from willow_bot.steward import mcp_client
 
-    app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
+    app = _resolve_app_id()
     path = state_path()
     state = json.loads(path.read_text()) if path.is_file() and path.read_text().strip() else {}
     already = dict(state.get("gaps_resolved") or {})
