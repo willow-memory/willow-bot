@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [0.8.0](https://github.com/willow-memory/willow-bot/compare/v0.7.1...v0.8.0) (2026-09-22)
+
+
+### Added
+
+* **steward:** the steward is its own principal — opt-in willow-bot identity, one sender, a notifier that files a permission wall instead of retrying into it ([1ee9f86](https://github.com/willow-memory/willow-bot/commit/1ee9f8684242f1a6e4278c1566b68d89d85b93ed))
+
+
+### Fixed
+
+* **steward:** correct the stale template header, pace the enqueue retry, surface a refused resolve ([deccbda](https://github.com/willow-memory/willow-bot/commit/deccbdadccbfde7f01f057fc2979fc0abc1f92ee))
+* **steward:** revert the app_id default, refuse (never substitute) a mismatched sender, fix enqueue dedupe and un-block ([dd1495f](https://github.com/willow-memory/willow-bot/commit/dd1495f627e519a0e990bb29b96d2539c416b188))
+* **steward:** willow-bot is its own principal; a permission-class Grove refusal is filed once, not retried ([4b7aec5](https://github.com/willow-memory/willow-bot/commit/4b7aec5b5a4bebd5dc9617527d9315cc42ec7b7b))
+
 ## [0.7.1](https://github.com/willow-memory/willow-bot/compare/v0.7.0...v0.7.1) (2026-09-22)
 
 
