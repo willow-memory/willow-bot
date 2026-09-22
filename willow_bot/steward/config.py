@@ -13,12 +13,33 @@ def _truthy(name: str, default: str = "0") -> bool:
 
 
 #: The steward's own principal (sealed 163b9a70): app_id ``willow-bot``,
-#: with its own signed manifest, never the human orchestrator seat. This is
-#: the code-level default only — the LIVE deploy unit still needs its own
-#: env (or a willow-bot manifest + the willow-mcp-side acceptance, packet
-#: 4326FDFE) before this identity switch is safe to install; see
-#: ``systemd/willow-bot-steward.service.template``'s header comment.
+#: with its own signed manifest, never the human orchestrator seat, and the
+#: constant the Grove ``sender`` resolves to whenever ``app_id()`` IS
+#: ``willow-bot`` (``tick._grove_sender``). NOT the default ``app_id()``
+#: returns today — see ``app_id()``'s own docstring (Loki 738DB24E F1: the
+#: code default moving ahead of the live unit's env is exactly the "unit
+#: goes dark on next restart" defect this rework closes). Reached only by
+#: an explicit ``WILLOW_BOT_MCP_APP_ID=willow-bot`` (the deploy unit
+#: template sets this once ``mcp_apps/willow-bot/manifest.json`` exists and
+#: willow-mcp accepts it — packet 4326FDFE).
 STEWARD_APP_ID = "willow-bot"
+
+#: The default ``app_id()`` returns with no override — what main had
+#: BEFORE this principal work started, and what every already-installed
+#: unit still resolves to today (no ``WILLOW_BOT_MCP_APP_ID`` in the
+#: currently-installed unit; ``WILLOW_HUMAN_ORCHESTRATOR=1`` is set
+#: precisely because the steward speaks AS this seat). Flipping this
+#: default to ``STEWARD_APP_ID`` is a later one-line change, made only
+#: once ``mcp_apps/willow-bot/manifest.json`` is live — doing it here,
+#: ahead of that, was Loki 738DB24E F1: a merge + routine pull + the next
+#: unit restart would have entered the steward as ``willow-bot``, which
+#: has no manifest on the box, and every orchestrator-scoped verb plus
+#: every Grove send goes ``gate denied`` — the steward goes dark until a
+#: human notices and fixes the env by hand. The gate belongs on the unit
+#: (it sets ``WILLOW_BOT_MCP_APP_ID=willow-bot`` explicitly once ready),
+#: never on the code default silently moving out from under an
+#: already-installed unit.
+_LEGACY_APP_ID = "willow"
 
 #: The env var every call site reads to resolve which app_id it speaks to
 #: willow-mcp as. One name, read in exactly one place (``app_id()`` below)
@@ -31,13 +52,14 @@ APP_ID_ENV = "WILLOW_BOT_MCP_APP_ID"
 
 def app_id() -> str:
     """The app_id the steward speaks to willow-mcp as. ``$WILLOW_BOT_MCP_APP_ID``
-    if set, else ``STEWARD_APP_ID`` ("willow-bot") — NOT "willow": the
-    steward is its own principal, never the human orchestrator seat
-    (sealed 163b9a70). A box whose willow-bot manifest / willow-mcp
-    acceptance has not landed yet must set ``WILLOW_BOT_MCP_APP_ID=willow``
-    explicitly in its own env to keep working as before; that is the
-    "gate" — nothing here silently reverts to the old default."""
-    return os.environ.get(APP_ID_ENV, "").strip() or STEWARD_APP_ID
+    if set, else ``_LEGACY_APP_ID`` ("willow") — main's existing behavior,
+    unchanged, so an already-installed unit (no ``WILLOW_BOT_MCP_APP_ID``
+    line) keeps working exactly as it does today after a merge + pull +
+    restart. The steward becomes its own principal (``STEWARD_APP_ID`` /
+    sealed 163b9a70) only once the DEPLOY UNIT explicitly sets
+    ``WILLOW_BOT_MCP_APP_ID=willow-bot`` — the gate lives on the unit's own
+    env, never on this default (Loki 738DB24E F1)."""
+    return os.environ.get(APP_ID_ENV, "").strip() or _LEGACY_APP_ID
 
 
 def manifest_fingerprint(for_app_id: str | None = None) -> str | None:

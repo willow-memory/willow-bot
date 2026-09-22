@@ -86,7 +86,7 @@ STALL_PROBE_TICKS = 12
 BLOCKED_PROBE_TICKS = 48
 MAX_ENTRY_AGE_DAYS = 14
 _TICK_KEY = "_tick"
-_HUMAN_REQUIRED_FILED_KEY = "_human_required_filed"
+_HUMAN_REQUIRED_KEY = "_human_required"
 
 
 def path() -> Path:
@@ -186,9 +186,13 @@ def save(state: dict[str, Any]) -> None:
 
 def head_keys(state: dict[str, Any]) -> list[str]:
     """Every real head-entry key in `state`, sorted — excludes the
-    internal tick counter so a caller can iterate entries without
-    reaching into this module's private storage shape."""
-    return sorted(k for k, v in state.items() if k != _TICK_KEY and isinstance(v, dict))
+    internal tick counter and the human_required dedupe table so a caller
+    can iterate entries without reaching into this module's private
+    storage shape."""
+    return sorted(
+        k for k, v in state.items()
+        if k not in (_TICK_KEY, _HUMAN_REQUIRED_KEY) and isinstance(v, dict)
+    )
 
 
 def next_tick(state: dict[str, Any]) -> int:
@@ -323,6 +327,16 @@ def record_failure(sub: dict[str, Any], *, error: str, tick: int) -> None:
 #       first; see tick.py)
 #     * anything this module has not seen yet — the safe default is to
 #       keep retrying via `record_failure`, not to silently stop.
+#
+# A THIRD reason reaches `record_blocked` without ever calling
+# `grove_send_message` at all: `"sender_mismatch"` (tick.py) — a
+# `WILLOW_BOT_GROVE_SENDER` override that disagrees with the caller's own
+# `app_id`. Loki 738DB24E F2: the earlier cut substituted the app_id for a
+# disagreeing override and SENT anyway, which on the interim box config
+# (app_id=willow, override=willow-bot) posted to Grove as `willow` — the
+# human trust-root seat — with willow-mcp's own gate accepting it, since
+# `sender == caller` is always free. A mismatch must never send; it is
+# detected and blocked before the call is made.
 def is_permission_error(error: str | None) -> bool:
     if not error:
         return False
@@ -366,20 +380,61 @@ def blocked_report(owed: dict[str, Any]) -> list[dict[str, Any]]:
 # ── human_required dedup: durable in the SAME file as the entries it
 # describes, so one atomic `save()` keeps both in sync and there is no
 # second state file to fall out of step with this one. Keyed on
-# "<grove_sender>::<channel>" — ten blocked heads from the same identity on
-# the same channel are one filed item, not ten (the assignment's dedup
-# requirement); a different (sender, channel) pair files its own. ────────
+# "<app_id>::<channel>" — ten blocked heads from the same identity on the
+# same channel are one filed item, not ten (the assignment's dedup
+# requirement); a different (identity, channel) pair files its own.
+#
+# Loki 738DB24E F3/F4: the dedupe table is a small state machine per key,
+# not a flat "filed" set — `human_required_enqueue`'s own result decides
+# whether the key is actually filed:
+#   {"status": "filed", "item_id": <str|None>, "last_error": None}
+#     — the enqueue call succeeded; no re-attempt until `release` (F4).
+#   {"status": "could_not_run", "item_id": None, "last_error": <str>}
+#     — the enqueue call itself errored/refused (gate denied, rate_limited,
+#       pg down — including the SAME 'gate denied' this branch can itself
+#       be a symptom of). NOT filed: the desk item never landed, so a
+#       caller must retry the enqueue, not treat this as done.
+# `release_human_required` (called on a successful un-block) pops the row
+# entirely — a LATER new refusal on the same (identity, channel), after a
+# grant was revoked or a sender renamed, files a fresh item rather than
+# staying silently deduped against one that no longer describes anything.
+# ──────────────────────────────────────────────────────────────────────────
 
 
-def human_required_filed(state: dict[str, Any]) -> set[str]:
-    raw = state.get(_HUMAN_REQUIRED_FILED_KEY)
-    return set(raw) if isinstance(raw, list) else set()
+def human_required_row(state: dict[str, Any], dedup_key: str) -> dict[str, Any] | None:
+    table = state.get(_HUMAN_REQUIRED_KEY)
+    if not isinstance(table, dict):
+        return None
+    row = table.get(dedup_key)
+    return row if isinstance(row, dict) else None
 
 
-def mark_human_required_filed(state: dict[str, Any], dedup_key: str) -> None:
-    filed = human_required_filed(state)
-    filed.add(dedup_key)
-    state[_HUMAN_REQUIRED_FILED_KEY] = sorted(filed)
+def human_required_is_filed(state: dict[str, Any], dedup_key: str) -> bool:
+    row = human_required_row(state, dedup_key)
+    return bool(row and row.get("status") == "filed")
+
+
+def mark_human_required_filed(state: dict[str, Any], dedup_key: str, *, item_id: str | None) -> None:
+    table = state.setdefault(_HUMAN_REQUIRED_KEY, {})
+    table[dedup_key] = {"status": "filed", "item_id": item_id, "last_error": None}
+
+
+def mark_human_required_could_not_run(state: dict[str, Any], dedup_key: str, *, error: str) -> None:
+    table = state.setdefault(_HUMAN_REQUIRED_KEY, {})
+    table[dedup_key] = {"status": "could_not_run", "item_id": None, "last_error": (error or "")[:400]}
+
+
+def release_human_required(state: dict[str, Any], dedup_key: str) -> str | None:
+    """Pop the dedupe row for ``dedup_key`` (a block just cleared) and
+    return its ``item_id``, if any, so the caller can resolve the actual
+    queue item. Returns ``None`` both when there was no row and when the
+    row never made it past ``could_not_run`` — either way there is nothing
+    to resolve, only something to stop deduping against."""
+    table = state.get(_HUMAN_REQUIRED_KEY)
+    if not isinstance(table, dict):
+        return None
+    row = table.pop(dedup_key, None)
+    return row.get("item_id") if isinstance(row, dict) else None
 
 
 def record_rate_limited(sub: dict[str, Any], *, retry_after: object, tick: int) -> None:

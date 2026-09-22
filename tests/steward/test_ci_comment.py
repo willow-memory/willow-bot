@@ -295,10 +295,10 @@ def test_grove_send_failure_is_retried_and_never_resent_after_success(home, monk
     _use(monkeypatch, _client)
     deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
     r1 = tick.run_ci()
-    assert r1["spoke"] == [{"channel": "willow", "grove_sender": "willow-bot",
+    assert r1["spoke"] == [{"channel": "willow", "grove_sender": "willow",
                             "ok": False, "reason": "refused"}]
     r2 = tick.run_ci()
-    assert r2["spoke"] == [{"channel": "willow", "grove_sender": "willow-bot", "ok": True}]
+    assert r2["spoke"] == [{"channel": "willow", "grove_sender": "willow", "ok": True}]
     r3 = tick.run_ci()
     assert r3["spoke"] == []
     assert calls["n"] == 2
@@ -341,7 +341,7 @@ def test_grove_is_told_unconditionally_for_a_willow_memory_repo_with_no_watch_ro
     _use(monkeypatch, c)
     deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
     r = tick.run_ci()
-    assert r["spoke"] == [{"channel": "willow", "grove_sender": "willow-bot", "ok": True}]
+    assert r["spoke"] == [{"channel": "willow", "grove_sender": "willow", "ok": True}]
     sends = c.named("grove_send_message")
     assert len(sends) == 1
     assert sends[0]["channel_name"] == "willow"
@@ -423,7 +423,7 @@ def test_github_down_45_ticks_then_up_lands_within_12_never_abandons(home, monke
     wall["tick"] = 1
     first = tick.run_ci()
     # Grove hears immediately — it never waited on the comment landing.
-    assert first["spoke"] == [{"channel": "willow", "grove_sender": "willow-bot", "ok": True}]
+    assert first["spoke"] == [{"channel": "willow", "grove_sender": "willow", "ok": True}]
 
     saw_stalled = False
     landed_at = None

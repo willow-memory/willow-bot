@@ -213,7 +213,7 @@ def test_filed_red_on_a_watched_pr_is_told_to_the_seat_and_the_pr(home, monkeypa
     assert _watcher_sends(c) == [], "the one-liner steps aside for the block"
     blocks = _block_sends(c)
     assert len(blocks) == 1
-    assert blocks[0]["channel_name"] == "willow" and blocks[0]["sender"] == "willow-bot"
+    assert blocks[0]["channel_name"] == "willow" and blocks[0]["sender"] == "willow"
     assert f"https://github.com/{RAT}/pull/48" in blocks[0]["content"]
     # The status comment (a SEPARATE mechanism from the CI-red comment)
     # still carries the CI line, once, keyed on the head.
@@ -436,20 +436,25 @@ def test_a_prless_head_is_never_a_watched_pr(home, monkeypatch):
 
 def test_the_channel_comes_from_the_row_and_the_sender_is_the_app_id(home, monkeypatch):
     """Sealed 163b9a70: the Grove `sender` is the SAME constant as the
-    steward's own `app_id` — one source of truth, never a
-    `WILLOW_BOT_GROVE_SENDER` override that can silently disagree with it
-    (Loki 9778E096 F2: that disagreement is exactly what made every send
-    `sender_forbidden` by construction). A mismatched override is refused
-    (falls back to the app_id), not silently used."""
+    steward's own `app_id` — one source of truth. `_grove_sender()` itself
+    can no longer return anything but the resolved app_id (`willow` here —
+    no WILLOW_BOT_MCP_APP_ID is set by this test's `home` fixture, and
+    Loki 738DB24E F1 means the code default stays `willow` until an
+    operator's unit says otherwise); a `WILLOW_BOT_GROVE_SENDER` override
+    that disagrees with it never changes what is actually sent as.
+    (`_notify_watchers` does not yet gate a disagreeing override into a
+    refusal the way `_ci_owed_drain` does — Loki 738DB24E F5, a known,
+    non-blocking gap — but it can no longer impersonate anyone either,
+    since `_grove_sender()` itself never returns the disagreeing value.)"""
     _prime()
     _watch(RAT, 48, app_id="hanuman")
-    monkeypatch.setenv(tick._GROVE_SENDER_ENV, "steward")  # disagrees with app_id — refused
+    monkeypatch.setenv(tick._GROVE_SENDER_ENV, "steward")  # disagrees with app_id
     c = _Client()
     _use(monkeypatch, c)
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
     tick.run_ci()
     msg = _watcher_sends(c)[0]
-    assert msg["channel_name"] == "hanuman" and msg["sender"] == "willow-bot"
+    assert msg["channel_name"] == "hanuman" and msg["sender"] == "willow"
 
 
 def test_a_grove_sender_override_that_agrees_with_the_app_id_is_honoured(home, monkeypatch):

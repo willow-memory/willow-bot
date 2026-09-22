@@ -30,14 +30,20 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("LOKI_PR_WATCH_STATE", raising=False)
     monkeypatch.delenv(tick._CI_CANCELLED_GRACE_ENV, raising=False)
     monkeypatch.delenv(tick._GROVE_SENDER_ENV, raising=False)
-    monkeypatch.delenv("WILLOW_BOT_MCP_APP_ID", raising=False)
+    # This file tests the notifier mechanism itself (blocking, dedup,
+    # reprobe), not the app_id default (that is test_config_app_id.py's
+    # job, Loki 738DB24E F1) — set the identity explicitly to the
+    # post-4326FDFE shape rather than relying on config.py's default,
+    # which now stays "willow" until an operator's unit says otherwise.
+    monkeypatch.setenv("WILLOW_BOT_MCP_APP_ID", "willow-bot")
     return tmp_path
 
 
 class _Client:
-    def __init__(self, *, grove_error="sender_forbidden"):
+    def __init__(self, *, grove_error="sender_forbidden", enqueue_error=None):
         self.calls: list[tuple[str, dict]] = []
         self.grove_error = grove_error
+        self.enqueue_error = enqueue_error
         self.n = 0
 
     def __call__(self, name, inputs):
@@ -45,6 +51,8 @@ class _Client:
         self.n += 1
         if name == "grove_send_message":
             return {"error": self.grove_error}
+        if name == "human_required_enqueue" and self.enqueue_error:
+            return {"error": self.enqueue_error}
         return {"ok": True, "id": f"hr-{self.n}"}
 
     def named(self, name):
@@ -221,3 +229,146 @@ def test_blocked_reprobes_after_BLOCKED_PROBE_TICKS_with_no_manifest(home, monke
 
     tick.run_ci()
     assert len(c.named("grove_send_message")) == 2, "must probe again once BLOCKED_PROBE_TICKS elapse"
+
+
+# ── F2: a disagreeing sender override is a refusal, never a substitution ────
+
+def test_sender_mismatch_refuses_without_ever_sending(home, monkeypatch):
+    """Loki 738DB24E F2: a WILLOW_BOT_GROVE_SENDER that disagrees with the
+    resolved app_id must refuse outright — no grove_send_message call is
+    made at all, never a substituted send under the app_id's name (the
+    earlier cut of this fix substituted silently and sent, which under the
+    interim box config posts as the human trust-root seat)."""
+    _prime()
+    monkeypatch.setenv(tick._GROVE_SENDER_ENV, "someone-else")
+    c = _Client(grove_error="sender_forbidden")  # must never be reached
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+
+    assert c.named("grove_send_message") == [], "a mismatched sender must never be sent as anyone"
+    assert r["spoke"][0]["ok"] is False
+    assert r["spoke"][0]["blocked"] is True
+    assert "sender_mismatch" in r["spoke"][0]["reason"]
+
+    owed, _ = ci_comments.load()
+    entry = owed[ci_comments.head_keys(owed)[0]]
+    assert entry["spoke"]["status"] == "blocked"
+    assert "sender_mismatch" in entry["spoke"]["last_error"]
+
+    # And it stays refused on later ticks, not retried every tick.
+    tick.run_ci()
+    assert c.named("grove_send_message") == []
+
+
+# ── F3: a refused enqueue is not filed; it is retried, not silenced ─────────
+
+def _grove_refuses_enqueues(c):
+    """Filter c's human_required_enqueue calls down to the notifier's OWN
+    item — the filing loop's separate per-head 'CI red: ...' review item
+    also calls human_required_enqueue, and also retries every tick while
+    refused, on the same fake tool name."""
+    return [i for i in c.named("human_required_enqueue") if i["title"].startswith("Grove refuses")]
+
+
+def test_enqueue_error_is_not_filed_and_is_retried_every_tick(home, monkeypatch):
+    _prime()
+    c = _Client(grove_error="sender_forbidden",
+               enqueue_error="gate denied: 'willow-bot' not permitted for 'human_required_enqueue'.")
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+
+    dedup_key = "willow-bot::willow"
+    owed, _ = ci_comments.load()
+    assert not ci_comments.human_required_is_filed(owed, dedup_key)
+    row = ci_comments.human_required_row(owed, dedup_key)
+    assert row["status"] == "could_not_run"
+    assert "gate denied" in row["last_error"]
+    assert len(_grove_refuses_enqueues(c)) == 1
+
+    # Retried on the very next tick — decoupled from the Grove resend's
+    # own much slower BLOCKED_PROBE_TICKS cadence.
+    tick.run_ci()
+    assert len(_grove_refuses_enqueues(c)) == 2
+    assert len(c.named("grove_send_message")) == 1, "the Grove line itself stays blocked, not re-sent"
+
+    # Once the enqueue itself succeeds, it is filed and stops retrying.
+    c.enqueue_error = None
+    tick.run_ci()
+    assert len(_grove_refuses_enqueues(c)) == 3
+    owed2, _ = ci_comments.load()
+    assert ci_comments.human_required_is_filed(owed2, dedup_key)
+
+    tick.run_ci()
+    assert len(_grove_refuses_enqueues(c)) == 3, "filed — no further enqueue attempts"
+
+
+# ── F4: un-block resolves the item and releases the dedupe key ──────────────
+
+def test_unblock_resolves_the_item_and_releases_the_dedupe_key(home, monkeypatch):
+    _prime()
+    c = _Client(grove_error="sender_forbidden")
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+
+    dedup_key = "willow-bot::willow"
+    owed, _ = ci_comments.load()
+    row = ci_comments.human_required_row(owed, dedup_key)
+    assert row["status"] == "filed"
+    item_id = row["item_id"]
+
+    # A grant lands: force an immediate re-probe via a manifest change
+    # rather than waiting out BLOCKED_PROBE_TICKS (same trick the reprobe
+    # test above uses).
+    c.grove_error = None
+    manifest = Path(home) / "mcp_apps" / "willow-bot" / "manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"app_id": "willow-bot", "permissions": ["grove_write"]}),
+                        encoding="utf-8")
+    tick.run_ci()
+
+    resolves = c.named("human_required_resolve")
+    assert len(resolves) == 1
+    assert resolves[0]["item_id"] == item_id
+    assert resolves[0]["status"] == "resolved"
+
+    owed2, _ = ci_comments.load()
+    assert ci_comments.human_required_row(owed2, dedup_key) is None, "the dedupe key must be released"
+
+    # A LATER new refusal on the same (identity, channel) — a revoked
+    # grant, say — files a fresh item rather than staying deduped against
+    # one that no longer describes anything.
+    deposits.append_local(_row(RAT, "b" * 40, 99, "test", "failure", pr=99))
+    c.grove_error = "sender_forbidden"
+    tick.run_ci()
+    fresh = [i for i in c.named("human_required_enqueue") if i["title"].startswith("Grove refuses")]
+    assert len(fresh) == 2, "release must allow a fresh filing on a later refusal"
+
+
+def test_unblock_without_a_filed_item_still_releases_cleanly(home, monkeypatch):
+    """A block whose OWN human_required filing never succeeded
+    (could_not_run) has no item to resolve — un-blocking must not error,
+    and must still release the dedupe key."""
+    _prime()
+    c = _Client(grove_error="sender_forbidden", enqueue_error="postgres_unavailable")
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+
+    dedup_key = "willow-bot::willow"
+    owed, _ = ci_comments.load()
+    assert ci_comments.human_required_row(owed, dedup_key)["status"] == "could_not_run"
+
+    c.grove_error = None
+    manifest = Path(home) / "mcp_apps" / "willow-bot" / "manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"app_id": "willow-bot", "permissions": ["grove_write"]}),
+                        encoding="utf-8")
+    r = tick.run_ci()
+    assert r["spoke"] == [{"channel": "willow", "grove_sender": "willow-bot", "ok": True}]
+    assert c.named("human_required_resolve") == [], "nothing was ever filed — nothing to resolve"
+
+    owed2, _ = ci_comments.load()
+    assert ci_comments.human_required_row(owed2, dedup_key) is None
