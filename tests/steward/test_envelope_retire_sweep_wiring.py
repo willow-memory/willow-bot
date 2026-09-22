@@ -122,7 +122,8 @@ def test_heartbeat_writes_the_full_receipt_to_its_own_file(home, monkeypatch):
 
 
 def test_retired_sample_is_bounded_regardless_of_list_size(home, monkeypatch):
-    rows = [{"id": f"env-{i}", "verb": "git.push", "reason": "branch_gone"} for i in range(187)]
+    rows = [{"id": f"env-{i:03d}", "verb": "git.push", "reason": "branch_gone"}
+            for i in range(187)]
     populated = {
         "state": "populated", "dry_run": False, "examined": 187, "truncated": False,
         "retired": rows, "kept_standing": 0, "kept_in_force": [], "unreachable": [],
@@ -132,7 +133,113 @@ def test_retired_sample_is_bounded_regardless_of_list_size(home, monkeypatch):
     )
     e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
     assert e["retired_count"] == 187
-    assert e["retired_sample"] == [f"env-{i}" for i in range(heartbeat._RETIRED_SAMPLE_N)]
+    assert e["retired_sample"] == [f"env-{i:03d}" for i in range(heartbeat._RETIRED_SAMPLE_N)]
+
+
+def test_retired_sample_is_sorted_by_id_not_iteration_order(home, monkeypatch):
+    """Rework of Loki's LOW finding on 7C899577: the first cut sampled
+    `retired[:N]` in whatever order the cursor-rotated sweep happened to
+    examine rows that tick, so two ticks at the same overall state could
+    show two different samples. Deliberately out-of-order input here."""
+    rows = [{"id": "env-c", "verb": "git.push", "reason": "branch_gone"},
+            {"id": "env-a", "verb": "git.push", "reason": "branch_gone"},
+            {"id": "env-b", "verb": "git.push", "reason": "branch_gone"}]
+    populated = {
+        "state": "populated", "dry_run": False, "examined": 3, "truncated": False,
+        "retired": rows, "kept_standing": 0, "kept_in_force": [], "unreachable": [],
+    }
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
+    assert e["retired_sample"] == ["env-a", "env-b", "env-c"]
+
+
+def test_retired_sample_skips_rows_with_no_id(home, monkeypatch):
+    rows = [{"id": "env-b", "verb": "git.push", "reason": "branch_gone"},
+            {"verb": "git.push", "reason": "branch_gone"}]  # malformed, no id
+    populated = {
+        "state": "populated", "dry_run": False, "examined": 2, "truncated": False,
+        "retired": rows, "kept_standing": 0, "kept_in_force": [], "unreachable": [],
+    }
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    e = _tool_entry(heartbeat.run_heartbeat(), "envelope_retire_sweep")
+    assert e["retired_sample"] == ["env-b"]
+    assert e["retired_count"] == 2  # count is unaffected — every row counted
+
+
+# --------------------------------------------------------------------------
+# Retention: a size cap with one rotated backup (rework of Loki's MEDIUM
+# finding on 7C899577 — the receipts file was append-only, no cap, 60-200
+# MB/week measured)
+# --------------------------------------------------------------------------
+
+def test_full_receipts_file_rotates_once_the_cap_is_reached(home, monkeypatch):
+    import json
+
+    # Narrowed to one tool so each tick writes exactly one row to the
+    # receipts file — otherwise every curated tool's own append would
+    # each independently check/trigger rotation within the same tick.
+    monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "envelope_retire_sweep")
+    monkeypatch.setattr(heartbeat, "_FULL_RECEIPTS_MAX_BYTES", 500)  # tiny cap for a fast test
+    populated = {"state": "populated", "dry_run": False, "examined": 0, "truncated": False,
+                 "retired": [], "kept_standing": 0, "kept_in_force": [], "unreachable": [],
+                 "pad": "x" * 400}
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    heartbeat.run_heartbeat()  # first tick: writes past the 500-byte cap
+    full_path = heartbeat._full_receipts_path()
+    backup_path = full_path.with_name(full_path.name + ".1")
+    assert not backup_path.exists()  # nothing to rotate yet on the first write
+
+    heartbeat.run_heartbeat()  # second tick: sees the cap already exceeded, rotates first
+    assert backup_path.exists()
+    # the live file holds only this tick's row, not both
+    rows = [json.loads(line) for line in full_path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 1
+    backup_rows = [json.loads(line) for line in backup_path.read_text(encoding="utf-8").splitlines()]
+    assert len(backup_rows) == 1  # the first tick's row, preserved in the backup
+
+
+def test_full_receipts_file_rotation_keeps_only_one_backup_generation(home, monkeypatch):
+    monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "envelope_retire_sweep")
+    monkeypatch.setattr(heartbeat, "_FULL_RECEIPTS_MAX_BYTES", 500)
+    populated = {"state": "populated", "dry_run": False, "examined": 0, "truncated": False,
+                 "retired": [], "kept_standing": 0, "kept_in_force": [], "unreachable": [],
+                 "pad": "x" * 400}
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    for _ in range(4):
+        heartbeat.run_heartbeat()
+    full_path = heartbeat._full_receipts_path()
+    backup_path = full_path.with_name(full_path.name + ".1")
+    assert backup_path.exists()
+    assert not full_path.with_name(full_path.name + ".2").exists()
+
+
+def test_full_receipts_file_stays_under_cap_growth_is_bounded(home, monkeypatch):
+    """The point of the cap: disk usage for this file has a ceiling, not
+    just a slower rate of growth."""
+    monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "envelope_retire_sweep")
+    monkeypatch.setattr(heartbeat, "_FULL_RECEIPTS_MAX_BYTES", 2000)
+    populated = {"state": "populated", "dry_run": False, "examined": 0, "truncated": False,
+                 "retired": [], "kept_standing": 0, "kept_in_force": [], "unreachable": [],
+                 "pad": "x" * 300}
+    _heartbeat_with(
+        monkeypatch, lambda n: populated if n == "envelope_retire_sweep" else {"ok": True}
+    )
+    for _ in range(50):
+        heartbeat.run_heartbeat()
+    full_path = heartbeat._full_receipts_path()
+    backup_path = full_path.with_name(full_path.name + ".1")
+    total = full_path.stat().st_size + (backup_path.stat().st_size if backup_path.exists() else 0)
+    # Two generations at roughly the cap each -- nowhere near 50 ticks'
+    # worth of unbounded growth.
+    assert total < heartbeat._FULL_RECEIPTS_MAX_BYTES * 3
 
 
 def test_heartbeat_mirrors_unreachable_as_a_count_not_the_full_list(home, monkeypatch):

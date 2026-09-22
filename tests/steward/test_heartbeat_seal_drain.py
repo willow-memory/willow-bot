@@ -77,7 +77,13 @@ def test_receipt_carries_the_drain_three_state(tmp_path: Path, monkeypatch, caps
     assert drain["outcome"] == "ok"
     assert drain["state"] == "populated"
     assert drain["drained"] == 3
-    assert drain["upgraded"] == ["pair-9"]
+    # Rework of Loki's LOW finding on 7C899577: `upgraded` (the list of
+    # pair ids) is the same unbounded-per-row shape as `retired`/
+    # `kept_in_force`/`unreachable` and now rides as a count only, not
+    # verbatim; `results.upgraded` is a small pre-summarized nested
+    # count seal_drain already returns and is untouched.
+    assert "upgraded" not in drain
+    assert drain["upgraded_count"] == 1
     assert drain["results"]["upgraded"] == 1
     assert drain["offset_after"] == 1234
     # Non-receipt fields stay keys-only.
