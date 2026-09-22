@@ -189,7 +189,7 @@ def test_one_item_per_head_naming_every_red_leg(home, monkeypatch):
     assert len(enq) == 1, [i["title"] for i in enq]
     i = enq[0]
     assert i["title"] == f"CI red: {GROVE}#76 — 2 leg(s): title, test-suite (3.13)"
-    assert i["app_id"] == "willow" and i["kind"] == "review"
+    assert i["app_id"] == "willow-bot" and i["kind"] == "review"
     assert i["summary"].startswith(f"head {SHA}\n")
     assert "job/1" in i["summary"] and "job/3" in i["summary"]
     assert i["source_ref"].endswith("/job/1")

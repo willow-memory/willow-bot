@@ -434,16 +434,35 @@ def test_a_prless_head_is_never_a_watched_pr(home, monkeypatch):
     assert c.named("grove_send_message") == []
 
 
-def test_the_sender_and_channel_come_from_the_row_and_the_env(home, monkeypatch):
+def test_the_channel_comes_from_the_row_and_the_sender_is_the_app_id(home, monkeypatch):
+    """Sealed 163b9a70: the Grove `sender` is the SAME constant as the
+    steward's own `app_id` — one source of truth, never a
+    `WILLOW_BOT_GROVE_SENDER` override that can silently disagree with it
+    (Loki 9778E096 F2: that disagreement is exactly what made every send
+    `sender_forbidden` by construction). A mismatched override is refused
+    (falls back to the app_id), not silently used."""
     _prime()
     _watch(RAT, 48, app_id="hanuman")
-    monkeypatch.setenv(tick._GROVE_SENDER_ENV, "steward")
+    monkeypatch.setenv(tick._GROVE_SENDER_ENV, "steward")  # disagrees with app_id — refused
     c = _Client()
     _use(monkeypatch, c)
     deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
     tick.run_ci()
     msg = _watcher_sends(c)[0]
-    assert msg["channel_name"] == "hanuman" and msg["sender"] == "steward"
+    assert msg["channel_name"] == "hanuman" and msg["sender"] == "willow-bot"
+
+
+def test_a_grove_sender_override_that_agrees_with_the_app_id_is_honoured(home, monkeypatch):
+    _prime()
+    _watch(RAT, 48, app_id="hanuman")
+    monkeypatch.setenv("WILLOW_BOT_MCP_APP_ID", "willow-bot")
+    monkeypatch.setenv(tick._GROVE_SENDER_ENV, "willow-bot")  # agrees — honoured, not just default
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
+    tick.run_ci()
+    msg = _watcher_sends(c)[0]
+    assert msg["sender"] == "willow-bot"
 
 
 # ── the voice step's comment says the same ──────────────────────────────────

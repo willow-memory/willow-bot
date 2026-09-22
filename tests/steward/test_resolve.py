@@ -107,7 +107,7 @@ def test_resolves_each_well_formed_gap_with_where_it_merged(home, monkeypatch, r
     gap_calls = [i for n, i in c.calls if n == "gap_resolve"]
     assert len(gap_calls) == 2
     for inputs in gap_calls:
-        assert inputs["app_id"] == "willow"
+        assert inputs["app_id"] == "willow-bot"
         assert inputs["note"].startswith("merged o/r@")
         assert len(inputs["note"].split("@")[1]) == 40
     # the malformed `#74` never reached the tool
