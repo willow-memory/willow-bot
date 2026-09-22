@@ -106,12 +106,28 @@ def _read_running_commit(cwd: Path | None = None) -> dict[str, Any]:
 # ── receipts (heartbeat + tick) ───────────────────────────────────────────
 
 
-def _read_last_receipt(path: Path) -> dict[str, Any]:
+_TAIL_WINDOW_START = 8192
+_TAIL_WINDOW_MAX = 1024 * 1024  # 1 MiB — gap b7a4ccdc8bbb
+_TAIL_WINDOW_GROWTH = 8
+
+
+def _read_last_receipt(path: Path, *, max_window: int = _TAIL_WINDOW_MAX) -> dict[str, Any]:
     """Return the last row of a JSONL receipt file with its state:
 
     - file missing → ``empty`` (unit has never run; not the same as broken)
-    - file present but no readable JSON row → ``unreachable``
+    - file present but no complete JSON row found within ``max_window``
+      bytes of the tail → ``unreachable``
     - file present with rows → ``populated`` + the last row
+
+    Gap ``b7a4ccdc8bbb``: the first cut read a fixed 8 KiB tail and gave up.
+    A heartbeat row mirroring a large tool receipt (measured: one
+    ``envelope_retire_sweep`` row ~40 KB) landed the tail in the MIDDLE of
+    that row — nothing parsed, and the file was reported ``unreachable``
+    with "no valid JSON row in tail" for a file whose rows were all
+    perfectly valid JSON, just longer than the window. The window now
+    widens (``8 KiB`` × 8 each retry, capped at ``max_window``) and
+    re-reads until a complete row parses or the cap is hit; when it IS hit,
+    the ``detail`` says why in bytes, not a generic parse complaint.
     """
     if not path.is_file():
         return {"status": "empty", "detail": f"no file at {path}", "last": None, "at": None}
@@ -119,24 +135,39 @@ def _read_last_receipt(path: Path) -> dict[str, Any]:
         with path.open("rb") as fh:
             fh.seek(0, os.SEEK_END)
             size = fh.tell()
-            fh.seek(max(0, size - 8192))
-            tail = fh.read()
+            window = min(_TAIL_WINDOW_START, max(max_window, 1))
+            last: dict[str, Any] | None = None
+            while True:
+                start = max(0, size - window)
+                fh.seek(start)
+                tail = fh.read()
+                # Discard a possibly-partial first line when the window
+                # does not start at byte 0 of the file — otherwise a
+                # truncated row at the very front of the window could
+                # parse into garbage that happens to be valid JSON.
+                if start > 0:
+                    nl = tail.find(b"\n")
+                    tail = tail[nl + 1:] if nl != -1 else b""
+                for raw in reversed(tail.splitlines()):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(rec, dict):
+                        last = rec
+                        break
+                if last is not None or start == 0 or window >= max_window:
+                    break
+                window = min(window * _TAIL_WINDOW_GROWTH, max_window)
     except OSError as exc:
         return {"status": "unreachable", "detail": str(exc)[:200], "last": None, "at": None}
-    last: dict[str, Any] | None = None
-    for raw in reversed(tail.splitlines()):
-        line = raw.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(rec, dict):
-            last = rec
-            break
     if last is None:
-        return {"status": "unreachable", "detail": "no valid JSON row in tail",
+        return {"status": "unreachable",
+                "detail": (f"no complete JSON row found within the last {window} bytes "
+                           f"of a {size}-byte file — the last row exceeds {window} bytes"),
                 "last": None, "at": None}
     return {"status": "populated", "last": last, "at": last.get("at")}
 

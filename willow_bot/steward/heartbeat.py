@@ -45,16 +45,27 @@ DEFAULT_CURATED: list[tuple[str, dict[str, Any]]] = [
 # short lists), so bot_status can show a tool's three-state without the
 # reader opening the tool's own journal. Everything else stays keys-only.
 _RECEIPT_FIELDS = ("state", "reason", "drained", "upgraded", "results", "offset_after",
-                   "examined", "kept_standing", "retired", "kept_in_force",
-                   "dry_run", "truncated")
+                   "examined", "kept_standing", "dry_run", "truncated", "cursor")
 
-#: `unreachable` is deliberately NOT in `_RECEIPT_FIELDS` above (rework of
-#: Loki's LOW finding on BAA43543/9494D3AF: "23 permanently-unreachable
-#: rows are echoed into the heartbeat JSONL every tick" — a chronically
-#: unreachable row repeats unbounded forever with no new information after
-#: the first tick). Only its COUNT is carried, via this map
-#: (`result[key]` -> `entry[value]`, `len(...)` not the list itself).
-_COUNT_ONLY_FIELDS = {"unreachable": "unreachable_count"}
+#: `unreachable`, `retired`, and `kept_in_force` are deliberately NOT in
+#: `_RECEIPT_FIELDS` above — all three are per-row lists that can grow
+#: unbounded (gap b7a4ccdc8bbb, measured live: a first-tick
+#: envelope_retire_sweep receipt carried 187 `retired` + 139
+#: `kept_in_force` + 20 `unreachable` rows, one heartbeat row ~40 KB —
+#: bigger than the 8 KiB tail `willow_bot.status._read_last_receipt` used
+#: to read, so `bot_status` reported the whole heartbeat file
+#: `unreachable`). Only each list's COUNT rides the heartbeat entry, via
+#: this map (`result[key]` -> `entry[value]`, `len(...)` not the list
+#: itself); `retired` additionally gets a bounded ID sample so an operator
+#: reading the heartbeat at a glance sees WHAT got retired, not just how
+#: many — the full receipt (every row, every `why`) is appended whole to
+#: its own file every tick regardless of size, see `_append_full_receipt`.
+_COUNT_ONLY_FIELDS = {"unreachable": "unreachable_count", "kept_in_force": "kept_in_force_count"}
+
+#: How many `retired` ids to sample into the heartbeat entry (`_id_sample`
+#: below) — enough to be useful at a glance, small enough to never be the
+#: reason a row exceeds the tail reader's window on its own.
+_RETIRED_SAMPLE_N = 10
 
 # Nested fields, mirrored as dotted keys. net_authority_drain answers with two
 # halves under one three-state (`tasks` and `leases`, each a receipt or None
@@ -81,6 +92,23 @@ def _app_id() -> str:
 
 def _receipts_path() -> Path:
     return willow_home() / "willow-bot" / "steward_heartbeat.jsonl"
+
+
+def _full_receipts_path() -> Path:
+    """Where a curated tool's FULL, unsummarized result lands every tick,
+    regardless of size — the pattern the steward already uses for
+    ``steward_ticks.jsonl`` vs the heartbeat file: a small, always-readable
+    heartbeat row that names what happened, and a separate file that keeps
+    everything. Gap b7a4ccdc8bbb."""
+    return willow_home() / "willow-bot" / "steward_heartbeat_receipts.jsonl"
+
+
+def _append_full_receipt(*, tool: str, at: str, result: dict[str, Any]) -> None:
+    row = {"tool": tool, "at": at, "result": result}
+    path = _full_receipts_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, separators=(",", ":")) + "\n")
 
 
 #: Fast lookup of each curated tool's own args (e.g. envelope_retire_sweep's
@@ -163,8 +191,15 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
             entry["outcome"] = "ok"
             # Keep receipt small — summarize, but carry the three-state
             # fields through so the journal says what happened, not just
-            # that something answered.
+            # that something answered. The FULL result (every row, every
+            # `why`) is appended whole to its own file every tick,
+            # regardless of size — gap b7a4ccdc8bbb: a heartbeat row must
+            # stay small enough for the tail reader, no exceptions, so
+            # nothing here is a judgment call about what is "too big" per
+            # tool; the split is unconditional.
             if isinstance(result, dict):
+                _append_full_receipt(tool=name, at=receipt["at"], result=result)
+                entry["full_receipt"] = {"file": _full_receipts_path().name, "at": receipt["at"]}
                 entry["result_keys"] = sorted(result.keys())[:20]
                 for field in _RECEIPT_FIELDS:
                     if field in result:
@@ -173,6 +208,19 @@ def run_heartbeat(*, enable_mcp: bool | None = None) -> dict[str, Any]:
                     val = result.get(src)
                     if isinstance(val, list):
                         entry[dest] = len(val)
+                # `retired` gets a bounded ID sample on top of its count
+                # (rework of gap b7a4ccdc8bbb finding 1: "the first N
+                # retired ids" belongs at a glance, not just the count) —
+                # never the `why`/`reason` text, and never more than
+                # `_RETIRED_SAMPLE_N` rows regardless of how large the
+                # real list is.
+                retired = result.get("retired")
+                if isinstance(retired, list):
+                    entry["retired_count"] = len(retired)
+                    entry["retired_sample"] = [
+                        row.get("id") for row in retired[:_RETIRED_SAMPLE_N]
+                        if isinstance(row, dict)
+                    ]
                 for outer, inner in _RECEIPT_NESTED_FIELDS:
                     half = result.get(outer)
                     if isinstance(half, dict) and inner in half:

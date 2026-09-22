@@ -135,6 +135,61 @@ def test_receipt_file_reads_the_last_valid_line_past_garbage(home: Path):
     assert r["tick"]["last"]["event"] == "steward_sweep"
 
 
+# ── the tail window widens past 8 KiB (gap b7a4ccdc8bbb) ─────────────────
+
+
+def test_a_row_bigger_than_8kib_is_still_read(home: Path, tmp_path):
+    """Measured live: a heartbeat row mirroring a large sweep receipt was
+    ~40 KB, one row, bigger than the fixed 8 KiB tail the reader used to
+    read — nothing parsed and the whole file reported `unreachable`. The
+    window must widen past a single oversized row instead of giving up."""
+    p = home / "willow-bot" / "steward_heartbeat.jsonl"
+    earlier = {"event": "steward_heartbeat", "at": "2026-09-15T00:00:00+00:00", "status": "ok"}
+    huge = {
+        "event": "steward_heartbeat", "at": "2026-09-22T02:02:30+00:00", "status": "ok",
+        "tools": [{"tool": "envelope_retire_sweep", "retired_sample": ["env-x"] * 2000}],
+    }
+    text = json.dumps(earlier) + "\n" + json.dumps(huge) + "\n"
+    assert len(json.dumps(huge)) > 8192  # the row genuinely exceeds the old window
+    _write(p, text)
+    r = status._read_last_receipt(p)
+    assert r["status"] == "populated"
+    assert r["last"]["at"] == "2026-09-22T02:02:30+00:00"
+    assert r["at"] == "2026-09-22T02:02:30+00:00"
+
+
+def test_a_row_bigger_than_the_window_cap_is_unreachable_and_says_why(home: Path):
+    """A row so large it exceeds even the widened cap must still refuse
+    honestly — `unreachable` with a detail naming the byte counts, not the
+    old generic "no valid JSON row in tail" for a file whose row WAS
+    valid, just enormous."""
+    p = home / "willow-bot" / "steward_heartbeat.jsonl"
+    huge = {"event": "steward_heartbeat", "tools": [{"why": "x" * 20000}]}
+    _write(p, json.dumps(huge) + "\n")
+    r = status._read_last_receipt(p, max_window=8192)  # small cap for a fast test
+    assert r["status"] == "unreachable"
+    assert r["last"] is None
+    assert "8192" in r["detail"]
+    assert "exceeds" in r["detail"]
+
+
+def test_widened_window_does_not_parse_a_truncated_partial_line_as_valid(home: Path):
+    """When the window does not start at byte 0, the first (possibly
+    partial) line inside it must be discarded — otherwise a row cut in
+    half by the window boundary could coincidentally parse as valid JSON
+    and return a corrupted row silently."""
+    p = home / "willow-bot" / "steward_heartbeat.jsonl"
+    # A first row padded so the window boundary lands mid-row, then a
+    # normal small final row.
+    padded = {"event": "steward_heartbeat", "at": "2026-09-15T00:00:00+00:00",
+              "pad": "x" * 9000}
+    final = {"event": "steward_heartbeat", "at": "2026-09-15T01:00:00+00:00"}
+    _write(p, json.dumps(padded) + "\n" + json.dumps(final) + "\n")
+    r = status._read_last_receipt(p)
+    assert r["status"] == "populated"
+    assert r["last"]["at"] == "2026-09-15T01:00:00+00:00"
+
+
 # ── journal excerpt ───────────────────────────────────────────────────────
 
 
