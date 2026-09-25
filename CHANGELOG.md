@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.9.0](https://github.com/willow-memory/willow-bot/compare/v0.8.0...v0.9.0) (2026-09-25)
+
+
+### Added
+
+* **deterministic:** loopback Ollama runner behind a Unix socket for Kart ([4b0346d](https://github.com/willow-memory/willow-bot/commit/4b0346db435567239d47dc019ff477c673ace596))
+* **deterministic:** loopback Ollama runner behind a Unix socket for Kart ([1277b2a](https://github.com/willow-memory/willow-bot/commit/1277b2a4dd84d46d62ec85696f12aa1f00e30565))
+
 ## [0.8.0](https://github.com/willow-memory/willow-bot/compare/v0.7.1...v0.8.0) (2026-09-22)
 
 
