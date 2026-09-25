@@ -1,0 +1,21 @@
+[Unit]
+Description=Willow deterministic runner — loopback Ollama socket for Kart client
+Documentation=https://github.com/willow-memory/willow-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# unit: willow-bot-deterministic
+# `@…@` placeholders are substituted by scripts/install-service.sh at install
+# time. Do not commit a rendered unit file.
+Environment=PATH=@VENV_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=WILLOW_HOME=@VAULT_BOX@
+Environment=WILLOW_VAULT_BOX=@VAULT_BOX@
+WorkingDirectory=@WORKDIR@
+ExecStart=@VENV_BIN@/willow-bot-deterministic serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

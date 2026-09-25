@@ -3,9 +3,10 @@
 # unit for the current user. Prints the resolved values before writing.
 #
 # Units (systemd/*.service.template):
-#   willow-bot          — the GitHub App webhook receiver (default)
-#   willow-bot-steward  — the tick loop: PR watch, curated heartbeat, gitsync
-#                         sweep through willow-mcp (WILLOW_BOT_MCP=1)
+#   willow-bot                    — the GitHub App webhook receiver (default)
+#   willow-bot-steward            — the tick loop: PR watch, curated heartbeat,
+#                                   gitsync sweep through willow-mcp (WILLOW_BOT_MCP=1)
+#   willow-bot-deterministic      — loopback Ollama delegate (Unix socket for Kart)
 #
 # Env inputs (with defaults):
 #   WILLOW_BOT_VENV_BIN   — dir holding the willow-bot entry-point scripts
