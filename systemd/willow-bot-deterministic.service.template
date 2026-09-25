@@ -6,7 +6,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# unit: willow-bot-deterministic
 # `@…@` placeholders are substituted by scripts/install-service.sh at install
 # time. Do not commit a rendered unit file.
 Environment=PATH=@VENV_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
