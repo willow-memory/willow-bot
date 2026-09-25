@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.9.1](https://github.com/willow-memory/willow-bot/compare/v0.9.0...v0.9.1) (2026-09-25)
+
+
+### Fixed
+
+* **deterministic:** let the unit name default to the template filename ([fb6a8d2](https://github.com/willow-memory/willow-bot/commit/fb6a8d2f7aad5448a2623f0fb8d2c4216ea521e8))
+* **deterministic:** let the unit name default to the template filename ([c230d35](https://github.com/willow-memory/willow-bot/commit/c230d35aae8545971dfc0b246b8029193af8a1ca))
+
 ## [0.9.0](https://github.com/willow-memory/willow-bot/compare/v0.8.0...v0.9.0) (2026-09-25)
 
 
