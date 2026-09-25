@@ -186,6 +186,7 @@ Two units, both rendered from `systemd/*.service.template` by
 |------|------|--------------|
 | `willow-bot.service` | `willow-bot` | the webhook receiver: inbox items, gitsync trigger flags, event log |
 | `willow-bot-steward.service` | `willow-bot-steward loop` | the tick, every 300 s: PR watch → curated heartbeat → **gitsync sweep** (`WILLOW_BOT_MCP=1`) |
+| `willow-bot-deterministic.service` | `willow-bot-deterministic serve` | loopback Ollama socket (`$WILLOW_HOME/willow-bot/deterministic.sock`) for Kart `client` / `ladder` |
 
 After vault secrets pass preflight:
 
@@ -215,3 +216,39 @@ The unit sets `WILLOW_VAULT_BOX` and loads `secrets/willow-bot.env` from the vau
 PEM + webhook secret resolve via `credentials.py` — not a checkout `.env`.
 
 See also [docs/MOVE-STAY-BORROW.md](docs/MOVE-STAY-BORROW.md).
+
+## Deterministic runner (flowering T1 MVP)
+
+Host owns loopback Ollama; Kart calls `willow-bot-deterministic client` over
+`$WILLOW_HOME/willow-bot/deterministic.sock` (no `allow_localhost`).
+
+**Horizon:** if this works, model weights and inference may move *into* the bot
+boundary (`$WILLOW_HOME/willow-bot/`) instead of ambient `~/.ollama` on disk —
+church/state: git holds code, vault holds secrets, bot stewards what may run
+locally.
+
+Bootstrap one-liners (operator terminal, canonical checkout):
+
+```bash
+source ~/.willow/fleet.env
+test -x "$WILLOW_HOME/venvs/willow-bot/bin/python" || python3 -m venv "$WILLOW_HOME/venvs/willow-bot"
+"$WILLOW_HOME/venvs/willow-bot/bin/pip" install -e '/home/sean-campbell/github/willow-memory/willow-bot[dev]'
+mkdir -p "$WILLOW_HOME/willow-bot/runs"
+cp /home/sean-campbell/github/willow-memory/willow-bot/deploy/deterministic-policy.template.json "$WILLOW_HOME/willow-bot/deterministic-policy.json"
+# Stop any nohup serve; run through systemd (same pattern as webhook + steward):
+pkill -f 'willow-bot-deterministic serve' 2>/dev/null || true
+cd /home/sean-campbell/github/willow-memory/willow-bot
+scripts/install-service.sh willow-bot-deterministic
+systemctl --user enable --now willow-bot-deterministic.service
+systemctl --user status willow-bot-deterministic.service --no-pager
+test -S "$WILLOW_HOME/willow-bot/deterministic.sock" && echo socket ok
+"$WILLOW_HOME/venvs/willow-bot/bin/willow-bot-deterministic" client --fixtures /home/sean-campbell/github/willow-memory/willows-grove/seat/willow/experiments/flowering-2026-09 --model llama3.2:3b --limit 1
+```
+
+Kart smoke (desk `task_submit`, same client):
+
+```bash
+willow-bot-deterministic client --fixtures /home/sean-campbell/github/willow-memory/willows-grove/seat/willow/experiments/flowering-2026-09 --model llama3.2:3b --limit 1
+```
+
+(run from a Kart task with `WILLOW_HOME` set and `$WILLOW_HOME/venvs/willow-bot/bin` on `PATH`, or use the full path to `client` in the task string.)

@@ -1,0 +1,14 @@
+{
+  "socket_path": "$WILLOW_HOME/willow-bot/deterministic.sock",
+  "ollama_base": "http://127.0.0.1:11434",
+  "runs_dir": "$WILLOW_HOME/willow-bot/runs",
+  "default_model": "llama3.2:3b",
+  "ollama_chat_timeout_s": 600,
+  "chain_tiers": [
+    "llama3.2:3b",
+    "willow-lane4-3b",
+    "qwen3:4b",
+    "gemma3:4b",
+    "llama3.1:8b"
+  ]
+}

@@ -5,13 +5,15 @@ fleet. Propose-only: `willows-bot` may comment and deposit draft CI outcomes; it
 cannot commit.
 
 Install: `pip install willow-bot`  
-Docs: [INSTALL.md](INSTALL.md) · [docs/MOVE-STAY-BORROW.md](docs/MOVE-STAY-BORROW.md)
+Docs: [INSTALL.md](INSTALL.md) · [docs/MOVE-STAY-BORROW.md](docs/MOVE-STAY-BORROW.md) · [docs/ideas.md](docs/ideas.md)
 
 ```bash
 willow-bot              # webhook (uvicorn)
 willow-bot-steward tick    # PR watch one-shot
 willow-bot-steward status  # read-only surface: version, tick, inbox depth, cursors
 willow-bot-steward heartbeat  # curated willow-mcp tools when WILLOW_BOT_MCP=1
+willow-bot-deterministic serve   # host loopback runner (Unix socket for Kart)
+willow-bot-deterministic client --fixtures /path/to/S-growth-*.json dir
 ```
 
 Home: [willow-memory/willow-bot](https://github.com/willow-memory/willow-bot)  
