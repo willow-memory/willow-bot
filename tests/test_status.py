@@ -33,7 +33,7 @@ def _write(path: Path, text: str) -> None:
 def test_report_returns_every_declared_field(home: Path):
     r = status.report()
     for field in ("at", "willow_home", "version", "running_commit",
-                  "heartbeat", "tick", "journal", "inbox", "cursors", "sync"):
+                  "heartbeat", "tick", "journal", "inbox", "cursors", "sync", "upstream"):
         assert field in r
     assert r["willow_home"] == str(home)
 
@@ -289,6 +289,53 @@ def test_cursors_garbled_offset_is_none_not_a_raise(home: Path):
     (d / "mirror.offset").write_text("not a number", encoding="utf-8")
     r = status.report()
     assert r["cursors"]["mirror_offset"] is None
+
+
+# ── upstream desk ────────────────────────────────────────────────────────
+
+
+def test_upstream_ledger_open_prs_surface(home: Path):
+    ledger_path = home / "willow-bot" / "upstream_desk.json"
+    _write(
+        ledger_path,
+        json.dumps(
+            {
+                "at": "2026-09-22T00:00:00+00:00",
+                "author": "rudi193-cmd",
+                "open_count": 2,
+                "open": [
+                    {"repo": "DeusData/codebase-memory-mcp", "number": 1702,
+                     "title": "fix registry", "url": "https://github.com/x/y/pull/1702"},
+                    {"repo": "Redential/redential-cli", "number": 95,
+                     "title": "git errors", "url": "https://github.com/x/y/pull/95"},
+                ],
+            }
+        ),
+    )
+    r = status.report()
+    assert r["upstream"]["status"] == "populated"
+    assert r["upstream"]["ledger"]["open_count"] == 2
+    assert len(r["upstream"]["ledger"]["open_prs"]) == 2
+    assert r["upstream"]["ledger"]["open_prs"][0]["number"] == 1702
+
+
+def test_upstream_last_tick_from_journal(home: Path):
+    p = home / "willow-bot" / "steward_ticks.jsonl"
+    _write(
+        p,
+        json.dumps(
+            {
+                "event": "steward_upstream_desk",
+                "status": "ok",
+                "at": "2026-09-22T12:00:00Z",
+                "open_prs": 2,
+            }
+        )
+        + "\n",
+    )
+    r = status.report()
+    assert r["upstream"]["last_tick"]["status"] == "populated"
+    assert r["upstream"]["last_tick"]["last"]["open_prs"] == 2
 
 
 # ── sync (last successful sweep) ─────────────────────────────────────────

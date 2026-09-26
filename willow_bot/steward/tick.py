@@ -3411,6 +3411,12 @@ def run_ingress(*, enable_mcp: bool | None = None) -> dict:
     return _emit(ingress.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
+def _run_upstream_desk() -> dict:
+    from willow_bot.steward.upstream_desk import run_upstream_desk
+
+    return _emit(run_upstream_desk())
+
+
 def mcp_enabled() -> bool:
     return os.environ.get("WILLOW_BOT_MCP", "").strip().lower() in ("1", "true", "yes")
 
@@ -3482,6 +3488,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("ci", run_ci),
             ("ci-legacy-clear", run_ci_legacy_clear),
             ("catchup", run_catchup),
+            ("upstream-desk", _run_upstream_desk),
             ("audit", run_audit),
             ("ingress", run_ingress),
             ("voice", run_voice),
@@ -3532,6 +3539,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "ingress":
         run_ingress()
         return 0
+    if args[0] == "upstream-desk":
+        _run_upstream_desk()
+        return 0
     if args[0] == "install-receipts":
         # Sweep then install, as the loop does — install alone has no ranges.
         run_install_receipts(run_sweep())
@@ -3564,7 +3574,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "annul":
         return run_annul(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|ingress|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
