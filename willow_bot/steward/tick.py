@@ -1486,6 +1486,12 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
     return _emit(receipt)
 
 
+def _run_upstream_desk() -> dict:
+    from willow_bot.steward.upstream_desk import run_upstream_desk
+
+    return _emit(run_upstream_desk())
+
+
 def mcp_enabled() -> bool:
     return os.environ.get("WILLOW_BOT_MCP", "").strip().lower() in ("1", "true", "yes")
 
@@ -1557,6 +1563,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("ci", run_ci),
             ("ci-legacy-clear", run_ci_legacy_clear),
             ("catchup", run_catchup),
+            ("upstream-desk", _run_upstream_desk),
             ("audit", run_audit),
             ("voice", run_voice),
         ):
@@ -1603,6 +1610,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "catchup":
         run_catchup()
         return 0
+    if args[0] == "upstream-desk":
+        _run_upstream_desk()
+        return 0
     if args[0] == "install-receipts":
         # Sweep then install, as the loop does — install alone has no ranges.
         run_install_receipts(run_sweep())
@@ -1633,7 +1643,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "scan":
         return scan_mod.main()
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|voice|status|inbox <state>|scan]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|voice|status|inbox <state>|scan]",
         file=sys.stderr,
     )
     return 2

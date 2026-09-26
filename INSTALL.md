@@ -20,7 +20,7 @@ python3 -m venv .venv
 Canonical checkout: `~/github/willow-memory/willow-bot`. The workshop clone is a
 stale second home — do not point the unit or Kart bind at it.
 
-Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `catchup` | `audit` | `status` | `inbox` | `scan`).
+Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `catchup` | `upstream-desk` | `audit` | `status` | `inbox` | `scan`).
 
 `status` prints one JSON receipt for the seat, with three-state fields (`populated` / `empty` / `unreachable`) — an unreadable journal is not "unit absent". See `willow_bot/status.py`.
 
@@ -92,6 +92,13 @@ Additional env vars (all optional):
 |-----|---------|---------|
 | `WILLOW_OPERATOR_GITHUB_LOGIN` | Assignee / requested reviewer for bot-opened PRs (`willow_bot.pr_assign`). Unset is honest-absence, not error. | unset |
 | `WILLOW_BOT_DELIVERY_STATE` | Path override for the webhook `X-GitHub-Delivery` LRU (`willow_bot.delivery_dedup`). | `$WILLOW_HOME/willow-bot/delivery-seen.json` |
+| `WILLOW_BOT_UPSTREAM_DESK` | Poll GitHub notifications + refresh author PR ledger on the steward loop (`upstream-desk` step). Needs `gh` user auth. | `0` |
+| `WILLOW_BOT_UPSTREAM_WATCH_REPOS` | Comma-separated Tier A upstream repos for triage. | See `willow_bot/steward/upstream_config.py` |
+| `WILLOW_BOT_UPSTREAM_TRACKER_EVERY` | Steward ticks between GraphQL ledger refreshes. | `12` (~1 h at 300 s) |
+
+`willow-bot-steward status` includes an `upstream` block: `ledger.open_prs`, pending depth by lane, and the last `steward_upstream_desk` receipt.
+
+Planned: upstream fork rebase + `--force-with-lease` push — see [`docs/SPEC-contrib-refresh.md`](docs/SPEC-contrib-refresh.md).
 
 ## Pangolin route
 

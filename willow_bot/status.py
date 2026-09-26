@@ -20,6 +20,13 @@ One operation: ``report()`` returns a dict of the form:
       "inbox": {"status": ..., "depth_by_kind": {"pull_request": N, ...}},
       "cursors": {"mirror_offset": N|None, "ci_offset": N|None, "chain_tip": <sha|None>},
       "sync": {"status": ..., "last_success": <receipt>, "at": <ISO8601>},
+      "upstream": {
+        "desk_enabled": <bool>,
+        "watch_repos": [<owner/repo>, ...],
+        "ledger": {"status": ..., "at": ..., "open_count": N, "open_prs": [...]},
+        "pending": {"status": ..., "total": N, "by_lane": {...}},
+        "last_tick": {"status": ..., "last": <receipt>, "at": ...},
+      },
     }
 
 Three states per source, chosen deliberately:
@@ -250,6 +257,120 @@ def _read_cursors() -> dict[str, Any]:
 # ── sync (last successful sweep) ─────────────────────────────────────────
 
 
+_UPSTREAM_LEDGER_CAP = 100
+
+
+def _read_upstream_ledger() -> dict[str, Any]:
+    path = _bot_dir() / "upstream_desk.json"
+    if not path.is_file():
+        return {"status": "empty", "detail": f"no file at {path}", "at": None,
+                "open_count": 0, "open_prs": [], "author": None}
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200], "at": None,
+                "open_count": 0, "open_prs": [], "author": None}
+    if not isinstance(body, dict):
+        return {"status": "unreachable", "detail": "ledger is not a JSON object",
+                "at": None, "open_count": 0, "open_prs": [], "author": None}
+    open_prs = body.get("open") if isinstance(body.get("open"), list) else []
+    trimmed = [p for p in open_prs if isinstance(p, dict)][: _UPSTREAM_LEDGER_CAP]
+    out: dict[str, Any] = {
+        "status": "populated",
+        "at": body.get("at"),
+        "author": body.get("author"),
+        "open_count": body.get("open_count", len(open_prs)),
+        "open_prs": trimmed,
+    }
+    if body.get("tracker_error"):
+        out["tracker_error"] = str(body["tracker_error"])[:200]
+    if len(open_prs) > _UPSTREAM_LEDGER_CAP:
+        out["truncated"] = len(open_prs) - _UPSTREAM_LEDGER_CAP
+    if isinstance(body.get("summary"), dict):
+        out["summary"] = body["summary"]
+    return out
+
+
+def _read_upstream_pending() -> dict[str, Any]:
+    pending_dir = _willow_home() / "upstream_steward" / "pending"
+    if not pending_dir.is_dir():
+        return {"status": "empty", "total": 0, "by_lane": {}}
+    try:
+        entries = list(pending_dir.glob("*.json"))
+    except OSError as exc:
+        return {"status": "unreachable", "total": 0, "by_lane": {}, "detail": str(exc)[:200]}
+    by_lane: dict[str, int] = {}
+    unreadable = 0
+    for entry in entries:
+        try:
+            item = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            unreadable += 1
+            continue
+        if not isinstance(item, dict):
+            unreadable += 1
+            continue
+        lane = str(item.get("lane") or item.get("status") or "unknown")
+        by_lane[lane] = by_lane.get(lane, 0) + 1
+    result: dict[str, Any] = {
+        "status": "populated" if entries else "empty",
+        "total": len(entries),
+        "by_lane": dict(sorted(by_lane.items())),
+    }
+    if unreadable:
+        result["unreadable"] = unreadable
+    return result
+
+
+def _read_last_upstream_tick() -> dict[str, Any]:
+    path = _tick_receipts_path()
+    if not path.is_file():
+        return {"status": "empty", "last": None, "at": None}
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 65536))
+            tail = fh.read()
+    except OSError as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200], "last": None, "at": None}
+    for raw in reversed(tail.splitlines()):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            rec = json.loads(s)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("event") == "steward_upstream_desk":
+            return {"status": "populated", "last": rec, "at": rec.get("at")}
+    return {"status": "empty", "last": None, "at": None,
+            "detail": "no steward_upstream_desk in the tail read"}
+
+
+def _read_upstream() -> dict[str, Any]:
+    from willow_bot.steward.upstream_config import watch_repos
+    from willow_bot.steward.upstream_desk import desk_enabled
+
+    ledger = _read_upstream_ledger()
+    pending = _read_upstream_pending()
+    last_tick = _read_last_upstream_tick()
+    any_data = (
+        ledger["status"] == "populated"
+        or pending["status"] == "populated"
+        or last_tick["status"] == "populated"
+    )
+    surface_status = "populated" if any_data else "empty"
+    return {
+        "status": surface_status,
+        "desk_enabled": desk_enabled(),
+        "watch_repos": watch_repos(),
+        "ledger": ledger,
+        "pending": pending,
+        "last_tick": last_tick,
+    }
+
+
 def _read_last_successful_sync() -> dict[str, Any]:
     """The most recent ``steward_sweep`` receipt with ``status=ok``. Read
     from the tail of the tick log so a busy log does not force reading
@@ -299,4 +420,5 @@ def report() -> dict[str, Any]:
         "inbox": _read_inbox_depth(),
         "cursors": _read_cursors(),
         "sync": _read_last_successful_sync(),
+        "upstream": _read_upstream(),
     }
