@@ -29,6 +29,11 @@ if [[ -z "$VAULT_BOX" ]]; then
     echo "  (willow-data-vault: bootstrap/provision.sh <box>). There is no default." >&2
     exit 2
 fi
+if [[ "$VAULT_BOX" != /* || ! -d "$VAULT_BOX" ]]; then
+    echo "install-service.sh: box $VAULT_BOX is not an existing absolute directory" >&2
+    echo "  (willow-data-vault: bootstrap/provision.sh <box> creates it; this script never does)." >&2
+    exit 2
+fi
 VENV_BIN="${WILLOW_BOT_VENV_BIN:-$VAULT_BOX/venvs/willow-bot/bin}"
 WORKDIR="${WILLOW_BOT_WORKDIR:-$HOME/github/willow-memory/willow-bot}"
 

@@ -27,6 +27,8 @@ if str(_ROOT) not in sys.path:
 import jwt
 import requests
 
+from willow_bot.steward.ingress import redact_url  # a hook URL can carry a login or a token
+
 APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
 SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
 PUBLIC_URL = os.getenv("WEBHOOK_PUBLIC_URL", "").strip().rstrip("/")
@@ -85,7 +87,7 @@ def main() -> int:
         _fail(f"GET /app/hook/config → {get_r.status_code}: {get_r.text[:300]}")
 
     before = get_r.json()
-    print("[INFO] current hook URL:", before.get("url", "(unset)"))
+    print("[INFO] current hook URL:", redact_url(before.get("url", "")) or "(unset)")
 
     patch_body = {
         "url": url,
@@ -103,10 +105,10 @@ def main() -> int:
         _fail(f"PATCH /app/hook/config → {patch_r.status_code}: {patch_r.text[:300]}")
 
     after = patch_r.json()
-    print("[OK]   synced hook URL:", after.get("url"))
+    print("[OK]   synced hook URL:", redact_url(after.get("url", "")))
     print("[OK]   secret pushed (len=%d)" % len(SECRET))
     if before.get("url") and before.get("url") != url:
-        print("[WARN] URL changed from", before.get("url"))
+        print("[WARN] URL changed from", redact_url(before.get("url", "")))
     print()
     print("Restart the listener if it was running:")
     print("    systemctl --user restart willow-bot")

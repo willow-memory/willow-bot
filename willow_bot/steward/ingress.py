@@ -19,10 +19,15 @@ States, never collapsed:
   HTTP error). Says nothing about the ingress either way.
 - ``malformed`` — GitHub answered, but not in a shape this step can read.
 - ``empty`` — GitHub has no App-webhook deliveries on record.
-- ``ok`` — the newest delivery was answered 2xx. ``failed_in_window`` still
-  counts failures further back.
+- ``ok`` — the newest delivery was answered 2xx, within the last
+  ``WILLOW_BOT_INGRESS_QUIET_DAYS`` days (default 7). ``failed_in_window``
+  still counts failures further back.
+- ``quiet`` — the newest delivery was answered 2xx, but it is older than
+  that: nothing recent to judge the route by. Reported, not flagged, and it
+  does not resolve an open flag.
 - ``degraded`` — the newest delivery was not answered 2xx, but fewer than
-  ``FAILING_STREAK`` in a row. Reported, not flagged.
+  ``FAILING_STREAK`` in a row (so a record of one or two failed deliveries
+  is degraded, never an episode). Reported, not flagged.
 - ``failing`` — the newest ``FAILING_STREAK`` deliveries were not answered
   2xx and at least one of them got an HTTP answer (the route reaches
   something, and it is the wrong thing: a 404 from the wrong listener).
@@ -38,7 +43,8 @@ carries ``latest_age_s`` — how old the newest delivery is — because a
 month-old 2xx still reads ``ok``.
 
 The hook URL never leaves this module whole: it is reduced to
-``scheme://host[:port]/path`` (no login, no query, no fragment) before it
+``scheme://host[:port]/path`` (no login, no query, no fragment, and any path
+segment that is not a plain lowercase word shown as ``…``) before it
 reaches a receipt, ``ingress.json``, the status surface or a filed item,
 and ``github_app.hook_url`` returns only the URL, never the config's
 ``secret``.
@@ -51,6 +57,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -64,6 +71,19 @@ FILE_NAME = "ingress.json"
 WINDOW = 30
 FAILING_STREAK = 3
 _FLAGGED = ("failing", "unanswered")
+#: A newest delivery older than this reads ``quiet``, not ``ok``: an old
+#: success says nothing about the route now (Loki 757108E8).
+QUIET_AFTER_DAYS_ENV = "WILLOW_BOT_INGRESS_QUIET_DAYS"
+QUIET_AFTER_DAYS_DEFAULT = 7.0
+
+
+def _quiet_after_s() -> float:
+    raw = os.environ.get(QUIET_AFTER_DAYS_ENV, "").strip()
+    try:
+        days = float(raw) if raw else QUIET_AFTER_DAYS_DEFAULT
+    except ValueError:
+        days = QUIET_AFTER_DAYS_DEFAULT
+    return max(days, 0.0) * 86400.0
 
 
 def path() -> Path:
@@ -84,9 +104,31 @@ def _fetch_hook_url() -> str:
     return github_app.hook_url()
 
 
+_SAFE_SEGMENT = re.compile(r"^[a-z][a-z_.-]{0,31}$")
+#: GitHub's own token prefixes: a segment starting with one is a token,
+#: whatever its letters (``ghp_``, ``github_pat_``, ...).
+_TOKEN_PREFIX = re.compile(r"^(gh[pousr]_|github_pat_)", re.IGNORECASE)
+
+
+def _redact_segment(seg: str) -> str:
+    """A path segment is kept only when it reads as a word — lowercase
+    letters and ``_ . -`` only, at most 32 characters (``webhook``,
+    ``hooks``, ``github-app``) — and does not start with a GitHub token
+    prefix. Anything else is shown as ``…``: a relay channel
+    (``smee.io/<channel>``) is mixed-case, often letters only, and a token
+    placed in the path is exactly that shape (Loki 757108E8, 87DF2A04)."""
+    if not seg:
+        return seg
+    if _TOKEN_PREFIX.match(seg) or not _SAFE_SEGMENT.match(seg):
+        return "…"
+    return seg
+
+
 def redact_url(url: str) -> str:
-    """``scheme://host[:port]/path`` — drops any login, query and fragment,
-    the places a credential rides in a webhook URL."""
+    """``scheme://host[:port]/path`` with every path segment that could be a
+    secret replaced by ``…`` — drops any login, query and fragment, the
+    other places a credential rides in a webhook URL. An IPv6 host keeps
+    its brackets (``http://[::1]:9000/webhook``)."""
     try:
         parts = urlsplit(str(url or "").strip())
         host = parts.hostname or ""
@@ -95,8 +137,11 @@ def redact_url(url: str) -> str:
         return ""
     if not parts.scheme or not host:
         return ""
+    if ":" in host:
+        host = f"[{host}]"
     netloc = f"{host}:{port}" if port else host
-    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    path = "/".join(_redact_segment(seg) for seg in parts.path.split("/"))
+    return urlunsplit((parts.scheme, netloc, path, "", ""))
 
 
 def _code(d: dict) -> int:
@@ -156,9 +201,12 @@ def assess(deliveries: list[dict], *, now: float | None = None) -> dict[str, Any
         by_code[key] = by_code.get(key, 0) + 1
     last_ok = next((d for d in rows if _ok(d)), None)
     last_fail = next((d for d in rows if not _ok(d)), None)
+    age = _age_s(rows[0].get("delivered_at"), now)
     if streak == 0:
-        status = "ok"
-    elif streak < min(FAILING_STREAK, len(rows)):
+        status = "quiet" if age is not None and age > _quiet_after_s() else "ok"
+    elif streak < FAILING_STREAK:
+        # Fewer than FAILING_STREAK failures in a row — including a record
+        # holding only one or two deliveries — is not yet an episode.
         status = "degraded"
     elif all(_code(d) == 0 for d in rows[:streak]):
         status = "unanswered"
@@ -171,7 +219,7 @@ def assess(deliveries: list[dict], *, now: float | None = None) -> dict[str, Any
         "failed_in_window": sum(1 for d in rows if not _ok(d)),
         "by_status_code": dict(sorted(by_code.items())),
         "latest": _brief(rows[0]),
-        "latest_age_s": _age_s(rows[0].get("delivered_at"), now),
+        "latest_age_s": age,
         "last_success": _brief(last_ok) if last_ok else None,
         "last_failure": _brief(last_fail) if last_fail else None,
     }
@@ -294,7 +342,7 @@ def run(*, enable_mcp: bool, call, app: str) -> dict[str, Any]:
                 receipt["flag"] = {"state": "resolved", "id": flag["id"]}
                 flag = None
     elif flag and flag.get("id"):
-        # degraded, empty, malformed or unreachable: the flag stands; none
+        # quiet, degraded, empty, malformed or unreachable: the flag stands; none
         # of those says the ingress recovered.
         receipt["flag"] = {"state": "open", "id": flag["id"], "since": flag.get("since")}
 

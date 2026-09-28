@@ -49,6 +49,20 @@ def _record(line: dict) -> None:
         pass
 
 
+def _umask() -> int:
+    """The process umask, read without changing it where the kernel says it
+    (Linux ``/proc/self/status``); elsewhere the set-and-restore fallback."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("Umask:"):
+                return int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass
+    current = os.umask(0o022)
+    os.umask(current)
+    return current
+
+
 def _carry_over(legacy: Path, target: Path) -> None:
     """Copy ``legacy`` into ``target`` with SQLite's backup API, into a
     temp file of its own (``mkstemp``) renamed into place, so a half-written
@@ -56,6 +70,9 @@ def _carry_over(legacy: Path, target: Path) -> None:
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".carry")
     os.close(fd)
     tmp = Path(tmp_name)
+    # mkstemp makes the file 0600; give the carried-over counter the mode
+    # SQLite gives a fresh one (0644 less the umask) so the two never differ.
+    os.chmod(tmp, 0o644 & ~_umask())
     try:
         src = sqlite3.connect(f"file:{legacy}?mode=ro", uri=True)
         try:
