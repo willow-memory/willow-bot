@@ -1191,14 +1191,17 @@ def test_an_unverified_watcher_line_says_so(home, monkeypatch):
     receipt, _, unverified = _notify(monkeypatch, c, live=unplaced, heads={})
     sent = c.named("grove_send_message")
     note = f"PR head unverified (GitHub reports {SHA2[:7]}, not seen by the bot after {SHA[:7]})"
-    assert len(sent) == 1 and sent[0]["content"].endswith(f"({note})")
+    assert len(sent) == 1
+    assert sent[0]["content"] == f"{tick._ci_line_filed(_watched_item())} — {note}"
     assert unverified == [{"key": f"{NOT_WM}#48@{SHA}", "note": note}]
 
 
 def test_a_confirmed_watcher_line_carries_no_note(home, monkeypatch):
+    """Loki 754C4008 W2: the exact line, so a note (or a "None") appended
+    to a confirmed red fails here."""
     c = _Client()
     _notify(monkeypatch, c, live=("open", False, SHA), heads={})
-    assert "unverified" not in c.named("grove_send_message")[0]["content"]
+    assert c.named("grove_send_message")[0]["content"] == tick._ci_line_filed(_watched_item())
 
 
 def test_run_ci_hands_seen_heads_to_the_watcher_step(home, monkeypatch, pulls):
@@ -1234,3 +1237,25 @@ def test_run_ci_hands_seen_heads_to_the_watcher_step(home, monkeypatch, pulls):
     assert r2["notified"][0]["state"] == "skipped"
     assert r2["notified"][0]["reason"] == f"moot: superseded by {SHA2[:7]}"
     assert r2["pr_unverified"] == []
+
+
+
+# ── the three states of a re-read (Loki 754C4008 E1/E7) ──────────────────────
+
+def test_verdict_prless_head_is_neither_stale_nor_noted(home, monkeypatch):
+    """E1: a head with no PR has nothing to re-read — no call, no note."""
+    p = _Pulls({(RAT, 48): ("open", False, SHA2)})
+    monkeypatch.setattr(tick, "_ci_fetch_pull", p)
+    assert tick._ci_head_verdict(RAT, None, SHA, {}, SEEN) == (None, None)
+    assert p.calls == []
+
+
+def test_verdict_empty_live_head_is_unverified_not_confirmed(home, monkeypatch):
+    """E7: GitHub answering with no head is "empty", not "populated"."""
+    monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(RAT, 48): ("open", False, "")}))
+    assert tick._ci_head_verdict(RAT, 48, SHA, {}, SEEN) == (None, "PR head unverified (GitHub returned no head)")
+
+
+def test_verdict_confirmed_live_head_has_no_note(home, monkeypatch):
+    monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(RAT, 48): ("open", False, SHA)}))
+    assert tick._ci_head_verdict(RAT, 48, SHA, {}, SEEN) == (None, None)

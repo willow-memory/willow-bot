@@ -1638,7 +1638,11 @@ def _ci_head_verdict(repo: str, pr: object, head_sha: str, cache: dict,
     if live.get("state") and live["state"] != "open":
         return "pr closed", None
     live_head = live.get("head_sha") or ""
-    if not live_head or live_head == head_sha:
+    if not live_head:
+        # An answer with no head is empty, not a confirmation (Loki
+        # 754C4008): the red goes out marked, never as confirmed live.
+        return None, "PR head unverified (GitHub returned no head)"
+    if live_head == head_sha:
         return None, None
     seen = heads.get(_ci_pr_key(repo, pr, head_sha)) or {}
     mine, theirs = seen.get(head_sha), seen.get(live_head)
@@ -1954,7 +1958,7 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
                 # Same marker the comment header and the Grove block carry:
                 # the opener's channel never reads "could not check" as
                 # "confirmed live" (Loki 258F1365 follow-up).
-                line = f"{line} ({note})"
+                line = f"{line} — {note}"
         if (kind == "filed" and not item.get("stuck")
                 and str(item.get("repo") or "").startswith(_GROVE_CI_RED_REPO_PREFIX)
                 and channel.lstrip("#") == "willow"):
