@@ -6,7 +6,8 @@ single source of truth: every caller reads `WILLOW_HOME` the same way,
 so a rename of the env or a change to the default lands in one place.
 
 - `willow_home()` — root: the data-vault box. Reads `WILLOW_HOME`, then
-  `WILLOW_VAULT_BOX` (stripped, `~` expanded). There is NO default: the box
+  `WILLOW_VAULT_BOX` (stripped, `~` expanded), and it must be an existing
+  directory. There is NO default: the box
   is wherever willow-data-vault's `bootstrap/provision.sh <box>` put it, and
   `WILLOW_HOME == WILLOW_STORE_ROOT == <box>` is that repo's contract. With
   neither set this raises `BoxNotConfigured` rather than guess — the old
@@ -36,13 +37,26 @@ BOX_NOT_CONFIGURED = (
 )
 
 
+BOX_ENV = ("WILLOW_HOME", "WILLOW_VAULT_BOX")
+
+
 def env_box(*names: str) -> Path:
-    """The first of ``names`` set to a non-blank value, ``~`` expanded; else
-    ``BoxNotConfigured``. The one rule every box resolver in this repo uses."""
-    for name in names:
+    """The box: the first of ``names`` (default ``BOX_ENV``) set to a
+    non-blank value, ``~`` expanded — and it must be an existing directory.
+    Otherwise ``BoxNotConfigured``. The one rule every box resolver in this
+    repo uses. A named box that does not exist is refused too (Loki
+    A726C6F8): the first write would otherwise create a whole bogus tree,
+    and every read would report "empty" when the truth is "no box"."""
+    for name in names or BOX_ENV:
         raw = os.environ.get(name, "").strip()
         if raw:
-            return Path(raw).expanduser()
+            box = Path(raw).expanduser()
+            if not box.is_dir():
+                raise BoxNotConfigured(
+                    f"{name}={box} is not an existing directory; the box is created by "
+                    "willow-data-vault's bootstrap/provision.sh, never by willow-bot."
+                )
+            return box
     raise BoxNotConfigured(BOX_NOT_CONFIGURED)
 
 
@@ -56,7 +70,7 @@ def willow_home() -> Path:
     write without first ensuring its parent tree exists — this function
     computes a path, it does not create one.
     """
-    return env_box("WILLOW_HOME", "WILLOW_VAULT_BOX")
+    return env_box(*BOX_ENV)
 
 
 def bot_dir() -> Path:

@@ -87,7 +87,12 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
     # tmp_path, so no test reads — or copies — the real one.
     from willow_bot import persona_store as _persona_store
 
-    monkeypatch.setattr(_persona_store, "_legacy_dir", lambda: root / "legacy-dot-willow")
+    def _no_real_legacy():
+        return root / "legacy-dot-willow"
+
+    # The real source stays reachable for the one test that pins it.
+    _no_real_legacy.__wrapped__ = _persona_store._legacy_dir
+    monkeypatch.setattr(_persona_store, "_legacy_dir", _no_real_legacy)
     # Modules that bound the name at import (`from ...config import state_path`).
     for modname in ("willow_bot.steward.tick", "willow_bot.steward.voice", "willow_bot.steward.inbox",
                     "willow_bot.steward.merge", "willow_bot.steward.heartbeat"):

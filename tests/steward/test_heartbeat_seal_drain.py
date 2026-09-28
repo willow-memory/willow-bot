@@ -48,6 +48,7 @@ def test_curated_calls_carry_the_seat_app_id(monkeypatch) -> None:
 
 
 def test_receipt_carries_the_drain_three_state(tmp_path: Path, monkeypatch, capsys) -> None:
+    (tmp_path / "w").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "w"))
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     monkeypatch.delenv("WILLOW_BOT_STEWARD_TOOLS", raising=False)
@@ -96,6 +97,7 @@ def test_receipt_carries_the_drain_three_state(tmp_path: Path, monkeypatch, caps
 
 
 def test_unreachable_drain_is_visible_not_collapsed(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "w").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "w"))
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     monkeypatch.setenv("WILLOW_BOT_STEWARD_TOOLS", "seal_drain")

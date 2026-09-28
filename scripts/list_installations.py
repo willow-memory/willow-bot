@@ -11,13 +11,21 @@ from pathlib import Path
 import jwt
 import requests
 
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
-KEY_PATH = Path(
-    os.getenv(
-        "GITHUB_APP_PRIVATE_KEY_PATH",
-        str(Path.home() / ".willow" / "secrets/willow-bot.pem"),
-    )
-)
+def _key_path() -> Path:
+    """GITHUB_APP_PRIVATE_KEY_PATH if set, else the box's
+    secrets/willow-bot.pem (credentials.default_pem_path — never ~/.willow).
+    Raises BoxNotConfigured when neither names a key and there is no box."""
+    raw = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    import credentials
+
+    return credentials.default_pem_path()
 
 API = "https://api.github.com"
 API_VERSION = "2022-11-28"
@@ -101,14 +109,14 @@ def _repo_record(repo: dict, account: str) -> dict:
 
 
 def main() -> int:
-    if not APP_ID or not KEY_PATH.is_file():
+    if not APP_ID or not _key_path().is_file():
         print("[FAIL] GITHUB_APP_ID / PEM not configured", file=sys.stderr)
         return 1
 
     now = int(time.time())
     app_token = jwt.encode(
         {"iat": now - 60, "exp": now + 600, "iss": int(APP_ID)},
-        KEY_PATH.read_text().strip(),
+        _key_path().read_text().strip(),
         algorithm="RS256",
     )
 

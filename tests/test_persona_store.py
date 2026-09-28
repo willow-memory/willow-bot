@@ -124,3 +124,91 @@ def test_status_with_no_box_says_so_and_names_the_fix(monkeypatch):
     r = status.report()
     assert r["status"] == "no-box" and r["willow_home"] is None
     assert "provision.sh" in r["detail"]
+
+
+# ── Loki A726C6F8 ────────────────────────────────────────────────────────────
+
+def test_the_real_carry_over_source_is_home_dot_willow(monkeypatch, tmp_path):
+    """F3/M20: every other test patches the source; this pins the real one."""
+    real = persona_store._legacy_dir.__wrapped__
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "someone"))
+    assert real() == tmp_path / "someone" / ".willow"
+
+
+def test_a_box_that_does_not_exist_is_refused_and_nothing_is_created(monkeypatch, tmp_path):
+    """F2: a WILLOW_HOME pointing nowhere is no box — the first write must
+    not build a tree under it, and status must not read it as empty."""
+    from willow_bot import status
+
+    ghost = tmp_path / "not-provisioned"
+    monkeypatch.setenv("WILLOW_HOME", str(ghost))
+    with pytest.raises(paths.BoxNotConfigured, match="not an existing directory"):
+        sigh.bump_fail("o/r", 1)
+    assert not ghost.exists()
+    r = status.report()
+    assert r["status"] == "no-box" and str(ghost) in r["detail"]
+
+
+def test_vault_only_env_is_the_box(monkeypatch, tmp_path):
+    """M04."""
+    box = tmp_path / "vault-only"
+    box.mkdir()
+    monkeypatch.delenv("WILLOW_HOME", raising=False)
+    monkeypatch.setenv("WILLOW_VAULT_BOX", str(box))
+    assert paths.willow_home() == box
+    assert persona_store.db_path("sigh") == box / "willow-bot" / "persona" / "willow-bot-sigh.db"
+
+
+def test_a_copy_that_fails_before_the_rename_leaves_nothing(legacy, monkeypatch):
+    """M09: the copy lands in a temp file and is renamed into place; a
+    failure before the rename leaves no target and no temp behind."""
+    _make_contributors(legacy / "willow-bot-contributors.db", [("veteran", 40, "x")])
+    real_replace = Path.replace
+
+    def _refuse(self, target):
+        if str(self).endswith(".carry"):
+            raise OSError("disk full")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _refuse)
+    target = persona_store.db_path("contributors")
+    assert not target.exists()
+    assert [p.name for p in paths.persona_dir().iterdir() if p.name.endswith(".carry")] == []
+    [line] = _migrations()
+    assert line["status"] == "failed" and "disk full" in line["error"]
+
+
+def test_first_open_rechecks_under_the_lock(legacy, monkeypatch):
+    """F4: a second process that finished the copy (and bumped the count)
+    while this one waited for the lock is not overwritten."""
+    _make_contributors(legacy / "willow-bot-contributors.db", [("veteran", 40, "x")])
+    target = paths.persona_dir() / "willow-bot-contributors.db"
+    real_flock = persona_store.fcntl.flock
+
+    def _other_process_won(fd, op):
+        real_flock(fd, op)
+        if op == persona_store.fcntl.LOCK_EX and not target.exists():
+            _make_contributors(target, [("veteran", 41, "x")])
+
+    monkeypatch.setattr(persona_store.fcntl, "flock", _other_process_won)
+    assert persona_store.db_path("contributors") == target
+    conn = sqlite3.connect(target)
+    assert conn.execute("SELECT merged_prs FROM contributors").fetchone() == (41,)
+    conn.close()
+    assert _migrations() == []
+
+
+def test_install_service_refuses_without_a_box(tmp_path):
+    """M21."""
+    import os
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    env = {k: v for k, v in os.environ.items() if k not in ("WILLOW_HOME", "WILLOW_BOT_VAULT_BOX")}
+    r = subprocess.run(["bash", str(root / "scripts" / "install-service.sh"), "--print", "willow-bot"],
+                       env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2 and "no box" in r.stderr and "provision.sh" in r.stderr
+    env["WILLOW_BOT_VAULT_BOX"] = str(tmp_path)
+    r = subprocess.run(["bash", str(root / "scripts" / "install-service.sh"), "--print", "willow-bot"],
+                       env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and f"WILLOW_VAULT_BOX={tmp_path}" in r.stdout

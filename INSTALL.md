@@ -41,7 +41,7 @@ PEMs — confirm with `nest_intake_file` after `nest_intake_scan`.
 | App id + webhook secret (+ optional `WEBHOOK_PUBLIC_URL`) | Nest `willow-bot.env` → same, or edit the vault file |
 | Optional Fernet keys | `willow-bot/app_id`, `willow-bot/webhook_secret`, `willow-bot/private_key` in `vault.db` |
 
-The box is wherever willow-data-vault's `bootstrap/provision.sh <box>` created it; `WILLOW_HOME` (or `WILLOW_VAULT_BOX`) must name it. There is **no default box**: with neither set, willow-bot refuses (`BoxNotConfigured`) instead of guessing a path. `WILLOW_VAULT_BOX` defaults to `WILLOW_HOME`.
+The box is wherever willow-data-vault's `bootstrap/provision.sh <box>` created it; `WILLOW_HOME` (or `WILLOW_VAULT_BOX`) must name it. There is **no default box**, and the box must already exist: with neither set, or with one naming a directory that is not there, willow-bot refuses (`BoxNotConfigured`) instead of guessing a path or creating one. Everything (state, secrets, the webhook fan-out) reads `WILLOW_HOME` first, then `WILLOW_VAULT_BOX`. **Commands run by hand need the box exported**; the systemd units already set it.
 If Nest has not filed the env yet, copy the example and fill it (mode 600):
 
 ```bash

@@ -25,12 +25,16 @@ def test_vault_box_has_no_default_box(monkeypatch, tmp_path):
     assert list(tmp_path.iterdir()) == []  # nothing created under a guessed path
 
 
-def test_vault_box_prefers_vault_box_then_willow_home(monkeypatch, tmp_path):
+def test_vault_box_follows_the_same_rule_as_the_state(monkeypatch, tmp_path):
+    """One rule (Loki A726C6F8): WILLOW_HOME, else WILLOW_VAULT_BOX — the
+    same order paths.willow_home() reads, so secrets and state never split."""
+    (tmp_path / "home").mkdir()
+    (tmp_path / "box").mkdir()
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("WILLOW_VAULT_BOX", str(tmp_path / "box"))
-    assert credentials.vault_box() == tmp_path / "box"
-    monkeypatch.setenv("WILLOW_VAULT_BOX", "  ")
     assert credentials.vault_box() == tmp_path / "home"
+    monkeypatch.setenv("WILLOW_HOME", "  ")
+    assert credentials.vault_box() == tmp_path / "box"
 
 
 def test_resolve_from_secrets_dir(monkeypatch, tmp_path):

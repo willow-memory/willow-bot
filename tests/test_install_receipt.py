@@ -23,6 +23,7 @@ def _willow_home(tmp_path, monkeypatch):
     WILLOW_HOME, never the live operator home — the whole point of gap
     f982a9be2eac is that the marker must not touch shared state outside
     the sandbox any more than it touches the checkout."""
+    (tmp_path / "wh").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "wh"))
 
 

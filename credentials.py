@@ -6,8 +6,9 @@ Precedence (same shape as willow-mcp integrations):
   3. Fernet vault keys under ``willow-bot/…`` (when vault.key is present)
   4. Default PEM path: ``$WILLOW_VAULT_BOX/secrets/willow-bot.pem``
 
-``WILLOW_VAULT_BOX`` defaults to ``WILLOW_HOME``; with neither set there is
-no box and resolution raises — never a guessed path, never ``~/.willow``.
+The box is ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX`` — the same rule the
+state uses. With neither set, or a path that does not exist, there is no box
+and resolution raises: never a guessed path, never ``~/.willow``.
 """
 from __future__ import annotations
 
@@ -22,11 +23,12 @@ _VAULT_PEM = "willow-bot/private_key"
 
 
 def vault_box() -> Path:
-    """The box: ``$WILLOW_VAULT_BOX``, else ``$WILLOW_HOME``. No default —
-    raises ``BoxNotConfigured`` (see ``willow_bot.paths``)."""
-    from willow_bot.paths import env_box
+    """The box, by the same rule as the state it sits beside:
+    ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX`` (``willow_bot.paths``). No
+    default, and it must exist — else ``BoxNotConfigured``."""
+    from willow_bot.paths import BOX_ENV, env_box
 
-    return env_box("WILLOW_VAULT_BOX", "WILLOW_HOME")
+    return env_box(*BOX_ENV)
 
 
 def secrets_dir() -> Path:

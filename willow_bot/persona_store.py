@@ -16,8 +16,11 @@ operator's call. Once the box file exists, ``~/.willow`` is never read again.
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 
@@ -47,43 +50,63 @@ def _record(line: dict) -> None:
 
 
 def _carry_over(legacy: Path, target: Path) -> None:
-    """Copy ``legacy`` into ``target`` with SQLite's backup API, via a temp
-    file renamed into place so a half-written copy is never mistaken for
-    the real one."""
-    tmp = target.with_name(f".{target.name}.carry")
-    src = sqlite3.connect(f"file:{legacy}?mode=ro", uri=True)
+    """Copy ``legacy`` into ``target`` with SQLite's backup API, into a
+    temp file of its own (``mkstemp``) renamed into place, so a half-written
+    copy is never mistaken for the real one."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".carry")
+    os.close(fd)
+    tmp = Path(tmp_name)
     try:
-        dst = sqlite3.connect(tmp)
+        src = sqlite3.connect(f"file:{legacy}?mode=ro", uri=True)
         try:
-            src.backup(dst)
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
         finally:
-            dst.close()
+            src.close()
+        tmp.replace(target)
     finally:
-        src.close()
-    tmp.replace(target)
+        tmp.unlink(missing_ok=True)
 
 
 def db_path(name: str) -> Path:
     """The box path of counter ``name`` (a key of ``FILES``), created
     parent-first, carried over from ``~/.willow`` on first use. Raises
-    ``BoxNotConfigured`` when there is no box — never falls back."""
+    ``BoxNotConfigured`` when there is no box — never falls back.
+
+    The first open is serialized with an exclusive lock on
+    ``persona/.carry.lock`` and the target is re-checked once the lock is
+    held (Loki A726C6F8): two processes opening the same counter for the
+    first time must not both copy, or a late copy lands over a count the
+    early one already bumped."""
     filename = FILES[name]
     target = persona_dir() / filename
     if target.exists():
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
-    legacy = _legacy_dir() / filename
-    if legacy.is_file():
-        at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with open(target.parent / ".carry.lock", "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
-            _carry_over(legacy, target)
-        except (OSError, sqlite3.Error) as exc:
-            # Nothing half-copied is left behind; the counter starts in the
-            # box and the refusal is on record. The legacy file is untouched.
-            target.with_name(f".{target.name}.carry").unlink(missing_ok=True)
-            _record({"event": "persona_carry_over", "at": at, "counter": name, "status": "failed",
-                     "from": str(legacy), "to": str(target), "error": f"{type(exc).__name__}: {exc}"[:300]})
-        else:
-            _record({"event": "persona_carry_over", "at": at, "counter": name, "status": "copied",
-                     "from": str(legacy), "to": str(target), "bytes": target.stat().st_size})
+            if target.exists():
+                return target
+            legacy = _legacy_dir() / filename
+            if not legacy.is_file():
+                return target
+            at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            try:
+                _carry_over(legacy, target)
+            except (OSError, sqlite3.Error) as exc:
+                # Nothing half-copied is left behind; the counter starts in
+                # the box and the refusal is on record. The legacy file is
+                # untouched.
+                _record({"event": "persona_carry_over", "at": at, "counter": name, "status": "failed",
+                         "from": str(legacy), "to": str(target),
+                         "error": f"{type(exc).__name__}: {exc}"[:300]})
+            else:
+                _record({"event": "persona_carry_over", "at": at, "counter": name, "status": "copied",
+                         "from": str(legacy), "to": str(target), "bytes": target.stat().st_size})
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     return target

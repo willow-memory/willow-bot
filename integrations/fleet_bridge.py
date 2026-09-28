@@ -3,13 +3,14 @@ fleet_bridge.py — route willow-bot webhooks into local fleet services.
 
 Push path (replaces blind polling for installed repos):
   pull_request / issues / issue_comment / check_run
-    → ~/.willow/upstream_steward/webhook_inbox/<work_id>.json
+    → $WILLOW_HOME/upstream_steward/webhook_inbox/<work_id>.json
   push (default branch, local clone exists)
-    → ~/.willow/gitsync/trigger-<owner>-<repo>.flag, a JSON payload
+    → $WILLOW_HOME/gitsync/trigger-<owner>-<repo>.flag, a JSON payload
       {at, repo, clone, layout} — layout is "org", "flat", or "scan",
       whichever shape of `_local_clone_path_with_layout` found the repo
 
-All events also append to ~/.willow/willow-bot/event-log.jsonl for audit.
+All events also append to $WILLOW_HOME/willow-bot/event-log.jsonl for audit.
+The box has no default (``willow_bot.paths``); with none, the bridge raises.
 """
 from __future__ import annotations
 
@@ -25,20 +26,35 @@ from pathlib import Path
 
 log = logging.getLogger("willow-bot.fleet_bridge")
 
-_WILLOW_HOME = Path(os.environ.get("WILLOW_HOME", Path.home() / "github" / ".willow"))
-if "WILLOW_HOME" not in os.environ:
-    # The fallback is the pre-2026-08-10 layout and on a current box it is a
-    # decoy path one level above the fleet's home. Say so once at import
-    # rather than filing an inbox nothing reads; the fix is the env var in the
-    # unit file, not a new default here (the real home moved once already).
-    log_boot = logging.getLogger("willow-bot.fleet_bridge")
-    log_boot.warning("WILLOW_HOME unset; fleet_bridge falls back to %s, which is the "
-                     "pre-move layout — set WILLOW_HOME in the unit's EnvironmentFile",
-                     _WILLOW_HOME)
 _GITHUB_ROOT = Path(os.environ.get("GITHUB_ROOT", Path.home() / "github"))
-_EVENT_LOG = _WILLOW_HOME / "willow-bot" / "event-log.jsonl"
-_INBOX = _WILLOW_HOME / "upstream_steward" / "webhook_inbox"
-_GITSYNC_TRIGGERS = _WILLOW_HOME / "gitsync"
+
+
+# The box is resolved at use, through the one rule (``willow_bot.paths``):
+# WILLOW_HOME, else WILLOW_VAULT_BOX, an existing directory, no default.
+# This used to read WILLOW_HOME once at import and fall back to
+# ~/github/.willow (the pre-2026-08-10 layout) with only a warning; a blank
+# value wrote the inbox relative to the working directory, and a
+# vault-only env filed where the steward never reads (Loki A726C6F8).
+def _box() -> Path:
+    from willow_bot.paths import willow_home
+
+    return willow_home()
+
+
+def _event_log() -> Path:
+    return _box() / "willow-bot" / "event-log.jsonl"
+
+
+def _inbox() -> Path:
+    from willow_bot.paths import webhook_inbox_dir
+
+    return webhook_inbox_dir()
+
+
+def _gitsync_triggers() -> Path:
+    return _box() / "gitsync"
+
+
 _GIT = shutil.which("git") or "/usr/bin/git"
 
 # GitHub's own grammar for `owner/name`: ASCII alphanumerics, `-`, `_`, `.`;
@@ -91,8 +107,9 @@ def _work_id(repo: str, kind: str, number: int | str) -> str:
 
 
 def _append_log(record: dict) -> None:
-    _EVENT_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with _EVENT_LOG.open("a", encoding="utf-8") as f:
+    event_log = _event_log()
+    event_log.parent.mkdir(parents=True, exist_ok=True)
+    with event_log.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, separators=(",", ":")) + "\n")
 
 
@@ -169,9 +186,10 @@ def _local_clone_path_with_layout(repo_full_name: str) -> tuple[Path | None, str
 
 
 def _queue_upstream(item: dict) -> None:
-    _INBOX.mkdir(parents=True, exist_ok=True)
+    inbox = _inbox()
+    inbox.mkdir(parents=True, exist_ok=True)
     wid = item["work_id"]
-    path = _INBOX / f"{wid}.json"
+    path = inbox / f"{wid}.json"
     if path.exists():
         return
     path.write_text(json.dumps(item, indent=2) + "\n", encoding="utf-8")
@@ -187,11 +205,12 @@ def _request_gitsync(repo_full_name: str) -> None:
     if not clone:
         log.info("gitsync skip: no local clone for %s (git=%s)", repo_full_name, _GIT)
         return
-    _GITSYNC_TRIGGERS.mkdir(parents=True, exist_ok=True)
+    triggers = _gitsync_triggers()
+    triggers.mkdir(parents=True, exist_ok=True)
     owner, name = repo_full_name.split("/", 1)
-    flag = _contained(_GITSYNC_TRIGGERS, f"trigger-{owner}-{name}.flag")
+    flag = _contained(triggers, f"trigger-{owner}-{name}.flag")
     if flag is None:
-        log.warning("gitsync skip: trigger path for %s escapes %s", repo_full_name, _GITSYNC_TRIGGERS)
+        log.warning("gitsync skip: trigger path for %s escapes %s", repo_full_name, triggers)
         return
     payload = {"at": _now(), "repo": repo_full_name, "clone": str(clone), "layout": layout}
     flag.write_text(json.dumps(payload) + "\n", encoding="utf-8")

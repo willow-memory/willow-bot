@@ -127,12 +127,15 @@ def main() -> int:
     import requests
 
     app_id = env["GITHUB_APP_ID"]
-    key_path = Path(
-        env.get(
-            "GITHUB_APP_PRIVATE_KEY_PATH",
-            str(Path.home() / ".willow/secrets/willow-bot.pem"),
-        )
-    )
+    raw_key = env.get("GITHUB_APP_PRIVATE_KEY_PATH", "").strip()
+    if raw_key:
+        key_path = Path(raw_key).expanduser()
+    else:
+        if str(_ROOT) not in sys.path:
+            sys.path.insert(0, str(_ROOT))
+        import credentials
+
+        key_path = credentials.default_pem_path()  # the box's secrets/, never ~/.willow
     token = jwt.encode(
         {"iat": int(time.time()) - 60, "exp": int(time.time()) + 600, "iss": app_id},
         key_path.read_text().strip(),
@@ -155,11 +158,15 @@ def main() -> int:
     expected_url = env.get("WEBHOOK_PUBLIC_URL", "").rstrip("/")
     if expected_url and not expected_url.endswith("/webhook"):
         expected_url += "/webhook"
+    from willow_bot.steward.ingress import redact_url
+
     hook_url = hook.get("url", "")
+    # Compared whole, printed redacted: a hook URL can carry a login or a
+    # token (Loki A726C6F8 / 7E5306B6).
     if hook_url == expected_url:
-        _ok(f"hook URL matches .env ({hook_url})")
+        _ok(f"hook URL matches .env ({redact_url(hook_url)})")
     else:
-        _fail(f"hook URL {hook_url!r} != .env {expected_url!r}")
+        _fail(f"hook URL {redact_url(hook_url)!r} != .env {redact_url(expected_url)!r}")
 
     recent = [
         f"{d.get('event')} → {d.get('status_code')}" for d in deliveries[:5]
