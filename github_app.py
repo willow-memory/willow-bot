@@ -21,6 +21,11 @@ log = logging.getLogger("willow-bot.github_app")
 # a bot must be recognised, match on `user.type == "Bot"` (BOT-INVENTORY.md).
 
 _installation_token_cache: dict[int, tuple[str, float]] = {}
+# What GitHub said each installation token may do, from the same
+# access_tokens answer that minted it, and which installation serves a repo.
+# Read by `installation_permissions`; never a network call of its own.
+_installation_permissions: dict[int, dict[str, str]] = {}
+_repo_installation: dict[str, int] = {}
 _cached: _creds.BotCredentials | None = None
 
 
@@ -91,16 +96,56 @@ def _get_installation_token(installation_id: int) -> str:
     data = r.json()
     access_token = data["token"]
     _installation_token_cache[installation_id] = (access_token, time.time() + 3600)
+    perms = data.get("permissions")
+    if isinstance(perms, dict):
+        _installation_permissions[installation_id] = {str(k): str(v) for k, v in perms.items()}
     return access_token
 
 
 def _auth_headers(repo_full_name: str) -> dict:
     installation_id = _get_installation_id(repo_full_name)
+    _repo_installation[repo_full_name.lower()] = installation_id
     token = _get_installation_token(installation_id)
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
     }
+
+
+def installation_permissions(repo_full_name: str) -> dict[str, str] | None:
+    """The permissions GitHub granted the installation token for this repo,
+    as the access_tokens answer stated them (``{"checks": "read", ...}``).
+
+    Cache only: known after `_auth_headers(repo)` has minted or reused a
+    token this process, ``None`` before that — a caller reads ``None`` as
+    "unknown" and must not treat it as a refusal. A fact GitHub asserts
+    about the credential, so a caller can skip a call the grant cannot
+    make instead of learning it from a 403 every tick.
+    """
+    installation_id = _repo_installation.get(repo_full_name.lower())
+    if installation_id is None:
+        return None
+    perms = _installation_permissions.get(installation_id)
+    return dict(perms) if perms is not None else None
+
+
+def get_pull(repo_full_name: str, number: int) -> dict:
+    """``GET /repos/{repo}/pulls/{number}`` under the App's install token.
+    Returns the parsed JSON; raises on an unconfigured App or HTTP error so
+    the caller decides what an unreadable PR means."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — cannot get_pull")
+    headers = _auth_headers(repo_full_name)
+    r = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/pulls/{int(number)}",
+        headers=headers,
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"unexpected pulls answer for {repo_full_name}#{number}")
+    return data
 
 
 def list_open_pulls(repo_full_name: str, *, per_page: int = 100, max_pages: int = 5) -> list[dict]:

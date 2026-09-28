@@ -533,6 +533,24 @@ def test_run_voice_check_refusal_marks_status_partial(
     ]
 
 
+
+def test_run_voice_check_skipped_for_a_read_only_grant_is_not_a_refusal(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        pr_voice, "publish_check",
+        lambda repo, head_sha, name, **kw: {"status": "skipped", "missing_permission": "checks:write",
+                                            "detail": "installation grants checks:read, not write"},
+    )
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    receipt = voice.run_voice(state)
+    assert receipt["status"] == "ok"
+    assert receipt["check_refused"] == []
+    assert receipt["check_skipped"] == [
+        {"repo_pr": "o/r#1", "head_sha": "aaa111", "detail": "installation grants checks:read, not write"}
+    ]
+
 # ── _check_conclusion / _audit_state_ok directly ─────────────────────────
 
 

@@ -1575,8 +1575,55 @@ def _release_and_resolve_human_required(owed: dict, *, app: str, channel: str, c
     return None
 
 
+def _ci_fetch_pull(repo: str, pr: int) -> dict:
+    """The PR as GitHub has it now. A module-level name so the test floor
+    (tests/conftest.py) can keep it off the network."""
+    import github_app  # local import so a test can monkeypatch the module
+
+    return github_app.get_pull(repo, pr)
+
+
+def _ci_pr_liveness(repo: str, pr: object, cache: dict) -> dict | None:
+    """``{"state", "merged", "head_sha"}`` for ``repo#pr`` read live from
+    GitHub, once per PR per tick (``cache``); ``None`` when it cannot be
+    read (App not configured, network, a PR-less head) — unknown, which the
+    callers treat as "alert as before", never as "stale"."""
+    if not pr:
+        return None
+    key = f"{repo}#{pr}"
+    if key in cache:
+        return cache[key]
+    try:
+        data = _ci_fetch_pull(repo, int(pr))
+        live = {"state": str(data.get("state") or ""),
+                "merged": bool(data.get("merged") or data.get("merged_at")),
+                "head_sha": str((data.get("head") or {}).get("sha") or "")}
+    except Exception:  # noqa: BLE001 — unreadable is unknown, not stale
+        live = None
+    cache[key] = live
+    return live
+
+
+def _ci_stale_reason(head_sha: str, live: dict | None) -> str | None:
+    """Why a red on ``head_sha`` is no longer the PR's news, or ``None``
+    when it still is (or when nobody could tell). A merged or closed PR, or
+    one whose head has moved past this sha, has nothing to fix at this sha:
+    willow-mcp #659/#661/#662 heard "CI red" for superseded heads and for
+    release PRs that had already merged green (2026-09-28)."""
+    if not live:
+        return None
+    if live.get("merged"):
+        return "pr merged"
+    if live.get("state") and live["state"] != "open":
+        return "pr closed"
+    if live.get("head_sha") and head_sha and live["head_sha"] != head_sha:
+        return f"superseded by {live['head_sha'][:7]}"
+    return None
+
+
 def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", call,
-                   enable_mcp: bool, commented: list, spoke: list, errors: list | None = None) -> None:
+                   enable_mcp: bool, commented: list, spoke: list, errors: list | None = None,
+                   liveness: dict | None = None, mooted: list | None = None) -> None:
     """Retry every owed comment and Grove line that is due — new this
     tick or carried over from any earlier one. The GitHub half never
     needs `call`/`enable_mcp`; only the Grove half does, and when the
@@ -1609,11 +1656,36 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
     # case) cost one refused enqueue call this tick, not N.
     _enqueue_retried_this_tick: set[str] = set()
 
+    live_cache = liveness if liveness is not None else {}
     for head_key in ci_comments.head_keys(owed):
         entry = owed[head_key]
         try:
             repo, pr, head_sha, where = entry["repo"], entry["pr"], entry["head_sha"], entry["where"]
             cs = entry.get("comment") or {}
+            red_comment_due = (entry.get("pending_kind") != "green" and ci_comments.due(cs, tick=tick))
+            grove_owed = (enable_mcp and call is not None and repo.startswith(_GROVE_CI_RED_REPO_PREFIX)
+                          and (entry.get("spoke") or {}).get("status") in ("pending", "stalled", "blocked"))
+            if red_comment_due or grove_owed:
+                # Re-read the PR before any red goes out: a head the PR has
+                # moved past, or a PR already merged or closed, is not news.
+                reason = _ci_stale_reason(head_sha, _ci_pr_liveness(repo, pr, live_cache))
+                if reason is not None:
+                    landed = (cs.get("status") in ("posted", "green") or cs.get("comment_id")
+                              or entry.get("pending_kind") == "green")
+                    if landed:
+                        # A red comment is already on the PR: keep the entry
+                        # so its green edit still comes. The Grove line and
+                        # any further red edit are withdrawn.
+                        entry["spoke"] = {**(entry.get("spoke") or {}), "status": "moot", "moot": reason}
+                        if entry.get("pending_kind") != "green" and cs.get("status") in ("pending", "stalled"):
+                            cs["status"] = "posted"
+                        if mooted is not None:
+                            mooted.append({"key": head_key, "reason": reason, "kept": "comment"})
+                    else:
+                        del owed[head_key]
+                        if mooted is not None:
+                            mooted.append({"key": head_key, "reason": reason})
+                        continue
             if ci_comments.due(cs, tick=tick):
                 if entry.get("pending_kind") == "green":
                     body = _ci_red_green_body(where, head_sha, by=entry.get("green_by", head_sha),
@@ -1781,7 +1853,8 @@ def _ci_line_resolved(item: dict) -> str:
 
 
 def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer", app: str, call,
-                     just_filed: set[str], just_resolved: set[str], state_view: dict) -> dict:
+                     just_filed: set[str], just_resolved: set[str], state_view: dict,
+                     liveness: dict | None = None) -> dict:
     """One Grove message per (item, filed|resolved) to the seat that opened
     the PR, plus the bot's per-head PR comment kept current — for WATCHED
     PRs only. Returns the new `ci_notified` table; fills `receipt["notified"]`
@@ -1826,6 +1899,17 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
             return
         channel = str(watcher.get("channel") or "")
         entry["channel"] = channel
+        if kind == "filed" and liveness is not None:
+            # A "filed" line still owed from an earlier tick is re-checked
+            # against the PR as it is now, like the drain's red lines.
+            reason = _ci_stale_reason(item.get("head_sha") or "",
+                                      _ci_pr_liveness(item.get("repo", ""), item.get("pr"), liveness))
+            if reason is not None:
+                entry.update(state="skipped", reason=f"moot: {reason}")
+                notified.setdefault(item_id, {})[kind] = receipt["at"]
+                lines.append(entry)
+                counts["skipped"] += 1
+                return
         if (kind == "filed" and not item.get("stuck")
                 and str(item.get("repo") or "").startswith(_GROVE_CI_RED_REPO_PREFIX)
                 and channel.lstrip("#") == "willow"):
@@ -2065,6 +2149,22 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         groups.setdefault(_ci_head_key(leg["repo"], leg["pr"], leg["head_sha"]), []).append(leg)
     skipped = sum(1 for leg in red + stuck if leg["key"] in already)
 
+    # Re-read each PR before filing or voicing a red for it (the desk,
+    # 2026-09-28): a head the PR has moved past, or a PR that already
+    # merged or closed, is dropped here — no review item, no comment, no
+    # Grove line. An unreadable PR is unknown and files as before. The legs
+    # stay in `head_legs`/`heads`, so green detection is unchanged.
+    liveness: dict = {}
+    stale_skipped: list[dict] = []
+    for head_key in list(groups):
+        first = groups[head_key][0]
+        reason = _ci_stale_reason(first["head_sha"], _ci_pr_liveness(first["repo"], first["pr"], liveness))
+        if reason is not None:
+            stale_skipped.append({"where": _ci_pr_key(first["repo"], first["pr"], first["head_sha"]),
+                                  "legs": [lg["check"] for lg in groups.pop(head_key)], "reason": reason})
+    if stale_skipped:
+        receipt["stale_skipped"] = stale_skipped
+
     # The CI-red comment and the Grove line: owed per (repo, pr, head_sha)
     # until they land, in their OWN small atomically-written file
     # (`ci_comments.py`), independent of `human_required_enqueue` and of
@@ -2141,8 +2241,12 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         tick_n = ci_comments.next_tick(owed)
         _ci_owed_merge_new_legs(owed, owed_groups, commented=commented, errors=drain_errors)
         _ci_owed_detect_green(owed, heads, head_legs, at=receipt["at"], errors=drain_errors)
+        mooted: list = []
         _ci_owed_drain(owed, tick=tick_n, app=app, grove_pace=grove_pace, call=call, enable_mcp=enable_mcp,
-                      commented=commented, spoke=spoke, errors=drain_errors)
+                      commented=commented, spoke=spoke, errors=drain_errors,
+                      liveness=liveness, mooted=mooted)
+        if mooted:
+            receipt["mooted"] = mooted
         if drain_errors:
             receipt["ci_comments_errors"] = drain_errors
         retired = ci_comments.retire_check(owed, closed=closed, tick=tick_n)
@@ -2352,6 +2456,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         just_filed={f["id"] for f in filed}, just_resolved={r["item_id"] for r in resolved},
         state_view={**state, "ci_items": items, "ci_filed": filed_now,
                     "ci_filed_cancelled": filed_cancelled_now},
+        liveness=liveness,
     )
     state["ci_notified"] = notified_now
 

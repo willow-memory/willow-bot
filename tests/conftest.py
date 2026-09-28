@@ -62,6 +62,16 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
         return p
 
     monkeypatch.setattr(_config, "state_path", _guarded_state)
+
+    # The steward re-reads a PR live before any CI red goes out. No test
+    # reaches GitHub for that: unreadable is "unknown", which alerts as
+    # before. A test of the gate itself patches `_ci_fetch_pull` back in.
+    from willow_bot.steward import tick as _tick
+
+    def _no_network_pull(repo, pr):
+        raise RuntimeError("no GitHub in tests")
+
+    monkeypatch.setattr(_tick, "_ci_fetch_pull", _no_network_pull)
     # Modules that bound the name at import (`from ...config import state_path`).
     for modname in ("willow_bot.steward.tick", "willow_bot.steward.voice", "willow_bot.steward.inbox",
                     "willow_bot.steward.merge", "willow_bot.steward.heartbeat"):

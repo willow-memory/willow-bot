@@ -880,3 +880,189 @@ def test_grove_summary_is_capped_by_characters_not_lines(home, monkeypatch):
     # The cap plus the PR url and close-block slack — nowhere near the
     # ~240k-char body a line-based cut would have let through untouched.
     assert len(sends[0]["content"]) <= tick.GROVE_SUMMARY_CHAR_CAP + 500
+
+
+# ── a red is re-read against the PR before it goes out (desk, 2026-09-28) ────
+#
+# willow-mcp #659, #661 and #662 heard "CI red" for heads the PR had moved
+# past and for release PRs that had already merged green. The steward asks
+# GitHub for the PR as it is now, once per PR per tick; a red on a
+# superseded head or a merged/closed PR files nothing, comments nothing and
+# says nothing to Grove. Unreadable is unknown and alerts as before. The
+# read (`tick._ci_fetch_pull`) is a fake here.
+
+
+class _Pulls:
+    """A fake GitHub PR read: `live[(repo, pr)]` is what the PR is now."""
+
+    def __init__(self, live: dict | None = None):
+        self.live = dict(live or {})
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, repo, pr):
+        self.calls.append((repo, pr))
+        if (repo, pr) not in self.live:
+            raise RuntimeError("404")
+        state, merged, head = self.live[(repo, pr)]
+        return {"state": state, "merged": merged, "head": {"sha": head}}
+
+
+@pytest.fixture
+def pulls(monkeypatch):
+    p = _Pulls()
+    monkeypatch.setattr(tick, "_ci_fetch_pull", p)
+    return p
+
+
+def test_red_on_the_current_open_head_still_alerts(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("human_required_enqueue")) == 1
+    assert len(c.named("grove_send_message")) == 1
+    assert "stale_skipped" not in r
+
+
+def test_red_on_a_superseded_head_files_and_says_nothing(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert comments.calls == []
+    assert c.named("human_required_enqueue") == []
+    assert c.named("grove_send_message") == []
+    assert r["stale_skipped"] == [{"where": f"{RAT}#48", "legs": ["test"],
+                                   "reason": f"superseded by {SHA2[:7]}"}]
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed) == []
+
+
+@pytest.mark.parametrize("state,merged,reason", [("closed", True, "pr merged"), ("closed", False, "pr closed")])
+def test_red_on_a_merged_or_closed_pr_files_and_says_nothing(home, monkeypatch, pulls, state, merged, reason):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = (state, merged, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert comments.calls == []
+    assert c.named("human_required_enqueue") == []
+    assert c.named("grove_send_message") == []
+    assert r["stale_skipped"][0]["reason"] == reason
+
+
+def test_unreadable_pr_alerts_as_before(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))  # no live row: the read raises
+    r = tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("grove_send_message")) == 1
+    assert "stale_skipped" not in r
+
+
+def test_the_pr_is_read_once_per_tick_for_many_legs(home, monkeypatch, pulls):
+    _prime()
+    _use(monkeypatch, _Client())
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
+    deposits.append_local(_row(RAT, SHA, 2, "unit", "failure", pr=48))
+    tick.run_ci()
+    assert pulls.calls == [(RAT, 48)]
+
+
+def test_an_owed_comment_carried_over_is_dropped_once_the_pr_merges(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    fails = {"n": 0}
+
+    def _github_down(repo, pr_number, head_sha, body):
+        fails["n"] += 1
+        return {"status": "could-not-run", "action": "skipped", "detail": "502"}
+
+    _use(monkeypatch, c, comments=_github_down)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    assert fails["n"] == 1
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed)  # still owed
+
+    # Before the retry, the PR merges green on a later head.
+    pulls.live[(RAT, 48)] = ("closed", True, SHA2)
+    monkeypatch.setattr(ci_comments, "due", lambda sub, **kw: sub.get("status") in ("pending", "stalled"))
+    r = tick.run_ci()
+    assert fails["n"] == 1  # no second attempt at a red comment
+    assert r["mooted"] == [{"key": f"{RAT}#48@{SHA}", "reason": "pr merged"}]
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed) == []
+
+
+def test_a_posted_red_keeps_its_entry_for_the_green_edit_but_grove_is_withdrawn(home, monkeypatch, pulls):
+    _prime()
+
+    def _grove_refused(name, inputs, n):
+        if name == "grove_send_message":
+            return {"error": "upstream 502"}
+        return None
+
+    c = _Client(refuse=_grove_refused)
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("grove_send_message")) == 1
+
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)  # a new push before the Grove retry
+    monkeypatch.setattr(ci_comments, "due", lambda sub, **kw: sub.get("status") in ("pending", "stalled"))
+    r = tick.run_ci()
+    assert len(c.named("grove_send_message")) == 1  # not retried
+    owed, _ = ci_comments.load()
+    entry = owed[f"{RAT}#48@{SHA}"]
+    assert entry["comment"]["status"] == "posted"
+    assert entry["spoke"]["status"] == "moot"
+    assert r["mooted"] == [{"key": f"{RAT}#48@{SHA}", "reason": f"superseded by {SHA2[:7]}", "kept": "comment"}]
+
+
+def test_a_pending_green_edit_survives_a_stale_grove_line(home, monkeypatch, pulls):
+    owed, _ = ci_comments.load()
+    key = f"{RAT}#48@{SHA}"
+    entry = ci_comments.entry_for(owed, key, repo=RAT, pr=48, head_sha=SHA, where=f"{RAT}#48")
+    entry["pending_kind"] = "green"
+    entry["green_by"] = SHA2
+    entry["comment"]["comment_id"] = 7
+    pulls.live[(RAT, 48)] = ("closed", True, SHA2)
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    mooted: list = []
+    tick._ci_owed_drain(owed, tick=1, app="willow", grove_pace=tick._Pacer(5.0), call=c, enable_mcp=True,
+                        commented=[], spoke=[], liveness={}, mooted=mooted)
+    assert key in owed
+    assert owed[key]["spoke"]["status"] == "moot"
+    assert len(comments.calls) == 1 and "green" in comments.calls[0]["body"]
+    assert c.named("grove_send_message") == []
+
+
+def test_a_posted_red_reset_by_a_new_leg_is_not_re_edited_once_stale(home, monkeypatch, pulls):
+    owed, _ = ci_comments.load()
+    key = f"{RAT}#48@{SHA}"
+    entry = ci_comments.entry_for(owed, key, repo=RAT, pr=48, head_sha=SHA, where=f"{RAT}#48")
+    entry["pending_kind"] = "red"
+    entry["comment"]["comment_id"] = 7  # landed earlier; a new leg set it pending again
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    mooted: list = []
+    tick._ci_owed_drain(owed, tick=1, app="willow", grove_pace=tick._Pacer(5.0), call=c, enable_mcp=True,
+                        commented=[], spoke=[], liveness={}, mooted=mooted)
+    assert key in owed and owed[key]["comment"]["status"] == "posted"
+    assert comments.calls == []
+    assert c.named("grove_send_message") == []
