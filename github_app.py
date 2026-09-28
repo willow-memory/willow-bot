@@ -173,13 +173,15 @@ def list_hook_deliveries(per_page: int = 30) -> list[dict]:
     return [d for d in data if isinstance(d, dict)]
 
 
-def hook_config() -> dict:
-    """The App webhook's configuration (``url``, ``content_type``, ...;
-    the secret is never returned by GitHub). Raises on error."""
+def hook_url() -> str:
+    """The URL the App webhook posts to — and nothing else from
+    ``/app/hook/config``, whose answer can carry the webhook ``secret``.
+    The caller still redacts it (a URL can carry a login or a token).
+    Raises on error."""
     data = _app_get("/app/hook/config")
     if not isinstance(data, dict):
         raise RuntimeError("unexpected /app/hook/config answer")
-    return data
+    return str(data.get("url") or "")
 
 
 def list_open_pulls(repo_full_name: str, *, per_page: int = 100, max_pages: int = 5) -> list[dict]:
