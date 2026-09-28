@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.1](https://github.com/willow-memory/willow-bot/compare/v0.11.0...v0.11.1) (2026-09-28)
+
+
+### Fixed
+
+* **bot:** the box is WILLOW_HOME, never a guess; the voice's counters move into it ([f825028](https://github.com/willow-memory/willow-bot/commit/f8250281c8c6392c3f12fa4c1ff1a1acc7623465))
+* **bot:** the box is WILLOW_HOME, never a guess; the voice's counters move into it ([018d7db](https://github.com/willow-memory/willow-bot/commit/018d7dbcb5ead651833f8949cff445ce17f61a9c))
+* **bot:** the fan-out, the scripts and a missing box follow the no-fallback rule too (Loki A726C6F8) ([66c01f2](https://github.com/willow-memory/willow-bot/commit/66c01f2ba897f6b01f1f7dbbfd90b7dd3e258efd))
+
 ## [0.11.0](https://github.com/willow-memory/willow-bot/compare/v0.10.2...v0.11.0) (2026-09-28)
 
 
