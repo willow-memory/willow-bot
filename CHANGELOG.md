@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.0](https://github.com/willow-memory/willow-bot/compare/v0.10.2...v0.11.0) (2026-09-28)
+
+
+### Added
+
+* **steward:** ask GitHub whether the App webhook reaches the bot (ingress step) ([20251cb](https://github.com/willow-memory/willow-bot/commit/20251cb39556fd8fef6bed16cec0dfb5a07ce965))
+* **steward:** ask GitHub whether the webhook reaches the bot (ingress step) ([5915c76](https://github.com/willow-memory/willow-bot/commit/5915c762ceaed0a41341aca4447340147f1973a2))
+* **steward:** ingress tells unanswered from failing, never ok on a 404, redacts the hook URL (Loki 7E5306B6) ([9e65891](https://github.com/willow-memory/willow-bot/commit/9e6589126acfe839bff8c5604d5e35324f0d49e6))
+
 ## [0.10.2](https://github.com/willow-memory/willow-bot/compare/v0.10.1...v0.10.2) (2026-09-28)
 
 
