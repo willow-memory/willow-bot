@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from willow_bot.deterministic.policy import load_policy
+from willow_bot.deterministic.resolvers import run_resolve
 from willow_bot.deterministic.runner import run_growth_fixtures
 from willow_bot.deterministic.socket_client import client_op
 from willow_bot.deterministic.socket_server import client_run, serve_forever
@@ -85,6 +86,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_status.add_argument("--fixtures", type=Path, default=None)
     p_status.set_defaults(func=_cmd_status)
+
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="Code-first resolver pass (D0) -- stdlib only, no socket or Ollama needed",
+    )
+    p_resolve.add_argument("--fixtures", type=Path, required=True)
+    p_resolve.add_argument("--out", type=Path, default=None)
+    p_resolve.set_defaults(func=_cmd_resolve)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
@@ -191,6 +200,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
     result = client_op(policy, req, timeout_s=60.0)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else 1
+
+
+def _cmd_resolve(args: argparse.Namespace) -> int:
+    policy = load_policy()
+    result = run_resolve(policy, fixtures_dir=args.fixtures, out_path=args.out)
+    print(json.dumps(result["summary"], indent=2, sort_keys=True))
+    wrong = any(
+        row.get("scored") and not row.get("correct") for row in result["rows"]
+    )
+    return 1 if wrong else 0
 
 
 def _cmd_client(args: argparse.Namespace) -> int:
