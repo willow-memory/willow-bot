@@ -267,6 +267,7 @@ def run_voice(
     voice_refused: list[dict[str, Any]] = []
     checked: list[dict[str, Any]] = []
     check_refused: list[dict[str, Any]] = []
+    check_skipped: list[dict[str, Any]] = []
 
     for key in open_keys:
         pr = _parse_key(key)
@@ -296,6 +297,12 @@ def run_voice(
                 "repo_pr": key, "head_sha": head_sha,
                 "action": check_result.get("action"), "conclusion": conclusion,
             })
+        elif check_result.get("status") == "skipped":
+            # The grant does not cover check-runs: said once per PR, not a
+            # refusal — the status comment above carries the same view.
+            check_skipped.append({
+                "repo_pr": key, "head_sha": head_sha, "detail": check_result.get("detail", ""),
+            })
         else:
             check_refused.append({
                 "repo_pr": key, "head_sha": head_sha, "detail": check_result.get("detail", ""),
@@ -313,6 +320,7 @@ def run_voice(
         voice_refused=voice_refused,
         checked=checked,
         check_refused=check_refused,
+        check_skipped=check_skipped,
     )
     _emit(receipt)
     return receipt

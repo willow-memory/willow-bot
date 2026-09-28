@@ -411,3 +411,88 @@ def test_ci_red_comment_missing_head_sha_is_a_line_not_a_raise(rec: _Recorder):
     assert receipt["status"] == "could-not-run" and receipt["action"] == "skipped"
     assert receipt["detail"] == "no head_sha"
     assert rec.calls == []
+
+
+# ── check: the grant is asked before the call (desk, 2026-09-28) ─────────────
+#
+# willows-bot holds checks:read. Every create answered 403 and the steward
+# journal carried "create: 403 … /check-runs" once per open PR per tick.
+
+
+def test_publish_check_skips_when_the_token_grants_checks_read_only(rec: _Recorder, monkeypatch):
+    monkeypatch.setattr(github_app, "installation_permissions",
+                        lambda repo: {"checks": "read", "pull_requests": "write"})
+    receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
+                                     status="completed", conclusion="success")
+    assert receipt["status"] == "skipped"
+    assert receipt["missing_permission"] == "checks:write"
+    assert "checks:read" in receipt["detail"]
+    assert rec.calls == []  # no list, no create: nothing to 403
+
+
+def test_publish_check_proceeds_when_the_token_grants_checks_write(rec: _Recorder, monkeypatch):
+    monkeypatch.setattr(github_app, "installation_permissions", lambda repo: {"checks": "write"})
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/commits/{SHA}/check-runs")] = [
+        _FakeResp(_payload={"total_count": 0, "check_runs": []}),
+    ]
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/check-runs")] = [
+        _FakeResp(_status=201, _payload={"id": 5, "html_url": "u"}),
+    ]
+    receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
+                                     status="completed", conclusion="success")
+    assert receipt["status"] == "ok" and receipt["action"] == "created"
+
+
+def test_installation_permissions_come_from_the_access_token_answer(monkeypatch):
+    monkeypatch.setattr(github_app, "_installation_token_cache", {})
+    monkeypatch.setattr(github_app, "_installation_permissions", {})
+    monkeypatch.setattr(github_app, "_repo_installation", {})
+    monkeypatch.setattr(github_app, "_make_jwt", lambda: "JWT")
+    monkeypatch.setattr(github_app, "_get_installation_id", lambda repo: 42)
+
+    class _Req:
+        def post(self, url, headers=None, timeout=None):  # noqa: ARG002
+            return _FakeResp(_status=201, _payload={"token": "t", "permissions": {"checks": "read"}})
+
+    monkeypatch.setattr(github_app, "requests", _Req())
+    assert github_app.installation_permissions(REPO) is None  # unknown before any token
+    github_app._auth_headers(REPO)
+    assert github_app.installation_permissions(REPO) == {"checks": "read"}
+    assert github_app.installation_permissions(REPO.upper()) == {"checks": "read"}
+
+
+
+# ── HTTP refusals stay refusals (Loki 8168907A B2) ───────────────────────────
+#
+# Only a stated grant short of checks:write is a skip. A 403 or 422 from
+# GitHub on either call is `could-not-run`, never `skipped`.
+
+
+@pytest.mark.parametrize("code", [403, 422])
+def test_publish_check_list_http_4xx_is_could_not_run(rec: _Recorder, code: int):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/commits/{SHA}/check-runs")] = [
+        _FakeResp(_status=code, _payload={"message": "nope"}),
+    ]
+    receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
+                                     status="completed", conclusion="success")
+    assert receipt["status"] == "could-not-run"
+    assert receipt["action"] == "skipped"
+    assert receipt["detail"].startswith("list:") and str(code) in receipt["detail"]
+    assert "missing_permission" not in receipt
+    assert not any(c[0] == "POST" for c in rec.calls)
+
+
+@pytest.mark.parametrize("code", [403, 422])
+def test_publish_check_create_http_4xx_is_could_not_run(rec: _Recorder, code: int):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/commits/{SHA}/check-runs")] = [
+        _FakeResp(_payload={"total_count": 0, "check_runs": []}),
+    ]
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/check-runs")] = [
+        _FakeResp(_status=code, _payload={"message": "nope"}),
+    ]
+    receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
+                                     status="completed", conclusion="success")
+    assert receipt["status"] == "could-not-run"
+    assert receipt["action"] == "skipped"
+    assert receipt["detail"].startswith("create:") and str(code) in receipt["detail"]
+    assert "missing_permission" not in receipt

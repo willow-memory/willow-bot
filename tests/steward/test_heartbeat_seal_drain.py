@@ -1,7 +1,7 @@
 """The seal watch runs on the steward tick (sealed decision 72292afd).
 
 Pins: ``seal_drain`` is in the curated heartbeat calls, and its three-state
-receipt fields ride into the steward journal so ``bot_status`` can show
+receipt fields ride into the steward tick receipts so ``bot_status`` can show
 whether seals are propagating without anyone opening a second unit's log.
 """
 from __future__ import annotations

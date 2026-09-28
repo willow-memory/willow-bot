@@ -343,6 +343,18 @@ def publish_check(
         receipt.update(status="could-not-run", detail=f"auth: {exc}"[:400], action="skipped")
         return receipt
 
+    # willows-bot holds checks:read, not write (BOT-INVENTORY): every create
+    # answered 403 and the steward tick receipts carried "create: 403 …
+    # /check-runs" once per open PR per tick. The token's own grant is
+    # asked first; a grant GitHub states is not `write` skips the call.
+    # Unknown (`None`) proceeds as before, and a later grant of
+    # checks:write is picked up with the next minted token.
+    perms = github_app.installation_permissions(repo)
+    if perms is not None and perms.get("checks") != "write":
+        receipt.update(status="skipped", action="skipped", missing_permission="checks:write",
+                       detail=f"installation grants checks:{perms.get('checks') or 'none'}, not write")
+        return receipt
+
     payload: dict[str, Any] = {"name": name, "head_sha": head_sha, "status": status}
     if conclusion is not None:
         payload["conclusion"] = conclusion

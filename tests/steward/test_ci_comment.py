@@ -880,3 +880,283 @@ def test_grove_summary_is_capped_by_characters_not_lines(home, monkeypatch):
     # The cap plus the PR url and close-block slack — nowhere near the
     # ~240k-char body a line-based cut would have let through untouched.
     assert len(sends[0]["content"]) <= tick.GROVE_SUMMARY_CHAR_CAP + 500
+
+
+# ── a red is re-read against the PR before it goes out (desk, 2026-09-28) ────
+#
+# willow-mcp #659, #661 and #662 heard "CI red" for heads the PR had moved
+# past and for release PRs that had already merged green. The steward asks
+# GitHub for the PR as it is now, once per PR per tick; a red on a
+# superseded head or a merged/closed PR files nothing, comments nothing and
+# says nothing to Grove. Unreadable is unknown and alerts as before. The
+# read (`tick._ci_fetch_pull`) is a fake here.
+
+
+class _Pulls:
+    """A fake GitHub PR read: `live[(repo, pr)]` is what the PR is now."""
+
+    def __init__(self, live: dict | None = None):
+        self.live = dict(live or {})
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, repo, pr):
+        self.calls.append((repo, pr))
+        if (repo, pr) not in self.live:
+            raise RuntimeError("404")
+        state, merged, head = self.live[(repo, pr)]
+        return {"state": state, "merged": merged, "head": {"sha": head}}
+
+
+@pytest.fixture
+def pulls(monkeypatch):
+    p = _Pulls()
+    monkeypatch.setattr(tick, "_ci_fetch_pull", p)
+    return p
+
+
+def _at(rec, iso):
+    rec["received_at"] = iso
+    return rec
+
+
+T0 = "2026-09-28T10:00:00+00:00"
+T1 = "2026-09-28T10:05:00+00:00"
+# The bot saw SHA first and SHA2 after it on PR 48.
+SEEN = {f"{RAT}#48": {SHA: 1.0, SHA2: 2.0}}
+
+
+def test_red_on_the_current_open_head_still_alerts(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("human_required_enqueue")) == 1
+    assert len(c.named("grove_send_message")) == 1
+    assert "stale_skipped" not in r
+
+
+def test_red_on_a_superseded_head_files_and_says_nothing(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)
+    deposits.append_local(_at(_row(RAT, SHA, 1, "test", "failure", pr=48), T0))
+    deposits.append_local(_at(_row(RAT, SHA2, 2, "test", "in_progress", pr=48), T1))  # the later push
+    r = tick.run_ci()
+    assert comments.calls == []
+    assert c.named("human_required_enqueue") == []
+    assert c.named("grove_send_message") == []
+    assert r["stale_skipped"] == [{"where": f"{RAT}#48", "legs": ["test"],
+                                   "reason": f"superseded by {SHA2[:7]}"}]
+    assert r["pr_unverified"] == []
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed) == []
+
+
+@pytest.mark.parametrize("state,merged,reason", [("closed", True, "pr merged"), ("closed", False, "pr closed")])
+def test_red_on_a_merged_or_closed_pr_files_and_says_nothing(home, monkeypatch, pulls, state, merged, reason):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = (state, merged, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert comments.calls == []
+    assert c.named("human_required_enqueue") == []
+    assert c.named("grove_send_message") == []
+    assert r["stale_skipped"][0]["reason"] == reason
+
+
+def test_unreadable_pr_alerts_as_before(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))  # no live row: the read raises
+    r = tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("grove_send_message")) == 1
+    assert "stale_skipped" not in r
+    # Loki 8168907A B1: "could not check" never reads like "confirmed live".
+    note = "PR state unverified (RuntimeError: 404)"
+    assert note in comments.calls[0]["body"]
+    assert note in c.named("grove_send_message")[0]["content"]
+    assert r["pr_unverified"] == [{"key": f"{RAT}#48@{SHA}", "note": note}]
+
+
+def test_confirmed_live_red_carries_no_unverified_note(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    r = tick.run_ci()
+    assert "unverified" not in comments.calls[0]["body"]
+    assert "unverified" not in c.named("grove_send_message")[0]["content"]
+    assert r["pr_unverified"] == []
+
+
+@pytest.mark.parametrize("seen_live_head_first", [False, True])
+def test_a_live_head_the_bot_cannot_place_after_the_red_alerts_unverified(
+        home, monkeypatch, pulls, seen_live_head_first):
+    """Loki 8168907A: the pulls API lagging a push (or naming a head the bot
+    saw BEFORE the red's) must not drop the real red for good."""
+    _prime()
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)
+    if seen_live_head_first:
+        deposits.append_local(_at(_row(RAT, SHA2, 2, "test", "success", pr=48), T0))
+    deposits.append_local(_at(_row(RAT, SHA, 1, "test", "failure", pr=48), T1))
+    r = tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("human_required_enqueue")) == 1
+    assert len(c.named("grove_send_message")) == 1
+    assert "stale_skipped" not in r
+    note = f"PR head unverified (GitHub reports {SHA2[:7]}, not seen by the bot after {SHA[:7]})"
+    assert note in comments.calls[0]["body"]
+    assert note in c.named("grove_send_message")[0]["content"]
+    assert r["pr_unverified"] == [{"key": f"{RAT}#48@{SHA}", "note": note}]
+
+
+def test_the_pr_is_read_once_per_tick_for_many_legs(home, monkeypatch, pulls):
+    _prime()
+    _use(monkeypatch, _Client())
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "lint", "failure", pr=48))
+    deposits.append_local(_row(RAT, SHA, 2, "unit", "failure", pr=48))
+    tick.run_ci()
+    assert pulls.calls == [(RAT, 48)]
+
+
+def test_an_owed_comment_carried_over_is_dropped_once_the_pr_merges(home, monkeypatch, pulls):
+    _prime()
+    c = _Client()
+    fails = {"n": 0}
+
+    def _github_down(repo, pr_number, head_sha, body):
+        fails["n"] += 1
+        return {"status": "could-not-run", "action": "skipped", "detail": "502"}
+
+    _use(monkeypatch, c, comments=_github_down)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    assert fails["n"] == 1
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed)  # still owed
+
+    # Before the retry, the PR merges green on a later head.
+    pulls.live[(RAT, 48)] = ("closed", True, SHA2)
+    monkeypatch.setattr(ci_comments, "due", lambda sub, **kw: sub.get("status") in ("pending", "stalled"))
+    r = tick.run_ci()
+    assert fails["n"] == 1  # no second attempt at a red comment
+    assert r["mooted"] == [{"key": f"{RAT}#48@{SHA}", "reason": "pr merged"}]
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed) == []
+
+
+def test_a_posted_red_keeps_its_entry_for_the_green_edit_but_grove_is_withdrawn(home, monkeypatch, pulls):
+    _prime()
+
+    def _grove_refused(name, inputs, n):
+        if name == "grove_send_message":
+            return {"error": "upstream 502"}
+        return None
+
+    c = _Client(refuse=_grove_refused)
+    comments = _use(monkeypatch, c)
+    pulls.live[(RAT, 48)] = ("open", False, SHA)
+    deposits.append_local(_row(RAT, SHA, 1, "test", "failure", pr=48))
+    tick.run_ci()
+    assert len(comments.calls) == 1
+    assert len(c.named("grove_send_message")) == 1
+
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)  # a new push before the Grove retry
+    deposits.append_local(_row(RAT, SHA2, 2, "test", "in_progress", pr=48))
+    monkeypatch.setattr(ci_comments, "due", lambda sub, **kw: sub.get("status") in ("pending", "stalled"))
+    r = tick.run_ci()
+    assert len(c.named("grove_send_message")) == 1  # not retried
+    owed, _ = ci_comments.load()
+    entry = owed[f"{RAT}#48@{SHA}"]
+    assert entry["comment"]["status"] == "posted"
+    assert entry["spoke"]["status"] == "moot"
+    assert r["mooted"] == [{"key": f"{RAT}#48@{SHA}", "reason": f"superseded by {SHA2[:7]}", "kept": "comment"}]
+
+
+def test_a_pending_green_edit_survives_a_stale_grove_line(home, monkeypatch, pulls):
+    owed, _ = ci_comments.load()
+    key = f"{RAT}#48@{SHA}"
+    entry = ci_comments.entry_for(owed, key, repo=RAT, pr=48, head_sha=SHA, where=f"{RAT}#48")
+    entry["pending_kind"] = "green"
+    entry["green_by"] = SHA2
+    entry["comment"]["comment_id"] = 7
+    pulls.live[(RAT, 48)] = ("closed", True, SHA2)
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    mooted: list = []
+    tick._ci_owed_drain(owed, tick=1, app="willow", grove_pace=tick._Pacer(5.0), call=c, enable_mcp=True,
+                        commented=[], spoke=[], liveness={}, mooted=mooted, heads=SEEN)
+    assert key in owed
+    assert owed[key]["spoke"]["status"] == "moot"
+    assert len(comments.calls) == 1 and "green" in comments.calls[0]["body"]
+    assert c.named("grove_send_message") == []
+
+
+def test_a_posted_red_reset_by_a_new_leg_is_not_re_edited_once_stale(home, monkeypatch, pulls):
+    owed, _ = ci_comments.load()
+    key = f"{RAT}#48@{SHA}"
+    entry = ci_comments.entry_for(owed, key, repo=RAT, pr=48, head_sha=SHA, where=f"{RAT}#48")
+    entry["pending_kind"] = "red"
+    entry["comment"]["comment_id"] = 7  # landed earlier; a new leg set it pending again
+    pulls.live[(RAT, 48)] = ("open", False, SHA2)
+    c = _Client()
+    comments = _use(monkeypatch, c)
+    mooted: list = []
+    tick._ci_owed_drain(owed, tick=1, app="willow", grove_pace=tick._Pacer(5.0), call=c, enable_mcp=True,
+                        commented=[], spoke=[], liveness={}, mooted=mooted, heads=SEEN)
+    assert key in owed and owed[key]["comment"]["status"] == "posted"
+    assert comments.calls == []
+    assert c.named("grove_send_message") == []
+
+
+# ── the watcher line is gated the same way (Loki 8168907A, mutant M9) ────────
+
+def _watched_item():
+    return {"id": "hr-1", "repo": NOT_WM, "pr": 48, "head_sha": SHA, "legs": ["test"],
+            "url": "https://example.invalid/job/1", "stuck": False}
+
+
+def _notify(monkeypatch, c, *, live, heads):
+    from willow_bot.steward import pr_watch
+
+    monkeypatch.setattr(pr_watch, "load", lambda *a, **kw: {})
+    monkeypatch.setattr(pr_watch, "watcher_for", lambda repo, pr, table=None: {"channel": "#desk"})
+    monkeypatch.setattr(tick, "_comment_on_pr", lambda item, view, at: {"state": "sent"})
+    monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(NOT_WM, 48): live}))
+    receipt = {"at": T1}
+    unverified: list = []
+    notified = tick._notify_watchers({"k": _watched_item()}, {}, receipt, pace=tick._Pacer(5.0), app="willow",
+                                     call=c, just_filed=set(), just_resolved=set(), state_view={},
+                                     liveness={}, heads=heads, unverified=unverified)
+    return receipt, notified, unverified
+
+
+def test_an_owed_watcher_line_for_a_superseded_head_is_not_sent(home, monkeypatch):
+    c = _Client()
+    heads = {f"{NOT_WM}#48": {SHA: 1.0, SHA2: 2.0}}
+    receipt, notified, unverified = _notify(monkeypatch, c, live=("open", False, SHA2), heads=heads)
+    assert c.named("grove_send_message") == []
+    assert receipt["notified"][0]["state"] == "skipped"
+    assert receipt["notified"][0]["reason"] == f"moot: superseded by {SHA2[:7]}"
+    assert "filed" in notified["hr-1"]  # marked, so it is not retried every tick
+    assert unverified == []
+
+
+def test_an_owed_watcher_line_for_the_live_head_is_sent(home, monkeypatch):
+    c = _Client()
+    receipt, notified, _ = _notify(monkeypatch, c, live=("open", False, SHA), heads={})
+    assert len(c.named("grove_send_message")) == 1
+    assert receipt["notified"][0]["state"] == "sent"
