@@ -103,14 +103,16 @@ def test_assess_a_redirect_is_a_failure():
     assert ingress.assess([_d(1, 200), _d(2, 302)])["status"] == "degraded"
 
 
-def test_assess_fewer_deliveries_than_the_streak_all_failing_is_failing():
-    assert ingress.assess([_d(1, 404)])["status"] == "failing"
+def test_assess_fewer_deliveries_than_the_streak_is_degraded_not_an_episode():
+    """Loki 757108E8: one or two failed deliveries on record never flag."""
+    assert ingress.assess([_d(1, 404)])["status"] == "degraded"
+    assert ingress.assess([_d(1, 0), _d(2, 0)])["status"] == "degraded"
 
 
 def test_assess_carries_the_age_of_the_newest_delivery():
     """F6: a month-old 2xx must not read as a live ok."""
     v = ingress.assess([_d(1, 200, at="2026-08-28T10:00:00Z")], now=NOW)
-    assert v["status"] == "ok"
+    assert v["status"] == "quiet"  # Loki 757108E8: an old 2xx says nothing about now
     assert v["latest_age_s"] == int(NOW) - 1787911200
 
 
@@ -360,3 +362,38 @@ def test_status_file_without_a_verdict_is_unreachable(github):
     ingress.path().write_text(json.dumps({"flag": None}), encoding="utf-8")
     got = status.report()["ingress"]
     assert got["status"] == "unreachable" and "no last verdict" in got["detail"]
+
+
+
+# ── Loki 757108E8 follow-ups ─────────────────────────────────────────────────
+
+def test_assess_quiet_boundary_is_configurable(monkeypatch):
+    recent = "2026-09-20T10:00:00Z"  # about 1 day before NOW
+    assert ingress.assess([_d(1, 200, at=recent)], now=NOW)["status"] == "ok"
+    monkeypatch.setenv(ingress.QUIET_AFTER_DAYS_ENV, "0.5")
+    assert ingress.assess([_d(1, 200, at=recent)], now=NOW)["status"] == "quiet"
+    monkeypatch.setenv(ingress.QUIET_AFTER_DAYS_ENV, "not a number")
+    assert ingress.assess([_d(1, 200, at=recent)], now=NOW)["status"] == "ok"
+
+
+def test_quiet_does_not_resolve_an_open_flag(github):
+    github["deliveries"] = list(FAILING)
+    c = _Client()
+    ingress.run(enable_mcp=True, call=c, app="willow-bot")
+    github["deliveries"] = FAILING + [_d(4, 200, at="2026-01-01T00:00:00Z")]
+    r = ingress.run(enable_mcp=True, call=c, app="willow-bot")
+    assert r["status"] == "quiet" and r["flag"]["state"] == "open"
+    assert c.named("human_required_resolve") == []
+
+
+@pytest.mark.parametrize("url,want", [
+    ("https://smee.io/Ab3dEf9GhIjKlMnO", "https://smee.io/…"),
+    ("https://hooks.example.invalid/hooks/7f3a9c0e2b41d5e6/webhook", "https://hooks.example.invalid/hooks/…/webhook"),
+    ("https://hooks.example.invalid/github-app/webhook", "https://hooks.example.invalid/github-app/webhook"),
+    ("https://hooks.example.invalid/" + "a" * 40, "https://hooks.example.invalid/…"),
+    ("http://[::1]:9000/webhook", "http://[::1]:9000/webhook"),
+    ("http://[2001:db8::1]/webhook?t=SECRET", "http://[2001:db8::1]/webhook"),
+    ("https://user:pw@hooks.example.invalid:8443/", "https://hooks.example.invalid:8443/"),
+])
+def test_redact_url_hides_path_tokens_and_keeps_ipv6_brackets(url, want):
+    assert ingress.redact_url(url) == want

@@ -97,13 +97,16 @@ def webhook_inbox_dir() -> Path:
 
 
 def state_path() -> Path:
-    vault = os.environ.get("WILLOW_VAULT_BOX", str(willow_home()))
-    return Path(
-        os.environ.get(
-            "WILLOW_BOT_STEWARD_STATE",
-            os.environ.get("LOKI_PR_WATCH_STATE", f"{vault}/loki_pr_watch_state.json"),
-        )
-    )
+    """The steward's state file: an explicit ``WILLOW_BOT_STEWARD_STATE`` /
+    ``LOKI_PR_WATCH_STATE`` override, else ``<box>/loki_pr_watch_state.json``
+    — the box by the one rule (``willow_bot.paths``), never a separate read
+    of ``WILLOW_VAULT_BOX`` that skips the existence check or turns a blank
+    value into ``/loki_pr_watch_state.json`` (Loki 757108E8 N1)."""
+    override = (os.environ.get("WILLOW_BOT_STEWARD_STATE", "").strip()
+                or os.environ.get("LOKI_PR_WATCH_STATE", "").strip())
+    if override:
+        return Path(override).expanduser()
+    return willow_home() / "loki_pr_watch_state.json"
 
 
 def watcher_call_enabled() -> bool:

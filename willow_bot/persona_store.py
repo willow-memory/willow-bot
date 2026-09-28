@@ -56,6 +56,11 @@ def _carry_over(legacy: Path, target: Path) -> None:
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".carry")
     os.close(fd)
     tmp = Path(tmp_name)
+    # mkstemp makes the file 0600; give the carried-over counter the mode a
+    # freshly created one gets (0666 less the umask) so the two never differ.
+    umask = os.umask(0)
+    os.umask(umask)
+    os.chmod(tmp, 0o666 & ~umask)
     try:
         src = sqlite3.connect(f"file:{legacy}?mode=ro", uri=True)
         try:

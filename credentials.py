@@ -2,9 +2,9 @@
 
 Precedence (same shape as willow-mcp integrations):
   1. Process env (explicit override / tests)
-  2. ``$WILLOW_VAULT_BOX/secrets/willow-bot.env`` (non-PEM settings)
+  2. ``<box>/secrets/willow-bot.env`` (non-PEM settings)
   3. Fernet vault keys under ``willow-bot/…`` (when vault.key is present)
-  4. Default PEM path: ``$WILLOW_VAULT_BOX/secrets/willow-bot.pem``
+  4. Default PEM path: ``<box>/secrets/willow-bot.pem``
 
 The box is ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX`` — the same rule the
 state uses. With neither set, or a path that does not exist, there is no box

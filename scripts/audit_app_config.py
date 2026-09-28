@@ -87,6 +87,20 @@ DO_NOT_NEED = {
 }
 
 
+def _key_path(env: dict) -> Path:
+    """GITHUB_APP_PRIVATE_KEY_PATH from ``env`` if set, else the box's
+    secrets/willow-bot.pem (credentials.default_pem_path — never ~/.willow).
+    Raises BoxNotConfigured when neither names a key and there is no box."""
+    raw = str(env.get("GITHUB_APP_PRIVATE_KEY_PATH", "")).strip()
+    if raw:
+        return Path(raw).expanduser()
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    import credentials
+
+    return credentials.default_pem_path()
+
+
 def _fail(msg: str) -> None:
     print(f"  FAIL  {msg}")
 
@@ -127,15 +141,7 @@ def main() -> int:
     import requests
 
     app_id = env["GITHUB_APP_ID"]
-    raw_key = env.get("GITHUB_APP_PRIVATE_KEY_PATH", "").strip()
-    if raw_key:
-        key_path = Path(raw_key).expanduser()
-    else:
-        if str(_ROOT) not in sys.path:
-            sys.path.insert(0, str(_ROOT))
-        import credentials
-
-        key_path = credentials.default_pem_path()  # the box's secrets/, never ~/.willow
+    key_path = _key_path(env)
     token = jwt.encode(
         {"iat": int(time.time()) - 60, "exp": int(time.time()) + 600, "iss": app_id},
         key_path.read_text().strip(),

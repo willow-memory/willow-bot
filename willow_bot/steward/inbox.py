@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Merge willow-bot fleet_bridge webhook inbox into loki_pr_watch state.
 
-Reads ~/.willow/upstream_steward/webhook_inbox/*.json (WILLOW_HOME), records
+Reads <box>/upstream_steward/webhook_inbox/*.json (the box: WILLOW_HOME, else
+WILLOW_VAULT_BOX; willow_bot.paths.webhook_inbox_dir), records
 consumed work_ids, emits one JSON line per newly seen pull_request or
 check_run event.
 

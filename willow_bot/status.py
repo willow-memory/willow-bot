@@ -365,7 +365,7 @@ def _read_ingress() -> dict[str, Any]:
     and any open flag, from ``willow-bot/ingress.json``. ``empty`` before
     the step has ever run; ``unreachable`` when the file is present but
     unreadable or carries no verdict; else ``populated`` with ``verdict``
-    (``ok``/``degraded``/``failing``/``unanswered``/``empty``/``malformed``/
+    (``ok``/``quiet``/``degraded``/``failing``/``unanswered``/``empty``/``malformed``/
     ``unreachable`` — see ``willow_bot.steward.ingress``). The App webhook
     only: a repository or organization hook is not read."""
     from willow_bot.steward import ingress as _ingress

@@ -51,6 +51,10 @@ def env_box(*names: str) -> Path:
         raw = os.environ.get(name, "").strip()
         if raw:
             box = Path(raw).expanduser()
+            if not box.is_absolute():
+                # A relative box moves with the working directory: under a
+                # unit that is the checkout. Not a box (Loki 757108E8).
+                raise BoxNotConfigured(f"{name}={raw} is not an absolute path; name the box itself.")
             if not box.is_dir():
                 raise BoxNotConfigured(
                     f"{name}={box} is not an existing directory; the box is created by "
