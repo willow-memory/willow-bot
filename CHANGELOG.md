@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.2](https://github.com/willow-memory/willow-bot/compare/v0.11.1...v0.11.2) (2026-09-28)
+
+
+### Fixed
+
+* **bot:** close the box rule's last gaps; ingress redacts path tokens, keeps IPv6, never flags on one delivery ([8c865e5](https://github.com/willow-memory/willow-bot/commit/8c865e5030b8bed2d5efe6ede58cac2cfd75e10b))
+* **bot:** close the box rule's last gaps; ingress redacts path tokens, keeps IPv6, never flags on one delivery (Loki 757108E8) ([ed1f21f](https://github.com/willow-memory/willow-bot/commit/ed1f21f5ac3d9f3ee925d569450cb8261053538a))
+* **steward:** redaction keeps only lowercase words and hides token prefixes; carried counters match SQLite's mode (Loki 87DF2A04) ([48af1ed](https://github.com/willow-memory/willow-bot/commit/48af1edca3eec00f0c47325ae99e0055938b4371))
+
 ## [0.11.1](https://github.com/willow-memory/willow-bot/compare/v0.11.0...v0.11.1) (2026-09-28)
 
 
