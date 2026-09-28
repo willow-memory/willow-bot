@@ -30,12 +30,16 @@ import requests
 APP_ID = os.getenv("GITHUB_APP_ID", "").strip()
 SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "").strip()
 PUBLIC_URL = os.getenv("WEBHOOK_PUBLIC_URL", "").strip().rstrip("/")
-KEY_PATH = Path(
-    os.getenv(
-        "GITHUB_APP_PRIVATE_KEY_PATH",
-        str(Path.home() / ".willow" / "secrets" / "willow-bot.pem"),
-    )
-)
+def _key_path() -> Path:
+    """GITHUB_APP_PRIVATE_KEY_PATH if set, else the box's
+    secrets/willow-bot.pem (credentials.default_pem_path — never ~/.willow).
+    Raises BoxNotConfigured when neither names a key and there is no box."""
+    raw = os.getenv("GITHUB_APP_PRIVATE_KEY_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    import credentials
+
+    return credentials.default_pem_path()
 
 
 def _fail(msg: str) -> None:
@@ -55,7 +59,7 @@ def _jwt() -> str:
     now = int(time.time())
     return jwt.encode(
         {"iat": now - 60, "exp": now + 600, "iss": APP_ID},
-        KEY_PATH.read_text().strip(),
+        _key_path().read_text().strip(),
         algorithm="RS256",
     )
 
@@ -65,8 +69,8 @@ def main() -> int:
         _fail("GITHUB_APP_ID is not set")
     if not SECRET:
         _fail("GITHUB_WEBHOOK_SECRET is not set")
-    if not KEY_PATH.is_file():
-        _fail(f"GitHub App PEM missing: {KEY_PATH}")
+    if not _key_path().is_file():
+        _fail(f"GitHub App PEM missing: {_key_path()}")
 
     url = _webhook_url()
     headers = {

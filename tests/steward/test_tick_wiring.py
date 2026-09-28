@@ -138,7 +138,6 @@ def test_push_to_master_on_an_org_layout_repo_writes_the_trigger(tmp_path, monke
     org = root / "forge-play" / "Forge"
     (org / ".git").mkdir(parents=True)
     monkeypatch.setattr(fleet_bridge, "_GITHUB_ROOT", root)
-    monkeypatch.setattr(fleet_bridge, "_GITSYNC_TRIGGERS", tmp_path / "gitsync")
     monkeypatch.setattr(fleet_bridge.subprocess, "run",
                         _fake_git({str(org): "https://github.com/forge-play/Forge.git"}))
     fleet_bridge._request_gitsync("forge-play/Forge")
@@ -155,7 +154,6 @@ def test_push_to_master_on_a_flat_layout_repo_reports_flat_in_the_trigger(tmp_pa
     flat = root / "willow-bot"
     (flat / ".git").mkdir(parents=True)
     monkeypatch.setattr(fleet_bridge, "_GITHUB_ROOT", root)
-    monkeypatch.setattr(fleet_bridge, "_GITSYNC_TRIGGERS", tmp_path / "gitsync")
     monkeypatch.setattr(fleet_bridge.subprocess, "run",
                         _fake_git({str(flat): "https://github.com/rudi193-cmd/willow-bot.git"}))
     fleet_bridge._request_gitsync("rudi193-cmd/willow-bot")

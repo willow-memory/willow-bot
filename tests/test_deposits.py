@@ -14,6 +14,7 @@ from willow_bot.deposits import (
 
 def test_append_failure_and_success(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "willow"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
 
@@ -51,6 +52,7 @@ def test_append_failure_and_success(tmp_path: Path, monkeypatch) -> None:
 
 def test_from_webhook_payload(tmp_path: Path, monkeypatch) -> None:
     home = tmp_path / "willow"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
     payload = {
@@ -75,6 +77,7 @@ def test_from_webhook_payload(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_heartbeat_absent_without_mcp(tmp_path: Path, monkeypatch, capsys) -> None:
+    (tmp_path / "w").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "w"))
     monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
     from willow_bot.steward.heartbeat import run_heartbeat

@@ -12,7 +12,9 @@ import horoscope
 import runes
 
 _CONFIG_PATH = Path(__file__).parent / "willow-bot.json"
-_DB_PATH = Path.home() / ".willow" / "willow-bot-contributors.db"
+# The contributors counter lives in the box (willow_bot.persona_store), not
+# ~/.willow. A test may set _DB_PATH to a file of its own.
+_DB_PATH: Path | None = None
 
 _config: dict = {}
 
@@ -28,8 +30,16 @@ def _cfg() -> dict:
     return _config
 
 
+def _db_path() -> Path:
+    if _DB_PATH is not None:
+        return _DB_PATH
+    from willow_bot import persona_store
+
+    return persona_store.db_path("contributors")
+
+
 def _init_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(_DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.execute("""
         CREATE TABLE IF NOT EXISTS contributors (
             login TEXT PRIMARY KEY,

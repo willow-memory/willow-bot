@@ -11,8 +11,9 @@
 # Env inputs (with defaults):
 #   WILLOW_BOT_VENV_BIN   — dir holding the willow-bot entry-point scripts
 #                           (default: $VAULT_BOX/venvs/willow-bot/bin)
-#   WILLOW_BOT_VAULT_BOX  — WILLOW_HOME / vault box root
-#                           (default: $HOME/sean-data-vault/willow-operator-box)
+#   WILLOW_BOT_VAULT_BOX  — WILLOW_HOME / vault box root (REQUIRED; no default —
+#                           the box willow-data-vault's bootstrap/provision.sh made.
+#                           Falls back to an exported WILLOW_HOME, never a guess)
 #   WILLOW_BOT_WORKDIR    — repo checkout the service cd's into
 #                           (default: $HOME/github/willow-memory/willow-bot)
 #
@@ -22,7 +23,12 @@
 #   scripts/install-service.sh --all             # render + install every template
 set -euo pipefail
 
-VAULT_BOX="${WILLOW_BOT_VAULT_BOX:-$HOME/sean-data-vault/willow-operator-box}"
+VAULT_BOX="${WILLOW_BOT_VAULT_BOX:-${WILLOW_HOME:-}}"
+if [[ -z "$VAULT_BOX" ]]; then
+    echo "install-service.sh: no box: set WILLOW_BOT_VAULT_BOX (or WILLOW_HOME) to the data-vault box" >&2
+    echo "  (willow-data-vault: bootstrap/provision.sh <box>). There is no default." >&2
+    exit 2
+fi
 VENV_BIN="${WILLOW_BOT_VENV_BIN:-$VAULT_BOX/venvs/willow-bot/bin}"
 WORKDIR="${WILLOW_BOT_WORKDIR:-$HOME/github/willow-memory/willow-bot}"
 

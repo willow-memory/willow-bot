@@ -562,6 +562,7 @@ def test_cli_resolve_exit_zero_on_g4_conflicting_to_app(tmp_path, monkeypatch):
             "expected": {"builder_seat": "hanuman"},
         },
     )
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
     out = tmp_path / "out.jsonl"
     rc = cli.main(["resolve", "--fixtures", str(fixtures), "--out", str(out)])
@@ -798,6 +799,7 @@ def test_cli_resolve_end_to_end_exit_zero(tmp_path, monkeypatch):
             "expected": {"to_app": "loki", "must_cite": ["ex-a"]},
         },
     )
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
     out = tmp_path / "out.jsonl"
     rc = cli.main(["resolve", "--fixtures", str(fixtures), "--out", str(out)])
@@ -822,6 +824,7 @@ def test_cli_resolve_end_to_end_exit_one_on_wrong_resolved_answer(tmp_path, monk
             "expected": {"to_app": "hanuman", "must_cite": ["ex-a"]},
         },
     )
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
     out = tmp_path / "out.jsonl"
     rc = cli.main(["resolve", "--fixtures", str(fixtures), "--out", str(out)])
@@ -843,6 +846,7 @@ def test_cli_resolve_exit_one_on_wrong_verbatim_answer(tmp_path, monkeypatch):
             "expected": {"answer": "no", "must_cite": ["ex-other"]},
         },
     )
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
     out = tmp_path / "out.jsonl"
     rc = cli.main(["resolve", "--fixtures", str(fixtures), "--out", str(out)])

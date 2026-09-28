@@ -4,11 +4,20 @@ sigh.py — Sighing NPC. Tracks consecutive CI failures per PR.
 import sqlite3
 from pathlib import Path
 
-_DB_PATH = Path.home() / ".willow" / "willow-bot-sigh.db"
+# The counter lives in the box (willow_bot.persona_store), not ~/.willow.
+# Every function takes an explicit path for tests; None means the box.
 
 
-def _init_db(path: Path = _DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+def _db(path: Path | None) -> Path:
+    if path is not None:
+        return path
+    from willow_bot import persona_store
+
+    return persona_store.db_path("sigh")
+
+
+def _init_db(path: Path | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(_db(path))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS ci_fail_streaks (
             repo TEXT,
@@ -21,7 +30,7 @@ def _init_db(path: Path = _DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def bump_fail(repo: str, pr_number: int, path: Path = _DB_PATH) -> int:
+def bump_fail(repo: str, pr_number: int, path: Path | None = None) -> int:
     conn = _init_db(path)
     conn.execute("""
         INSERT INTO ci_fail_streaks (repo, pr_number, streak)
@@ -37,7 +46,7 @@ def bump_fail(repo: str, pr_number: int, path: Path = _DB_PATH) -> int:
     return row[0]
 
 
-def reset(repo: str, pr_number: int, path: Path = _DB_PATH) -> None:
+def reset(repo: str, pr_number: int, path: Path | None = None) -> None:
     conn = _init_db(path)
     conn.execute("""
         INSERT INTO ci_fail_streaks (repo, pr_number, streak)

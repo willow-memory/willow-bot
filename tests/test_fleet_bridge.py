@@ -19,11 +19,9 @@ SHA = "cc9aab19ba2502e14e331e20e699f634fb4cb1a2"
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
-    monkeypatch.setattr(fleet_bridge, "_WILLOW_HOME", tmp_path)
-    monkeypatch.setattr(fleet_bridge, "_EVENT_LOG", tmp_path / "willow-bot" / "event-log.jsonl")
-    monkeypatch.setattr(fleet_bridge, "_INBOX", tmp_path / "upstream_steward" / "webhook_inbox")
-    monkeypatch.setattr(fleet_bridge, "_GITSYNC_TRIGGERS", tmp_path / "gitsync")
+def home(tmp_path):
+    # The bridge resolves the box at use (willow_bot.paths); the test floor
+    # (tests/conftest.py) already made tmp_path the box.
     return tmp_path
 
 
@@ -194,7 +192,7 @@ def test_push_with_a_malformed_repo_name_writes_no_trigger(home):
         "sender": {"type": "User"},
     }
     fleet_bridge.handle("push", payload)
-    triggers = fleet_bridge._GITSYNC_TRIGGERS
+    triggers = fleet_bridge._gitsync_triggers()
     assert not triggers.exists() or list(triggers.iterdir()) == []
 
 
@@ -208,9 +206,9 @@ def test_trigger_flag_name_is_built_from_owner_and_name(home, monkeypatch, tmp_p
         "repository": {"full_name": "willow-memory/willow-bot"},
         "sender": {"type": "User"},
     })
-    (flag,) = list(fleet_bridge._GITSYNC_TRIGGERS.iterdir())
+    (flag,) = list(fleet_bridge._gitsync_triggers().iterdir())
     assert flag.name == "trigger-willow-memory-willow-bot.flag"
-    assert fleet_bridge._under(fleet_bridge._GITSYNC_TRIGGERS, flag)
+    assert fleet_bridge._under(fleet_bridge._gitsync_triggers(), flag)
 
 
 def test_under_refuses_a_path_outside_root(tmp_path):
@@ -230,3 +228,37 @@ def test_contained_returns_a_normalized_path_inside_root_or_none(tmp_path):
     assert fleet_bridge._contained(root, "/etc/passwd") is None
     # A sibling whose name merely starts with root's name is outside root.
     assert fleet_bridge._contained(root, "..", root.name + "2", "x") is None
+
+
+# ── the box: resolved at use, never guessed (Loki A726C6F8 F1) ──────────────
+
+_PR = {"action": "opened", "repository": {"full_name": REPO}, "sender": {"type": "User"},
+       "pull_request": {"number": 7, "title": "t", "html_url": "u", "head": {"sha": SHA}}}
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_no_box_refuses_instead_of_writing_a_guess(monkeypatch, tmp_path, value):
+    from willow_bot.paths import BoxNotConfigured
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("WILLOW_VAULT_BOX", raising=False)
+    if value is None:
+        monkeypatch.delenv("WILLOW_HOME", raising=False)
+    else:
+        monkeypatch.setenv("WILLOW_HOME", value)
+    before = sorted(p.name for p in tmp_path.iterdir())
+    with pytest.raises(BoxNotConfigured):
+        fleet_bridge.handle("pull_request", _PR)
+    assert sorted(p.name for p in tmp_path.iterdir()) == before  # nothing relative to cwd
+
+
+def test_vault_only_env_files_where_the_steward_reads(monkeypatch, tmp_path):
+    from willow_bot.paths import webhook_inbox_dir
+
+    box = tmp_path / "vault"
+    box.mkdir()
+    monkeypatch.delenv("WILLOW_HOME", raising=False)
+    monkeypatch.setenv("WILLOW_VAULT_BOX", str(box))
+    fleet_bridge.handle("pull_request", _PR)
+    assert webhook_inbox_dir() == box / "upstream_steward" / "webhook_inbox"
+    assert list(webhook_inbox_dir().glob("*.json"))

@@ -27,6 +27,7 @@ def test_ingest_pull_request_emits_once(tmp_path: Path, monkeypatch, capsys) -> 
     }
     (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
@@ -69,6 +70,7 @@ def test_ingest_pull_request_carries_head_sha_through(tmp_path: Path, monkeypatc
     }
     (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
@@ -107,6 +109,7 @@ def test_ingest_pull_request_missing_head_sha_is_empty_string(
     }
     (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
@@ -118,6 +121,7 @@ def test_ingest_pull_request_missing_head_sha_is_empty_string(
 
 def test_call_watcher_flag_rejected(tmp_path: Path, monkeypatch, capsys) -> None:
     state = tmp_path / "state.json"
+    (tmp_path / "empty").mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "empty"))
     monkeypatch.setenv("LOKI_PR_WATCH_CALL_WATCHER", "1")
     assert ingest(state) == 1
@@ -167,6 +171,7 @@ def test_ingest_check_run_emits_and_consumes_every_terminal_state(
         (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
 
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
@@ -214,6 +219,7 @@ def test_ingest_check_run_preserves_null_conclusion(
     (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
 
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
@@ -254,6 +260,7 @@ def test_ingest_check_run_and_pull_request_share_state(
     (inbox / f"{check_item['work_id']}.json").write_text(json.dumps(check_item), encoding="utf-8")
 
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
@@ -296,6 +303,7 @@ def test_ingest_unknown_kind_stays_in_inbox(
     (inbox / f"{item['work_id']}.json").write_text(json.dumps(item), encoding="utf-8")
 
     state = tmp_path / "state.json"
+    (home).mkdir(parents=True, exist_ok=True)  # the box exists (no default, no bogus path)
     monkeypatch.setenv("WILLOW_HOME", str(home))
     monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
     monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
