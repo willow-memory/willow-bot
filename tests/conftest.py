@@ -72,6 +72,15 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
         raise RuntimeError("no GitHub in tests")
 
     monkeypatch.setattr(_tick, "_ci_fetch_pull", _no_network_pull)
+
+    # Same floor for the ingress read (GitHub's webhook delivery record).
+    from willow_bot.steward import ingress as _ingress
+
+    def _no_network_ingress(*a, **kw):
+        raise RuntimeError("no GitHub in tests")
+
+    monkeypatch.setattr(_ingress, "_fetch_deliveries", _no_network_ingress)
+    monkeypatch.setattr(_ingress, "_fetch_hook_url", _no_network_ingress)
     # Modules that bound the name at import (`from ...config import state_path`).
     for modname in ("willow_bot.steward.tick", "willow_bot.steward.voice", "willow_bot.steward.inbox",
                     "willow_bot.steward.merge", "willow_bot.steward.heartbeat"):

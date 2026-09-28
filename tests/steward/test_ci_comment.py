@@ -1239,7 +1239,6 @@ def test_run_ci_hands_seen_heads_to_the_watcher_step(home, monkeypatch, pulls):
     assert r2["pr_unverified"] == []
 
 
-
 # ── the three states of a re-read (Loki 754C4008 E1/E7) ──────────────────────
 
 def test_verdict_prless_head_is_neither_stale_nor_noted(home, monkeypatch):

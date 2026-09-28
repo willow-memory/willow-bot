@@ -148,6 +148,42 @@ def get_pull(repo_full_name: str, number: int) -> dict:
     return data
 
 
+def _app_get(path: str, *, params: dict | None = None):
+    """GET an App-level endpoint (``/app/...``) under the App's own JWT —
+    not an installation token. Raises on an unconfigured App or HTTP error."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured")
+    r = requests.get(
+        f"https://api.github.com{path}",
+        headers={"Authorization": f"Bearer {_make_jwt()}", "Accept": "application/vnd.github+json"},
+        params=params or {},
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def list_hook_deliveries(per_page: int = 30) -> list[dict]:
+    """The App webhook's most recent deliveries, newest first, as GitHub
+    recorded them: ``status_code`` is what the receiving end answered (0
+    when nothing answered). Raises on an unconfigured App or HTTP error."""
+    data = _app_get("/app/hook/deliveries", params={"per_page": int(per_page)})
+    if not isinstance(data, list):
+        raise RuntimeError("unexpected /app/hook/deliveries answer")
+    return [d for d in data if isinstance(d, dict)]
+
+
+def hook_url() -> str:
+    """The URL the App webhook posts to — and nothing else from
+    ``/app/hook/config``, whose answer can carry the webhook ``secret``.
+    The caller still redacts it (a URL can carry a login or a token).
+    Raises on error."""
+    data = _app_get("/app/hook/config")
+    if not isinstance(data, dict):
+        raise RuntimeError("unexpected /app/hook/config answer")
+    return str(data.get("url") or "")
+
+
 def list_open_pulls(repo_full_name: str, *, per_page: int = 100, max_pages: int = 5) -> list[dict]:
     """List every open pull request in ``repo_full_name`` under the App's
     install token — the same auth path ``post_comment`` uses.

@@ -20,9 +20,11 @@ python3 -m venv .venv
 Canonical checkout: `~/github/willow-memory/willow-bot`. The workshop clone is a
 stale second home — do not point the unit or Kart bind at it.
 
-Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `catchup` | `audit` | `status` | `inbox` | `scan`).
+Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `catchup` | `audit` | `ingress` | `status` | `inbox` | `scan`).
 
 `status` prints one JSON receipt for the seat, with three-state fields (`populated` / `empty` / `unreachable`) — an unreadable journal is not "unit absent". See `willow_bot/status.py`.
+
+`ingress` asks GitHub for the **App webhook**'s recent deliveries (`/app/hook/deliveries`, App JWT) on every tick. A repository or organization hook is not read. Verdicts: `ok` (newest delivery 2xx), `degraded` (newest not 2xx, fewer than 3 in a row), `failing` (newest 3 not 2xx, at least one HTTP answer), `unanswered` (newest 3 got no HTTP answer), `empty`, `malformed` or `unreachable`. Only 2xx counts, because GitHub does not follow redirects. `failing` and `unanswered` file one `human_required` item and resolve it when the newest delivery is 2xx again. The hook URL is reduced to `scheme://host[:port]/path` before it is written anywhere. `status` shows the last verdict under `ingress`, with `latest_age_s`.
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
