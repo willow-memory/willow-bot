@@ -41,11 +41,11 @@ PEMs — confirm with `nest_intake_file` after `nest_intake_scan`.
 | App id + webhook secret (+ optional `WEBHOOK_PUBLIC_URL`) | Nest `willow-bot.env` → same, or edit the vault file |
 | Optional Fernet keys | `willow-bot/app_id`, `willow-bot/webhook_secret`, `willow-bot/private_key` in `vault.db` |
 
-`WILLOW_VAULT_BOX` defaults to `WILLOW_HOME`, then `~/{user}-data-vault/willow-operator-box`.
+The box is wherever willow-data-vault's `bootstrap/provision.sh <box>` created it; `WILLOW_HOME` (or `WILLOW_VAULT_BOX`) must name it. There is **no default box**: with neither set, willow-bot refuses (`BoxNotConfigured`) instead of guessing a path. `WILLOW_VAULT_BOX` defaults to `WILLOW_HOME`.
 If Nest has not filed the env yet, copy the example and fill it (mode 600):
 
 ```bash
-BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operator-box}"
+BOX="${WILLOW_VAULT_BOX:?set WILLOW_VAULT_BOX to the data-vault box}"
 cp secrets/willow-bot.env.example "$BOX/secrets/willow-bot.env"
 chmod 600 "$BOX/secrets/willow-bot.env" "$BOX/secrets/willow-bot.pem"
 # edit willow-bot.env — GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET, WEBHOOK_PUBLIC_URL
@@ -56,16 +56,16 @@ Checkout `.env` is no longer the source of truth. Env vars still override for te
 Run locally:
 
 ```bash
-export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operator-box}"
+export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:?set WILLOW_VAULT_BOX to the data-vault box}"
 export WILLOW_HOME="$WILLOW_VAULT_BOX"
 set -a && . "$WILLOW_VAULT_BOX/secrets/willow-bot.env" && set +a
 .venv/bin/willow-bot
 ```
 
-Steward one-shot / loop (state under `$WILLOW_HOME` by default):
+Steward one-shot / loop (state under `$WILLOW_HOME`, which must be set):
 
 ```bash
-export WILLOW_HOME="${WILLOW_HOME:-$HOME/sean-data-vault/willow-operator-box}"
+export WILLOW_HOME="${WILLOW_HOME:?set WILLOW_HOME to the data-vault box}"
 .venv/bin/willow-bot-steward tick
 .venv/bin/willow-bot-steward heartbeat   # curated mcp tools when WILLOW_BOT_MCP=1
 .venv/bin/willow-bot-steward sweep       # gitsync_sweep via mcp when WILLOW_BOT_MCP=1
@@ -144,7 +144,7 @@ Verified webhooks fan out into local queues under `$WILLOW_HOME`:
 Map App installations to local clones:
 
 ```bash
-export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operator-box}"
+export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:?set WILLOW_VAULT_BOX to the data-vault box}"
 set -a && . "$WILLOW_VAULT_BOX/secrets/willow-bot.env" && set +a
 python scripts/repo_map.py
 python scripts/list_installations.py
@@ -160,7 +160,7 @@ systemctl --user restart willow-bot
 ## Preflight
 
 ```bash
-export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:-$HOME/sean-data-vault/willow-operator-box}"
+export WILLOW_VAULT_BOX="${WILLOW_VAULT_BOX:?set WILLOW_VAULT_BOX to the data-vault box}"
 .venv/bin/python scripts/preflight.py
 ```
 

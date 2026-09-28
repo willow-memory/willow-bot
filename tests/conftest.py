@@ -81,6 +81,13 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_ingress, "_fetch_deliveries", _no_network_ingress)
     monkeypatch.setattr(_ingress, "_fetch_hook_url", _no_network_ingress)
+
+    # The voice's counters live in the box now (tmp_path above). The retired
+    # ~/.willow they are carried over from is pointed at an empty dir under
+    # tmp_path, so no test reads — or copies — the real one.
+    from willow_bot import persona_store as _persona_store
+
+    monkeypatch.setattr(_persona_store, "_legacy_dir", lambda: root / "legacy-dot-willow")
     # Modules that bound the name at import (`from ...config import state_path`).
     for modname in ("willow_bot.steward.tick", "willow_bot.steward.voice", "willow_bot.steward.inbox",
                     "willow_bot.steward.merge", "willow_bot.steward.heartbeat"):

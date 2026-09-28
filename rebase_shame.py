@@ -8,7 +8,16 @@ the PR's head ref (`pr["head"]["ref"]`) and use that as the key.
 import sqlite3
 from pathlib import Path
 
-_DB_PATH = Path.home() / ".willow" / "willow-bot-rebase-shame.db"
+# The counter lives in the box (willow_bot.persona_store), not ~/.willow.
+# Every function takes an explicit path for tests; None means the box.
+
+
+def _db(path: Path | None) -> Path:
+    if path is not None:
+        return path
+    from willow_bot import persona_store
+
+    return persona_store.db_path("rebase_shame")
 
 _WORDS = {
     3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
@@ -16,8 +25,8 @@ _WORDS = {
 }
 
 
-def _init_db(path: Path = _DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+def _init_db(path: Path | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(_db(path))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS rebase_counts (
             repo TEXT,
@@ -30,7 +39,7 @@ def _init_db(path: Path = _DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def increment(repo: str, ref: str, path: Path = _DB_PATH) -> int:
+def increment(repo: str, ref: str, path: Path | None = None) -> int:
     conn = _init_db(path)
     conn.execute("""
         INSERT INTO rebase_counts (repo, ref, count)
@@ -45,7 +54,7 @@ def increment(repo: str, ref: str, path: Path = _DB_PATH) -> int:
     return row[0]
 
 
-def get(repo: str, ref: str, path: Path = _DB_PATH) -> int:
+def get(repo: str, ref: str, path: Path | None = None) -> int:
     conn = _init_db(path)
     row = conn.execute(
         "SELECT count FROM rebase_counts WHERE repo = ? AND ref = ?", (repo, ref)

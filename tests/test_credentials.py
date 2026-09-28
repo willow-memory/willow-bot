@@ -3,15 +3,34 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import credentials
 
 
-def test_vault_box_uses_user_data_vault(monkeypatch, tmp_path):
+def test_vault_box_has_no_default_box(monkeypatch, tmp_path):
+    """No fallback (operator, 2026-09-28): the box is wherever
+    willow-data-vault provisioned it, named by the env — never guessed from
+    $USER or one operator's layout."""
+    from willow_bot.paths import BoxNotConfigured
+
     monkeypatch.delenv("WILLOW_VAULT_BOX", raising=False)
     monkeypatch.delenv("WILLOW_HOME", raising=False)
     monkeypatch.setenv("USER", "sean-campbell")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    assert credentials.vault_box() == tmp_path / "sean-campbell-data-vault" / "willow-operator-box"
+    with pytest.raises(BoxNotConfigured, match="provision.sh"):
+        credentials.vault_box()
+    with pytest.raises(BoxNotConfigured):
+        credentials.resolve(require_complete=False)
+    assert list(tmp_path.iterdir()) == []  # nothing created under a guessed path
+
+
+def test_vault_box_prefers_vault_box_then_willow_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("WILLOW_VAULT_BOX", str(tmp_path / "box"))
+    assert credentials.vault_box() == tmp_path / "box"
+    monkeypatch.setenv("WILLOW_VAULT_BOX", "  ")
+    assert credentials.vault_box() == tmp_path / "home"
 
 
 def test_resolve_from_secrets_dir(monkeypatch, tmp_path):

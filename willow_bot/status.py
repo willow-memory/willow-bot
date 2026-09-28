@@ -390,7 +390,15 @@ def _read_ingress() -> dict[str, Any]:
 
 def report() -> dict[str, Any]:
     """Assemble one status surface. Every field is a three-state read; no
-    field's failure hides another field's success."""
+    field's failure hides another field's success. With no box configured
+    there is nothing to read: the surface says so, and names the fix."""
+    from willow_bot.paths import BoxNotConfigured
+
+    try:
+        _willow_home()
+    except BoxNotConfigured as exc:
+        return {"at": _now(), "willow_home": None, "status": "no-box", "detail": str(exc),
+                "version": _read_version(), "running_commit": _read_running_commit()}
     return {
         "at": _now(),
         "willow_home": str(_willow_home()),
