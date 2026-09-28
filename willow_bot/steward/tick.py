@@ -1112,7 +1112,8 @@ def _leg_char_budget(header: str, n_legs: int, *, cap: int = BODY_CHAR_CAP) -> i
     return max((cap - len(header)) // n_legs, 4_000)
 
 
-def _ci_red_body(where: str, head_sha: str, legs: list[dict], *, cap: int = BODY_CHAR_CAP) -> str:
+def _ci_red_body(where: str, head_sha: str, legs: list[dict], *, cap: int = BODY_CHAR_CAP,
+                 note: str | None = None) -> str:
     """One PR comment body for a head's failing legs: which jobs are red,
     then each job's failure block (or why it has none) in a collapsible
     fenced section. `legs` are the per-leg dicts `_ci_red_leg_info` built,
@@ -1137,6 +1138,10 @@ def _ci_red_body(where: str, head_sha: str, legs: list[dict], *, cap: int = BODY
     fit, never leaves a dangling fence or an unclosed section.
     """
     header_lines = [f"CI red: {where} @ {head_sha[:7]} — {len(legs)} job(s):"]
+    if note:
+        # In the header, so neither the body cap nor the Grove head/tail
+        # cut can drop it (`_ci_head_verdict`: could not confirm live).
+        header_lines.append(f"_{note}_")
     header_lines += [f"- **{lg['check']}** ({lg['conclusion']}): {lg['url']}" for lg in legs]
     header = "\n".join(header_lines) + "\n\n"
 
@@ -1585,9 +1590,9 @@ def _ci_fetch_pull(repo: str, pr: int) -> dict:
 
 def _ci_pr_liveness(repo: str, pr: object, cache: dict) -> dict | None:
     """``{"state", "merged", "head_sha"}`` for ``repo#pr`` read live from
-    GitHub, once per PR per tick (``cache``); ``None`` when it cannot be
-    read (App not configured, network, a PR-less head) — unknown, which the
-    callers treat as "alert as before", never as "stale"."""
+    GitHub, once per PR per tick (``cache``), or ``{"unverified": why}``
+    when it cannot be read (App not configured, network, an HTTP error).
+    ``None`` for a PR-less head: there is no PR to re-read."""
     if not pr:
         return None
     key = f"{repo}#{pr}"
@@ -1598,32 +1603,62 @@ def _ci_pr_liveness(repo: str, pr: object, cache: dict) -> dict | None:
         live = {"state": str(data.get("state") or ""),
                 "merged": bool(data.get("merged") or data.get("merged_at")),
                 "head_sha": str((data.get("head") or {}).get("sha") or "")}
-    except Exception:  # noqa: BLE001 — unreadable is unknown, not stale
-        live = None
+    except Exception as exc:  # noqa: BLE001 — unreadable is unverified, never stale
+        live = {"unverified": f"{type(exc).__name__}: {exc}"[:200]}
     cache[key] = live
     return live
 
 
-def _ci_stale_reason(head_sha: str, live: dict | None) -> str | None:
-    """Why a red on ``head_sha`` is no longer the PR's news, or ``None``
-    when it still is (or when nobody could tell). A merged or closed PR, or
-    one whose head has moved past this sha, has nothing to fix at this sha:
-    willow-mcp #659/#661/#662 heard "CI red" for superseded heads and for
-    release PRs that had already merged green (2026-09-28)."""
-    if not live:
-        return None
+def _ci_head_verdict(repo: str, pr: object, head_sha: str, cache: dict,
+                     heads: dict) -> tuple[str | None, str | None]:
+    """``(stale_reason, unverified)`` for a red on ``repo#pr@head_sha``.
+
+    ``stale_reason`` says why the red is no longer the PR's news: the PR
+    merged or closed, or its live head is one the bot has ALREADY SEEN for
+    this PR arriving after ``head_sha`` (``heads``). willow-mcp
+    #659/#661/#662 heard "CI red" for superseded heads and for release PRs
+    that had already merged green (2026-09-28). A live head that merely
+    differs — GitHub's answer lagging a push the bot has seen, or one the
+    bot has not seen yet — proves nothing, and dropping a real red on it
+    would lose the red for good (the scan offset moves past it; Loki
+    8168907A).
+
+    ``unverified`` is set whenever the red goes out without that check
+    having confirmed it: the PR could not be read, or its live head could
+    not be placed. The caller alerts as before and carries the note on
+    the comment, the Grove line and the receipt, so "confirmed live" and
+    "could not check" never read the same."""
+    live = _ci_pr_liveness(repo, pr, cache)
+    if live is None:
+        return None, None
+    if live.get("unverified"):
+        return None, f"PR state unverified ({live['unverified']})"
     if live.get("merged"):
-        return "pr merged"
+        return "pr merged", None
     if live.get("state") and live["state"] != "open":
-        return "pr closed"
-    if live.get("head_sha") and head_sha and live["head_sha"] != head_sha:
-        return f"superseded by {live['head_sha'][:7]}"
-    return None
+        return "pr closed", None
+    live_head = live.get("head_sha") or ""
+    if not live_head or live_head == head_sha:
+        return None, None
+    seen = heads.get(_ci_pr_key(repo, pr, head_sha)) or {}
+    mine, theirs = seen.get(head_sha), seen.get(live_head)
+    if mine is not None and theirs is not None and theirs > mine:
+        return f"superseded by {live_head[:7]}", None
+    return None, (f"PR head unverified (GitHub reports {live_head[:7]}, "
+                  f"not seen by the bot after {head_sha[:7]})")
+
+
+def _ci_note_unverified(unverified: list | None, key: str, note: str | None) -> None:
+    if unverified is None or not note:
+        return
+    if not any(u.get("key") == key for u in unverified):
+        unverified.append({"key": key, "note": note})
 
 
 def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", call,
                    enable_mcp: bool, commented: list, spoke: list, errors: list | None = None,
-                   liveness: dict | None = None, mooted: list | None = None) -> None:
+                   liveness: dict | None = None, mooted: list | None = None,
+                   heads: dict | None = None, unverified: list | None = None) -> None:
     """Retry every owed comment and Grove line that is due — new this
     tick or carried over from any earlier one. The GitHub half never
     needs `call`/`enable_mcp`; only the Grove half does, and when the
@@ -1665,10 +1700,12 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
             red_comment_due = (entry.get("pending_kind") != "green" and ci_comments.due(cs, tick=tick))
             grove_owed = (enable_mcp and call is not None and repo.startswith(_GROVE_CI_RED_REPO_PREFIX)
                           and (entry.get("spoke") or {}).get("status") in ("pending", "stalled", "blocked"))
+            note = None
             if red_comment_due or grove_owed:
                 # Re-read the PR before any red goes out: a head the PR has
                 # moved past, or a PR already merged or closed, is not news.
-                reason = _ci_stale_reason(head_sha, _ci_pr_liveness(repo, pr, live_cache))
+                reason, note = _ci_head_verdict(repo, pr, head_sha, live_cache, heads or {})
+                _ci_note_unverified(unverified, head_key, note)
                 if reason is not None:
                     landed = (cs.get("status") in ("posted", "green") or cs.get("comment_id")
                               or entry.get("pending_kind") == "green")
@@ -1692,7 +1729,7 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                                               at=entry.get("green_at", ""))
                 else:
                     _ci_owed_refetch_stripped(entry, errors=errors)
-                    body = _ci_red_body(where, head_sha, _ci_active_legs(entry))
+                    body = _ci_red_body(where, head_sha, _ci_active_legs(entry), note=note)
                 result = pr_voice.upsert_ci_red_comment(repo, int(pr), head_sha, body)
                 if result.get("status") == "ok":
                     new_status = "green" if entry.get("pending_kind") == "green" else "posted"
@@ -1761,7 +1798,7 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
                 continue
 
             pr_url = f"https://github.com/{repo}/pull/{pr}"
-            body_for_summary = _ci_red_body(where, head_sha, _ci_active_legs(entry))
+            body_for_summary = _ci_red_body(where, head_sha, _ci_active_legs(entry), note=note)
             summary = _grove_summary(body_for_summary, pr_url)
             was_blocked = sp.get("status") == "blocked"
             result, err = grove_pace.call(call, "grove_send_message", {
@@ -1854,7 +1891,8 @@ def _ci_line_resolved(item: dict) -> str:
 
 def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer", app: str, call,
                      just_filed: set[str], just_resolved: set[str], state_view: dict,
-                     liveness: dict | None = None) -> dict:
+                     liveness: dict | None = None, heads: dict | None = None,
+                     unverified: list | None = None) -> dict:
     """One Grove message per (item, filed|resolved) to the seat that opened
     the PR, plus the bot's per-head PR comment kept current — for WATCHED
     PRs only. Returns the new `ci_notified` table; fills `receipt["notified"]`
@@ -1902,8 +1940,10 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
         if kind == "filed" and liveness is not None:
             # A "filed" line still owed from an earlier tick is re-checked
             # against the PR as it is now, like the drain's red lines.
-            reason = _ci_stale_reason(item.get("head_sha") or "",
-                                      _ci_pr_liveness(item.get("repo", ""), item.get("pr"), liveness))
+            reason, note = _ci_head_verdict(item.get("repo", ""), item.get("pr"), item.get("head_sha") or "",
+                                            liveness, heads or {})
+            _ci_note_unverified(unverified, _ci_head_key(item.get("repo", ""), item.get("pr"),
+                                                         item.get("head_sha") or ""), note)
             if reason is not None:
                 entry.update(state="skipped", reason=f"moot: {reason}")
                 notified.setdefault(item_id, {})[kind] = receipt["at"]
@@ -2155,15 +2195,21 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # Grove line. An unreadable PR is unknown and files as before. The legs
     # stay in `head_legs`/`heads`, so green detection is unchanged.
     liveness: dict = {}
+    unverified: list[dict] = []
     stale_skipped: list[dict] = []
     for head_key in list(groups):
         first = groups[head_key][0]
-        reason = _ci_stale_reason(first["head_sha"], _ci_pr_liveness(first["repo"], first["pr"], liveness))
+        reason, note = _ci_head_verdict(first["repo"], first["pr"], first["head_sha"], liveness, heads)
+        _ci_note_unverified(unverified, head_key, note)
         if reason is not None:
             stale_skipped.append({"where": _ci_pr_key(first["repo"], first["pr"], first["head_sha"]),
                                   "legs": [lg["check"] for lg in groups.pop(head_key)], "reason": reason})
     if stale_skipped:
         receipt["stale_skipped"] = stale_skipped
+    # Every red that went (or is going) out without the re-read confirming
+    # it, and why — filled by this pass, the owed drain and the watcher
+    # lines below. The same list object, so later steps land here too.
+    receipt["pr_unverified"] = unverified
 
     # The CI-red comment and the Grove line: owed per (repo, pr, head_sha)
     # until they land, in their OWN small atomically-written file
@@ -2244,7 +2290,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         mooted: list = []
         _ci_owed_drain(owed, tick=tick_n, app=app, grove_pace=grove_pace, call=call, enable_mcp=enable_mcp,
                       commented=commented, spoke=spoke, errors=drain_errors,
-                      liveness=liveness, mooted=mooted)
+                      liveness=liveness, mooted=mooted, heads=heads, unverified=unverified)
         if mooted:
             receipt["mooted"] = mooted
         if drain_errors:
@@ -2456,7 +2502,7 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         just_filed={f["id"] for f in filed}, just_resolved={r["item_id"] for r in resolved},
         state_view={**state, "ci_items": items, "ci_filed": filed_now,
                     "ci_filed_cancelled": filed_cancelled_now},
-        liveness=liveness,
+        liveness=liveness, heads=heads, unverified=unverified,
     )
     state["ci_notified"] = notified_now
 

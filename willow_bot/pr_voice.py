@@ -344,7 +344,7 @@ def publish_check(
         return receipt
 
     # willows-bot holds checks:read, not write (BOT-INVENTORY): every create
-    # answered 403 and the steward journal carried "create: 403 …
+    # answered 403 and the steward tick receipts carried "create: 403 …
     # /check-runs" once per open PR per tick. The token's own grant is
     # asked first; a grant GitHub states is not `write` skips the call.
     # Unknown (`None`) proceeds as before, and a later grant of

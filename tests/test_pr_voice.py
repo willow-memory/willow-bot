@@ -459,3 +459,40 @@ def test_installation_permissions_come_from_the_access_token_answer(monkeypatch)
     github_app._auth_headers(REPO)
     assert github_app.installation_permissions(REPO) == {"checks": "read"}
     assert github_app.installation_permissions(REPO.upper()) == {"checks": "read"}
+
+
+
+# ── HTTP refusals stay refusals (Loki 8168907A B2) ───────────────────────────
+#
+# Only a stated grant short of checks:write is a skip. A 403 or 422 from
+# GitHub on either call is `could-not-run`, never `skipped`.
+
+
+@pytest.mark.parametrize("code", [403, 422])
+def test_publish_check_list_http_4xx_is_could_not_run(rec: _Recorder, code: int):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/commits/{SHA}/check-runs")] = [
+        _FakeResp(_status=code, _payload={"message": "nope"}),
+    ]
+    receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
+                                     status="completed", conclusion="success")
+    assert receipt["status"] == "could-not-run"
+    assert receipt["action"] == "skipped"
+    assert receipt["detail"].startswith("list:") and str(code) in receipt["detail"]
+    assert "missing_permission" not in receipt
+    assert not any(c[0] == "POST" for c in rec.calls)
+
+
+@pytest.mark.parametrize("code", [403, 422])
+def test_publish_check_create_http_4xx_is_could_not_run(rec: _Recorder, code: int):
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/commits/{SHA}/check-runs")] = [
+        _FakeResp(_payload={"total_count": 0, "check_runs": []}),
+    ]
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/check-runs")] = [
+        _FakeResp(_status=code, _payload={"message": "nope"}),
+    ]
+    receipt = pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
+                                     status="completed", conclusion="success")
+    assert receipt["status"] == "could-not-run"
+    assert receipt["action"] == "skipped"
+    assert receipt["detail"].startswith("create:") and str(code) in receipt["detail"]
+    assert "missing_permission" not in receipt
