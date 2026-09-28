@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.10.0](https://github.com/willow-memory/willow-bot/compare/v0.9.1...v0.10.0) (2026-09-28)
+
+
+### Added
+
+* code-first resolver tier (D0) for the flowering battery ([1bae071](https://github.com/willow-memory/willow-bot/commit/1bae0714701f8c6503307ed473ba82f570996aa2))
+* **deterministic:** code-first resolver tier (D0) for flowering pool ([12704eb](https://github.com/willow-memory/willow-bot/commit/12704ebd9e7548d3c98d0d03e9c9b67697a59d97))
+
+
+### Fixed
+
+* D0 correct refusals score correct; tests for six resolver checks ([8f9c7a8](https://github.com/willow-memory/willow-bot/commit/8f9c7a88d320264751f5bdf852c4fb5e4f30ef02))
+* **deterministic:** close resolver grammar, escalate conflicts/truncation (Loki 174F4F2A) ([5705519](https://github.com/willow-memory/willow-bot/commit/5705519f49264cc99c3f258cbb0b4708223a500f))
+* **deterministic:** G4 refusal scored correctly, cover six untested checks ([ad7b8e0](https://github.com/willow-memory/willow-bot/commit/ad7b8e015d65cd26e6ec1a94c3ebf47481b92614))
+
 ## [0.9.1](https://github.com/willow-memory/willow-bot/compare/v0.9.0...v0.9.1) (2026-09-25)
 
 
