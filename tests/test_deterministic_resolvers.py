@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from willow_bot.deterministic import cli
+from willow_bot.deterministic import resolvers
 from willow_bot.deterministic.policy import Policy
 from willow_bot.deterministic.resolvers import (
     STATUS_ESCALATE,
@@ -224,6 +225,38 @@ def test_g2_escalates_when_embedded_semicolon_truncates_title():
     assert resolution["reason"] == "value_split_by_semicolon"
 
 
+def test_g2_escalates_on_conflicting_title_across_excerpts():
+    # Untested check (Loki 7EA73431 F2/F7): the G2 conflict check at
+    # _resolve_g2 -- two excerpts disagreeing on title must escalate,
+    # never pick one.
+    fixture = {
+        "id": "S-g2-conflict",
+        "class": "G2",
+        "excerpts": [
+            {"id": "ex-a", "text": "title: CI red variant A"},
+            {"id": "ex-b", "text": "title: CI red variant B"},
+        ],
+        "expected": {"max_chars": 120, "must_name": []},
+    }
+    resolution = resolve_fixture(fixture)
+    assert resolution["status"] == STATUS_ESCALATE
+    assert resolution["reason"] == "conflicting_field"
+
+
+def test_g2_max_chars_fallback_when_expected_value_is_not_numeric():
+    # Untested check (Loki 7EA73431 F7): the max_chars except
+    # (TypeError, ValueError) fallback to 120 in _resolve_g2.
+    fixture = {
+        "id": "S-g2-bad-max-chars",
+        "class": "G2",
+        "excerpts": [{"id": "ex-a", "text": "title: Short title"}],
+        "expected": {"max_chars": "not-a-number", "must_name": []},
+    }
+    resolution = resolve_fixture(fixture)
+    assert resolution["status"] == STATUS_RESOLVED
+    assert resolution["answer"] == "Short title"
+
+
 def test_g2_scorer_prefers_exact_reference_title_match():
     fixture = {
         "id": "S-g2-exact",
@@ -300,6 +333,43 @@ def test_g3_escalates_on_mid_word_cut():
     resolution = resolve_fixture(fixture)
     assert resolution["status"] == STATUS_ESCALATE
     assert resolution["reason"] == "source_truncated"
+
+
+def test_g3_escalates_on_conflicting_id_across_excerpts():
+    # Untested check (Loki 7EA73431 F2/F7): the G3 conflict check at
+    # _resolve_g3 -- two excerpts disagreeing on id must escalate.
+    fixture = {
+        "id": "S-g3-conflict",
+        "class": "G3",
+        "excerpts": [
+            {"id": "ex-a", "text": "id abc12345; question: Ok?"},
+            {"id": "ex-b", "text": "id def67890; question: Ok?"},
+        ],
+        "expected": {"must_cite": ["abc12345"]},
+    }
+    resolution = resolve_fixture(fixture)
+    assert resolution["status"] == STATUS_ESCALATE
+    assert resolution["reason"] == "conflicting_field"
+
+
+def test_g3_escalates_when_embedded_semicolon_truncates_question():
+    # Untested check (Loki 7EA73431 F7): the G3 ";" split -- prose after
+    # a ";" that does not parse as a fresh key marks "question" suspect
+    # and must escalate, not silently resolve the truncated fragment.
+    fixture = {
+        "id": "S-g3-semicolon",
+        "class": "G3",
+        "excerpts": [
+            {
+                "id": "ex-a",
+                "text": "id abc12345; question: Is this ok; not a key at all",
+            }
+        ],
+        "expected": {"must_cite": ["abc12345"]},
+    }
+    resolution = resolve_fixture(fixture)
+    assert resolution["status"] == STATUS_ESCALATE
+    assert resolution["reason"] == "value_split_by_semicolon"
 
 
 def test_g3_resolved_when_question_terminated():
@@ -434,7 +504,10 @@ def test_g4_scorer_catches_wrong_builder_seat():
     assert score["correct"] is False
 
 
-def test_g4_conflicting_to_app_yields_empty_answer_and_fails_score():
+def test_g4_conflicting_to_app_is_a_correct_refusal_and_unscored():
+    # Loki 7EA73431 F1: a G4 row with conflicting to_app is a correct
+    # refusal (there is nothing to check against expected.builder_seat),
+    # so it must be left unscored -- never counted wrong.
     fixture = {
         "id": "S-g4-conflict",
         "class": "G4",
@@ -449,8 +522,50 @@ def test_g4_conflicting_to_app_yields_empty_answer_and_fails_score():
     assert resolution["answer"] == {}
     assert resolution["reason"] == "conflicting_field"
     score = score_resolution(fixture, resolution)
-    assert score["scored"] is True
-    assert score["correct"] is False
+    assert score["scored"] is False
+    assert score["correct"] is None
+
+
+def test_g4_missing_to_app_field_is_a_correct_refusal_and_unscored():
+    # Same as above but for the "no to_app field at all" path (reason is
+    # None, not "conflicting_field") -- also a correct refusal.
+    fixture = {
+        "id": "S-g4-missing",
+        "class": "G4",
+        "excerpts": [{"id": "ex-a", "text": "summary: nothing about a seat here"}],
+        "expected": {"builder_seat": "hanuman"},
+    }
+    resolution = resolve_fixture(fixture)
+    assert resolution["status"] == STATUS_FLOWERING_REQUIRED
+    assert resolution["answer"] == {}
+    assert resolution["reason"] is None
+    score = score_resolution(fixture, resolution)
+    assert score["scored"] is False
+    assert score["correct"] is None
+
+
+def test_cli_resolve_exit_zero_on_g4_conflicting_to_app(tmp_path, monkeypatch):
+    # The bug this fixes: _cmd_resolve used to exit 1 on a G4 row whose
+    # to_app conflicted across excerpts, even though refusing is correct.
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    _write_fixture(
+        fixtures,
+        "S-growth-01.json",
+        {
+            "id": "S-growth-01",
+            "class": "G4",
+            "excerpts": [
+                {"id": "ex-a", "text": "to_app hanuman"},
+                {"id": "ex-b", "text": "to_app loki"},
+            ],
+            "expected": {"builder_seat": "hanuman"},
+        },
+    )
+    monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
+    out = tmp_path / "out.jsonl"
+    rc = cli.main(["resolve", "--fixtures", str(fixtures), "--out", str(out)])
+    assert rc == 0
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +623,51 @@ def test_malformed_fixture_not_a_dict_escalates_without_raising():
     resolution = resolve_fixture(["not", "a", "dict"])  # type: ignore[arg-type]
     assert resolution["status"] == STATUS_ESCALATE
     assert resolution["reason"] == "malformed_fixture"
+
+
+def test_parse_excerpts_skips_non_string_excerpt_text_without_raising():
+    # Untested check (Loki 7EA73431 F7/F8): the non-string guard in
+    # _parse_excerpts (``if not isinstance(raw_text, str): continue``).
+    # Without it, ``raw_text.split(";")`` on a non-string blows up.
+    fixture = {
+        "id": "S-g1-nonstring-text",
+        "class": "G1",
+        "excerpts": [
+            {"id": "ex-a", "text": 12345},
+            {"id": "ex-b", "text": "to_app loki"},
+        ],
+        "expected": {"to_app": "loki", "must_cite": ["ex-b"]},
+    }
+    resolution = resolve_fixture(fixture)
+    assert resolution["status"] == STATUS_RESOLVED
+    assert resolution["answer"] == "loki"
+
+
+def test_resolve_fixtures_dir_catches_unexpected_resolver_exception(
+    tmp_path, monkeypatch
+):
+    # Untested check (Loki 7EA73431 F7/F8): the resolver_error catch-all
+    # in resolve_fixtures_dir (``except Exception as exc:``). It must
+    # turn an exception any single fixture's resolution raises into one
+    # escalate row, never abort the run.
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    _write_fixture(
+        fixtures,
+        "S-growth-01.json",
+        {"id": "S-growth-01", "class": "G1", "excerpts": [], "expected": {}},
+    )
+
+    def _boom(fixture):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(resolvers, "resolve_fixture", _boom)
+    rows = resolvers.resolve_fixtures_dir(fixtures)
+    assert len(rows) == 1
+    assert rows[0]["status"] == STATUS_ESCALATE
+    assert rows[0]["reason"].startswith("resolver_error")
+    assert rows[0]["scored"] is False
+    assert rows[0]["correct"] is None
 
 
 def test_one_malformed_fixture_escalates_its_row_and_does_not_abort_the_run(tmp_path):

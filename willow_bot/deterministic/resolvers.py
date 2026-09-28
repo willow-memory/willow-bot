@@ -35,6 +35,13 @@ Rework (753B6124, per Loki audit 174F4F2A on D288B449 12704eb):
 - G5's scorer now checks ``must_cite`` instead of "any cite present";
   G2's scorer prefers an exact match against ``expected.reference_title``
   when given.
+
+D0 follow-ups (Loki audit 7EA73431 on 753B6124 5705519):
+
+- A G4 row with no or conflicting ``to_app`` is a correct refusal, not a
+  wrong answer -- ``score_resolution`` now leaves it unscored (like an
+  escalate) instead of comparing an empty answer against
+  ``expected.builder_seat`` and failing it.
 """
 from __future__ import annotations
 
@@ -425,9 +432,12 @@ def score_resolution(fixture: dict, resolution: dict) -> dict:
         return {"scored": True, "correct": ok, "detail": "g3_cite_and_no_stray_ids"}
 
     if cls == "G4":
-        ok = isinstance(answer, dict) and answer.get("builder_seat") == expected.get(
-            "builder_seat"
-        )
+        if not isinstance(answer, dict) or not answer.get("builder_seat"):
+            # A G4 row with no or conflicting to_app is a correct refusal
+            # -- there is nothing to check it against, so it is never
+            # scored, the same as an escalate (Loki 7EA73431 F1).
+            return {"scored": False, "correct": None, "detail": "g4_refusal_not_scored"}
+        ok = answer.get("builder_seat") == expected.get("builder_seat")
         return {"scored": True, "correct": ok, "detail": "g4_builder_seat"}
 
     if cls == "G5":
