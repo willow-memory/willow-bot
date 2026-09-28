@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.10.1](https://github.com/willow-memory/willow-bot/compare/v0.10.0...v0.10.1) (2026-09-28)
+
+
+### Fixed
+
+* **steward:** mark unverified reds, supersede only on a head the bot saw later (Loki 8168907A) ([97cf05b](https://github.com/willow-memory/willow-bot/commit/97cf05b503d9a802296e0b2b48293f603a391d46))
+* **steward:** re-read the PR before a CI red goes out; skip check-runs the grant cannot write ([89464a7](https://github.com/willow-memory/willow-bot/commit/89464a7d4d013d1e2f565115540a437e7d6b68a5))
+* **steward:** re-read the PR before a CI red goes out; skip check-runs the grant cannot write ([78af48d](https://github.com/willow-memory/willow-bot/commit/78af48df42bbbdf2258836817b92e402b857c92f))
+
 ## [0.10.0](https://github.com/willow-memory/willow-bot/compare/v0.9.1...v0.10.0) (2026-09-28)
 
 
