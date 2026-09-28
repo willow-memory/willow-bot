@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.10.2](https://github.com/willow-memory/willow-bot/compare/v0.10.1...v0.10.2) (2026-09-28)
+
+
+### Fixed
+
+* **steward:** watched-PR CI lines say when the re-read could not confirm them (Loki 754C4008) ([ca040ec](https://github.com/willow-memory/willow-bot/commit/ca040ecde3c00bc4402a839550a68b4534365721))
+* **steward:** watched-PR CI lines say when the re-read could not confirm them; pin the head verdict edges ([e502d48](https://github.com/willow-memory/willow-bot/commit/e502d485554bb4e4fa52c6e6bc9a302dbffd895e))
+
 ## [0.10.1](https://github.com/willow-memory/willow-bot/compare/v0.10.0...v0.10.1) (2026-09-28)
 
 
