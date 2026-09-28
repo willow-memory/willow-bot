@@ -1950,6 +1950,11 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
                 lines.append(entry)
                 counts["skipped"] += 1
                 return
+            if note:
+                # Same marker the comment header and the Grove block carry:
+                # the opener's channel never reads "could not check" as
+                # "confirmed live" (Loki 258F1365 follow-up).
+                line = f"{line} ({note})"
         if (kind == "filed" and not item.get("stuck")
                 and str(item.get("repo") or "").startswith(_GROVE_CI_RED_REPO_PREFIX)
                 and channel.lstrip("#") == "willow"):

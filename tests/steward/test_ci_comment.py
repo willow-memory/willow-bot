@@ -1160,3 +1160,77 @@ def test_an_owed_watcher_line_for_the_live_head_is_sent(home, monkeypatch):
     receipt, notified, _ = _notify(monkeypatch, c, live=("open", False, SHA), heads={})
     assert len(c.named("grove_send_message")) == 1
     assert receipt["notified"][0]["state"] == "sent"
+
+
+# ── follow-ups from Loki 258F1365 ────────────────────────────────────────────
+
+def test_verdict_red_head_never_recorded_is_unverified_not_superseded(home, monkeypatch):
+    """M17: the live head was seen, the red's own head never was — nothing
+    orders them, so the red is not superseded."""
+    monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(RAT, 48): ("open", False, SHA2)}))
+    reason, note = tick._ci_head_verdict(RAT, 48, SHA, {}, {f"{RAT}#48": {SHA2: 2.0}})
+    assert reason is None
+    assert note == f"PR head unverified (GitHub reports {SHA2[:7]}, not seen by the bot after {SHA[:7]})"
+
+
+def test_verdict_live_head_seen_at_the_same_instant_is_not_superseded(home, monkeypatch):
+    """M19: superseded means seen strictly AFTER the red's head."""
+    monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(RAT, 48): ("open", False, SHA2)}))
+    reason, note = tick._ci_head_verdict(RAT, 48, SHA, {}, {f"{RAT}#48": {SHA: 1.0, SHA2: 1.0}})
+    assert reason is None and note and note.startswith("PR head unverified")
+
+
+def test_verdict_live_head_seen_later_is_superseded(home, monkeypatch):
+    monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(RAT, 48): ("open", False, SHA2)}))
+    assert tick._ci_head_verdict(RAT, 48, SHA, {}, SEEN) == (f"superseded by {SHA2[:7]}", None)
+
+
+def test_an_unverified_watcher_line_says_so(home, monkeypatch):
+    c = _Client()
+    unplaced = ("open", False, SHA2)  # GitHub names a head the bot never saw
+    receipt, _, unverified = _notify(monkeypatch, c, live=unplaced, heads={})
+    sent = c.named("grove_send_message")
+    note = f"PR head unverified (GitHub reports {SHA2[:7]}, not seen by the bot after {SHA[:7]})"
+    assert len(sent) == 1 and sent[0]["content"].endswith(f"({note})")
+    assert unverified == [{"key": f"{NOT_WM}#48@{SHA}", "note": note}]
+
+
+def test_a_confirmed_watcher_line_carries_no_note(home, monkeypatch):
+    c = _Client()
+    _notify(monkeypatch, c, live=("open", False, SHA), heads={})
+    assert "unverified" not in c.named("grove_send_message")[0]["content"]
+
+
+def test_run_ci_hands_seen_heads_to_the_watcher_step(home, monkeypatch, pulls):
+    """M22, end to end: a watcher line refused at tick 1 is owed; by tick 2
+    the bot has seen a later head and GitHub names it — the owed line is
+    moot, not sent as an unverified red."""
+    from willow_bot.steward import pr_watch
+
+    _prime()
+    monkeypatch.setattr(pr_watch, "load", lambda *a, **kw: {})
+    monkeypatch.setattr(pr_watch, "watcher_for", lambda repo, pr, table=None: {"channel": "#desk"})
+    monkeypatch.setattr(tick, "_comment_on_pr", lambda item, view, at: {"state": "sent"})
+    refuse = {"on": True}
+
+    def _desk_down(name, inputs, n):
+        if name == "grove_send_message" and inputs.get("channel_name") == "desk" and refuse["on"]:
+            return {"error": "upstream 502"}
+        return None
+
+    c = _Client(refuse=_desk_down)
+    _use(monkeypatch, c)
+    pulls.live[(NOT_WM, 48)] = ("open", False, SHA)
+    deposits.append_local(_at(_row(NOT_WM, SHA, 1, "test", "failure", pr=48), T0))
+    r1 = tick.run_ci()
+    assert [ln["state"] for ln in r1["notified"]] == ["refused"]
+
+    refuse["on"] = False
+    pulls.live[(NOT_WM, 48)] = ("open", False, SHA2)
+    deposits.append_local(_at(_row(NOT_WM, SHA2, 2, "test", "in_progress", pr=48), T1))
+    r2 = tick.run_ci()
+    desk = [i for i in c.named("grove_send_message") if i.get("channel_name") == "desk"]
+    assert len(desk) == 1  # only tick 1's refused attempt
+    assert r2["notified"][0]["state"] == "skipped"
+    assert r2["notified"][0]["reason"] == f"moot: superseded by {SHA2[:7]}"
+    assert r2["pr_unverified"] == []

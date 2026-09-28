@@ -416,7 +416,7 @@ def test_ci_red_comment_missing_head_sha_is_a_line_not_a_raise(rec: _Recorder):
 # ── check: the grant is asked before the call (desk, 2026-09-28) ─────────────
 #
 # willows-bot holds checks:read. Every create answered 403 and the steward
-# journal carried "create: 403 … /check-runs" once per open PR per tick.
+# tick receipts carried "create: 403 … /check-runs" once per open PR per tick.
 
 
 def test_publish_check_skips_when_the_token_grants_checks_read_only(rec: _Recorder, monkeypatch):
