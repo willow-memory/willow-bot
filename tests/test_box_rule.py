@@ -186,3 +186,89 @@ def test_install_service_refuses_a_box_that_is_not_an_existing_absolute_dir(box)
     r = subprocess.run(["bash", str(ROOT / "scripts" / "install-service.sh"), "--print", "willow-bot"],
                        env=env, capture_output=True, text=True, timeout=30)
     assert r.returncode == 2 and "not an existing absolute directory" in r.stderr
+
+
+# ── Loki 87DF2A04 ────────────────────────────────────────────────────────────
+
+def test_a_carried_over_counter_matches_a_fresh_one_under_umask_002(monkeypatch, tmp_path):
+    """F2: SQLite creates 0644 less the umask; the carry-over must match it
+    under any umask, not only CI's 022."""
+    legacy = tmp_path / "old"
+    legacy.mkdir()
+    _make_db(legacy / "willow-bot-sigh.db")
+    monkeypatch.setattr(persona_store, "_legacy_dir", lambda: legacy)
+    old = os.umask(0o002)
+    try:
+        carried = persona_store.db_path("sigh")
+        fresh = persona_store.db_path("rebase_shame")
+        sqlite3.connect(fresh).close()
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(carried.stat().st_mode) == stat.S_IMODE(fresh.stat().st_mode)
+
+
+def test_state_override_expands_tilde(monkeypatch, tmp_path):
+    """M03."""
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("WILLOW_BOT_STEWARD_STATE", "~/s.json")
+    assert _real_state_path() == tmp_path / "h" / "s.json"
+
+
+def test_install_service_refuses_an_existing_relative_box(monkeypatch, tmp_path):
+    """M26: the absolute-path half of the installer's check."""
+    import subprocess
+
+    (tmp_path / "box").mkdir()
+    env = {k: v for k, v in os.environ.items() if k != "WILLOW_HOME"}
+    env["WILLOW_BOT_VAULT_BOX"] = "box"
+    r = subprocess.run(["bash", str(ROOT / "scripts" / "install-service.sh"), "--print", "willow-bot"],
+                       env=env, cwd=str(tmp_path), capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2 and "not an existing absolute directory" in r.stderr
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_audit_script_prints_the_hook_url_redacted(monkeypatch, tmp_path, capsys, matches):
+    """M23/M24: both the match and the mismatch line."""
+    import json
+    import sys
+    import types
+
+    secret = "https://u:pw@hooks.example.invalid/relay/cOXMpBiOXVtcrqwe"
+    hook_url = secret + "/webhook"
+    (tmp_path / "k.pem").write_text("PEM")
+    (tmp_path / ".env").write_text(
+        f"GITHUB_APP_ID=1\nGITHUB_APP_PRIVATE_KEY_PATH={tmp_path / 'k.pem'}\n"
+        f"WEBHOOK_PUBLIC_URL={secret if matches else 'https://other.example.invalid/x/QQtokenQQ'}\n")
+    mod = _load_script("audit_app_config")
+    monkeypatch.setattr(mod, "_ROOT", tmp_path)
+
+    calls = {"n": 0}
+
+    def _run(cmd, **kw):
+        calls["n"] += 1
+        out = json.dumps({"repositories": [], "installations": []}) if calls["n"] == 1 else ""
+        return types.SimpleNamespace(returncode=0 if calls["n"] == 1 else 1, stdout=out, stderr="")
+
+    monkeypatch.setattr(mod.subprocess, "run", _run)
+
+    class _Resp:
+        def __init__(self, body):
+            self._b = body
+
+        def json(self):
+            return self._b
+
+    answers = {"https://api.github.com/app": {"name": "willows-bot", "permissions": {}, "events": []},
+               "https://api.github.com/app/hook/config": {"url": hook_url, "secret": "WEBHOOKSECRET"}}
+    fake_requests = types.SimpleNamespace(
+        get=lambda url, **kw: _Resp(answers.get(url, [])))
+    fake_jwt = types.SimpleNamespace(encode=lambda *a, **k: "JWT")
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "jwt", fake_jwt)
+    mod.main()
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "hook URL" in ln)
+    assert ("matches" in line) is matches
+    assert "hooks.example.invalid/relay/…/webhook" in line
+    for s in ("u:pw", "cOXMpBiOXVtcrqwe", "QQtokenQQ", "WEBHOOKSECRET"):
+        assert s not in out, s

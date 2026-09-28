@@ -44,7 +44,7 @@ month-old 2xx still reads ``ok``.
 
 The hook URL never leaves this module whole: it is reduced to
 ``scheme://host[:port]/path`` (no login, no query, no fragment, and any path
-segment that is not a plain word shown as ``…``) before it
+segment that is not a plain lowercase word shown as ``…``) before it
 reaches a receipt, ``ingress.json``, the status surface or a filed item,
 and ``github_app.hook_url`` returns only the URL, never the config's
 ``secret``.
@@ -104,16 +104,24 @@ def _fetch_hook_url() -> str:
     return github_app.hook_url()
 
 
-_SAFE_SEGMENT = re.compile(r"^[A-Za-z][A-Za-z_.-]{0,31}$")
+_SAFE_SEGMENT = re.compile(r"^[a-z][a-z_.-]{0,31}$")
+#: GitHub's own token prefixes: a segment starting with one is a token,
+#: whatever its letters (``ghp_``, ``github_pat_``, ...).
+_TOKEN_PREFIX = re.compile(r"^(gh[pousr]_|github_pat_)", re.IGNORECASE)
 
 
 def _redact_segment(seg: str) -> str:
-    """A path segment is kept only when it reads as a word — letters and
-    ``_ . -`` only, at most 32 characters (``webhook``, ``hooks``,
-    ``github-app``). Anything carrying a digit or longer than that is shown
-    as ``…``: a relay channel (``smee.io/<channel>``) or a token placed in
-    the path is exactly that shape (Loki 757108E8)."""
-    return seg if (not seg or _SAFE_SEGMENT.match(seg)) else "…"
+    """A path segment is kept only when it reads as a word — lowercase
+    letters and ``_ . -`` only, at most 32 characters (``webhook``,
+    ``hooks``, ``github-app``) — and does not start with a GitHub token
+    prefix. Anything else is shown as ``…``: a relay channel
+    (``smee.io/<channel>``) is mixed-case, often letters only, and a token
+    placed in the path is exactly that shape (Loki 757108E8, 87DF2A04)."""
+    if not seg:
+        return seg
+    if _TOKEN_PREFIX.match(seg) or not _SAFE_SEGMENT.match(seg):
+        return "…"
+    return seg
 
 
 def redact_url(url: str) -> str:
