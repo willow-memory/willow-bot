@@ -357,6 +357,31 @@ def _read_notifier() -> dict[str, Any]:
     return {"status": "populated", "blocked": blocked}
 
 
+# ── ingress (is GitHub's webhook reaching the bot?) ──────────────────────
+
+
+def _read_ingress() -> dict[str, Any]:
+    """The steward's last ``steward_ingress`` verdict and any open flag,
+    from ``willow-bot/ingress.json``. ``empty`` before the step has ever
+    run; ``unreachable`` when the file is present but unreadable; else
+    ``populated`` with ``verdict`` (``ok``/``failing``/``empty``/
+    ``unreachable`` — what GitHub said, or that it could not be asked)."""
+    from willow_bot.steward import ingress as _ingress
+
+    p = _ingress.path()
+    if not p.is_file():
+        return {"status": "empty", "detail": f"no file at {p}"}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    if not isinstance(data, dict) or not isinstance(data.get("last"), dict):
+        return {"status": "unreachable", "detail": "ingress.json has no last verdict"}
+    last = data["last"]
+    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"),
+            "last": last, "flag": data.get("flag")}
+
+
 # ── the surface ──────────────────────────────────────────────────────────
 
 
@@ -375,4 +400,5 @@ def report() -> dict[str, Any]:
         "cursors": _read_cursors(),
         "sync": _read_last_successful_sync(),
         "notifier": _read_notifier(),
+        "ingress": _read_ingress(),
     }

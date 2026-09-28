@@ -3290,6 +3290,21 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
     return _emit(receipt)
 
 
+def run_ingress(*, enable_mcp: bool | None = None) -> dict:
+    """Ask GitHub whether the App webhook is reaching the bot
+    (``willow_bot.steward.ingress``) and receipt the answer."""
+    from willow_bot.steward import ingress
+
+    if enable_mcp is None:
+        enable_mcp = mcp_enabled()
+    call = None
+    if enable_mcp:
+        from willow_bot.steward import mcp_client
+
+        call = mcp_client.call
+    return _emit(ingress.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
+
+
 def mcp_enabled() -> bool:
     return os.environ.get("WILLOW_BOT_MCP", "").strip().lower() in ("1", "true", "yes")
 
@@ -3362,6 +3377,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("ci-legacy-clear", run_ci_legacy_clear),
             ("catchup", run_catchup),
             ("audit", run_audit),
+            ("ingress", run_ingress),
             ("voice", run_voice),
         ):
             try:
@@ -3407,6 +3423,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "catchup":
         run_catchup()
         return 0
+    if args[0] == "ingress":
+        run_ingress()
+        return 0
     if args[0] == "install-receipts":
         # Sweep then install, as the loop does — install alone has no ranges.
         run_install_receipts(run_sweep())
@@ -3439,7 +3458,7 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "annul":
         return run_annul(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|audit|ingress|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2

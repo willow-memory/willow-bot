@@ -20,9 +20,11 @@ python3 -m venv .venv
 Canonical checkout: `~/github/willow-memory/willow-bot`. The workshop clone is a
 stale second home — do not point the unit or Kart bind at it.
 
-Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `catchup` | `audit` | `status` | `inbox` | `scan`).
+Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` | `heartbeat` | `sweep` | `resolve` | `install-receipts` | `mirror` | `ci` | `catchup` | `audit` | `ingress` | `status` | `inbox` | `scan`).
 
 `status` prints one JSON receipt for the seat, with three-state fields (`populated` / `empty` / `unreachable`) — an unreadable journal is not "unit absent". See `willow_bot/status.py`.
+
+`ingress` asks GitHub for the App webhook's recent deliveries (`/app/hook/deliveries`, App JWT) on every tick. It reports `ok`, `failing` (the newest 3 deliveries were all answered non-2xx), `empty` or `unreachable`. `failing` files one `human_required` item naming the status code and the URL GitHub posts to, and resolves it when deliveries succeed again. `status` shows the last verdict under `ingress`.
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
