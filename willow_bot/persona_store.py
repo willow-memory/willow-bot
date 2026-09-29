@@ -31,6 +31,8 @@ FILES = {
     "contributors": "willow-bot-contributors.db",
     "sigh": "willow-bot-sigh.db",
     "rebase_shame": "willow-bot-rebase-shame.db",
+    # No ~/.willow ancestor: created fresh in the box (troll.py's no-repeat memory).
+    "voice": "willow-bot-voice.db",
 }
 
 

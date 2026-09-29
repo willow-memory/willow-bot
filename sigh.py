@@ -46,6 +46,17 @@ def bump_fail(repo: str, pr_number: int, path: Path | None = None) -> int:
     return row[0]
 
 
+def get(repo: str, pr_number: int, path: Path | None = None) -> int:
+    """The current failure streak for this PR (0 when none is recorded)."""
+    conn = _init_db(path)
+    row = conn.execute(
+        "SELECT streak FROM ci_fail_streaks WHERE repo = ? AND pr_number = ?",
+        (repo, pr_number),
+    ).fetchone()
+    conn.close()
+    return int(row[0]) if row else 0
+
+
 def reset(repo: str, pr_number: int, path: Path | None = None) -> None:
     conn = _init_db(path)
     conn.execute("""

@@ -76,9 +76,10 @@ REQUIRED_EVENTS = {
     "check_run",
     "create",
     "issue_comment",
+    "pull_request_review",  # the troll's review lines (approved / changes requested)
 }
 
-OPTIONAL_EVENTS = {"pull_request_review", "workflow_run", "status"}
+OPTIONAL_EVENTS = {"workflow_run", "status"}
 
 DO_NOT_NEED = {
     "contents": "write",  # bot comments only; commits use Kart/PAT

@@ -45,7 +45,8 @@ def test_counters_live_in_the_box(legacy):
     quips.record_merge("someone")
     box = paths.persona_dir()
     assert box == paths.willow_home() / "willow-bot" / "persona"
-    assert sorted(p.name for p in box.glob("*.db")) == sorted(persona_store.FILES.values())
+    counters = [persona_store.FILES[k] for k in ("contributors", "sigh", "rebase_shame")]
+    assert sorted(p.name for p in box.glob("*.db")) == sorted(counters)
     assert _migrations() == []  # nothing to carry over
 
 
