@@ -93,7 +93,7 @@
         "The troll sniffs the diff. {files} files. It smells like intent.",
         "Noted. {size} lines, placed carefully under the bridge.",
         "Another one. {files} files. The troll keeps a list. The list is long.",
-        "The troll has seen this branch arrive. The troll will see it leave. One way or another.",
+        "The troll has seen this branch arrive with {files} files. The troll will see it leave. One way or another.",
         "{size} lines. The troll has read the first one. It sets the tone."
       ],
       "huge": [
@@ -108,25 +108,25 @@
         "{size} lines. Small enough to review before the kettle boils."
       ],
       "draft": [
-        "A draft. The troll will pretend it saw nothing. It saw everything.",
-        "Draft noted. The troll has not started counting. The troll is lying.",
+        "A draft of {size} lines. The troll will pretend it saw nothing. It saw everything.",
+        "Draft noted. The troll has not started counting. The troll is lying: {files} files.",
         "Unfinished, and honest about it. {size} lines so far."
       ],
       "revert": [
-        "A revert. The troll remembers the original. The troll always remembers.",
-        "Undoing something. The troll respects a clean retreat.",
-        "Revert filed. Somewhere, a decision is being quietly un-made."
+        "A revert: {size} lines going back where they came from. The troll remembers the original. The troll always remembers.",
+        "Undoing {files} files' worth of something. The troll respects a clean retreat.",
+        "Revert filed, {size} lines. Somewhere, a decision is being quietly un-made."
       ],
       "release": [
-        "The release machine speaks. The troll nods at a fellow machine.",
-        "A release PR. The changelog is the only honest document in the building."
+        "The release machine speaks: {files} files of changelog and version. The troll nods at a fellow machine.",
+        "A release PR, {size} lines. The changelog is the only honest document in the building."
       ],
       "dependabot": [
-        "Dependabot has opened a door. The troll checks what came through it.",
-        "A dependency moved. Nobody asked it to. Nobody ever does."
+        "Dependabot has opened a door: {files} files came through it. The troll checks each one.",
+        "A dependency moved {size} lines. Nobody asked it to. Nobody ever does."
       ],
       "bot": [
-        "A machine has opened a PR. The troll respects the hustle."
+        "{login} has opened a PR. {size} lines from a machine. The troll respects the hustle."
       ],
       "weekend": [
         "A weekend PR. {size} lines. The troll does not judge. The troll is also here."
@@ -136,10 +136,10 @@
       "default": [
         "Merged after {days} days and {size} lines. The tree stands.",
         "Across the bridge: {files} files. The toll was paid.",
-        "Merged. The troll has moved it from 'maybe' to 'forever'.",
+        "Merged. The troll has moved {size} lines from 'maybe' to 'forever'.",
         "{size} lines are now everyone's problem. Congratulations.",
         "Done. {days} days from idea to history.",
-        "Merged. The troll adds it to the ledger and goes back under the bridge."
+        "Merged after {hours} hours. The troll adds it to the ledger and goes back under the bridge."
       ],
       "speedrun": [
         "Merged in {hours} hours. The troll blinked and missed it.",
@@ -160,15 +160,15 @@
         "A {size}-line merge. The troll has had bigger sneezes."
       ],
       "revert": [
-        "The revert is merged. The previous future has been cancelled.",
-        "Undone. The troll will remember it so nobody else has to."
+        "The revert is merged, {size} lines. The previous future has been cancelled.",
+        "Undone in {files} files. The troll will remember it so nobody else has to."
       ],
       "release": [
-        "Released. The version number went up. The bugs did not get the memo.",
-        "The release is out. The troll has returned to guarding the next one."
+        "Released after {days} days. The version number went up. The bugs did not get the memo.",
+        "The release is out: {files} files. The troll has returned to guarding the next one."
       ],
       "dependabot": [
-        "Dependency updated. The troll hopes someone read the changelog. The troll did not."
+        "Dependency updated, {size} lines. The troll hopes someone read the changelog. The troll did not."
       ],
       "weekend": [
         "Merged on a weekend. {size} lines. The troll will not tell anyone."
@@ -177,21 +177,21 @@
     "pr_ready": {
       "default": [
         "Out of draft. {size} lines, now officially someone's problem.",
-        "Ready for review. The troll has started counting for real.",
+        "Ready for review. The troll has started counting for real: {size} lines.",
         "No longer a draft. {files} files step onto the bridge."
       ]
     },
     "pr_reopened": {
       "default": [
-        "Back from the dead. The troll never really closed its eyes.",
-        "Reopened. Some things refuse to stay under the water.",
+        "Back from the dead after {days} days. The troll never really closed its eyes.",
+        "Reopened: {files} files that refuse to stay under the water.",
         "It returns. {days} days after it first appeared."
       ]
     },
     "pr_closed_unmerged": {
       "default": [
         "Closed without merging. {size} lines return to the river.",
-        "Not merged. The troll files it under 'ideas that happened'.",
+        "Not merged. The troll files {size} lines under 'ideas that happened'.",
         "Closed after {days} days. The bridge remembers the footsteps."
       ]
     },

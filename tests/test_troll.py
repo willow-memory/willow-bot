@@ -67,6 +67,20 @@ def test_every_line_in_every_pool_formats_with_its_facts():
                 assert "{" not in out and "some" not in out.split(), (event, tag, line)
 
 
+def test_every_line_carries_at_least_one_fact_slot():
+    """The PR's promise: no line in any pool is fact-free. (The guests are
+    separate: they are the troll's cousins, not the troll.)"""
+    bare = [f"{e}.{t}: {ln}" for e, pools in troll._cfg()["troll"].items()
+            for t, lines in pools.items() for ln in lines if "{" not in ln]
+    assert bare == []
+
+
+def _formatted(event: str, tag: str, facts: dict) -> set[str]:
+    slots = troll._Slots({k: (f"{v:,}" if isinstance(v, int) and not isinstance(v, bool) else v)
+                          for k, v in facts.items()})
+    return {ln.format_map(slots) for ln in troll._cfg()["troll"][event][tag]}
+
+
 def test_a_line_carries_the_fact():
     line, tag = troll.say("pr_opened", REPO, troll.pr_facts(_pr(additions=1200, deletions=34), now=NOW),
                           sha=NO_GUEST_SHA, rng=random.Random(1))
@@ -126,7 +140,11 @@ def test_opened_greets_with_title_fact_and_rune(posts):
     router.route("pull_request", _event("opened", additions=900, deletions=0), post)
     [(repo, number, body)] = out
     assert number == 7 and body.startswith("**Thrall someone** — ")
-    assert "900" in body and "\n\n> " in body
+    line, rune = body[len("**Thrall someone** — "):].split("\n\n", 1)
+    # Whichever huge line was drawn, it is one of the huge lines with the
+    # real facts filled in (not a lucky pick of the one that says 900).
+    assert line in _formatted("pr_opened", "huge", troll.pr_facts(_pr(additions=900, deletions=0)))
+    assert rune.startswith("> ")
 
 
 def test_merged_carries_days_title_and_horoscope(posts):
