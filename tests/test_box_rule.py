@@ -190,14 +190,16 @@ def test_install_service_refuses_a_box_that_is_not_an_existing_absolute_dir(box)
 
 # ── Loki 87DF2A04 ────────────────────────────────────────────────────────────
 
-def test_a_carried_over_counter_matches_a_fresh_one_under_umask_002(monkeypatch, tmp_path):
-    """F2: SQLite creates 0644 less the umask; the carry-over must match it
-    under any umask, not only CI's 022."""
+@pytest.mark.parametrize("mask", [0o002, 0o027, 0o077])
+def test_a_carried_over_counter_matches_a_fresh_one_under_any_umask(monkeypatch, tmp_path, mask):
+    """F2/F4 (Loki 87DF2A04, 407AC2A3): SQLite creates 0644 less the umask;
+    the carry-over must match it under every umask — 027 and 077 are the
+    ones that prove the umask is actually applied, not only CI's 022."""
     legacy = tmp_path / "old"
     legacy.mkdir()
     _make_db(legacy / "willow-bot-sigh.db")
     monkeypatch.setattr(persona_store, "_legacy_dir", lambda: legacy)
-    old = os.umask(0o002)
+    old = os.umask(mask)
     try:
         carried = persona_store.db_path("sigh")
         fresh = persona_store.db_path("rebase_shame")
@@ -205,6 +207,7 @@ def test_a_carried_over_counter_matches_a_fresh_one_under_umask_002(monkeypatch,
     finally:
         os.umask(old)
     assert stat.S_IMODE(carried.stat().st_mode) == stat.S_IMODE(fresh.stat().st_mode)
+    assert stat.S_IMODE(carried.stat().st_mode) == 0o644 & ~mask
 
 
 def test_state_override_expands_tilde(monkeypatch, tmp_path):
