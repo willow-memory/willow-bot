@@ -213,11 +213,23 @@
     },
     "ci_recovered": {
       "default": [
-        "Green after {reds} reds. The troll exhales.",
-        "{reds} failures, then a pass. Persistence, or a flaky test. The troll suspects both.",
-        "It took {reds} tries. The tests finally believed you.",
-        "Green at last, after {reds} reds. The troll will stop sighing now."
+        "Green after {reds} red checks. The troll exhales.",
+        "{reds} red checks, then a pass. Persistence, or a flaky test. The troll suspects both.",
+        "{reds} red checks before this green. The tests finally believed you.",
+        "Green at last, after {reds} red checks. The troll will stop sighing now."
       ]
     }
+  },
+  "troll_scope": {
+    "_doc": "Where and to whom the troll speaks (troll.allowed / troll.claim). orgs: the only orgs it speaks in. associations: GitHub author_association values it speaks to; outside contributors are never trolled. daily_cap: lines per repo per UTC day.",
+    "orgs": [
+      "willow-memory"
+    ],
+    "associations": [
+      "OWNER",
+      "MEMBER",
+      "COLLABORATOR"
+    ],
+    "daily_cap": 20
   }
 }

@@ -19,15 +19,19 @@ import troll
 
 REPO = "willow-memory/willow-bot"
 NOW = datetime(2026, 9, 29, 12, 0, tzinfo=timezone.utc)  # a Tuesday
-NO_GUEST_SHA = next(f"{i:040x}" for i in range(1000)
-                    if int(__import__("hashlib").sha256(f"{i:040x}".encode()).hexdigest()[:8], 16)
-                    % troll.GUEST_ONE_IN > 1)
+def _draw(sha: str) -> int:
+    return int(__import__("hashlib").sha256(sha.encode()).hexdigest()[:8], 16) % troll.GUEST_DRAW
+
+
+NO_GUEST_SHA = next(f"{i:040x}" for i in range(1000) if _draw(f"{i:040x}") > 1)
+FRANK_SHA = next(f"{i:040x}" for i in range(1000) if _draw(f"{i:040x}") == 0)
 
 
 def _pr(**over):
     pr = {"number": 7, "title": "feat: a thing", "draft": False, "additions": 40, "deletions": 10,
           "changed_files": 3, "created_at": "2026-09-27T12:00:00Z", "merged_at": None, "closed_at": None,
-          "user": {"login": "someone", "type": "User"}, "head": {"ref": "feat/x", "sha": NO_GUEST_SHA}}
+          "user": {"login": "someone", "type": "User"}, "head": {"ref": "feat/x", "sha": NO_GUEST_SHA},
+          "author_association": "OWNER"}
     pr.update(over)
     return pr
 
@@ -63,8 +67,8 @@ def test_every_line_in_every_pool_formats_with_its_facts():
     for event, pools in troll._cfg()["troll"].items():
         for tag, lines in pools.items():
             for line in lines:
-                out = line.format_map(troll._Slots(facts))
-                assert "{" not in out and "some" not in out.split(), (event, tag, line)
+                assert troll._fillable(line, facts), (event, tag, line)
+                assert "{" not in troll._render(line, facts), (event, tag, line)
 
 
 def test_every_line_carries_at_least_one_fact_slot():
@@ -76,9 +80,7 @@ def test_every_line_carries_at_least_one_fact_slot():
 
 
 def _formatted(event: str, tag: str, facts: dict) -> set[str]:
-    slots = troll._Slots({k: (f"{v:,}" if isinstance(v, int) and not isinstance(v, bool) else v)
-                          for k, v in facts.items()})
-    return {ln.format_map(slots) for ln in troll._cfg()["troll"][event][tag]}
+    return {troll._render(ln, facts) for ln in troll._cfg()["troll"][event][tag] if troll._fillable(ln, facts)}
 
 
 def test_a_line_carries_the_fact():
@@ -107,13 +109,21 @@ def test_memory_is_per_repo():
     assert len(other) == len(pool)
 
 
-def test_guest_voices_are_seeded_by_the_sha():
-    frank = next(f"{i:040x}" for i in range(1000)
-                 if int(__import__("hashlib").sha256(f"{i:040x}".encode()).hexdigest()[:8], 16)
-                 % troll.GUEST_ONE_IN == 0)
-    line, tag = troll.say("pr_merged", REPO, {}, sha=frank)
+def test_guest_voices_are_seeded_by_the_sha_and_only_on_open_and_merge():
+    line, tag = troll.say("pr_merged", REPO, {}, sha=FRANK_SHA)
     assert tag == "guest" and line.startswith("FRANK")
-    assert troll.say("pr_merged", REPO, {}, sha=frank)[0] == line  # same sha, same guest
+    assert troll.say("pr_merged", REPO, {}, sha=FRANK_SHA)[0] == line  # same sha, same guest
+    # Loki 8F92E889: never on the moments FRANK has no line for.
+    for event in ("review_approved", "review_changes_requested", "pr_ready", "pr_reopened",
+                  "pr_closed_unmerged", "ci_recovered"):
+        assert troll.say(event, REPO, {"reviewer": "r", "reds": 4, "size": 1, "files": 1, "days": 1},
+                         sha=FRANK_SHA)[1] != "guest"
+
+
+def test_the_guest_rate_is_one_in_twenty():
+    n = 20000
+    hits = sum(1 for i in range(n) if troll._guest("pr_opened", f"{i:040x}", "x"))
+    assert 0.04 < hits / n < 0.06
 
 
 def test_an_event_with_no_pool_says_nothing():
@@ -167,11 +177,7 @@ def test_new_pr_moments_speak_from_their_own_pool(posts, action, event):
     out, post = posts
     router.route("pull_request", _event(action), post)
     [(_, number, body)] = out
-    facts = troll.pr_facts(_pr())
-    expected = {ln.format_map(troll._Slots({k: (f"{v:,}" if isinstance(v, int) and not isinstance(v, bool) else v)
-                                            for k, v in facts.items()}))
-                for ln in troll._cfg()["troll"][event]["default"]}
-    assert number == 7 and body in expected
+    assert number == 7 and body in _formatted(event, "default", troll.pr_facts(_pr()))
 
 
 def test_closed_without_merge_speaks(posts):
@@ -184,7 +190,8 @@ def test_closed_without_merge_speaks(posts):
 def test_reviews_name_the_reviewer(posts, state, expect):
     out, post = posts
     payload = {"action": "submitted", "repository": {"full_name": REPO}, "pull_request": _pr(),
-               "review": {"state": state, "user": {"login": "reviewer-x"}, "commit_id": NO_GUEST_SHA}}
+               "review": {"state": state, "user": {"login": "reviewer-x"}, "commit_id": NO_GUEST_SHA,
+                          "author_association": "MEMBER"}}
     router.route("pull_request_review", payload, post)
     assert len(out) == expect
     if expect:
@@ -220,3 +227,82 @@ def test_frank_mode_still_takes_over(posts, monkeypatch):
     monkeypatch.setenv("FRANK_MODE", "1")
     router.route("pull_request", _event("opened"), post)
     assert out and "FRANK" in out[0][2]
+
+
+
+# ── Loki 8F92E889 ────────────────────────────────────────────────────────────
+
+def test_a_line_whose_fact_is_missing_is_never_drawn():
+    """F4: sparse facts draw only lines they can fill; nothing reads "some"."""
+    sparse = {"login": "x"}  # no size, no files, no days
+    for _ in range(12):
+        line, tag = troll.say("pr_opened", REPO, sparse, sha=NO_GUEST_SHA)
+        assert line == "" or "some" not in line.split()
+    # pr_opened.bot carries {login} and {size}: without size, nothing fits; silence.
+    assert troll.say("pr_opened", REPO, {"login": "x", "bot_author": True}, sha=NO_GUEST_SHA)[0] == ""
+
+
+def test_a_new_cycle_never_opens_with_the_line_just_said():
+    """F6: a stub that always prefers the last line said proves the guard."""
+    pool = troll._cfg()["troll"]["pr_opened"]["default"]
+    facts = troll.pr_facts(_pr(), now=NOW)
+    said = []
+
+    class _Stub(random.Random):
+        def choice(self, seq):
+            wanted = said[-1] if said else None
+            return next((x for x in seq if troll._render(x, facts) == wanted), seq[0])
+
+    for _ in range(len(pool) + 1):
+        said.append(troll.say("pr_opened", "o/cycle", facts, sha=NO_GUEST_SHA, rng=_Stub())[0])
+    assert said[-1] != said[-2]
+
+
+def test_out_of_scope_org_is_silent(posts):
+    out, post = posts
+    payload = _event("opened")
+    payload["repository"]["full_name"] = "forge-play/Forge"
+    router.route("pull_request", payload, post)
+    assert out == []
+
+
+@pytest.mark.parametrize("assoc", ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE", None])
+def test_outside_contributors_are_not_trolled(posts, assoc):
+    out, post = posts
+    router.route("pull_request", _event("opened", author_association=assoc), post)
+    assert out == []
+
+
+def test_close_reopen_loop_speaks_once_each(posts):
+    """F2: 30 close/reopen cycles used to post 60 comments."""
+    out, post = posts
+    for _ in range(30):
+        router.route("pull_request", _event("closed", closed_at="2026-09-29T12:00:00Z"), post)
+        router.route("pull_request", _event("reopened"), post)
+    assert len(out) == 2
+
+
+def test_one_line_per_reviewer_per_pr(posts):
+    out, post = posts
+    for _ in range(10):
+        router.route("pull_request_review", {
+            "action": "submitted", "repository": {"full_name": REPO}, "pull_request": _pr(),
+            "review": {"state": "approved", "user": {"login": "reviewer-x"}, "author_association": "MEMBER"}}, post)
+    router.route("pull_request_review", {
+        "action": "submitted", "repository": {"full_name": REPO}, "pull_request": _pr(),
+        "review": {"state": "approved", "user": {"login": "reviewer-y"}, "author_association": "MEMBER"}}, post)
+    assert len(out) == 2
+
+
+def test_daily_cap_per_repo(posts, monkeypatch):
+    out, post = posts
+    monkeypatch.setitem(troll._cfg()["troll_scope"], "daily_cap", 3)
+    for n in range(1, 8):
+        router.route("pull_request", _event("opened", number=n), post)
+    assert len(out) == 3
+
+
+def test_red_count_is_called_red_checks_not_tries():
+    """F5: the count is failing check runs, not attempts."""
+    for line in troll._cfg()["troll"]["ci_recovered"]["default"]:
+        assert "{reds} red checks" in line and "tries" not in line

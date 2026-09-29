@@ -50,6 +50,23 @@ def _mode_override() -> bool:
     return bool(os.getenv("FRANK_MODE") or os.getenv("PROPHET_MODE"))
 
 
+def _may(repo: str, number: object, moment: str, association: object, *, bot: bool = False) -> bool:
+    """Scope first (org and author association), then the once-per-moment
+    and daily-cap claim. Anything that fails is silent, and says why in
+    the log."""
+    try:
+        if not troll.allowed(repo, association, bot=bot):
+            log.info("[%s] #%s %s: out of the troll's scope — silent", repo, number, moment)
+            return False
+        if not troll.claim(repo, number, moment):
+            log.info("[%s] #%s %s: already said, or daily cap reached — silent", repo, number, moment)
+            return False
+    except Exception:  # noqa: BLE001 — the voice must never break the webhook
+        log.exception("troll gate failed for %s on %s", moment, repo)
+        return False
+    return True
+
+
 def _troll_line(event: str, repo: str, facts: dict, sha: str = "") -> str:
     try:
         line, tag = troll.say(event, repo, facts, sha=sha)
@@ -68,15 +85,17 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
     number = pr.get("number")
     sha = pr.get("head", {}).get("sha", "")
     human = pr.get("user", {}).get("type") != "Bot"
+    assoc = pr.get("author_association")
 
     if _mode_override():
-        # The old single-voice path, unchanged.
+        # The old single-voice path, behind the same scope and limits.
         if action == "closed" and pr.get("merged"):
             quips.record_merge(login)
-            msg = quips.pick("pr_merged", login)
-            if msg:
-                post(repo, number, msg)
-        elif action == "opened":
+            if _may(repo, number, "merged", assoc, bot=not human):
+                msg = quips.pick("pr_merged", login)
+                if msg:
+                    post(repo, number, msg)
+        elif action == "opened" and _may(repo, number, "opened", assoc, bot=not human):
             msg = quips.pick("pr_opened", login, sha=sha)
             if msg:
                 post(repo, number, msg)
@@ -85,6 +104,8 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
     facts = troll.pr_facts(pr)
     if action == "closed" and pr.get("merged"):
         title = quips.record_merge(login) if human else ""
+        if not _may(repo, number, "merged", assoc, bot=not human):
+            return
         line = _troll_line("pr_merged", repo, facts, sha)
         if not line:
             return
@@ -93,10 +114,14 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
         shame = rebase_shame.header(rebase_shame.get(repo, pr.get("head", {}).get("ref", "")))
         post(repo, number, f"{shame}\n\n{line}" if shame else line)
     elif action == "closed":
+        if not _may(repo, number, "closed", assoc, bot=not human):
+            return
         line = _troll_line("pr_closed_unmerged", repo, facts, sha)
         if line:
             post(repo, number, line)
     elif action == "opened":
+        if not _may(repo, number, "opened", assoc, bot=not human):
+            return
         line = _troll_line("pr_opened", repo, facts, sha)
         if not line:
             return
@@ -104,10 +129,14 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
             line = f"**{quips.get_title(login).capitalize()} {login}** — {line}"
         post(repo, number, f"{line}\n\n{runes.cast(sha)}" if sha else line)
     elif action == "ready_for_review":
+        if not _may(repo, number, "ready", assoc, bot=not human):
+            return
         line = _troll_line("pr_ready", repo, facts, sha)
         if line:
             post(repo, number, line)
     elif action == "reopened":
+        if not _may(repo, number, "reopened", assoc, bot=not human):
+            return
         line = _troll_line("pr_reopened", repo, facts, sha)
         if line:
             post(repo, number, line)
@@ -125,7 +154,12 @@ def _handle_review(payload: dict, post: Callable) -> None:
         return
     pr = payload.get("pull_request") or {}
     repo = payload.get("repository", {}).get("full_name", "")
-    facts = {**troll.pr_facts(pr), "reviewer": (review.get("user") or {}).get("login", "someone")}
+    reviewer = (review.get("user") or {}).get("login", "")
+    # Once per reviewer per PR; the reviewer is the one being addressed.
+    if not reviewer or not _may(repo, pr.get("number"), f"review:{reviewer}", review.get("author_association"),
+                                bot=(review.get("user") or {}).get("type") == "Bot"):
+        return
+    facts = {**troll.pr_facts(pr), "reviewer": reviewer}
     line = _troll_line(event, repo, facts, str(review.get("commit_id") or ""))
     if line:
         post(repo, pr.get("number"), line)
@@ -162,9 +196,10 @@ def _handle_check_run(payload: dict, post: Callable) -> None:
                 sigh.reset(repo, pr["number"])
                 # Once per recovery: the first green leg resets the streak,
                 # so later legs of the same head see 0 and say nothing.
-                if reds >= troll.RECOVERY_REDS and not _mode_override():
-                    line = _troll_line("ci_recovered", repo, {"reds": reds},
-                                       str(check.get("head_sha") or ""))
+                head = str(check.get("head_sha") or "")
+                if (reds >= troll.RECOVERY_REDS and not _mode_override()
+                        and _may(repo, pr["number"], f"recovered:{head}", None, bot=True)):
+                    line = _troll_line("ci_recovered", repo, {"reds": reds}, head)
                     if line:
                         post(repo, pr["number"], line)
         elif conclusion in ("failure", "timed_out", "startup_failure"):
