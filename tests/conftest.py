@@ -73,6 +73,20 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_tick, "_ci_fetch_pull", _no_network_pull)
 
+    # The audit step reads the PR it dispatches. No test reaches GitHub for
+    # that either: every PR reads back as one small, fixed pull, and a test
+    # of the unreadable path patches these to raise.
+    def _fixed_audit_pull(repo, pr):
+        return {"body": f"## Bite\nfixture body for {repo}#{pr}",
+                "head": {"sha": "f1x7ure", "ref": "fix/fixture"}}
+
+    def _fixed_audit_files(repo, pr):
+        return [{"filename": "src/app.py", "status": "modified", "additions": 1,
+                 "deletions": 1, "patch": "@@ -1 +1 @@\n-old\n+new"}]
+
+    monkeypatch.setattr(_tick, "_audit_fetch_pull", _fixed_audit_pull)
+    monkeypatch.setattr(_tick, "_audit_fetch_files", _fixed_audit_files)
+
     # Same floor for the ingress read (GitHub's webhook delivery record).
     from willow_bot.steward import ingress as _ingress
 

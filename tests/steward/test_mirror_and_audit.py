@@ -261,12 +261,59 @@ def test_audit_dispatches_each_pending_pr_to_loki_as_auditor(home, monkeypatch):
     # the call args the verb gate cites: {to_agents: loki, task_class: auditor}
     assert inputs["to_app"] == "loki" and inputs["role"] == "auditor"
     assert inputs["reply_to"] == "willow"
+    # Loki's listener enters with runner="ratatosk"; a packet without it is a
+    # seat packet and every accept is refused ERUNNER.
+    assert inputs["runner"] == "ratatosk"
     assert "# Audit forge-play/Forge#31" in inputs["assignment_md"]
-    assert "/repos/forge-play/Forge/pulls/31/files" in inputs["assignment_md"]
+    # Loki holds no integration_call and no store scope: the packet carries
+    # the PR, and never asks for a read the auditor cannot make.
+    assert "fixture body for forge-play/Forge#31" in inputs["assignment_md"]
+    assert "--- src/app.py (modified +1 -1)\n@@ -1 +1 @@\n-old\n+new" in inputs["assignment_md"]
+    assert "`fix/fixture` @ `f1x7ure`" in inputs["assignment_md"]
+    assert "integration_call" not in inputs["assignment_md"]
+    assert "store_search" not in inputs["assignment_md"]
     assert "handoff_write_v4" in inputs["assignment_md"]
     st = json.loads(p.read_text())
     assert st["pending_audit"] == []
     assert st["audit_dispatched"] == {"forge-play/Forge#31": "D0", "willow-memory/willow-mcp#524": "D1"}
+
+
+def test_an_unreadable_pr_is_not_dispatched_and_stays_pending(home, monkeypatch):
+    """An audit of a title is not an audit: a PR whose body or diff cannot be
+    read sends no packet, and waits for the next tick with the reason."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    p = _state_with_pending(home, "o/r#7")
+
+    def _down(repo, pr):
+        raise RuntimeError("GitHub App not configured")
+
+    monkeypatch.setattr(tick, "_audit_fetch_files", _down)
+    c = _Client(result=lambda name, inputs: {"dispatch_id": "D0", "status": "pending"})
+    _use(monkeypatch, c)
+    r = tick.run_audit()
+    assert c.calls == [], "no packet goes out for a PR the bot could not read"
+    assert r["status"] == "could-not-run" and r["dispatched"] == []
+    assert r["refused"][0]["repo_pr"] == "o/r#7"
+    assert "pr unreadable" in r["refused"][0]["error"]
+    st = json.loads(p.read_text())
+    assert [i["repo_pr"] for i in st["pending_audit"]] == ["o/r#7"]
+    assert "pr unreadable" in st["pending_audit"][0]["last_error"]
+
+
+def test_the_diff_past_the_cap_is_named_not_dropped():
+    """A packet that cut the diff says which files it cut, with their counts,
+    so the auditor reports what it could not see instead of guessing."""
+    big = "@@ -1 +1 @@\n" + "+x\n" * (tick._AUDIT_DIFF_CAP // 3)
+    files = [
+        {"filename": "a.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@ -1 +1 @@\n+a"},
+        {"filename": "huge.py", "status": "added", "additions": 9000, "deletions": 0, "patch": big},
+        {"filename": "logo.png", "status": "added", "additions": 0, "deletions": 0},
+    ]
+    out = tick._audit_diff(files)
+    assert "--- a.py (modified +1 -0)\n@@ -1 +1 @@\n+a" in out
+    assert "--- logo.png (added +0 -0) — no patch (binary or too large)" in out
+    assert "Not shown (past the packet's diff cap):\n- huge.py (added +9000 -0)" in out
+    assert len(out) < tick._AUDIT_DIFF_CAP + 500
 
 
 def test_a_refused_dispatch_stays_pending_with_its_reason(home, monkeypatch):
