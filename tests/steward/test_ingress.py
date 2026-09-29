@@ -393,6 +393,7 @@ def test_quiet_does_not_resolve_an_open_flag(github):
     ("https://hooks.example.invalid/" + "a" * 40, "https://hooks.example.invalid/…"),
     ("https://smee.io/cOXMpBiOXVtcrqwe", "https://smee.io/…"),  # mixed-case, letters only (87DF2A04)
     ("https://hooks.example.invalid/ghp_abcdefghijklmnopqrstuvwxyz", "https://hooks.example.invalid/…"),
+    ("https://hooks.example.invalid/ghs_abcdefghijklmnop/webhook", "https://hooks.example.invalid/…/webhook"),  # F5
     ("https://hooks.example.invalid/github_pat_abc/webhook", "https://hooks.example.invalid/…/webhook"),
     ("https://hooks.example.invalid/" + "Q" * 24, "https://hooks.example.invalid/…"),
     ("http://[::1]:9000/webhook", "http://[::1]:9000/webhook"),
