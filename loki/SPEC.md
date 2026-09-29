@@ -132,11 +132,11 @@ willow-bot/
 
 - `psycopg2-binary` — Postgres connection for Grove
 - `httpx` — Cerebras API call
-- `cryptography` — Fernet vault decryption (`~/.willow/vault.db`)
+- `cryptography` — Fernet vault decryption (the box's `vault.db`)
 
 ## Key Store
 
-Cerebras API key lives in `~/.willow/vault.db` (Fernet-encrypted SQLite, keyed by `~/.willow/.master.key`). Written by `shoot.py` setup wizard. Read by `cerebras.py` at call time. No `.env` needed.
+`cerebras.py` reads a key by name at call time: first from the process env (a unit loads the box's `$WILLOW_HOME/env`), then from the box's Fernet vault (`$WILLOW_VAULT_BOX` or `$WILLOW_HOME`, `vault.db` keyed by `vault.key`). It never reads `~/.willow`: that home is tombstoned, and keys read from it are not the box's (2026-09-29).
 
 ## Run
 

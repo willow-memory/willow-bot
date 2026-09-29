@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.11.3](https://github.com/willow-memory/willow-bot/compare/v0.11.2...v0.11.3) (2026-09-29)
+
+
+### Fixed
+
+* **loki:** read keys from the box, never the tombstoned ~/.willow ([ab010e7](https://github.com/willow-memory/willow-bot/commit/ab010e7607379222218653c9abad03f766cf22d5))
+* **loki:** read keys from the box, never the tombstoned ~/.willow ([2a38f73](https://github.com/willow-memory/willow-bot/commit/2a38f73e0bf62c03d807986a230b85814f46afbb))
+
 ## [0.11.2](https://github.com/willow-memory/willow-bot/compare/v0.11.1...v0.11.2) (2026-09-28)
 
 
