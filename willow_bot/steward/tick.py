@@ -164,28 +164,107 @@ def run_once(*, do_host_sync: bool | None = None, scan_filters: list[str] | None
 _AUDIT_PER_TICK = 5
 
 
-def _audit_brief(item: dict) -> str:
+#: Caps on what the packet carries. The woken auditor's first rung is a free
+#: tier whose tokens-per-minute cap (Groq: 8000, measured 2026-09-29) the
+#: whole first turn has to fit under — tool definitions included — so the
+#: body and the diff are cut here, and the brief says where it cut.
+_AUDIT_BODY_CAP = 3000
+_AUDIT_DIFF_CAP = 9000
+
+
+def _audit_fetch_pull(repo: str, pr: int) -> dict:
+    """The PR as GitHub has it. A module-level name so the test floor
+    (tests/conftest.py) keeps it off the network."""
+    import github_app  # local import so a test can monkeypatch the module
+
+    return github_app.get_pull(repo, pr)
+
+
+def _audit_fetch_files(repo: str, pr: int) -> list[dict]:
+    """The PR's changed files with their patches. Module-level for the same
+    reason as `_audit_fetch_pull`."""
+    import github_app  # local import so a test can monkeypatch the module
+
+    return github_app.list_pull_files(repo, pr)
+
+
+def _audit_material(item: dict) -> tuple[dict | None, str | None]:
+    """``(material, None)`` with the PR's body, head and diff read live, or
+    ``(None, reason)`` when any of it cannot be read.
+
+    Loki cannot read GitHub or the bot's store (its manifest holds neither
+    `integration_call` nor a store scope beyond `loki_*`), so the packet has
+    to carry the PR itself. A PR that cannot be read is not dispatched: an
+    audit of a title is not an audit, and the PR stays pending for the next
+    tick with the reason."""
+    repo, _, num = str(item.get("repo_pr", "")).rpartition("#")
+    try:
+        pr = int(num)
+    except ValueError:
+        return None, f"not a repo#pr key: {item.get('repo_pr')!r}"
+    try:
+        pull = _audit_fetch_pull(repo, pr)
+        files = _audit_fetch_files(repo, pr)
+    except Exception as exc:  # noqa: BLE001 — unreadable is a pending reason, never a stub packet
+        return None, f"pr unreadable: {type(exc).__name__}: {exc}"[:300]
+    head = pull.get("head") or {}
+    return {
+        "body": str(pull.get("body") or ""),
+        "head_sha": str(head.get("sha") or ""),
+        "head_ref": str(head.get("ref") or ""),
+        "files": files,
+    }, None
+
+
+def _audit_diff(files: list[dict]) -> str:
+    """Every changed file's patch, in order, until `_AUDIT_DIFF_CAP`; each
+    file past the cap is still named with its counts, so the auditor knows
+    what it did not see."""
+    parts: list[str] = []
+    unseen: list[str] = []
+    used = 0
+    for f in files:
+        name = str(f.get("filename", "?"))
+        counts = f"{f.get('status', '?')} +{f.get('additions', 0)} -{f.get('deletions', 0)}"
+        patch = f.get("patch")
+        block = f"--- {name} ({counts})\n{patch}\n" if patch else f"--- {name} ({counts}) — no patch (binary or too large)\n"
+        if used + len(block) > _AUDIT_DIFF_CAP:
+            unseen.append(f"{name} ({counts})")
+            continue
+        parts.append(block)
+        used += len(block)
+    out = "".join(parts)
+    if unseen:
+        out += "\nNot shown (past the packet's diff cap):\n" + "".join(f"- {u}\n" for u in unseen)
+    return out
+
+
+def _audit_brief(item: dict, material: dict) -> str:
     key, title, url = item.get("repo_pr", ""), item.get("title", ""), item.get("url", "")
-    repo, _, num = key.rpartition("#")
+    body = material.get("body", "")
+    if len(body) > _AUDIT_BODY_CAP:
+        body = body[:_AUDIT_BODY_CAP] + "\n[… body cut at the packet's cap]"
     return (
         f"# Audit {key}\n\n"
-        f"**{title}**\n{url}\n\n"
+        f"**{title}**\n{url}\n"
+        f"Head: `{material.get('head_ref', '')}` @ `{material.get('head_sha', '')}`\n\n"
         "Adversarial review of this pull request, in your register: name what "
         "the PR promises, what the diff delivers, and the distance between "
         "them. Specific findings with file and line; no summary of the diff "
         "back to its author.\n\n"
-        "Read, do not build:\n"
-        f"- `integration_call(name='github', method='GET', path='/repos/{repo}/pulls/{num}')` "
-        "for the body and the head sha;\n"
-        f"- `integration_call(name='github', method='GET', path='/repos/{repo}/pulls/{num}/files')` "
-        "for the diff;\n"
-        f"- `store_search(collection='willow_bot_ci_deposits', query='{repo}')` for the "
-        "CI outcomes the bot deposited for its head sha.\n\n"
+        "Everything you are asked to judge is in this packet: you have no "
+        "GitHub or store access, so do not ask for it. Where the diff below "
+        "was cut, say which files you could not see rather than guessing at "
+        "them.\n\n"
         "Hold the body to the org PR template (Bite / What was done / Evidence / "
         "Out of scope / Next bite) and say which sections are missing or empty. "
         "Hold Evidence to receipts: a count with no command is a claim.\n\n"
         "Close with `handoff_write_v4` to willow: findings ranked, most severe "
-        "first; `no findings` is a finding only when you say what you checked."
+        "first; `no findings` is a finding only when you say what you checked.\n\n"
+        f"## PR body\n\n{body or '(empty)'}\n\n"
+        # No code fence: the patches of this fleet's .md files carry fences
+        # of their own, and one would close ours halfway through the diff.
+        f"## Diff\n\n{_audit_diff(material.get('files') or [])}"
     )
 
 
@@ -196,6 +275,12 @@ def _audit_brief(item: dict) -> str:
 _AUDIT_ENVELOPE_STATE_KEY = "audit_envelope_id"
 _AUDIT_TASK_CLASS = "auditor"
 _AUDIT_TO_AGENT = "loki"
+#: Who may accept the packet (willow-mcp dispatch_send `runner`, sealed
+#: 71fb4b10). Loki's audits are worked by its ratatosk listener, which
+#: enters with runner="ratatosk"; a packet sent without it is a "seat"
+#: packet and the listener's accept is refused ERUNNER — every audit this
+#: step sent between ratatosk#61 and this line sat pending, unworkable.
+_AUDIT_RUNNER = "ratatosk"
 
 
 def _auditor_envelope_from(envelopes: object) -> str | None:
@@ -280,16 +365,23 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
         if pace.budget_spent:
             still.append(item)
             continue
+        material, unreadable = _audit_material(item)
+        if material is None:
+            item["last_error"] = unreadable
+            refused.append({"repo_pr": key, "error": unreadable})
+            still.append(item)
+            continue
         args = {
             "app_id": app,
             "to_app": _AUDIT_TO_AGENT,
             "role": _AUDIT_TASK_CLASS,
             "summary": f"Audit {key}: {item.get('title', '')}"[:200],
-            "assignment_md": _audit_brief(item),
+            "assignment_md": _audit_brief(item, material),
             "context_refs": [item.get("url", "")],
             "reply_to": "willow",
             "phase": "operate",
             "priority": "normal",
+            "runner": _AUDIT_RUNNER,
         }
         if envelope_id:
             args["envelope_id"] = envelope_id

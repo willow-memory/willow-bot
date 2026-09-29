@@ -148,6 +148,33 @@ def get_pull(repo_full_name: str, number: int) -> dict:
     return data
 
 
+def list_pull_files(repo_full_name: str, number: int, *, per_page: int = 100, max_pages: int = 3) -> list[dict]:
+    """``GET /repos/{repo}/pulls/{number}/files`` under the App's install
+    token: each changed file with its ``status``, ``additions``,
+    ``deletions`` and ``patch`` (absent for a binary or an oversized file).
+    Paginates up to ``max_pages``; raises on an unconfigured App or HTTP
+    error so the caller decides what an unreadable diff means."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — cannot list_pull_files")
+    headers = _auth_headers(repo_full_name)
+    out: list[dict] = []
+    for page in range(1, max_pages + 1):
+        r = requests.get(
+            f"https://api.github.com/repos/{repo_full_name}/pulls/{int(number)}/files",
+            headers=headers,
+            params={"per_page": per_page, "page": page},
+            timeout=15,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        if not isinstance(batch, list):
+            raise RuntimeError(f"unexpected pulls/files answer for {repo_full_name}#{number}")
+        out.extend(f for f in batch if isinstance(f, dict))
+        if len(batch) < per_page:
+            break
+    return out
+
+
 def _app_get(path: str, *, params: dict | None = None):
     """GET an App-level endpoint (``/app/...``) under the App's own JWT —
     not an installation token. Raises on an unconfigured App or HTTP error."""
