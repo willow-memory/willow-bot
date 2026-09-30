@@ -1,6 +1,8 @@
-"""The socket's ``chat`` op: one system+user exchange with a local model.
+"""The socket's ``chat`` and ``unload`` ops: local models, loopback Ollama only.
 
-Loopback Ollama only. The model must be in the policy's allow-list. No cloud
+``chat`` is one system+user exchange with a local model. ``unload`` asks Ollama
+to drop a model from memory now, so a caller walking a ladder of models holds
+one in memory at a time. The model must be in the policy's allow-list. No cloud
 route, no escalation, no retry: one request, one answer or one refusal.
 
 Errors are ``{"ok": False, "error": "<CODE>: <detail>"}`` with codes
@@ -9,6 +11,7 @@ Errors are ``{"ok": False, "error": "<CODE>: <detail>"}`` with codes
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +21,11 @@ from willow_bot.deterministic.policy import Policy
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _MAX_TOKENS_CAP = 32768
+# keep_alive: how long Ollama holds the model after the reply. Bounded to a day
+# and never negative: a negative keep_alive pins a model in memory forever.
+_KEEP_ALIVE_MAX_S = 86400
+_KEEP_ALIVE_RE = re.compile(r"^(\d+)(s|m|h)$")
+_UNIT_S = {"s": 1, "m": 60, "h": 3600}
 
 
 def _err(code: str, detail: str) -> dict:
@@ -33,6 +41,38 @@ def is_loopback_base(base_url: str) -> bool:
     return parsed.scheme in ("http", "https") and host in LOOPBACK_HOSTS
 
 
+def _keep_alive_ok(value) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return 0 <= value <= _KEEP_ALIVE_MAX_S
+    if isinstance(value, str):
+        m = _KEEP_ALIVE_RE.match(value)
+        return bool(m) and int(m.group(1)) * _UNIT_S[m.group(2)] <= _KEEP_ALIVE_MAX_S
+    return False
+
+
+def _model_refusal(policy: Policy, model) -> dict | None:
+    if not isinstance(model, str) or not model:
+        return _err("EBADREQ", "model must be a non-empty string")
+    if model not in policy.chat_models:
+        return _err("EMODEL", f"{model!r} is not in the local-model allow-list")
+    if not is_loopback_base(policy.ollama_base):
+        return _err("ELOOPBACK", "ollama_base is not a loopback host")
+    return None
+
+
+def _post(policy: Policy, path: str, payload: dict) -> dict:
+    http_req = urllib.request.Request(
+        f"{policy.ollama_base.rstrip('/')}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(http_req, timeout=policy.chat_timeout_s) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def run_chat(policy: Policy, req: dict) -> dict:
     model = req.get("model")
     system = req.get("system")
@@ -46,22 +86,30 @@ def run_chat(policy: Policy, req: dict) -> dict:
         return _err("EBADREQ", "temperature must be a number")
     if not 0 <= float(temperature) <= 2:
         return _err("EBADREQ", "temperature must be within 0..2")
+    # format: null, "json", or a JSON schema object (Ollama's structured output).
     fmt = req.get("format")
-    if fmt not in (None, "json"):
-        return _err("EBADREQ", "format must be 'json' or null")
+    if fmt is not None and fmt != "json" and not isinstance(fmt, dict):
+        return _err("EBADREQ", "format must be 'json', a JSON schema object, or null")
     max_tokens = req.get("max_tokens")
     if max_tokens is not None:
         if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
             return _err("EBADREQ", "max_tokens must be an integer")
         if not 0 < max_tokens <= _MAX_TOKENS_CAP:
             return _err("EBADREQ", f"max_tokens must be within 1..{_MAX_TOKENS_CAP}")
+    keep_alive = req.get("keep_alive")
+    if keep_alive is not None and not _keep_alive_ok(keep_alive):
+        return _err(
+            "EBADREQ",
+            f"keep_alive must be seconds (int) or '<n>s|m|h', within 0..{_KEEP_ALIVE_MAX_S}s",
+        )
     size = len(system.encode("utf-8")) + len(user.encode("utf-8"))
+    if isinstance(fmt, dict):
+        size += len(json.dumps(fmt).encode("utf-8"))
     if size > policy.chat_max_request_bytes:
         return _err("ESIZE", f"{size} bytes exceeds {policy.chat_max_request_bytes}")
-    if model not in policy.chat_models:
-        return _err("EMODEL", f"{model!r} is not in the local-model allow-list")
-    if not is_loopback_base(policy.ollama_base):
-        return _err("ELOOPBACK", "ollama_base is not a loopback host")
+    refusal = _model_refusal(policy, model)
+    if refusal is not None:
+        return refusal
 
     options: dict = {"temperature": float(temperature)}
     if max_tokens is not None:
@@ -77,18 +125,13 @@ def run_chat(policy: Policy, req: dict) -> dict:
     }
     if fmt is not None:
         payload["format"] = fmt
+    if keep_alive is not None:
+        payload["keep_alive"] = keep_alive
     if "qwen3" in model.lower():
         payload["think"] = False
-    http_req = urllib.request.Request(
-        f"{policy.ollama_base.rstrip('/')}/api/chat",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(http_req, timeout=policy.chat_timeout_s) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+        body = _post(policy, "/api/chat", payload)
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return _err("ECHAT", str(exc))
     latency_ms = int((time.monotonic() - t0) * 1000)
@@ -105,4 +148,23 @@ def run_chat(policy: Policy, req: dict) -> dict:
         "tokens_out": int(body.get("eval_count") or 0),
         "latency_ms": latency_ms,
         "model": model,
+        # Ollama's own: "stop", or "length" when the reply hit num_predict
+        # (max_tokens). None when the server sends none. A caller scoring the
+        # reply needs it to tell a cut-off answer from a wrong one.
+        "done_reason": body.get("done_reason"),
     }
+
+
+def run_unload(policy: Policy, req: dict) -> dict:
+    """Drop ``model`` from Ollama's memory now (``/api/generate``, ``keep_alive: 0``)."""
+    model = req.get("model")
+    refusal = _model_refusal(policy, model)
+    if refusal is not None:
+        return refusal
+    try:
+        body = _post(policy, "/api/generate", {"model": model, "keep_alive": 0})
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return _err("ECHAT", str(exc))
+    if not isinstance(body, dict):
+        return _err("ECHAT", "unexpected reply shape")
+    return {"ok": True, "model": model, "done_reason": body.get("done_reason")}
