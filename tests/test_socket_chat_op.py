@@ -25,13 +25,15 @@ class _FakeOllama(BaseHTTPRequestHandler):
         type(self).seen.append((self.path, body))
         if type(self).delay_s:
             time.sleep(type(self).delay_s)
-        payload = json.dumps(
-            {
+        if self.path == "/api/generate":
+            reply = {"model": body.get("model"), "done": True, "done_reason": "unload"}
+        else:
+            reply = {
                 "message": {"role": "assistant", "content": '{"a": 1}'},
                 "prompt_eval_count": 11,
                 "eval_count": 7,
             }
-        ).encode()
+        payload = json.dumps(reply).encode()
         try:
             self.send_response(200)
             self.send_header("Content-Length", str(len(payload)))
@@ -127,12 +129,87 @@ def test_chat_timeout_is_not_ok_and_not_retried(tmp_path, fake_ollama):
 
 @pytest.mark.parametrize(
     "bad",
-    [{"format": "yaml"}, {"temperature": "hot"}, {"max_tokens": 0}, {"system": 3}],
+    [
+        {"format": "yaml"},
+        {"format": ["answer"]},
+        {"temperature": "hot"},
+        {"max_tokens": 0},
+        {"system": 3},
+        {"keep_alive": -1},
+        {"keep_alive": True},
+        {"keep_alive": 86401},
+        {"keep_alive": "25h"},
+        {"keep_alive": "forever"},
+        {"keep_alive": "-5m"},
+        {"keep_alive": 1.5},
+    ],
 )
 def test_chat_bad_request_refused(tmp_path, fake_ollama, bad):
     out = _dispatch(_req(**bad), _policy(tmp_path, fake_ollama))
     assert out["ok"] is False
     assert out["error"].startswith("EBADREQ")
+    assert _FakeOllama.seen == []
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}, "confidence": {"type": "number"}},
+    "required": ["answer", "confidence"],
+}
+
+
+def test_chat_json_schema_format_passes_through(tmp_path, fake_ollama):
+    out = _dispatch(_req(format=SCHEMA), _policy(tmp_path, fake_ollama))
+    assert out["ok"] is True
+    (_path, body), = _FakeOllama.seen
+    assert body["format"] == SCHEMA
+
+
+def test_chat_schema_counts_toward_request_size(tmp_path, fake_ollama):
+    # system+user alone fit; the schema pushes the request over the ceiling.
+    pol = _policy(tmp_path, fake_ollama, chat_max_request_bytes=40)
+    assert _dispatch(_req(), pol)["ok"] is True
+    _FakeOllama.seen = []
+    out = _dispatch(_req(format=SCHEMA), pol)
+    assert out["error"].startswith("ESIZE")
+    assert _FakeOllama.seen == []
+
+
+@pytest.mark.parametrize("keep_alive", [0, 600, 86400, "10m", "0s", "24h"])
+def test_chat_keep_alive_passes_through(tmp_path, fake_ollama, keep_alive):
+    out = _dispatch(_req(keep_alive=keep_alive), _policy(tmp_path, fake_ollama))
+    assert out["ok"] is True
+    (_path, body), = _FakeOllama.seen
+    assert body["keep_alive"] == keep_alive
+
+
+def test_chat_without_keep_alive_sends_none(tmp_path, fake_ollama):
+    _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    (_path, body), = _FakeOllama.seen
+    assert "keep_alive" not in body
+
+
+def test_unload_happy_path(tmp_path, fake_ollama):
+    out = _dispatch({"op": "unload", "model": "qwen3:4b"}, _policy(tmp_path, fake_ollama))
+    assert out == {"ok": True, "model": "qwen3:4b", "done_reason": "unload"}
+    (path, body), = _FakeOllama.seen
+    assert path == "/api/generate"
+    assert body == {"model": "qwen3:4b", "keep_alive": 0}
+
+
+@pytest.mark.parametrize(
+    ("req", "base", "code"),
+    [
+        ({"op": "unload", "model": "gpt-5"}, None, "EMODEL"),
+        ({"op": "unload"}, None, "EBADREQ"),
+        ({"op": "unload", "model": "llama3.2:3b"}, "http://192.0.2.7:11434", "ELOOPBACK"),
+    ],
+)
+def test_unload_refusals_never_reach_ollama(tmp_path, fake_ollama, req, base, code):
+    out = _dispatch(req, _policy(tmp_path, base or fake_ollama))
+    assert out["ok"] is False
+    assert out["error"].startswith(code)
+    assert _FakeOllama.seen == []
 
 
 def test_existing_ops_unchanged(tmp_path, fake_ollama):
