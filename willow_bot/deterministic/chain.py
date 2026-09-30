@@ -64,23 +64,45 @@ def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _raw_excerpts(fixture: dict) -> list | None:
+    """The fixture's excerpt list; ``[]`` when absent, ``None`` when it is
+    present but not a list (Loki F48383F4: an int here used to raise)."""
+    excerpts = fixture.get("excerpts")
+    if excerpts is None:
+        return []
+    return excerpts if isinstance(excerpts, list) else None
+
+
+def _is_citable(ex: object) -> bool:
+    # A whitespace-only id is not an id (Loki F48383F4).
+    return isinstance(ex, dict) and isinstance(ex.get("id"), str) and bool(ex["id"].strip())
+
+
+def _citable_excerpts(fixture: dict) -> list[dict]:
+    """Excerpts a reply can cite: a dict with a non-blank string id. The
+    prompt and the pool are both built from this one list, so the model is
+    never shown an excerpt it could not cite (Loki AEC0E753)."""
+    return [ex for ex in _raw_excerpts(fixture) or [] if _is_citable(ex)]
+
+
 def _excerpt_ids(fixture: dict) -> list[str]:
-    return [
-        ex["id"]
-        for ex in fixture.get("excerpts") or []
-        if isinstance(ex, dict) and isinstance(ex.get("id"), str) and ex["id"]
-    ]
+    return [ex["id"] for ex in _citable_excerpts(fixture)]
+
+
+def _has_uncitable_excerpt(fixture: dict) -> bool:
+    """True for any excerpt that cannot be cited, and for a pool that is
+    not a list at all."""
+    raw = _raw_excerpts(fixture)
+    return raw is None or len(_citable_excerpts(fixture)) != len(raw)
 
 
 def local_prompt(fixture: dict) -> str:
     """The brief, the pool's excerpts, and the reply contract -- nothing
     else. No transcript, no retrieval, no sealed-pair injection."""
     parts = [str(fixture.get("brief") or "").strip()]
-    blocks = []
-    for ex in fixture.get("excerpts") or []:
-        if not isinstance(ex, dict):
-            continue
-        blocks.append(f"[{ex.get('id', 'ex')}]\n{ex.get('text', '')}")
+    blocks = [
+        f"[{ex['id']}]\n{ex.get('text', '')}" for ex in _citable_excerpts(fixture)
+    ]
     if blocks:
         parts.append("Excerpts:\n" + "\n\n".join(blocks))
     # The example cites a real id from this pool, bare. A placeholder like
@@ -190,6 +212,11 @@ def chain_act(
     row.update(answer=None, cites=[], scored=False, correct=None, score_detail=None)
     if not isinstance(fixture, dict) or d0.get("reason") == "malformed_fixture":
         return _flowering(row, "malformed_fixture")
+    if _has_uncitable_excerpt(fixture):
+        # An excerpt with no usable id can be neither shown nor cited; the
+        # model would answer from a pool it cannot point into. Refuse, never
+        # guess (Loki AEC0E753, gap da93c749120b).
+        return _flowering(row, "uncitable_excerpt")
 
     row["model"] = model
     reply, latency_ms, err = chat_fn(
