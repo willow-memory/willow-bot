@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 from willow_bot.deterministic.chain import d0_wrong, run_chain
+from willow_bot.deterministic.chat_op import run_chat
 from willow_bot.deterministic.host_probe import (
     health,
     ollama_ps,
@@ -36,6 +37,8 @@ def _dispatch(req: dict, policy: Policy) -> dict:
             limit=lim,
         )
         return {"ok": True, **summary}
+    if op == "chat":
+        return run_chat(policy, req)
     if op == "run_chain":
         fixtures_dir = Path(str(req.get("fixtures_dir", ""))).expanduser()
         model = str(req.get("model") or policy.default_model)
