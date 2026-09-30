@@ -42,6 +42,18 @@ D0 follow-ups (Loki audit 7EA73431 on 753B6124 5705519):
   wrong answer -- ``score_resolution`` now leaves it unscored (like an
   escalate) instead of comparing an empty answer against
   ``expected.builder_seat`` and failing it.
+
+Routing rule (gap 82897b2f507e):
+
+- A G1 act whose brief asks to *route* an item (the brief opens with
+  ``Route``) is not a field read. It closes in code to ``willow`` with
+  status ``routed``: operator 2026-09-29, "Everything goes through
+  Willow. Willow is the orchestrator." (draft pair be0b6a1e). A field
+  read ("Name the to_app ...") with no ``to_app`` field still escalates.
+- ``routed`` is its own scored bucket. It is scored against the ruling
+  (answer is ``willow``, cites cover ``must_cite``), not against a frozen
+  ``expected.to_app`` that predates the ruling, so ``resolved``
+  precision stays a measurement against the fixture's own gold.
 """
 from __future__ import annotations
 
@@ -58,8 +70,17 @@ STATUS_RESOLVED = "resolved"
 STATUS_VERBATIM = "verbatim"
 STATUS_FLOWERING_REQUIRED = "flowering_required"
 STATUS_ESCALATE = "escalate"
+STATUS_ROUTED = "routed"
 
-_SCORED_STATUSES = (STATUS_RESOLVED, STATUS_VERBATIM, STATUS_FLOWERING_REQUIRED)
+_SCORED_STATUSES = (
+    STATUS_RESOLVED,
+    STATUS_VERBATIM,
+    STATUS_FLOWERING_REQUIRED,
+    STATUS_ROUTED,
+)
+
+ROUTE_TARGET = "willow"
+_ROUTE_BRIEF_RE = re.compile(r"^\s*Route\b")
 
 # Ellipsis (ASCII "..." or the single Unicode character) is truncation,
 # never a terminal mark, even though the ASCII form ends in ".".
@@ -245,6 +266,35 @@ def _record(
     }
 
 
+def is_route_act(fixture: dict) -> bool:
+    """A G1 brief that opens with ``Route`` asks where an item goes, not
+    what its ``to_app`` field says."""
+    brief = fixture.get("brief") if isinstance(fixture, dict) else None
+    return isinstance(brief, str) and bool(_ROUTE_BRIEF_RE.match(brief))
+
+
+def _excerpt_ids(excerpts: list) -> list[str]:
+    return [
+        ex["id"]
+        for ex in excerpts or []
+        if isinstance(ex, dict) and isinstance(ex.get("id"), str) and ex["id"]
+    ]
+
+
+def _route_g1(fixture_id: str, excerpts: list) -> dict:
+    cites = _excerpt_ids(excerpts)
+    if not cites:
+        return _record(fixture_id, "G1", STATUS_ESCALATE, None, [], "no_excerpt")
+    return _record(
+        fixture_id,
+        "G1",
+        STATUS_ROUTED,
+        ROUTE_TARGET,
+        cites,
+        "routing_goes_through_willow",
+    )
+
+
 def _resolve_g1(fixture_id: str, parsed: _ParsedExcerpts) -> dict:
     if "to_app" in parsed.conflicts:
         return _record(fixture_id, "G1", STATUS_ESCALATE, None, [], "conflicting_field")
@@ -347,6 +397,8 @@ def resolve_fixture(fixture: dict) -> dict:
     parsed = _parse_excerpts(excerpts)
 
     if cls == "G1":
+        if is_route_act(fixture):
+            return _route_g1(fixture_id, excerpts)
         return _resolve_g1(fixture_id, parsed)
     if cls == "G2":
         return _resolve_g2(fixture_id, parsed, expected)
@@ -401,6 +453,11 @@ def score_resolution(fixture: dict, resolution: dict) -> dict:
     cls = resolution.get("class")
     cites = resolution.get("cites") or []
     answer = resolution.get("answer")
+
+    if cls == "G1" and status == STATUS_ROUTED:
+        must_cite = expected.get("must_cite") or []
+        ok = answer == ROUTE_TARGET and set(must_cite).issubset(set(cites))
+        return {"scored": True, "correct": ok, "detail": "g1_route_through_willow"}
 
     if cls == "G1":
         must_cite = expected.get("must_cite") or []

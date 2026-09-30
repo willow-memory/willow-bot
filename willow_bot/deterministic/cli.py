@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from willow_bot.deterministic.chain import d0_wrong, run_chain
 from willow_bot.deterministic.policy import load_policy
 from willow_bot.deterministic.resolvers import run_resolve
 from willow_bot.deterministic.runner import run_growth_fixtures
@@ -94,6 +95,23 @@ def main(argv: list[str] | None = None) -> int:
     p_resolve.add_argument("--fixtures", type=Path, required=True)
     p_resolve.add_argument("--out", type=Path, default=None)
     p_resolve.set_defaults(func=_cmd_resolve)
+
+    p_chain = sub.add_parser(
+        "chain",
+        help="D0, then the local tier on escalations only, then flowering rows "
+        "(on this host; needs loopback Ollama)",
+    )
+    p_chain.add_argument("--fixtures", type=Path, required=True)
+    p_chain.add_argument("--model", default="")
+    p_chain.add_argument("--out", type=Path, default=None)
+    p_chain.set_defaults(func=_cmd_chain)
+
+    p_chain_client = sub.add_parser(
+        "chain-client", help="Delegate a chain run to serve (use from Kart tasks)"
+    )
+    p_chain_client.add_argument("--fixtures", type=Path, required=True)
+    p_chain_client.add_argument("--model", default="")
+    p_chain_client.set_defaults(func=_cmd_chain_client)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
@@ -210,6 +228,37 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
         row.get("scored") and not row.get("correct") for row in result["rows"]
     )
     return 1 if wrong else 0
+
+
+def _cmd_chain(args: argparse.Namespace) -> int:
+    policy = load_policy()
+    model = (args.model or "").strip() or policy.default_model
+    result = run_chain(
+        policy, fixtures_dir=args.fixtures, model=model, out_path=args.out
+    )
+    print(json.dumps(result["summary"], indent=2, sort_keys=True))
+    return 1 if d0_wrong(result["rows"]) else 0
+
+
+def _cmd_chain_client(args: argparse.Namespace) -> int:
+    policy = load_policy()
+    missing = _require_socket(policy)
+    if missing is not None:
+        return missing
+    model = (args.model or "").strip() or policy.default_model
+    result = client_op(
+        policy,
+        {
+            "op": "run_chain",
+            "fixtures_dir": str(args.fixtures.resolve()),
+            "model": model,
+        },
+        timeout_s=3600.0,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if not result.get("ok"):
+        return 1
+    return 1 if result.get("d0_wrong") else 0
 
 
 def _cmd_client(args: argparse.Namespace) -> int:
