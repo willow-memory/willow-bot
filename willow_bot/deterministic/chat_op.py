@@ -148,6 +148,10 @@ def run_chat(policy: Policy, req: dict) -> dict:
         "tokens_out": int(body.get("eval_count") or 0),
         "latency_ms": latency_ms,
         "model": model,
+        # Ollama's own: "stop", or "length" when the reply hit num_predict
+        # (max_tokens). None when the server sends none. A caller scoring the
+        # reply needs it to tell a cut-off answer from a wrong one.
+        "done_reason": body.get("done_reason"),
     }
 
 

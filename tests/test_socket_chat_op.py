@@ -15,6 +15,7 @@ from willow_bot.deterministic.socket_server import _dispatch
 class _FakeOllama(BaseHTTPRequestHandler):
     seen: list = []
     delay_s = 0.0
+    chat_done_reason: str | None = "stop"
 
     def log_message(self, *_a):  # noqa: ANN002
         return
@@ -33,6 +34,8 @@ class _FakeOllama(BaseHTTPRequestHandler):
                 "prompt_eval_count": 11,
                 "eval_count": 7,
             }
+            if type(self).chat_done_reason is not None:
+                reply["done_reason"] = type(self).chat_done_reason
         payload = json.dumps(reply).encode()
         try:
             self.send_response(200)
@@ -47,6 +50,7 @@ class _FakeOllama(BaseHTTPRequestHandler):
 def fake_ollama():
     _FakeOllama.seen = []
     _FakeOllama.delay_s = 0.0
+    _FakeOllama.chat_done_reason = "stop"
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeOllama)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -81,6 +85,7 @@ def test_chat_happy_path(tmp_path, fake_ollama):
     assert out["tokens_in"] == 11
     assert out["tokens_out"] == 7
     assert out["model"] == "llama3.2:3b"
+    assert out["done_reason"] == "stop"
     assert isinstance(out["latency_ms"], int)
     (path, body), = _FakeOllama.seen
     assert path == "/api/chat"
@@ -149,6 +154,21 @@ def test_chat_bad_request_refused(tmp_path, fake_ollama, bad):
     assert out["ok"] is False
     assert out["error"].startswith("EBADREQ")
     assert _FakeOllama.seen == []
+
+
+def test_chat_reports_a_length_stop(tmp_path, fake_ollama):
+    """A reply cut off at num_predict says so; the caller scores it knowing."""
+    _FakeOllama.chat_done_reason = "length"
+    out = _dispatch(_req(max_tokens=8), _policy(tmp_path, fake_ollama))
+    assert out["ok"] is True
+    assert out["done_reason"] == "length"
+
+
+def test_chat_without_a_done_reason_reports_none(tmp_path, fake_ollama):
+    _FakeOllama.chat_done_reason = None
+    out = _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    assert out["ok"] is True
+    assert out["done_reason"] is None
 
 
 SCHEMA = {
