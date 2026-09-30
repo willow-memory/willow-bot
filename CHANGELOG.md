@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.14.0](https://github.com/willow-memory/willow-bot/compare/v0.13.1...v0.14.0) (2026-09-30)
+
+
+### Added
+
+* **deterministic:** a loopback-only chat op on the deterministic socket ([ddf9fa4](https://github.com/willow-memory/willow-bot/commit/ddf9fa44bbbb893672caefac474ccf3d2a1adbd1))
+* **socket:** loopback-only chat op for local models ([61413f3](https://github.com/willow-memory/willow-bot/commit/61413f37c7b65a0fd0ef2f584730bc7812187f60))
+
+
+### Fixed
+
+* **deterministic:** a non-list pool flowers instead of raising; a blank id is not an id ([20d2ee6](https://github.com/willow-memory/willow-bot/commit/20d2ee6d1bec0fde7d1c945dd598580fb8e9cf11))
+* **deterministic:** the prompt and the pool agree; G2 scores cites when named ([87307cf](https://github.com/willow-memory/willow-bot/commit/87307cf7988ce006a216cac54bf4fe41c7a5ca23))
+* **deterministic:** the prompt and the pool agree; G2 scores cites when named ([eb4929d](https://github.com/willow-memory/willow-bot/commit/eb4929d79d867f12c0c9a073c7e6cf5f6b8803b4))
+
 ## [0.13.1](https://github.com/willow-memory/willow-bot/compare/v0.13.0...v0.13.1) (2026-09-30)
 
 
