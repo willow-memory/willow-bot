@@ -147,6 +147,8 @@ def test_chat_timeout_is_not_ok_and_not_retried(tmp_path, fake_ollama):
         {"keep_alive": "forever"},
         {"keep_alive": "-5m"},
         {"keep_alive": 1.5},
+        {"think": "no"},
+        {"think": 0},
     ],
 )
 def test_chat_bad_request_refused(tmp_path, fake_ollama, bad):
@@ -154,6 +156,30 @@ def test_chat_bad_request_refused(tmp_path, fake_ollama, bad):
     assert out["ok"] is False
     assert out["error"].startswith("EBADREQ")
     assert _FakeOllama.seen == []
+
+
+def _gemma_policy(tmp_path, base):
+    return _policy(tmp_path, base, chat_allowed_models=("gemma4:e2b", "qwen3:4b", "llama3.2:3b"))
+
+
+def test_chat_passes_the_callers_think_false_through(tmp_path, fake_ollama):
+    out = _dispatch(_req(model="gemma4:e2b", think=False), _gemma_policy(tmp_path, fake_ollama))
+    assert out["ok"] is True
+    (_path, body), = _FakeOllama.seen
+    assert body["think"] is False
+
+
+def test_chat_passes_the_callers_think_true_through_even_for_qwen3(tmp_path, fake_ollama):
+    _dispatch(_req(model="qwen3:4b", think=True), _gemma_policy(tmp_path, fake_ollama))
+    (_path, body), = _FakeOllama.seen
+    assert body["think"] is True
+
+
+@pytest.mark.parametrize(("model", "expected"), [("qwen3:4b", False), ("gemma4:e2b", None), ("llama3.2:3b", None)])
+def test_chat_without_think_keeps_the_standing_default(tmp_path, fake_ollama, model, expected):
+    _dispatch(_req(model=model), _gemma_policy(tmp_path, fake_ollama))
+    (_path, body), = _FakeOllama.seen
+    assert body.get("think", None) is expected
 
 
 def test_chat_reports_a_length_stop(tmp_path, fake_ollama):
