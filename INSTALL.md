@@ -254,3 +254,24 @@ willow-bot-deterministic client --fixtures /home/sean-campbell/github/willow-mem
 ```
 
 (run from a Kart task with `WILLOW_HOME` set and `$WILLOW_HOME/venvs/willow-bot/bin` on `PATH`, or use the full path to `client` in the task string.)
+
+### The chain: D0, then local, then flowering
+
+`willow-bot-deterministic chain` runs each act through code first (D0,
+`resolve`), sends only what D0 escalates to one local model under a JSON
+schema where `ESCALATE` is always a valid answer, and writes whatever the
+local tier escalates, answers off-schema, cites outside the pool, or cannot
+reach as a `flowering` row addressed to `willow`. It never calls a cloud
+model. A routing brief ("Route this item ...") closes in code to `willow`.
+
+```bash
+# on the host (needs loopback Ollama)
+willow-bot-deterministic chain --fixtures <dir> --model willow-lane4-3b
+# from Kart, through the serve socket (restart the serve unit after an upgrade)
+willow-bot-deterministic chain-client --fixtures <dir> --model willow-lane4-3b
+```
+
+The summary reports `closed_code`, `closed_local`, `flowering`,
+`grown_share`, `cloud_per_act_max` (an upper bound: one cloud call per
+flowering act at most) and precision per tier. Exit 1 means D0 answered
+something wrong; a wrong local answer is a measurement, not a failed run.

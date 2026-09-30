@@ -13,14 +13,20 @@ def chat(
     model: str,
     prompt: str,
     timeout_s: float = 300.0,
+    fmt: dict | None = None,
 ) -> tuple[str, int, str | None]:
-    """Return ``(reply_text, latency_ms, error)``. ``error`` is set on failure."""
+    """Return ``(reply_text, latency_ms, error)``. ``error`` is set on failure.
+
+    ``fmt`` is passed as Ollama's ``format`` (a JSON schema) when given.
+    """
     payload: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
         "options": {"temperature": 0},
     }
+    if fmt is not None:
+        payload["format"] = fmt
     # qwen3 defaults to thinking mode; long "thinking" phases hit common ~120s
     # Ollama/client limits while content stays empty (see flowering qwen3:4b rows).
     if "qwen3" in model.lower():
