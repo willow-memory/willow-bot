@@ -278,6 +278,30 @@ def test_audit_dispatches_each_pending_pr_to_loki_as_auditor(home, monkeypatch):
     assert st["audit_dispatched"] == {"forge-play/Forge#31": "D0", "willow-memory/willow-mcp#524": "D1"}
 
 
+def test_a_release_please_pr_is_skipped_and_settled_not_audited(home, monkeypatch):
+    """A release PR's diff is a version bump and a CHANGELOG from commits that
+    each had their own audit: no packet, no free-tier wake, and a settled
+    entry so the PR is never offered again."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    p = _state_with_pending(home, "o/r#9", "o/r#10")
+
+    def pull(repo, pr):
+        ref = "release-please--branches--main--components--r" if pr == 9 else "fix/real"
+        return {"body": "b", "head": {"sha": "s", "ref": ref}}
+
+    monkeypatch.setattr(tick, "_audit_fetch_pull", pull)
+    c = _Client(result=lambda name, inputs: {"dispatch_id": "D0", "status": "pending"})
+    _use(monkeypatch, c)
+    r = tick.run_audit()
+    sent = [inputs["summary"] for name, inputs in c.calls if name == "dispatch_send"]
+    assert len(sent) == 1 and sent[0].startswith("Audit o/r#10:")
+    assert r["status"] == "ok"
+    assert r["skipped"] == [{"repo_pr": "o/r#9", "reason": "release-please"}]
+    st = json.loads(p.read_text())
+    assert st["pending_audit"] == []
+    assert st["audit_dispatched"] == {"o/r#9": "skipped:release-please", "o/r#10": "D0"}
+
+
 def test_an_unreadable_pr_is_not_dispatched_and_stays_pending(home, monkeypatch):
     """An audit of a title is not an audit: a PR whose body or diff cannot be
     read sends no packet, and waits for the next tick with the reason."""

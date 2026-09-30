@@ -281,6 +281,11 @@ _AUDIT_TO_AGENT = "loki"
 #: packet and the listener's accept is refused ERUNNER — every audit this
 #: step sent between ratatosk#61 and this line sat pending, unworkable.
 _AUDIT_RUNNER = "ratatosk"
+#: release-please's own branches (`release-please--branches--<base>--…`).
+_RELEASE_PLEASE_HEAD_PREFIX = "release-please--"
+#: What `audit_dispatched` records for a PR the step chose not to audit: a
+#: settled answer (no packet will ever be sent), and never a dispatch id.
+_AUDIT_SKIPPED_RELEASE = "skipped:release-please"
 
 
 def _auditor_envelope_from(envelopes: object) -> str | None:
@@ -353,7 +358,7 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     dispatched = dict(state.get("audit_dispatched") or {})
     envelope_id = state.get(_AUDIT_ENVELOPE_STATE_KEY) or None
     resolved_this_tick = False
-    done, refused, still = [], [], []
+    done, refused, still, skipped = [], [], [], []
     # Paced through this step's own budget (gap 52928edb3fc7): audit is
     # the step that reaches Loki, and it used to refuse a PR on the first
     # rate_limited the mirror's pacing left behind — three of five on the
@@ -370,6 +375,15 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
             item["last_error"] = unreadable
             refused.append({"repo_pr": key, "error": unreadable})
             still.append(item)
+            continue
+        if str(material.get("head_ref") or "").startswith(_RELEASE_PLEASE_HEAD_PREFIX):
+            # release-please's own release PR: a version bump and a CHANGELOG
+            # built from commits that each had their own PR (and audit). The
+            # same bounded shape the org's other exemptions key on (head ref
+            # prefix, PR 78) — on 2026-09-29 five of ten audit packets were
+            # these, each one a free-tier wake spent on nothing to find.
+            dispatched[key] = _AUDIT_SKIPPED_RELEASE
+            skipped.append({"repo_pr": key, "reason": "release-please"})
             continue
         args = {
             "app_id": app,
@@ -443,7 +457,7 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
     path.write_text(json.dumps(state, indent=2) + "\n")
     # Same precedence as run_ci: a tool refusal outranks a pause (Loki FE91FF0E).
     status = "could-not-run" if refused else ("paced" if pace.budget_spent else "ok")
-    receipt.update(status=status, dispatched=done, refused=refused,
+    receipt.update(status=status, dispatched=done, refused=refused, skipped=skipped,
                    remaining=len(still), envelope_id=envelope_id, envelope_resolved=resolved_this_tick,
                    **pace.receipt())
     return _emit(receipt)
