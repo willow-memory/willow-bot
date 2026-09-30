@@ -177,6 +177,28 @@ def test_uncitable_excerpt_goes_to_flowering_without_a_call(tmp_path):
     assert row["reason"] == "uncitable_excerpt"
 
 
+def test_non_list_pool_flowers_and_never_raises(tmp_path):
+    # Loki F48383F4 MEDIUM: excerpts=5 raised TypeError after D0 escalated.
+    for bad in (5, True, object(), "text", {"id": "ex-1"}):
+        calls: list = []
+        fx = _title_fixture()
+        fx["excerpts"] = bad
+        row = chain_act(fx, policy=_policy(tmp_path), model="m", chat_fn=_fake_chat(calls=calls))
+        assert calls == [], bad
+        assert row["tier"] == TIER_FLOWERING, bad
+
+
+def test_whitespace_id_is_not_citable(tmp_path):
+    # Loki F48383F4 LOW.
+    calls: list = []
+    fx = _title_fixture()
+    fx["excerpts"].append({"id": "   ", "text": "blank id"})
+    row = chain_act(fx, policy=_policy(tmp_path), model="m", chat_fn=_fake_chat(calls=calls))
+    assert calls == []
+    assert row["reason"] == "uncitable_excerpt"
+    assert "blank id" not in local_prompt(fx)
+
+
 def test_prompt_never_shows_an_excerpt_the_pool_drops():
     fx = _title_fixture()
     fx["excerpts"].append({"id": 7, "text": "numeric id"})

@@ -64,15 +64,25 @@ def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _raw_excerpts(fixture: dict) -> list | None:
+    """The fixture's excerpt list; ``[]`` when absent, ``None`` when it is
+    present but not a list (Loki F48383F4: an int here used to raise)."""
+    excerpts = fixture.get("excerpts")
+    if excerpts is None:
+        return []
+    return excerpts if isinstance(excerpts, list) else None
+
+
+def _is_citable(ex: object) -> bool:
+    # A whitespace-only id is not an id (Loki F48383F4).
+    return isinstance(ex, dict) and isinstance(ex.get("id"), str) and bool(ex["id"].strip())
+
+
 def _citable_excerpts(fixture: dict) -> list[dict]:
-    """Excerpts a reply can cite: a dict with a non-empty string id. The
+    """Excerpts a reply can cite: a dict with a non-blank string id. The
     prompt and the pool are both built from this one list, so the model is
     never shown an excerpt it could not cite (Loki AEC0E753)."""
-    return [
-        ex
-        for ex in fixture.get("excerpts") or []
-        if isinstance(ex, dict) and isinstance(ex.get("id"), str) and ex["id"]
-    ]
+    return [ex for ex in _raw_excerpts(fixture) or [] if _is_citable(ex)]
 
 
 def _excerpt_ids(fixture: dict) -> list[str]:
@@ -80,8 +90,10 @@ def _excerpt_ids(fixture: dict) -> list[str]:
 
 
 def _has_uncitable_excerpt(fixture: dict) -> bool:
-    excerpts = fixture.get("excerpts") or []
-    return len(_citable_excerpts(fixture)) != len(excerpts)
+    """True for any excerpt that cannot be cited, and for a pool that is
+    not a list at all."""
+    raw = _raw_excerpts(fixture)
+    return raw is None or len(_citable_excerpts(fixture)) != len(raw)
 
 
 def local_prompt(fixture: dict) -> str:
