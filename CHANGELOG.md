@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.16.0](https://github.com/willow-memory/willow-bot/compare/v0.15.0...v0.16.0) (2026-09-30)
+
+
+### Added
+
+* **deterministic:** chat op takes the caller's think flag ([41a9129](https://github.com/willow-memory/willow-bot/commit/41a9129688d31c5def3fc070fdd99ac1d1951187))
+* **deterministic:** chat op takes the caller's think flag ([5d24c54](https://github.com/willow-memory/willow-bot/commit/5d24c54f5d3e9b1ca1421ac916a3800fae6a7961))
+
 ## [0.15.0](https://github.com/willow-memory/willow-bot/compare/v0.14.0...v0.15.0) (2026-09-30)
 
 
