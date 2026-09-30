@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.1](https://github.com/willow-memory/willow-bot/compare/v0.13.0...v0.13.1) (2026-09-30)
+
+
+### Fixed
+
+* **deterministic:** the local prompt's cite example is a real pool id, not a placeholder ([86303f9](https://github.com/willow-memory/willow-bot/commit/86303f949b9be146ddae5e4e5b3ab4e8af3d40d7))
+* **deterministic:** the local prompt's cite example is a real pool id, not a placeholder ([6a7fa59](https://github.com/willow-memory/willow-bot/commit/6a7fa592b28c86725622886dbb7ec569c986ee80))
+
 ## [0.13.0](https://github.com/willow-memory/willow-bot/compare/v0.12.0...v0.13.0) (2026-09-30)
 
 
