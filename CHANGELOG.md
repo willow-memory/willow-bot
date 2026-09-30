@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.15.0](https://github.com/willow-memory/willow-bot/compare/v0.14.0...v0.15.0) (2026-09-30)
+
+
+### Added
+
+* **deterministic:** chat op returns Ollama's done_reason ([cdc7a34](https://github.com/willow-memory/willow-bot/commit/cdc7a3430708a30fac7e3c6e797dead20a64c4f5))
+* **deterministic:** chat op takes a JSON-schema format and keep_alive; an unload op ([93a6900](https://github.com/willow-memory/willow-bot/commit/93a69009d4d6a2a0cd806aeaac6ecabc1fb945c2))
+* **deterministic:** chat op takes a JSON-schema format, keep_alive and returns done_reason; an unload op ([9d8b70c](https://github.com/willow-memory/willow-bot/commit/9d8b70c68bab08bd1e49463cd866c2c722a363a2))
+
 ## [0.14.0](https://github.com/willow-memory/willow-bot/compare/v0.13.1...v0.14.0) (2026-09-30)
 
 
