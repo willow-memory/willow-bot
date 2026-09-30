@@ -102,6 +102,11 @@ def run_chat(policy: Policy, req: dict) -> dict:
             "EBADREQ",
             f"keep_alive must be seconds (int) or '<n>s|m|h', within 0..{_KEEP_ALIVE_MAX_S}s",
         )
+    # think: the caller's own choice, passed through when given. Absent, a qwen3
+    # model still gets thinking off (the op's standing default); others get no field.
+    think = req.get("think")
+    if think is not None and not isinstance(think, bool):
+        return _err("EBADREQ", "think must be true, false or null")
     size = len(system.encode("utf-8")) + len(user.encode("utf-8"))
     if isinstance(fmt, dict):
         size += len(json.dumps(fmt).encode("utf-8"))
@@ -127,7 +132,9 @@ def run_chat(policy: Policy, req: dict) -> dict:
         payload["format"] = fmt
     if keep_alive is not None:
         payload["keep_alive"] = keep_alive
-    if "qwen3" in model.lower():
+    if think is not None:
+        payload["think"] = think
+    elif "qwen3" in model.lower():
         payload["think"] = False
     t0 = time.monotonic()
     try:
