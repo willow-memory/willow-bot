@@ -476,6 +476,12 @@ def score_resolution(fixture: dict, resolution: dict) -> dict:
             ok = text == reference_title
         else:
             ok = len(text) <= max_chars and all(name in text for name in must_name)
+        # A G2 fixture that names must_cite scores cites too, as G1/G3/G5
+        # do; before this, a title drawn from the wrong excerpt passed
+        # (Loki AEC0E753, gap da93c749120b). v2's 06 names none, so its
+        # score is unchanged.
+        must_cite = expected.get("must_cite") or []
+        ok = ok and set(must_cite).issubset(set(cites))
         return {"scored": True, "correct": ok, "detail": "g2_title_match"}
 
     if cls == "G3":

@@ -64,23 +64,33 @@ def _utc_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _excerpt_ids(fixture: dict) -> list[str]:
+def _citable_excerpts(fixture: dict) -> list[dict]:
+    """Excerpts a reply can cite: a dict with a non-empty string id. The
+    prompt and the pool are both built from this one list, so the model is
+    never shown an excerpt it could not cite (Loki AEC0E753)."""
     return [
-        ex["id"]
+        ex
         for ex in fixture.get("excerpts") or []
         if isinstance(ex, dict) and isinstance(ex.get("id"), str) and ex["id"]
     ]
+
+
+def _excerpt_ids(fixture: dict) -> list[str]:
+    return [ex["id"] for ex in _citable_excerpts(fixture)]
+
+
+def _has_uncitable_excerpt(fixture: dict) -> bool:
+    excerpts = fixture.get("excerpts") or []
+    return len(_citable_excerpts(fixture)) != len(excerpts)
 
 
 def local_prompt(fixture: dict) -> str:
     """The brief, the pool's excerpts, and the reply contract -- nothing
     else. No transcript, no retrieval, no sealed-pair injection."""
     parts = [str(fixture.get("brief") or "").strip()]
-    blocks = []
-    for ex in fixture.get("excerpts") or []:
-        if not isinstance(ex, dict):
-            continue
-        blocks.append(f"[{ex.get('id', 'ex')}]\n{ex.get('text', '')}")
+    blocks = [
+        f"[{ex['id']}]\n{ex.get('text', '')}" for ex in _citable_excerpts(fixture)
+    ]
     if blocks:
         parts.append("Excerpts:\n" + "\n\n".join(blocks))
     # The example cites a real id from this pool, bare. A placeholder like
@@ -190,6 +200,11 @@ def chain_act(
     row.update(answer=None, cites=[], scored=False, correct=None, score_detail=None)
     if not isinstance(fixture, dict) or d0.get("reason") == "malformed_fixture":
         return _flowering(row, "malformed_fixture")
+    if _has_uncitable_excerpt(fixture):
+        # An excerpt with no usable id can be neither shown nor cited; the
+        # model would answer from a pool it cannot point into. Refuse, never
+        # guess (Loki AEC0E753, gap da93c749120b).
+        return _flowering(row, "uncitable_excerpt")
 
     row["model"] = model
     reply, latency_ms, err = chat_fn(

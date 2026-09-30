@@ -165,6 +165,46 @@ def test_prompt_example_cites_a_real_pool_id_not_a_placeholder():
     assert "<ex-" not in text
 
 
+def test_uncitable_excerpt_goes_to_flowering_without_a_call(tmp_path):
+    # Loki AEC0E753 LOW: an id-less excerpt used to render as [ex] while the
+    # pool dropped it. Now the act is refused before any model call.
+    calls: list = []
+    fx = _title_fixture()
+    fx["excerpts"].append({"text": "no id here"})
+    row = chain_act(fx, policy=_policy(tmp_path), model="m", chat_fn=_fake_chat(calls=calls))
+    assert calls == []
+    assert row["tier"] == TIER_FLOWERING
+    assert row["reason"] == "uncitable_excerpt"
+
+
+def test_prompt_never_shows_an_excerpt_the_pool_drops():
+    fx = _title_fixture()
+    fx["excerpts"].append({"id": 7, "text": "numeric id"})
+    fx["excerpts"].append({"text": "no id"})
+    text = local_prompt(fx)
+    assert "[ex]" not in text
+    assert "numeric id" not in text
+    assert "no id" not in text
+    assert "[ex-d77d0c46]" in text
+
+
+def test_g2_scores_cites_when_the_fixture_names_them():
+    fx = _title_fixture()
+    fx["expected"]["must_cite"] = ["ex-d77d0c46"]
+    good = {"class": "G2", "status": "resolved", "cites": ["ex-d77d0c46"],
+            "answer": "CI stuck: willow-memory/willow-mcp#642, legs cancelled"}
+    wrong = dict(good, cites=["ex-other"])
+    assert score_resolution(fx, good)["correct"] is True
+    assert score_resolution(fx, wrong)["correct"] is False
+
+
+def test_g2_without_must_cite_is_scored_as_before():
+    fx = _title_fixture()
+    answer = {"class": "G2", "status": "resolved", "cites": [],
+              "answer": "CI stuck: willow-memory/willow-mcp#642, legs cancelled"}
+    assert score_resolution(fx, answer)["correct"] is True
+
+
 def test_prompt_example_with_no_excerpts_is_an_empty_list():
     fx = _title_fixture()
     fx["excerpts"] = []
