@@ -17,6 +17,17 @@ class Policy:
     default_model: str
     chain_tiers: tuple[str, ...]
     ollama_chat_timeout_s: float = 600.0
+    # Socket ``chat`` op: the local models it may call (empty = chain_tiers plus
+    # default_model), its request-size ceiling and its timeout.
+    chat_allowed_models: tuple[str, ...] = ()
+    chat_max_request_bytes: int = 262144
+    chat_timeout_s: float = 600.0
+
+    @property
+    def chat_models(self) -> tuple[str, ...]:
+        if self.chat_allowed_models:
+            return self.chat_allowed_models
+        return tuple(dict.fromkeys((self.default_model, *self.chain_tiers)))
 
 
 def _default_policy() -> Policy:
@@ -68,7 +79,26 @@ def load_policy() -> Policy:
         chat_timeout = float(raw_timeout)
     else:
         chat_timeout = base.ollama_chat_timeout_s
+    allowed_raw = raw.get("chat_allowed_models")
+    if isinstance(allowed_raw, list) and allowed_raw:
+        allowed = tuple(str(m) for m in allowed_raw)
+    else:
+        allowed = base.chat_allowed_models
+    raw_max = raw.get("chat_max_request_bytes")
+    max_bytes = (
+        int(raw_max)
+        if isinstance(raw_max, int) and not isinstance(raw_max, bool) and raw_max > 0
+        else base.chat_max_request_bytes
+    )
+    raw_chat_t = raw.get("chat_timeout_s")
+    if isinstance(raw_chat_t, (int, float)) and float(raw_chat_t) > 0:
+        chat_t = float(raw_chat_t)
+    else:
+        chat_t = chat_timeout
     return Policy(
+        chat_allowed_models=allowed,
+        chat_max_request_bytes=max_bytes,
+        chat_timeout_s=chat_t,
         socket_path=_path(socket),
         ollama_base=str(ollama),
         runs_dir=_path(runs),
