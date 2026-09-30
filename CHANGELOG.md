@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [0.12.0](https://github.com/willow-memory/willow-bot/compare/v0.11.3...v0.12.0) (2026-09-30)
+
+
+### Added
+
+* **voice:** the troll — every line carries a real fact, the situation picks the pool, nothing repeats ([30e5046](https://github.com/willow-memory/willow-bot/commit/30e5046830a298fb1a9a189b33e37b6988ecc2a6))
+
+
+### Fixed
+
+* **audit:** send Loki's packets as runner=ratatosk, carrying the PR itself ([21f1287](https://github.com/willow-memory/willow-bot/commit/21f12873ba53309ba3bfd9d42176888807783485))
+* **audit:** send Loki's packets as runner=ratatosk, carrying the PR itself ([155cb3d](https://github.com/willow-memory/willow-bot/commit/155cb3dfc8bbb71f3e10a3f10a8b79cfe25426bb))
+* **audit:** skip release-please PRs instead of spending a wake on them ([3fec9cf](https://github.com/willow-memory/willow-bot/commit/3fec9cf70f95898cfe0cfa2106776f5e8c424ae8))
+* **audit:** skip release-please PRs instead of spending a wake on them ([7a96913](https://github.com/willow-memory/willow-bot/commit/7a96913de2d725b04355495ad22c1b20229926e0))
+
 ## [0.11.3](https://github.com/willow-memory/willow-bot/compare/v0.11.2...v0.11.3) (2026-09-29)
 
 
