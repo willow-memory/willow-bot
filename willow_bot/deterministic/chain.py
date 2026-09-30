@@ -83,13 +83,19 @@ def local_prompt(fixture: dict) -> str:
         blocks.append(f"[{ex.get('id', 'ex')}]\n{ex.get('text', '')}")
     if blocks:
         parts.append("Excerpts:\n" + "\n\n".join(blocks))
+    # The example cites a real id from this pool, bare. A placeholder like
+    # "<excerpt id>" was copied brackets and all (S-growth-15, chain run
+    # 2026-09-30, gap c2f925577c39), and a cite outside the pool is refused.
+    ids = _excerpt_ids(fixture)
+    example_cites = json.dumps(ids[:1])
     parts.append(
         "Reply with one JSON object: "
-        '{"status": "answer" or "ESCALATE", "answer": "<text>", '
-        '"cites": ["<excerpt id>", ...]}. '
+        '{"status": "answer" or "ESCALATE", "answer": "...", '
+        f'"cites": {example_cites}}}. '
         'Use "ESCALATE" when the excerpts do not hold enough to answer, or '
         "when no one the brief names can act on it; then leave answer empty. "
-        "Cite only excerpt ids shown above."
+        "Cite only excerpt ids shown above, exactly as written, without the "
+        "square brackets."
     )
     return "\n\n".join(p for p in parts if p)
 

@@ -157,6 +157,20 @@ def test_prompt_offers_escalate_and_carries_only_brief_and_excerpts():
     assert "Respond in plain text" not in text
 
 
+def test_prompt_example_cites_a_real_pool_id_not_a_placeholder():
+    # gap c2f925577c39: the model copied "<ex-...>" from a placeholder.
+    text = local_prompt(_title_fixture())
+    assert '"cites": ["ex-d77d0c46"]' in text
+    assert "<excerpt id>" not in text
+    assert "<ex-" not in text
+
+
+def test_prompt_example_with_no_excerpts_is_an_empty_list():
+    fx = _title_fixture()
+    fx["excerpts"] = []
+    assert '"cites": []' in local_prompt(fx)
+
+
 def test_schema_offers_escalate_as_a_status():
     assert "ESCALATE" in LOCAL_SCHEMA["properties"]["status"]["enum"]
     assert set(LOCAL_SCHEMA["required"]) == {"status", "answer", "cites"}
