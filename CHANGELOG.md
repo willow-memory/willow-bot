@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.13.0](https://github.com/willow-memory/willow-bot/compare/v0.12.0...v0.13.0) (2026-09-30)
+
+
+### Added
+
+* **deterministic:** the chain — D0, then one local call under a schema, then a flowering row ([ed208fc](https://github.com/willow-memory/willow-bot/commit/ed208fcec96fd51a175fae80ade10ac126f9cfc5))
+* **deterministic:** the chain — D0, then one local call under a schema, then a flowering row ([429b854](https://github.com/willow-memory/willow-bot/commit/429b854eae2176913a1239436813bd683edcdab6))
+
 ## [0.12.0](https://github.com/willow-memory/willow-bot/compare/v0.11.3...v0.12.0) (2026-09-30)
 
 
