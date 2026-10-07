@@ -1,4 +1,4 @@
-"""Run the hook's tests on any Python, without pytest.
+"""Run the hooks' tests (hook.py, prompt.py) on any Python, without pytest.
 
     pythonX run_hook_tests.py
 
@@ -15,9 +15,11 @@ TESTS = Path(__file__).resolve().parent.parent / "onescript" / "tests"
 sys.path.insert(0, str(TESTS))
 
 import test_hook  # noqa: E402
+import test_prompt  # noqa: E402
 
 ok = bad = 0
-for name, fn in sorted(vars(test_hook).items()):
+tests = [*sorted(vars(test_hook).items()), *sorted(vars(test_prompt).items())]
+for name, fn in tests:
     if not name.startswith("test_"):
         continue
     with tempfile.TemporaryDirectory() as d:
