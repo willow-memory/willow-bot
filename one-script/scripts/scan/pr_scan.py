@@ -17,11 +17,17 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 MERGE = re.compile(r"^Merge pull request #(\d+) from (\S+)")
 SQUASH = re.compile(r"^(.*) \(#(\d+)\)$")
+
+
+def when(date: str) -> datetime:
+    """git's iso-strict date. Newer git writes UTC as `Z`, which
+    fromisoformat only reads from Python 3.11, so `Z` becomes +00:00."""
+    return datetime.fromisoformat(date[:-1] + "+00:00" if date.endswith("Z") else date)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -85,7 +91,7 @@ def scan(repo: Path, since: datetime) -> list[dict]:
     for line in refs.splitlines():
         ref, date, subject = line.split("\x1f", 2)
         n = int(ref.rsplit("/", 1)[1])
-        if n in prs or datetime.fromisoformat(date) < since:
+        if n in prs or when(date) < since:
             continue
         prs[n] = {
             "n": n,
@@ -98,6 +104,8 @@ def scan(repo: Path, since: datetime) -> list[dict]:
 
 def main(since_iso: str, *repos: str) -> None:
     since = datetime.fromisoformat(since_iso)
+    if since.tzinfo is None:  # git's dates carry an offset; a bare date means UTC
+        since = since.replace(tzinfo=timezone.utc)
     total = 0
     out = []
     for r in sorted(repos, key=lambda p: slug(Path(p)).lower()):
