@@ -5,9 +5,10 @@ Lanes: noise | auto | watch | draft | urgent. Rules only — no LLM.
 from __future__ import annotations
 
 import re
-from typing import NotRequired, TypedDict
+from typing import TypedDict
 
-class Notification(TypedDict):
+
+class _NotificationFields(TypedDict):
     id: str
     reason: str
     subject_type: str
@@ -16,7 +17,12 @@ class Notification(TypedDict):
     repo: str
     updated_at: str
     unread: bool
-    latest_comment_url: NotRequired[str]
+
+
+class Notification(_NotificationFields, total=False):
+    """`NotRequired` is Python 3.11+; a total=False subclass keeps 3.10."""
+
+    latest_comment_url: str
 
 Lane = str
 
