@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 MERGE = re.compile(r"^Merge pull request #(\d+) from (\S+)")
@@ -98,6 +98,8 @@ def scan(repo: Path, since: datetime) -> list[dict]:
 
 def main(since_iso: str, *repos: str) -> None:
     since = datetime.fromisoformat(since_iso)
+    if since.tzinfo is None:  # git's dates carry an offset; a bare date means UTC
+        since = since.replace(tzinfo=timezone.utc)
     total = 0
     out = []
     for r in sorted(repos, key=lambda p: slug(Path(p)).lower()):
