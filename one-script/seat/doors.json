@@ -1,0 +1,7 @@
+{
+ "doors": {
+  "hook.py": "1c87bd51b07937cce2529f62cd41486a3690f25ed0a160d1588fe83da3b269ec",
+  "prompt.py": "bd4a8fb4c961d248bea8805111287c6ec54245677a94d4c54552848fd4c44f35",
+  "seat/managed-settings.json": "f17175803ae8aadbbbcb4f8ad1ec4c30d10199d5fa92f5caceccc38b7c75d6ff"
+ }
+}

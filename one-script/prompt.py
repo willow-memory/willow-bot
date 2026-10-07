@@ -9,7 +9,7 @@ exists").
 Three states, never collapsed, and never a path in what the model sees:
 
   populated    the served document, inside the frame
-  empty        serve's own empty, or a served file over the cap ("narrow the
+  empty        serve's own empty, or a scope over the cap ("narrow the
                stack"): nothing served, and why
   unreachable  no served file set, missing, unreadable or not a served
                document: nothing served, and why
@@ -24,7 +24,11 @@ import json
 import os
 import sys
 
-MAX_BYTES = 64 * 1024  # a scope bigger than this is narrowed, not truncated
+# Claude Code caps additionalContext at 10,000 characters; past that it saves
+# the text to a file and hands the model the file's path and a preview. So the
+# whole injected text, frame included, stays under the cap, with room to spare.
+MAX_CHARS = 9_000
+MAX_BYTES = 64 * 1024  # never read more than this; anything near it is over anyway
 OPEN = "<served-data>"
 CLOSE = "</served-data>"
 FRAME = (
@@ -63,6 +67,16 @@ def load(path):
     return doc
 
 
+def render(path):
+    """What goes into the prompt: under the cap, or `empty` with the reason."""
+    text = context(load(path))
+    if len(text) > MAX_CHARS:
+        text = context(
+            _doc("empty", "the scope is too large to serve; narrow the stack")
+        )
+    return text
+
+
 def context(doc):
     body = json.dumps(doc, sort_keys=True, ensure_ascii=False)
     body = body.replace("<", "\\u003c")  # served text can't close the frame
@@ -71,8 +85,8 @@ def context(doc):
 
 if __name__ == "__main__":
     try:
-        doc = load(os.environ.get("ONESCRIPT_SERVED", ""))
-        out = {"hookEventName": "UserPromptSubmit", "additionalContext": context(doc)}
+        text = render(os.environ.get("ONESCRIPT_SERVED", ""))
+        out = {"hookEventName": "UserPromptSubmit", "additionalContext": text}
         print(json.dumps({"hookSpecificOutput": out}))
     except Exception:
         sys.exit(2)  # exit 2 blocks the prompt in Claude Code

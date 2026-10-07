@@ -22,7 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import gate, reverse
+import json
+
+from . import doors, gate, reverse
 
 OPTIONS = [
     "put it back and continue",
@@ -231,6 +233,20 @@ def reachability_gate(deps: list[dict]) -> list[dict]:
     return out
 
 
+def doors_gate(repo: str | None) -> list[dict]:
+    """The seat's doors in the repo still match their pins (seat/doors.json).
+    A hook changed without a new pin is a hard close, not a quiet drift."""
+    if not repo:
+        return []
+    try:
+        pins = json.loads((Path(repo) / "seat" / "doors.json").read_text())
+    except (OSError, ValueError) as e:
+        return [
+            _row("doors", "seat/doors.json", "failing", f"no pins: {type(e).__name__}")
+        ]
+    return doors.check_repo(Path(repo), pins)
+
+
 def gates(cfg: dict) -> list[dict]:
     """The four gates, in a fixed order. `cfg` keys are all optional."""
     return (
@@ -248,6 +264,7 @@ def gates(cfg: dict) -> list[dict]:
             cfg.get("git", _git),
         )
         + reachability_gate(cfg.get("deps", []))
+        + doors_gate(cfg.get("doors"))
     )
 
 

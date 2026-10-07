@@ -151,6 +151,7 @@ def _gate_cfg(no_tests: bool, ci_text: str, venv: Path) -> dict:
         "version_of": _in_venv(venv),
         "found_in": f"in {venv}",
         "repos": [str(ROOT), str(GROVE)],
+        "doors": str(PKG.parent),  # one-script/: the seat's doors against their pins
     }
     if not no_tests and not os.environ.get(NESTED):
         os.environ[NESTED] = "1"  # inherited by the suite the gate runs
