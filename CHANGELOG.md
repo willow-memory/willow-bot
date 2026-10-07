@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [0.17.0](https://github.com/willow-memory/willow-bot/compare/v0.16.0...v0.17.0) (2026-10-07)
+
+
+### Added
+
+* **install:** broker refresh without a local venv; ruff 0.16.7 in the dev extra; ingress tests off the real clock ([7de6408](https://github.com/willow-memory/willow-bot/commit/7de6408b3d2dfe4e313a28f9f5bcf53b89c80089))
+* **install:** refresh the editable install through the broker when there's no local venv ([9db7f82](https://github.com/willow-memory/willow-bot/commit/9db7f822b2fc2717cd4a4c9cd40615fc49ee9d51))
+
 ## [0.16.0](https://github.com/willow-memory/willow-bot/compare/v0.15.0...v0.16.0) (2026-09-30)
 
 
