@@ -127,8 +127,8 @@ def test_on_feature_branch_refuses_refresh(tmp_path):
 
 
 def test_ok_when_up_to_date_no_install_available(tmp_path):
-    """Up-to-date with no .venv → state is ok, install marked skipped
-    with a specific reason. The seat sees "checkout is current" as
+    """Up-to-date with no .venv and no allowlisted broker pair → state is
+    ok, install marked skipped. The seat sees "checkout is current" as
     distinct from "install ran"."""
     upstream = _init_upstream(tmp_path)
     root = _fresh_checkout(tmp_path, upstream)
@@ -136,9 +136,38 @@ def test_ok_when_up_to_date_no_install_available(tmp_path):
     assert receipt["state"] == "ok"
     assert receipt["ahead"] == 0
     assert receipt["behind"] == 0
-    # No .venv → install skipped, state stays ok.
     assert receipt.get("install") == "skipped"
-    assert "no .venv" in receipt["detail"]
+    assert "allowlist" in receipt["detail"] or "WILLOW_BOT_MCP" in receipt["detail"]
+
+
+def test_broker_pip_sync_when_no_local_venv(tmp_path, monkeypatch):
+    """No checkout .venv but an allowlisted remote + MCP on → broker path."""
+    upstream = _init_upstream(tmp_path)
+    root = _fresh_checkout(tmp_path, upstream)
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setattr(
+        install_receipt, "_broker_pair_for",
+        lambda _root: {"venv": "willow-bot", "extras": []},
+    )
+
+    calls = []
+
+    def fake_call(name, args, *, timeout_s=90):
+        calls.append((name, args, timeout_s))
+        return {
+            "ok": True, "synced": True, "venv": "willow-bot",
+            "receipt_id": "rec-test", "after": "9.9.9",
+        }
+
+    import willow_bot.steward.mcp_client as mcp_client
+    monkeypatch.setattr(mcp_client, "call", fake_call)
+    receipt = install_receipt.refresh_editable(root, "main", do_install=True)
+    assert receipt["state"] == "ok", receipt
+    assert receipt["install"] == "broker_pip_sync"
+    assert receipt["broker_venv"] == "willow-bot"
+    assert calls and calls[0][0] == "pip_sync_execute"
+    assert calls[0][1]["checkout"] == str(root)
+    assert calls[0][2] >= 600
 
 
 # ── behind → fast-forward ──────────────────────────────────────────────────
@@ -218,7 +247,7 @@ def test_install_ok_writes_stamp_with_head_commit(tmp_path, monkeypatch):
 
     receipt = install_receipt.refresh_editable(root, "main", do_install=True)
     assert receipt["state"] == "ok"
-    assert receipt.get("install") == "ok"
+    assert receipt.get("install") == "local_venv"
     assert receipt["installed_commit"] == receipt["checkout_commit"]
     stamp = Path(receipt["marker_path"])
     assert str(tmp_path / "wh") in str(stamp)

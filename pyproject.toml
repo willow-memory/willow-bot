@@ -38,7 +38,9 @@ mcp = ["mcp>=1.0,<3"]
 # back to `httpx`, so either one satisfies the requirement. Without it the
 # webhook boundary tests raise `RuntimeError: … requires the httpx2 package`
 # — they need TestClient to exercise `bot.py`'s FastAPI handler end-to-end.
-dev = ["pytest>=8", "httpx>=0.27"]
+# `ruff` is pinned exactly to the fleet's CI pin: the one script's toolchain
+# gate checks the bot venv's ruff against it (D2: the venvs live in the bot).
+dev = ["pytest>=8", "httpx>=0.27", "ruff==0.16.7"]
 
 [project.scripts]
 willow-bot = "willow_bot.cli:webhook_main"

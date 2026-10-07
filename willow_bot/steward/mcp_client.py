@@ -45,9 +45,9 @@ def server_env() -> dict[str, str]:
     return env
 
 
-def _call_sync(coro):
+def _call_sync(coro, *, timeout_s: float = 90):
     assert _mcp_loop is not None
-    return asyncio.run_coroutine_threadsafe(coro, _mcp_loop).result(timeout=90)
+    return asyncio.run_coroutine_threadsafe(coro, _mcp_loop).result(timeout=timeout_s)
 
 
 async def _lifecycle(argv: list[str], ready: threading.Event) -> None:
@@ -121,10 +121,10 @@ def shutdown() -> None:
     _mcp_task = None
 
 
-def call(name: str, inputs: dict[str, Any]) -> Any:
+def call(name: str, inputs: dict[str, Any], *, timeout_s: float = 90) -> Any:
     start()
     assert _mcp_session is not None
-    result = _call_sync(_mcp_session.call_tool(name, inputs))
+    result = _call_sync(_mcp_session.call_tool(name, inputs), timeout_s=timeout_s)
     # SDK 1.x isError / 2.x is_error
     is_err = getattr(result, "isError", None)
     if is_err is None:
