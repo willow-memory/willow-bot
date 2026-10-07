@@ -42,18 +42,22 @@ tick reading this receipt tells drift by comparing the two commits.
 
 Never opens a network socket outside a single bounded ``git fetch``,
 never switches branches, never creates a venv. If a venv is present at
-``.venv/`` we use its ``pip``; otherwise the receipt reports
-``install_skipped`` (state stays ``on_default`` for the seat to read).
+``.venv/`` we use its ``pip``; otherwise we ask the broker
+``pip_sync_execute`` (ideas A.2) to install into the vault venv named by
+the allowlist for this remote. If MCP is off or the remote is not on the
+allowlist, the receipt reports ``install_skipped``.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from willow_bot.paths import bot_dir
+from willow_bot.paths import bot_dir, willow_home
 
 log = logging.getLogger("willow-bot.install_receipt")
 
@@ -61,11 +65,21 @@ log = logging.getLogger("willow-bot.install_receipt")
 _GIT_TIMEOUT_S = 30
 _FETCH_TIMEOUT_S = 60
 _PIP_TIMEOUT_S = 300
+_BROKER_PIP_TIMEOUT_S = 600
 
 #: Legacy stamp name, once written straight into the checkout root
 #: (gap f982a9be2eac). Kept as a constant so the writer's cleanup and
 #: the reader's one-release fallback name the exact same file.
 _LEGACY_MARKER_NAME = ".willow-bot-installed.commit"
+
+#: Thin fallback when the broker allowlist file is absent (same seeds as
+#: willow-mcp's bundled ``pip_sync_allowlist.json``).
+_DEFAULT_BROKER_PAIRS: dict[str, dict[str, Any]] = {
+    "hornbook-knowledge/Jeles": {"venv": "willow-mcp", "extras": ["connectors"]},
+    "willow-memory/willow-bot": {"venv": "willow-bot", "extras": []},
+    "willow-memory/willow-mcp": {"venv": "willow-mcp", "extras": []},
+    "willow-memory/willow-gate": {"venv": "willow-mcp", "extras": []},
+}
 
 
 def _git(root: Path, *args: str, timeout: int = _GIT_TIMEOUT_S) -> subprocess.CompletedProcess:
@@ -158,6 +172,76 @@ def _run_editable_install(root: Path, pip: Path) -> tuple[bool, str]:
     if proc.returncode != 0:
         return False, (proc.stderr or proc.stdout).strip()[-500:]
     return True, ""
+
+
+def _origin_slug(root: Path) -> str | None:
+    """``owner/repo`` from origin (same shape as the broker allowlist keys)."""
+    slug = _repo_slug(root)
+    if not slug:
+        return None
+    return slug.replace("__", "/", 1)
+
+
+def _broker_pair_for(root: Path) -> dict[str, Any] | None:
+    slug = _origin_slug(root)
+    if not slug:
+        return None
+    pairs: dict[str, Any] = dict(_DEFAULT_BROKER_PAIRS)
+    allow = willow_home() / "constitutional" / "pip_sync_allowlist.json"
+    if allow.is_file():
+        try:
+            doc = json.loads(allow.read_text(encoding="utf-8"))
+            pairs.update(doc.get("pairs") or {})
+        except (OSError, json.JSONDecodeError):
+            pass
+    if slug in pairs:
+        return dict(pairs[slug])
+    lowered = {k.lower(): v for k, v in pairs.items()}
+    hit = lowered.get(slug.lower())
+    return dict(hit) if hit else None
+
+
+def _broker_pip_sync(root: Path) -> tuple[str, str, dict[str, Any]]:
+    """Ask willow-mcp ``pip_sync_execute``. Returns
+    ``(install_label, detail, extra_receipt_fields)``.
+    ``install_label`` is ``broker_pip_sync`` | ``install_failed`` | ``skipped``.
+    """
+    pair = _broker_pair_for(root)
+    if pair is None:
+        return "skipped", f"no broker allowlist pair for {_origin_slug(root)!r}", {}
+    # Same env gate as tick.mcp_enabled — do not import tick (circular).
+    if os.environ.get("WILLOW_BOT_MCP", "").strip().lower() not in ("1", "true", "yes"):
+        return "skipped", "WILLOW_BOT_MCP not enabled; broker pip_sync skipped", {}
+    try:
+        from willow_bot.steward import mcp_client
+        from willow_bot.steward.config import app_id
+    except Exception as exc:  # noqa: BLE001
+        return "skipped", f"mcp client unavailable: {exc}", {}
+    args: dict[str, Any] = {
+        "app_id": app_id(),
+        "checkout": str(root),
+        "venv": pair.get("venv") or "",
+    }
+    extras = list(pair.get("extras") or [])
+    if extras:
+        args["extras"] = extras
+    try:
+        result = mcp_client.call("pip_sync_execute", args, timeout_s=_BROKER_PIP_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001
+        return "install_failed", f"broker pip_sync: {exc}"[:400], {}
+    if not isinstance(result, dict):
+        return "install_failed", f"broker pip_sync: unexpected result {result!r}"[:400], {}
+    if result.get("ok") and result.get("synced"):
+        return "broker_pip_sync", "installed via broker pip_sync_execute", {
+            "broker_venv": result.get("venv"),
+            "broker_receipt_id": result.get("receipt_id"),
+            "broker_after": result.get("after"),
+        }
+    errno = result.get("error") or "EINSTALL"
+    reason = result.get("reason") or result.get("error") or "broker refused"
+    return "install_failed", f"broker pip_sync {errno}: {reason}"[:400], {
+        "broker_error": errno,
+    }
 
 
 def _legacy_marker_path(root: Path) -> Path:
@@ -327,20 +411,29 @@ def refresh_editable(
         return receipt
 
     pip = _venv_pip(repo_dir)
-    if pip is None:
-        receipt.update(state="ok", install="skipped",
-                       detail=f"no .venv/bin/pip under {repo_dir}; install skipped")
-        return receipt
-
-    ok, err = _run_editable_install(repo_dir, pip)
-    if not ok:
-        receipt.update(state="install_failed", detail=f"pip: {err}")
-        return receipt
+    if pip is not None:
+        ok, err = _run_editable_install(repo_dir, pip)
+        if not ok:
+            receipt.update(state="install_failed", detail=f"pip: {err}")
+            return receipt
+        install_label = "local_venv"
+        detail = "installed via checkout .venv"
+    else:
+        label, detail, extra = _broker_pip_sync(repo_dir)
+        receipt.update(extra)
+        if label == "skipped":
+            receipt.update(state="ok", install="skipped", detail=detail)
+            return receipt
+        if label == "install_failed":
+            receipt.update(state="install_failed", detail=detail)
+            return receipt
+        install_label = label
 
     commit = receipt["checkout_commit"]
     if commit:
         _write_installed_stamp(repo_dir, commit)
         receipt["installed_commit"] = commit
     receipt["state"] = "ok"
-    receipt["install"] = "ok"
+    receipt["install"] = install_label
+    receipt["detail"] = detail
     return receipt
