@@ -49,16 +49,45 @@ or a file exists (2026-10-07, the operator: "Sounds good").
 | No served file, a missing or unreadable one, or one that isn't a served document | `unreachable`, with a reason that names no path |
 | An error in `prompt.py` itself | Exit 2: Claude Code blocks the prompt |
 
-On Claude Code, wiring is two hooks (still the operator's to turn on, N6):
+## The seat: where the model runs
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 one-script/hook.py"}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 one-script/prompt.py"}]}]
-  }
-}
+The hooks aren't wired into your own Claude Code: managed settings reach every
+session on a machine, and every seat but this one needs its tools. The model
+gets its own machine instead, a container (`seat/`), and the managed settings
+live only there (2026-10-07, the operator: "I agree with you recomendations.").
+
+| Piece | What it holds |
+|---|---|
+| `seat/Dockerfile` | Python and Node from their official images, Claude Code pinned, no package manager run |
+| `seat/managed-settings.json` | Both hooks; `allowManagedHooksOnly` and `allowManagedPermissionRulesOnly`; a deny list of every tool but Write, plus `mcp__*`; `ONESCRIPT_SERVED` |
+| `seat/doors.json` | The sha256 of each door (`hook.py`, `prompt.py`, the settings). `python3 onescript/doors.py pin --repo .` rewrites it after a door changes. |
+| `onescript/doors.py` | Before Claude Code starts, the container's entrypoint checks every installed door against its pin, its owner (root) and its mode. One open door and the seat doesn't start. At check-in, the same file checks the repo's doors against the pins, and a mismatch is a hard close. |
+
+Two doors, because Claude Code hooks fail open on anything but exit 2. If a
+hook can't start or times out, the deny list still holds. If the deny list
+misses a tool, the hook denies it, since anything not on its policy is denied.
+Write is on neither, so the hook's ask still reaches you.
+
+```bash
+cd one-script
+docker build -f seat/Dockerfile -t onescript-seat .
+docker run --rm -it -v "$SERVED_DIR":/served:ro -v "$WORK_DIR":/work \
+    -e ANTHROPIC_API_KEY onescript-seat
 ```
+
+Serve writes `served.json` into `$SERVED_DIR` on your box; the seat sees only
+that directory, read-only, and `/work` for what the model proposes. The box
+itself never enters the container.
+
+CI builds the seat and checks what doesn't need a model: the doors are shut at
+start, the seat's user can't write them, the hook answers each tool, and a
+swapped door stops the seat.
+
+**Not yet checked, because it needs a model run:** that the settings' `env`
+reaches the hooks (the docs imply it), that each name on the deny list is a
+tool Claude Code still has, and what `ask` does in `dontAsk` mode. The first
+run with a key should try each tool, Write, and a prompt, before the seat is
+used for anything.
 
 Other front ends: whether each can add context at prompt time isn't verified
 (the 22-CLI research confirmed Claude Code only). Until one is, the fallback
