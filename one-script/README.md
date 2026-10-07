@@ -45,7 +45,7 @@ or a file exists (2026-10-07, the operator: "Sounds good").
 |---|---|
 | A served document | The document, inside the frame |
 | Serve's own `empty` | That, with serve's reason |
-| A served file over 64 KiB | `empty`: "narrow the stack". Never truncated |
+| A scope whose prompt text would pass 9,000 characters (Claude Code hands the model a file path past 10,000) | `empty`: "narrow the stack". Never truncated |
 | No served file, a missing or unreadable one, or one that isn't a served document | `unreachable`, with a reason that names no path |
 | An error in `prompt.py` itself | Exit 2: Claude Code blocks the prompt |
 
