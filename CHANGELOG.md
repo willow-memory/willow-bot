@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.18.0](https://github.com/willow-memory/willow-bot/compare/v0.17.0...v0.18.0) (2026-10-07)
+
+
+### Added
+
+* **steward:** upstream contribution desk on the tick ([dac2b25](https://github.com/willow-memory/willow-bot/commit/dac2b254369a85f2aa5459bc198b57407fb87bd0))
+* **steward:** upstream contribution desk on the tick; pr_scan reads a bare date as UTC ([9672984](https://github.com/willow-memory/willow-bot/commit/9672984c94e79b91b700c71322e54a4c876a5850))
+
+
+### Fixed
+
+* **steward:** upstream triage imports on Python 3.10 ([0dbbeb2](https://github.com/willow-memory/willow-bot/commit/0dbbeb29f48a8baa70093f3cda43aa60c51530df))
+
 ## [0.17.0](https://github.com/willow-memory/willow-bot/compare/v0.16.0...v0.17.0) (2026-10-07)
 
 
