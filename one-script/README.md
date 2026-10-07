@@ -19,8 +19,9 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 |---|---|
 | `onescript/` | The parts, `run`, serve and xref, and the CLI (`__main__.py`) |
 | `onescript/tests/` | Its tests |
-| `hook.py` | The one hook: Read only the served file, Write asks, everything else denied |
-| `foundation/` | The hook's tests run on a bare interpreter, without pytest |
+| `hook.py` | The one hook (PreToolUse): Write asks, everything else denied, Read included |
+| `prompt.py` | The served tables, put into each prompt as framed data (UserPromptSubmit), so the model never holds a path |
+| `foundation/` | The hooks' tests run on a bare interpreter, without pytest |
 | `scripts/scan/` | `script_match.py` (the gate's script index) and the table scans |
 | `scripts/flow/` | The view drafts: session maps and their merge |
 | `deep_thought.py` | The morning screen |
@@ -31,6 +32,38 @@ The one script's law is willows-grove's constitution (its Trace IDs), and its
 toolchain pin is willows-grove's CI. willows-grove is found at
 `ONESCRIPT_GROVE`, else beside this repo (`../willows-grove`). Without it
 there's no law, and every command refuses.
+
+## How the model gets what was served
+
+The model has no tools but Write, and Write asks the human. It doesn't read a
+file: at every prompt, `prompt.py` reads what serve wrote (`ONESCRIPT_SERVED`)
+and puts it into the turn inside a `<served-data>` frame that says it is data,
+not instructions. The model never sees a path, so it never learns that a box
+or a file exists (2026-10-07, the operator: "Sounds good").
+
+| What `prompt.py` finds | What the model gets |
+|---|---|
+| A served document | The document, inside the frame |
+| Serve's own `empty` | That, with serve's reason |
+| A served file over 64 KiB | `empty`: "narrow the stack". Never truncated |
+| No served file, a missing or unreadable one, or one that isn't a served document | `unreachable`, with a reason that names no path |
+| An error in `prompt.py` itself | Exit 2: Claude Code blocks the prompt |
+
+On Claude Code, wiring is two hooks (still the operator's to turn on, N6):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "python3 one-script/hook.py"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 one-script/prompt.py"}]}]
+  }
+}
+```
+
+Other front ends: whether each can add context at prompt time isn't verified
+(the 22-CLI research confirmed Claude Code only). Until one is, the fallback
+on file is a path in its instruction file, which tells the model the box is
+there; it is not built.
 
 ## Running it
 
