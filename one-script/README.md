@@ -1,0 +1,49 @@
+# The one script
+
+The code drives; the model reads what it served; the human seals. This is the
+skeleton: the seven parts (boot, predict, record, gate, resolve, view,
+reverse), `run`, serve, xref, the one hook, and the scripts they lean on.
+
+Moved here from willows-grove (`docs/design/one-script/` at `008c7f9`) under
+D2, sealed 2026-10-02: "All is the things should live inside the bot." Its
+history stays in willows-grove, and so do the design docs, which are the
+reasoning behind every part: the one-script README, `next-pile.md`,
+`workflow.md`, `incoming/`, and `../one-box/`.
+
+It sits outside the `willow_bot` package on purpose: it's a proposal, not a
+sealed build, so it isn't in the wheel and moving it cut no release.
+
+## What's here
+
+| Path | What it is |
+|---|---|
+| `onescript/` | The parts, `run`, serve and xref, and the CLI (`__main__.py`) |
+| `onescript/tests/` | Its tests |
+| `hook.py` | The one hook: Read only the served file, Write asks, everything else denied |
+| `foundation/` | The hook's tests run on a bare interpreter, without pytest |
+| `scripts/scan/` | `script_match.py` (the gate's script index) and the table scans |
+| `scripts/flow/` | The view drafts: session maps and their merge |
+| `deep_thought.py` | The morning screen |
+
+## The law comes from willows-grove
+
+The one script's law is willows-grove's constitution (its Trace IDs), and its
+toolchain pin is willows-grove's CI. willows-grove is found at
+`ONESCRIPT_GROVE`, else beside this repo (`../willows-grove`). Without it
+there's no law, and every command refuses.
+
+## Running it
+
+```bash
+cd one-script
+python3 -m onescript checkin            # boot: record, probes, the four gates
+python3 -m onescript turn "the bite"    # one turn as the desk
+python3 -m onescript checkout           # reverse, then the morning screen
+
+python3 -m pytest -q onescript/tests    # its tests (willows-grove beside this repo)
+python3 foundation/run_hook_tests.py    # the hook's tests on any Python
+```
+
+The box defaults to `.flow/onescript/` in this repo, which git ignores.
+`ruff.toml` here carries willows-grove's lint floor, so the move didn't
+change what the code is held to.

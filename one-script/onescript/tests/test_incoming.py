@@ -11,12 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from onescript import __main__ as cli  # noqa: E402
 from onescript import gate  # noqa: E402
 from onescript.run import Run  # noqa: E402
 
 KEYS = {"vishwakarma": b"k-vish"}
 LAW = {"trace_ids": ["CONST-III", "CONST-VI"], "grants": []}
-INCOMING = Path(__file__).resolve().parents[2] / "incoming"
+INCOMING = cli.GROVE / "docs" / "design" / "one-script" / "incoming"  # the proposals
 
 
 def ident(who="vishwakarma", family="qwen"):

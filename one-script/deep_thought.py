@@ -60,8 +60,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve()
 SKELETON = HERE.parent / "onescript"
-DESIGN = HERE.parent.parent
 ROOT = Path(os.environ.get("ONESCRIPT_ROOT", "~/github/willow-memory")).expanduser()
+DESIGN = ROOT / "willows-grove" / "docs" / "design"  # the docs stay in willows-grove
 RAT = ROOT / "ratatosk"
 BOT = ROOT / "willow-bot"
 _box = os.environ.get("WILLOW_HOME", "").strip()
@@ -763,7 +763,8 @@ def measure_docs() -> list[dict]:
     """Docs that still call a sealed thing open, or still home the script in Rat."""
     out = []
     files = sorted(
-        set(HERE.parent.rglob("*.md")) | set((DESIGN / "one-box").glob("*.md"))
+        set((DESIGN / "one-script").rglob("*.md"))
+        | set((DESIGN / "one-box").glob("*.md"))
     )
     for f in files:
         try:

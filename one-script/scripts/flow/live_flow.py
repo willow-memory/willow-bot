@@ -51,7 +51,7 @@ import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-LIVE = HERE.parents[4] / ".flow" / "live"  # willows-grove/.flow/live
+LIVE = HERE.parents[2] / ".flow" / "live"  # willow-bot/.flow/live
 SID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")  # no '/', no '..'
 ANCHOR = 4096  # bytes before the offset that must still hash the same
 LOCK_WAIT_S = 20  # a stuck child can't make the queue grow without bound

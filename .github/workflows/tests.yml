@@ -26,14 +26,53 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q
 
+  # The one script (one-script/, moved from willows-grove). It reads its law
+  # from willows-grove, so both repos are checked out side by side, the same
+  # layout the operator's box has; the tests read the real constitution.
+  one-script:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: willow-bot
+
+      - uses: actions/checkout@v7
+        with:
+          repository: willow-memory/willows-grove
+          ref: master
+          path: willows-grove
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: pip install pytest ruff==0.16.7
+
+      - name: Lint
+        working-directory: willow-bot/one-script
+        run: ruff check . && ruff format --check .
+
+      - name: Run the one script's tests
+        working-directory: willow-bot/one-script
+        run: python -m pytest -q -p no:cacheprovider onescript/tests
+
+      - name: Run the hook's tests without pytest
+        working-directory: willow-bot/one-script
+        run: python foundation/run_hook_tests.py
+
   test:
-    needs: [test-matrix]
+    needs: [test-matrix, one-script]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Assert every matrix leg actually succeeded
-        if: ${{ needs.test-matrix.result != 'success' }}
+        if: ${{ needs.test-matrix.result != 'success' || needs.one-script.result != 'success' }}
         run: |
-          echo "::error::test-matrix did not succeed (result: ${{ needs.test-matrix.result }})"
+          echo "::error::test-matrix: ${{ needs.test-matrix.result }}, one-script: ${{ needs.one-script.result }}"
           exit 1
       - run: echo "all matrix legs green"

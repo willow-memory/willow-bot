@@ -1,17 +1,21 @@
 """The one script, run on this box.
 
-    cd docs/design/one-script
+    cd one-script                           # in willow-bot
     python3 -m onescript checkin            # boot: record, probes, the four gates
     python3 -m onescript turn "the bite"    # one turn as the desk
     python3 -m onescript checkout           # reverse, then the morning screen
 
-The box defaults to the repo's `.flow/onescript/` (excluded from git). The
+The box defaults to willow-bot's `.flow/onescript/` (excluded from git). The
 record persists there between commands, so check-in, turns and check-out are
 one run across several invocations.
 
 Every command first writes an `invocation` row: the argv, the root, the box,
 and the hash of every input it read. A replay reads that row back; when the
 bytes differ, the row names which input moved.
+
+The law is willows-grove's: its constitution's Trace IDs, and the ruff pin
+in its CI. willows-grove is found at ONESCRIPT_GROVE, else beside willow-bot
+(../willows-grove). Without it there is no law, and every command refuses.
 
 Honest about itself: the keys are the skeleton's HMAC secrets, kept beside the
 box in `.flow/onescript-keys/` (0600), not passkeys, and still inside what the
@@ -33,9 +37,12 @@ from pathlib import Path
 from . import boot, gate, record
 from .run import PKG, Run
 
-ROOT = PKG.parents[3]  # onescript -> one-script -> design -> docs -> repo
-CONSTITUTION = ROOT / "governance" / "CONSTITUTION.md"
-CI = ROOT / ".github" / "workflows" / "tests.yml"
+ROOT = PKG.parents[1]  # onescript -> one-script -> willow-bot
+GROVE = Path(
+    os.environ.get("ONESCRIPT_GROVE") or ROOT.parent / "willows-grove"
+).expanduser()
+CONSTITUTION = GROVE / "governance" / "CONSTITUTION.md"
+CI = GROVE / ".github" / "workflows" / "tests.yml"
 DESK = ("desk", "claude")
 ANCHOR = "anchor.json"  # the sealed tip, beside the keys: outside the box
 
@@ -143,7 +150,7 @@ def _gate_cfg(no_tests: bool, ci_text: str, venv: Path) -> dict:
         "pins": {"tools": {"ruff": pin.group(1)}} if pin else {},
         "version_of": _in_venv(venv),
         "found_in": f"in {venv}",
-        "repos": [str(ROOT)],
+        "repos": [str(ROOT), str(GROVE)],
     }
     if not no_tests and not os.environ.get(NESTED):
         os.environ[NESTED] = "1"  # inherited by the suite the gate runs
@@ -200,6 +207,12 @@ def main(argv: list[str] | None = None) -> int:
     clock = (lambda: args.now) if args.now else _now
     law_text, law_sha = _read(CONSTITUTION)
     ci_text, ci_sha = _read(CI)
+    if law_sha is None:
+        print(
+            f"refused: no law; willows-grove's constitution isn't at {CONSTITUTION}"
+            " (set ONESCRIPT_GROVE)"
+        )
+        return 2
     if args.keys.resolve().is_relative_to(args.box.resolve()):
         print("refused: the keys file can't live inside the box")
         return 2
@@ -217,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         cmd=args.cmd,
         argv=list(argv if argv is not None else sys.argv[1:]),
         root=str(ROOT),
+        grove=str(GROVE),
         box=str(args.box),
         venv=str(args.venv),
         inputs={
@@ -224,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             ".github/workflows/tests.yml": ci_sha,
             "onescript": run.version,
             "git_head": boot._git(str(ROOT), "rev-parse", "HEAD") or None,
+            "grove_head": boot._git(str(GROVE), "rev-parse", "HEAD") or None,
             "python": f"{sys.executable} {sys.version.split()[0]}",
             "venv_ruff": _in_venv(args.venv)("ruff"),
         },

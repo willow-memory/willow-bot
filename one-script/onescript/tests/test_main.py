@@ -76,10 +76,20 @@ def test_every_invocation_names_its_inputs(tmp_path):
         ".github/workflows/tests.yml",
         "onescript",
         "git_head",
+        "grove_head",
         "python",
         "venv_ruff",
     }
     assert inv["venv"] == str(v) and inv["inputs"]["venv_ruff"] == "0.16.7"
+    assert inv["grove"] == str(cli.GROVE)
+
+
+def test_no_willows_grove_means_no_law_and_nothing_runs(tmp_path, monkeypatch, capsys):
+    """The law is willows-grove's constitution. Without it, every command refuses."""
+    monkeypatch.setattr(cli, "CONSTITUTION", tmp_path / "missing" / "CONSTITUTION.md")
+    assert run(tmp_path, venv_with(tmp_path, "0.16.7"), "checkin") == 2
+    assert "no law" in capsys.readouterr().out
+    assert not (tmp_path / "box" / "record.jsonl").exists()
 
 
 def test_the_tests_gate_never_nests(monkeypatch):

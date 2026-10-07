@@ -1,0 +1,8 @@
+# The one script's lint floor, carried from willows-grove's pyproject so the
+# move doesn't change what it's held to. willow-bot has no ruff config of its
+# own; without this file ruff falls back to whatever the box has configured.
+target-version = "py310"
+line-length = 88
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

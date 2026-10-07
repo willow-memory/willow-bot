@@ -12,7 +12,7 @@ rest. The vault is not checked here: its wall is that the agent's user can't
 read it.
 
     ONESCRIPT_SERVED=/path/to/box/served.json \
-        python3 docs/design/one-script/hook.py    # Claude Code PreToolUse, matcher "*"
+        python3 one-script/hook.py    # in willow-bot; Claude Code PreToolUse, matcher "*"
 """
 
 import json

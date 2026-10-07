@@ -1,7 +1,8 @@
 """serve — only the tables in scope, to one file the model reads.
 
-Cites: the security core and "Where the reading lands" (README.md); the four
-pieces join (../one-box/four-pieces-join.md, "What one-box adds to serve").
+Cites: the security core and "Where the reading lands" (willows-grove,
+docs/design/one-script/README.md); the four pieces join (willows-grove,
+docs/design/one-box/four-pieces-join.md, "What one-box adds to serve").
 
 The model is served only the tables in its scope, by ids it can't guess, and
 nothing else: a table out of scope isn't named, counted or marked. The one
@@ -36,8 +37,7 @@ permission. Code fills out every field here; the model never sees a box.
           says why. A sealed table the run can't find is `unreachable`, not
           `empty`.
 
-Not here yet: the home. D2 (sealed) puts serve inside willow-bot; it sits
-beside the skeleton until it runs on the operator's box, then moves with it.
+Home: willow-bot (D2, sealed), with the rest of the skeleton.
 """
 
 from __future__ import annotations

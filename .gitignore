@@ -7,3 +7,4 @@ __pycache__/
 dist/
 *.egg-info/
 loki/.loki_state.json
+.flow/
