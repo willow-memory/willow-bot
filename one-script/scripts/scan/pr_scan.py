@@ -24,6 +24,12 @@ MERGE = re.compile(r"^Merge pull request #(\d+) from (\S+)")
 SQUASH = re.compile(r"^(.*) \(#(\d+)\)$")
 
 
+def when(date: str) -> datetime:
+    """git's iso-strict date. Newer git writes UTC as `Z`, which
+    fromisoformat only reads from Python 3.11, so `Z` becomes +00:00."""
+    return datetime.fromisoformat(date[:-1] + "+00:00" if date.endswith("Z") else date)
+
+
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
@@ -85,7 +91,7 @@ def scan(repo: Path, since: datetime) -> list[dict]:
     for line in refs.splitlines():
         ref, date, subject = line.split("\x1f", 2)
         n = int(ref.rsplit("/", 1)[1])
-        if n in prs or datetime.fromisoformat(date) < since:
+        if n in prs or when(date) < since:
             continue
         prs[n] = {
             "n": n,
