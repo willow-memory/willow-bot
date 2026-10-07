@@ -9,6 +9,7 @@ network. Status texts are GitHub's own ("OK", "Invalid HTTP Response: 404").
 from __future__ import annotations
 
 import json
+import time as _time
 
 import pytest
 
@@ -24,6 +25,25 @@ def _d(i, code, text=None, event="pull_request", at=None):
         text = "OK" if code == 200 else (f"Invalid HTTP Response: {code}" if code else "timed out")
     return {"id": i, "status_code": code, "status": text, "event": event,
             "delivered_at": at or f"2026-09-28T10:{i:02d}:00Z"}
+
+
+class _FrozenTime:
+    """`ingress.time` with `time()` held at NOW and everything else real."""
+
+    def __getattr__(self, name):
+        return getattr(_time, name)
+
+    @staticmethod
+    def time():
+        return NOW
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """The deliveries are hard-dated; `assess` reads the clock when `now` isn't
+    passed. Unfrozen, every test that leans on the default went red once the
+    real date passed the 7-day quiet line (2026-10-05)."""
+    monkeypatch.setattr(ingress, "time", _FrozenTime())
 
 
 class _Client:
