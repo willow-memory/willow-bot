@@ -80,21 +80,29 @@ class Config:
     phone: bool = False
 
 
+PUBLIC_KEYRING = "verifiers.public.json"
+NO_STORE = (
+    "unreachable: no Nestor store is configured to confirm it "
+    "($WILLOW_NESTOR_DB or $NESTOR_DB)"
+)
+
+
 def default_keyring() -> Path | None:
-    """The operator's keyring: `$WILLOW_KEYRING`, else
-    `$WILLOW_HOME/config/verifiers.json`; None when neither is set."""
+    """The public-only export of the operator's keyring: `$WILLOW_KEYRING`, else
+    `$WILLOW_HOME/config/verifiers.public.json`; None when neither is set. The
+    signing keyring (`verifiers.json`) is never the default: the box doesn't read
+    it. `onescript keys export` writes this file."""
     if os.environ.get("WILLOW_KEYRING"):
         return Path(os.environ["WILLOW_KEYRING"]).expanduser()
     if os.environ.get("WILLOW_HOME"):
-        return (
-            Path(os.environ["WILLOW_HOME"]).expanduser() / "config" / "verifiers.json"
-        )
+        return Path(os.environ["WILLOW_HOME"]).expanduser() / "config" / PUBLIC_KEYRING
     return None
 
 
 def default_nestor_db() -> Path | None:
-    """Nestor's store as the broker names it (`$WILLOW_NESTOR_DB`), else None."""
-    got = os.environ.get("WILLOW_NESTOR_DB")
+    """Nestor's store: `$WILLOW_NESTOR_DB` as the broker names it, else Nestor's
+    own `$NESTOR_DB`, else None."""
+    got = os.environ.get("WILLOW_NESTOR_DB") or os.environ.get("NESTOR_DB")
     return Path(got).expanduser() if got else None
 
 
@@ -233,10 +241,12 @@ def _gate_cfg(
             }
         ]
     else:
-        os.environ[NESTED] = "1"  # inherited by the suite the gate runs
+        # Set in the child's environment only. Setting it in this process
+        # would make every later check-in in a long-lived process skip the gate.
         cfg["tests"] = [
             {
                 "name": "onescript",
+                "env": {NESTED: "1"},
                 "argv": [
                     sys.executable,
                     "-m",
@@ -287,7 +297,7 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
     except KeysExposed as e:
         return None, _refused(str(e), 2)
     law = _law(law_text)
-    nested = bool(os.environ.get(NESTED))  # before _gate_cfg sets it for the child
+    nested = bool(os.environ.get(NESTED))  # set only in the tests gate's child
     clock: Callable[[], str] = (lambda: cfg.now) if cfg.now else _now
     run = Run(cfg.box, keys, law, clock, anchor=cfg.keys.parent / ANCHOR)
     run.serve_key = _load_serve_key(cfg)
@@ -485,10 +495,10 @@ def _seal(
         if cfg.keyring is None:
             return refuse(
                 "unreachable: no operator keyring is configured "
-                "($WILLOW_KEYRING or $WILLOW_HOME/config/verifiers.json)"
+                "($WILLOW_KEYRING or $WILLOW_HOME/config/verifiers.public.json)"
             )
         if cfg.nestor_db is None:
-            return refuse("unreachable: no Nestor store is configured to confirm it")
+            return refuse(NO_STORE)
         if not nestor_seal.have_ed25519():
             return refuse(nestor_seal.NO_CRYPTO)
         try:

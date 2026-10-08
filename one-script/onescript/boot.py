@@ -25,6 +25,7 @@ gate the caller chose to skip says so in a row (`differently`), never silently.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -101,8 +102,18 @@ def _unreachable(gate_name: str, where: str, why: str, phone: bool = False) -> d
     return _row(gate_name, where, "failing", f"can't run on the box: {why}")
 
 
-def _run(argv: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
-    p = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def _run(
+    argv: list[str],
+    cwd: str,
+    timeout: int = 600,
+    env: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    """Run a command. `env` is added to a copy of this process's environment for
+    the child only; the calling process's own environment is never changed."""
+    child = {**os.environ, **env} if env else None
+    p = subprocess.run(
+        argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=child
+    )
     lines = (p.stdout + p.stderr).strip().splitlines()
     return p.returncode, lines[-1] if lines else ""
 
@@ -129,7 +140,10 @@ def tests_gate(
                 _unreachable("tests", s["name"], "can't run: no such directory", phone)
             )
         else:
-            rc, last = runner(s["argv"], s["cwd"])
+            if s.get("env"):  # the child's environment alone, never ours
+                rc, last = runner(s["argv"], s["cwd"], env=s["env"])
+            else:
+                rc, last = runner(s["argv"], s["cwd"])
             out.append(
                 _row("tests", s["name"], "satisfied", "", result=last)
                 if rc == 0

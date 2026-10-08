@@ -220,6 +220,24 @@ class Run:
                 self._script_index(),
             )
             lost = serve.check_cites(doc, p["cites"])
+            # The model's own idea: no cites. Code, never the model, marks it, and
+            # accepts it only alongside a populated served state ("only along
+            # side"); with nothing served it is refused, not guessed at.
+            own = not p["cites"]
+            if own and doc.get("state") != "populated":
+                rows.append(
+                    self.rec.append(
+                        "proposal",
+                        who,
+                        turn=n,
+                        line=got["line"],
+                        verdict="refused",
+                        reason="no cites, and nothing is served as populated; "
+                        "an idea of its own is accepted only alongside served state",
+                    )
+                )
+                continue
+            card = {"own_idea": True, **d.card} if own else d.card
             rows.append(
                 self.rec.append(
                     "proposal",
@@ -236,7 +254,8 @@ class Run:
                     verdict="link_fail" if lost else d.verdict,
                     reason="a cite is not in the served file" if lost else d.reason,
                     link_fail=lost,
-                    card=d.card,
+                    own_idea=own,
+                    card=card,
                 )
             )
         return rows

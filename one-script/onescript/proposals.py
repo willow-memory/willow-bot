@@ -4,7 +4,9 @@ only after the human's seal.
 The model has no Write. It returns rows (Rat's build B writes this file):
 
     JSONL, one {"path": str, "data": str, "cites": [served id], "claim": str}
-    per line. Exactly those four keys.
+    per line. Exactly those four keys. `cites` is empty only for the model's own
+    idea; code then marks the row `own_idea` (never the model), and it is
+    accepted only alongside a served state of `populated`.
 
 Code reads each row as data, never as instructions. A row that doesn't fit the
 contract is not a crash and not a guess: it is recorded as `refused`, with the
@@ -46,8 +48,9 @@ def path_problem(path: object) -> str | None:
     Judged as written, the way ratatosk judges it (`plain_relative_path`): the
     card shows exactly the bytes that will be written, so nothing is
     normalized or decoded first. No leading or trailing whitespace, no control,
-    format or bidi character (U+202E included), no newline, `~`, `%` or
-    backslash, no '.', '..' or empty segment, and not absolute."""
+    format or bidi character (U+202E included), no newline, no separator
+    (U+2028, U+2029 or any other Z* character but the ASCII space), no space at
+    a segment's start or end, no `~`, `%` or backslash, no '.', '..' or empty segment, and not absolute."""
     if not isinstance(path, str) or not path:
         return "path is empty or not text"
     if len(path) > MAX_PATH:
@@ -56,6 +59,13 @@ def path_problem(path: object) -> str | None:
         return "path must be plain text: no leading or trailing whitespace"
     if any(unicodedata.category(c).startswith("C") for c in path):
         return "path must be plain text: no control, format or bidi character"
+    # Separators (Z*: U+2028, U+2029, no-break and ideographic space, ...) are not
+    # control characters, but a card can't show them as what they are. Only the
+    # ASCII space is a space a person can read in a name.
+    if any(unicodedata.category(c).startswith("Z") and c != " " for c in path):
+        return "path must be plain text: no line, paragraph or other separator"
+    if any(part != part.strip(" ") for part in path.split("/")):
+        return "path must be plain text: no space at the start or end of a segment"
     if any(c in path for c in ("~", "%", "\\")):
         return "path must be plain text: no '~', '%' or backslash"
     if PurePosixPath(path).is_absolute() or any(
@@ -87,8 +97,10 @@ def check(obj: object) -> tuple[dict | None, str]:
     bad = path_problem(obj["path"])
     if bad:
         return None, bad
-    if not cites:  # strict until the operator rules on a proposal that cites nothing
-        return None, "cites must name at least one served table id"
+    # An empty `cites` is the model's own idea (operator, 2026-10-07: "It should be
+    # able to write it's own ideas, just marked as such"). Whether it is allowed is
+    # a fact about the served file, not about the row, so `Run._take` decides it:
+    # only alongside a served state of `populated`.
     try:
         canon(obj).encode("utf-8")  # every field, as the subject will hash it
     except (UnicodeEncodeError, ValueError):

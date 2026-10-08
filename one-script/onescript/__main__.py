@@ -8,6 +8,7 @@
     python3 -m onescript turn "the bite"    # one turn as the desk
     python3 -m onescript turn "the bite" --proposal f.jsonl   # the model's rows
     python3 -m onescript checkout           # reverse, then the morning screen
+    python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
 The app calls the functions in `onescript.api`; this file only reads argv,
 builds the `Config`, calls one of them and prints. Nothing here needs a tty.
@@ -38,7 +39,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import api, boot  # noqa: F401  (boot: tests patch cli.boot.probes)
+from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -151,17 +152,31 @@ def main(argv: list[str] | None = None) -> int:
         "--keyring",
         type=Path,
         default=api.default_keyring(),
-        help="the operator's keyring of public keys ($WILLOW_KEYRING, else "
-        "$WILLOW_HOME/config/verifiers.json); a Nestor seal is checked by it",
+        help="the public-only export of the operator's keyring ($WILLOW_KEYRING, "
+        "else $WILLOW_HOME/config/verifiers.public.json); a Nestor seal is "
+        "checked by it. Make it with `keys export`",
     )
     p.add_argument(
         "--nestor-db",
         type=Path,
         default=api.default_nestor_db(),
-        help="Nestor's store, read-only ($WILLOW_NESTOR_DB): a pair seals only "
-        "while it is sealed there",
+        help="Nestor's store, read-only ($WILLOW_NESTOR_DB, else $NESTOR_DB): a "
+        "pair seals only while it is sealed there",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
+    ks = sub.add_parser("keys", help="the operator's keyring export (run off the box)")
+    ksub = ks.add_subparsers(dest="keys_cmd", required=True)
+    ex = ksub.add_parser(
+        "export", help="write the public ed25519 entries of a signing keyring"
+    )
+    ex.add_argument("--from", dest="src", type=Path, required=True)
+    ex.add_argument(
+        "--to",
+        dest="dst",
+        type=Path,
+        default=api.default_keyring(),
+        help="default: the box's keyring path (verifiers.public.json)",
+    )
     sub.add_parser("checkin")
     t = sub.add_parser("turn")
     t.add_argument("bite")
@@ -189,6 +204,24 @@ def main(argv: list[str] | None = None) -> int:
     sl.add_argument("--verifier", action="append", help="only these may seal")
     args = p.parse_args(argv)
     raw = list(argv if argv is not None else sys.argv[1:])
+
+    if args.cmd == "keys":  # off the box: no record, no invocation row
+        if args.dst is None:
+            print(
+                "refused: no --to, and no $WILLOW_KEYRING or $WILLOW_HOME to default it"
+            )
+            return 2
+        try:
+            res = nestor_seal.export_public(args.src, args.dst)
+        except nestor_seal.Unverifiable as e:
+            print(f"refused: {e}")
+            return 2
+        print(f"exported {len(res['exported'])} public key(s) to {args.dst}")
+        for name in res["exported"]:
+            print(f"  kept     {name}")
+        for name in res["dropped_hmac"]:
+            print(f"  dropped  {name} (HMAC: a shared secret, not a public key)")
+        return 0
 
     cfg = api.Config(
         box=args.box,

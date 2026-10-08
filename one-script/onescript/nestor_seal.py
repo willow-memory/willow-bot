@@ -20,8 +20,10 @@ What is checked, and what is refused:
   conclusion  `target_text` equals the subject exactly; a seal over a
               different string covers nothing
   verifier    a name in the OPERATOR's keyring (fixed in `Config`, never from the
-              caller or the pair), not compromised, revoked or inactive; an
-              unknown name has no key, so no seal. The keyring's `legacy_key`
+              caller or the pair) whose key is not compromised. A key revoked
+              without compromise still verifies the seals it made, as in
+              Nestor (it makes no new ones); an unknown name has no key, so
+              no seal. The keyring's `legacy_key`
               is NOT accepted: it proves the deployment signed, not that a
               person did
   signature   ed25519 under the verifier's public key. An HMAC entry is a
@@ -38,6 +40,7 @@ Needs `cryptography` for ed25519. Nestor itself need not be installed.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -100,18 +103,76 @@ def load_keyring(path: str | Path) -> dict:
             key = bytes.fromhex(v["key"])
             if len(key) != 32:
                 raise Unverifiable(f"keyring entry {name!r} is not a 32-byte key")
+            # Nestor's own fields (`nestor.keyring.VerifierKey`): a key is revoked
+            # when `revoked_at` is set; `compromised` says why that matters.
             entries[name] = {
                 "key": key,
                 "kind": kind,
                 "compromised": bool(v.get("compromised", False)),
-                "revoked": bool(v.get("revoked", False)),
-                "active": bool(v.get("active", True)),
+                "revoked": bool(v.get("revoked_at", "")),
+                "reason": str(v.get("reason", "")),
             }
     except Unverifiable:
         raise
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise Unverifiable(f"keyring unreadable: {type(e).__name__}") from e
     return {"verifiers": entries}
+
+
+def export_public(src: str | Path, dst: str | Path) -> dict:
+    """Write the public half of the signing keyring `src` to `dst`.
+
+    The signing keyring holds secrets, and the box must never read it. This is
+    the one door between them, run by the operator outside the box: it copies
+    each ed25519 entry's Nestor fields (name, key, kind, revoked_at,
+    compromised, reason, created_at) and nothing else, so `private` can't be
+    carried over, and drops every HMAC entry (a shared
+    secret: whoever can verify with it can forge with it) and `legacy_key`.
+    The file is written 0644 and moved into place atomically. Returns
+    {"exported": [names], "dropped_hmac": [names]}."""
+    src, dst = Path(src), Path(dst)
+    if src.resolve() == dst.resolve():
+        raise Unverifiable("the export can't overwrite the keyring it reads")
+    try:
+        raw = json.loads(src.read_text(encoding="utf-8"))
+        entries = raw["verifiers"]
+        out, exported, dropped = [], [], []
+        for v in entries:
+            name = str(v["name"])
+            if str(v.get("kind", "hmac")) != "ed25519":
+                dropped.append(name)
+                continue
+            if len(bytes.fromhex(v["key"])) != 32:
+                raise Unverifiable(f"keyring entry {name!r} is not a 32-byte key")
+            out.append(
+                {
+                    "name": name,
+                    "key": str(v["key"]),
+                    "kind": "ed25519",
+                    "revoked_at": str(v.get("revoked_at", "")),
+                    "compromised": bool(v.get("compromised", False)),
+                    "reason": str(v.get("reason", "")),
+                    "created_at": str(v.get("created_at", "")),
+                }
+            )
+            exported.append(name)
+    except Unverifiable:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        raise Unverifiable(f"keyring unreadable: {type(e).__name__}") from e
+    body = json.dumps({"version": 1, "verifiers": out}, indent=2, ensure_ascii=False)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body + "\n")
+        os.chmod(tmp, 0o644)  # the umask must not narrow what the box has to read
+        load_keyring(tmp)  # what was written is what the box will accept
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"exported": exported, "dropped_hmac": dropped}
 
 
 def _sig_ok(kind: str, key: bytes, msg: bytes, sig: str) -> tuple[bool, str]:
@@ -149,10 +210,13 @@ def check(
     entry = keyring.get("verifiers", {}).get(who)
     if entry is None:
         return None, f"{who!r} is not in the keyring; no key backs the name"
+    # Nestor's semantics (nestor/keyring.py): a revoked key can make no new seals
+    # but still verifies the ones it made (the person left, their checks stand);
+    # a compromised key verifies nothing, since a theft can't be told from the
+    # owner's own signature. This side only reads seals already made, so a
+    # revoked key still passes and a compromised one never does.
     if entry["compromised"]:
         return None, f"{who!r}'s key is reported compromised; nothing it signed holds"
-    if entry.get("revoked") or not entry.get("active", True):
-        return None, f"{who!r}'s key is revoked or inactive; it seals nothing now"
     ok, why = _sig_ok(
         entry["kind"],
         entry["key"],

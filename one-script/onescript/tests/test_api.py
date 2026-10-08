@@ -213,8 +213,14 @@ def test_a_scope_seal_is_not_a_proposal_seal(cfg):
         (line("record.jsonl"), "temp or one the run keeps"),
         (line("served.json"), "temp or one the run keeps"),
         (line("tmp/x"), "temp or one the run keeps"),
+        (line("a b.md"), "no line, paragraph or other separator"),
+        (line("a b.md"), "no line, paragraph or other separator"),
+        (line("a b.md"), "no line, paragraph or other separator"),
+        (line("a　b.md"), "no line, paragraph or other separator"),
+        (line("a /b.md"), "no space at the start or end of a segment"),
+        (line("a/ b.md"), "no space at the start or end of a segment"),
+        (line("a/b.md /c"), "no space at the start or end of a segment"),
         (line(data="\ud800"), "UTF-8"),
-        (line(cites=[]), "at least one served table id"),
         ("[" * 100000, "not valid JSON"),
     ],
 )
@@ -226,6 +232,14 @@ def test_a_malformed_proposal_is_refused_into_the_record_never_a_crash(cfg, bad,
     assert "path" not in refused  # nothing to act on
     assert good["verdict"] == "pass"  # the rest are still read
     assert refused in [r for r in rows(cfg) if r["kind"] == "proposal"]
+
+
+def test_an_inner_ascii_space_in_a_name_is_still_a_name(cfg):
+    _, ids = served(cfg)
+    (p,) = api.take_proposals(cfg, [line("my notes/a b.md", cites=ids[:1])])["out"][
+        "proposals"
+    ]
+    assert p["verdict"] == "pass"
 
 
 def test_a_claim_that_says_nothing_is_refused_by_the_door(cfg):
@@ -445,15 +459,30 @@ def test_a_pair_the_store_no_longer_holds_as_sealed_is_not_a_seal(cfg):
 
 
 @needs_ed25519
-def test_a_revoked_operator_key_seals_nothing(cfg):
+def test_a_compromised_operator_key_seals_nothing(cfg):
     assert api.checkin(cfg)["code"] == 0
     s = api.scope(cfg, match={"who": "run"})["subject"]
     nestor_store(cfg, nestor_pair(s))
     ring = json.loads(cfg.keyring.read_text())
-    ring["verifiers"][0]["revoked"] = True
+    ring["verifiers"][0].update(
+        revoked_at="2026-10-01T00:00:00+00:00", compromised=True
+    )
     cfg.keyring.write_text(json.dumps(ring))
     got = api.seal_scope(cfg, s)
-    assert got["sealed"] is False and "revoked or inactive" in got["row"]["reason"]
+    assert got["sealed"] is False and "compromised" in got["row"]["reason"]
+
+
+@needs_ed25519
+def test_a_rotated_operator_key_still_verifies_its_past_seals(cfg):
+    """Nestor's semantics: revoked, not compromised, makes no new seals but the
+    ones it made stand (nestor/keyring.py, `Keyring.revoke`)."""
+    assert api.checkin(cfg)["code"] == 0
+    s = api.scope(cfg, match={"who": "run"})["subject"]
+    nestor_store(cfg, nestor_pair(s))
+    ring = json.loads(cfg.keyring.read_text())
+    ring["verifiers"][0].update(revoked_at="2026-10-01T00:00:00+00:00")
+    cfg.keyring.write_text(json.dumps(ring))
+    assert api.seal_scope(cfg, s)["sealed"] is True
 
 
 @needs_ed25519
@@ -712,3 +741,124 @@ def test_the_cli_serve_wants_the_row_the_scope_named(cfg, capsys, monkeypatch):
     capsys.readouterr()
     assert cli.main([*base, "serve"]) == 1
     assert "--upto" in capsys.readouterr().out
+
+
+# ── the model's own ideas, marked by code (operator, 2026-10-07) ────────────
+def test_an_idea_of_its_own_is_marked_by_code_and_leads_the_card(cfg):
+    _, ids = served(cfg)
+    own, cited = api.take_proposals(
+        cfg, [line(cites=[]), line("notes/b.md", "other", ids[:1], "another")]
+    )["out"]["proposals"]
+    assert own["verdict"] == "pass" and own["own_idea"] is True
+    assert next(iter(own["card"])) == "own_idea"  # the card leads with the marker
+    assert cited["own_idea"] is False and "own_idea" not in cited["card"]
+    stored = [r for r in rows(cfg) if r["kind"] == "proposal"]
+    assert [r["own_idea"] for r in stored] == [True, False]
+
+
+def test_the_model_cannot_mark_its_own_idea(cfg):
+    """Code sets `own_idea`; a row that brings the key is outside the contract."""
+    served(cfg)
+    bad = json.loads(line(cites=[]))
+    bad["own_idea"] = False
+    (p,) = api.take_proposals(cfg, [json.dumps(bad)])["out"]["proposals"]
+    assert p["verdict"] == "refused" and "keys must be exactly" in p["reason"]
+
+
+def test_an_own_idea_is_sealed_and_written_like_any_proposal(cfg):
+    served(cfg)
+    (p,) = api.take_proposals(cfg, [line(cites=[])])["out"]["proposals"]
+    done = api.seal_proposal(cfg, p["subject"], proof=proof(p["subject"]))
+    assert done["sealed"] and (cfg.box / "notes" / "a.md").exists()
+
+
+def test_an_own_idea_with_nothing_served_is_refused(cfg):
+    assert api.checkin(cfg)["code"] == 0  # nothing served
+    (p,) = api.take_proposals(cfg, [line(cites=[])])["out"]["proposals"]
+    assert p["verdict"] == "refused" and "populated" in p["reason"]
+    assert "path" not in p  # nothing to act on
+
+
+def test_an_own_idea_beside_an_empty_served_state_is_refused(cfg):
+    card, _ = served(cfg)
+    empty = api.serve(cfg, card["spec"], max_chars=1)  # too big for the cap
+    assert empty["state"] == "empty"
+    (p,) = api.take_proposals(cfg, [line(cites=[])])["out"]["proposals"]
+    assert p["verdict"] == "refused" and "populated" in p["reason"]
+    (q,) = api.take_proposals(cfg, [line(cites=["a" * 64])])["out"]["proposals"]
+    assert q["verdict"] == "link_fail"  # a cited row keeps the served-id check
+
+
+def test_the_served_return_line_allows_an_idea_of_its_own(cfg):
+    card, _ = served(cfg)
+    doc = json.loads((cfg.box / "served.json").read_text())
+    assert '"cites": []' in doc["return"] and "marked as yours" in doc["return"]
+
+
+# ── the Nestor store and the keyring defaults ───────────────────────────────
+def test_the_store_is_willow_nestor_db_else_nestor_db(monkeypatch, tmp_path):
+    monkeypatch.delenv("WILLOW_NESTOR_DB", raising=False)
+    monkeypatch.delenv("NESTOR_DB", raising=False)
+    assert api.default_nestor_db() is None
+    monkeypatch.setenv("NESTOR_DB", str(tmp_path / "n.db"))
+    assert api.default_nestor_db() == tmp_path / "n.db"
+    monkeypatch.setenv("WILLOW_NESTOR_DB", str(tmp_path / "w.db"))
+    assert api.default_nestor_db() == tmp_path / "w.db"  # the broker's name wins
+
+
+def test_neither_store_variable_is_unreachable_with_that_reason(cfg, monkeypatch):
+    monkeypatch.delenv("WILLOW_NESTOR_DB", raising=False)
+    monkeypatch.delenv("NESTOR_DB", raising=False)
+    bare = replace(cfg, nestor_db=api.default_nestor_db())
+    assert api.checkin(bare)["code"] == 0
+    s = api.scope(bare, match={"who": "run"})["subject"]
+    got = api.seal_scope(bare, s, pair={"status": "sealed"})
+    assert got["sealed"] is False and got["row"]["state"] == "unreachable"
+    assert "$WILLOW_NESTOR_DB or $NESTOR_DB" in got["row"]["reason"]
+
+
+def test_the_default_keyring_is_the_public_export_never_the_signing_file(
+    monkeypatch, tmp_path
+):
+    monkeypatch.delenv("WILLOW_KEYRING", raising=False)
+    monkeypatch.setenv("WILLOW_HOME", str(tmp_path))
+    got = api.default_keyring()
+    assert got == tmp_path / "config" / "verifiers.public.json"
+    assert got.name != "verifiers.json"
+    monkeypatch.delenv("WILLOW_HOME")
+    assert api.default_keyring() is None
+
+
+# ── keys export, off the box ────────────────────────────────────────────────
+@needs_ed25519
+def test_the_cli_exports_the_public_half_and_leaves_the_source_alone(tmp_path, capsys):
+    priv_hex = OPERATOR.private_bytes_raw().hex()
+    src = tmp_path / "verifiers.json"
+    src.write_text(
+        json.dumps(
+            {
+                "verifiers": [
+                    {
+                        "name": "sean campbell",
+                        "key": pub(OPERATOR),
+                        "kind": "ed25519",
+                        "private": priv_hex,
+                    },
+                    {"name": "shared", "key": "5e" * 32, "kind": "hmac"},
+                ]
+            }
+        )
+    )
+    before = src.read_bytes()
+    dst = tmp_path / "config" / "verifiers.public.json"
+    assert cli.main(["keys", "export", "--from", str(src), "--to", str(dst)]) == 0
+    out = capsys.readouterr().out
+    assert "kept     sean campbell" in out and "dropped  shared" in out
+    assert priv_hex not in dst.read_text() and "5e" * 32 not in dst.read_text()
+    assert src.read_bytes() == before
+    assert not (tmp_path / "box").exists()  # no record, no invocation row
+    assert (
+        cli.main(["keys", "export", "--from", str(tmp_path / "nope"), "--to", str(dst)])
+        == 2
+    )
+    assert "refused" in capsys.readouterr().out

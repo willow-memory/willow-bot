@@ -34,7 +34,7 @@ def keyring(**over) -> dict:
         "kind": "ed25519",
         "compromised": False,
         "revoked": False,
-        "active": True,
+        "reason": "",
     }
     return {"verifiers": {"sean campbell": {**entry, **over}}}
 
@@ -99,15 +99,19 @@ def test_a_signature_made_for_another_conclusion_does_not_move():
     assert nestor_seal.check(moved, SUBJECT, keyring())[0] is None
 
 
-def test_a_compromised_revoked_or_inactive_key_and_an_unlisted_verifier_hold_nothing():
-    assert (
-        "compromised"
-        in nestor_seal.check(pair(), SUBJECT, keyring(compromised=True))[1]
-    )
-    for over in ({"revoked": True}, {"active": False}):
+def test_a_compromised_key_and_an_unlisted_verifier_hold_nothing():
+    for over in ({"compromised": True}, {"compromised": True, "revoked": True}):
         who, why = nestor_seal.check(pair(), SUBJECT, keyring(**over))
-        assert who is None and "revoked or inactive" in why
+        assert who is None and "compromised" in why
     assert nestor_seal.check(pair(), SUBJECT, {"verifiers": {}})[0] is None
+
+
+def test_a_revoked_key_still_verifies_what_it_signed():
+    """Nestor: rita left, rita's verifications stand. Revoked is not compromised."""
+    assert nestor_seal.check(pair(), SUBJECT, keyring(revoked=True)) == (
+        "sean campbell",
+        "",
+    )
 
 
 def test_the_verifier_allow_list_narrows_who_may_seal():
@@ -273,3 +277,151 @@ def test_an_ed25519_seal_of_something_else_does_not_verify():
     p = pair()
     bad = {**p, "seal_sig": PRIV.sign(b"something else").hex()}
     assert nestor_seal.check(bad, SUBJECT, keyring())[0] is None
+
+
+# ── Nestor's own revocation format (Loki A276BE90 N2) ───────────────────────
+PRIV_HEX = PRIV.private_bytes_raw().hex()
+HMAC_SECRET = "5e" * 32  # a made-up shared secret, to prove it never travels
+REVOKED = "2026-10-01T00:00:00+00:00"
+
+
+def nestors_own_entry(name="sean campbell", **over) -> dict:
+    """An entry exactly as `nestor.keyring.VerifierKey.to_json` writes it for an
+    ed25519 key whose private half is on this instance (copied from its source,
+    so the tests below don't need Nestor installed)."""
+    return {
+        "name": name,
+        "key": PUB.hex(),
+        "revoked_at": "",
+        "compromised": False,
+        "reason": "",
+        "created_at": "2026-09-13T00:00:00+00:00",
+        "kind": "ed25519",
+        "private": PRIV_HEX,
+        **over,
+    }
+
+
+def public_entry(**over) -> dict:
+    e = nestors_own_entry(**over)
+    del e["private"]
+    return e
+
+
+def test_a_rotated_key_in_nestors_shape_verifies_its_past_seals(tmp_path):
+    f = keyring_file(
+        tmp_path / "k.json", public_entry(revoked_at=REVOKED, reason="rotated")
+    )
+    ring = nestor_seal.load_keyring(f)
+    assert ring["verifiers"]["sean campbell"]["revoked"] is True
+    assert nestor_seal.check(pair(), SUBJECT, ring) == ("sean campbell", "")
+
+
+def test_a_compromised_key_in_nestors_shape_verifies_nothing(tmp_path):
+    f = keyring_file(
+        tmp_path / "k.json", public_entry(revoked_at=REVOKED, compromised=True)
+    )
+    who, why = nestor_seal.check(pair(), SUBJECT, nestor_seal.load_keyring(f))
+    assert who is None and "compromised" in why
+
+
+def test_nestors_real_keyring_writes_what_this_side_reads(tmp_path):
+    """With Nestor importable, its own Keyring makes the fixture (revoke and all)."""
+    nk = pytest.importorskip("nestor.keyring")
+    other = ed.Ed25519PrivateKey.generate().public_key()
+    k = nk.Keyring()
+    k.add("sean campbell", key=PUB, kind="ed25519")
+    k.add(
+        "gone", key=other.public_bytes(Encoding.Raw, PublicFormat.Raw), kind="ed25519"
+    )
+    k.revoke("gone", reason="left", compromised=True)
+    k.add("rotated", key=PUB, kind="ed25519")
+    k.revoke("rotated", reason="rotate")
+    k.save(str(tmp_path / "nestor.json"))
+    ring = nestor_seal.load_keyring(tmp_path / "nestor.json")
+    assert ring["verifiers"]["gone"]["compromised"] is True
+    assert ring["verifiers"]["rotated"]["revoked"] is True
+    assert nestor_seal.check(pair(who="rotated"), SUBJECT, ring)[0] == "rotated"
+    assert nestor_seal.check(pair(who="gone"), SUBJECT, ring)[0] is None
+
+
+# ── the public-only export (operator, 2026-10-07) ───────────────────────────
+def signing_ring(path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "legacy_key": "7e" * 32,
+                "verifiers": [
+                    nestors_own_entry(),
+                    nestors_own_entry("rotated", revoked_at=REVOKED, reason="r"),
+                    {"name": "shared", "key": HMAC_SECRET, "kind": "hmac"},
+                    {"name": "old", "key": HMAC_SECRET},  # kind defaults to hmac
+                ],
+            }
+        )
+    )
+    path.chmod(0o600)
+    return path
+
+
+def test_the_export_carries_public_ed25519_entries_in_nestors_shape(tmp_path):
+    src = signing_ring(tmp_path / "verifiers.json")
+    dst = tmp_path / "out" / "verifiers.public.json"
+    res = nestor_seal.export_public(src, dst)
+    assert res == {
+        "exported": ["sean campbell", "rotated"],
+        "dropped_hmac": ["shared", "old"],
+    }
+    got = json.loads(dst.read_text())
+    assert [e["name"] for e in got["verifiers"]] == ["sean campbell", "rotated"]
+    for e in got["verifiers"]:
+        assert set(e) == set(public_entry())
+        assert e["kind"] == "ed25519" and e["key"] == PUB.hex()
+    assert got["verifiers"][1]["revoked_at"] == REVOKED
+    # the box can read it back, and a seal verifies under it
+    ring = nestor_seal.load_keyring(dst)
+    assert nestor_seal.check(pair(), SUBJECT, ring)[0] == "sean campbell"
+
+
+def test_the_export_never_carries_private_hmac_or_legacy_material(tmp_path):
+    src = signing_ring(tmp_path / "verifiers.json")
+    dst = tmp_path / "verifiers.public.json"
+    nestor_seal.export_public(src, dst)
+    text = dst.read_text()
+    for secret in (PRIV_HEX, HMAC_SECRET, "7e" * 32, "private", "legacy", "hmac"):
+        assert secret not in text, secret
+
+
+def test_the_export_is_world_readable_and_atomic(tmp_path):
+    import os
+    import stat
+
+    old = os.umask(0o077)  # a tight umask must not make the box's file unreadable
+    try:
+        src = signing_ring(tmp_path / "verifiers.json")
+        dst = tmp_path / "verifiers.public.json"
+        dst.write_text("old contents")
+        nestor_seal.export_public(src, dst)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(dst.stat().st_mode) == 0o644
+    assert not list(tmp_path.glob("*.tmp"))
+    # a source that can't be read leaves the old export untouched
+    dst.write_text("old contents")
+    with pytest.raises(nestor_seal.Unverifiable):
+        nestor_seal.export_public(tmp_path / "missing.json", dst)
+    assert dst.read_text() == "old contents"
+
+
+def test_the_export_refuses_to_overwrite_its_source(tmp_path):
+    src = signing_ring(tmp_path / "verifiers.json")
+    with pytest.raises(nestor_seal.Unverifiable, match="overwrite"):
+        nestor_seal.export_public(src, src)
+    assert PRIV_HEX in src.read_text()  # untouched
+
+
+def test_a_file_that_holds_private_is_still_refused_by_the_reader(tmp_path):
+    f = keyring_file(tmp_path / "k.json", nestors_own_entry())
+    with pytest.raises(nestor_seal.Unverifiable, match="public keys only"):
+        nestor_seal.load_keyring(f)

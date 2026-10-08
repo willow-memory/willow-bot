@@ -69,7 +69,8 @@ CANNOT_HOLD = {
 RETURN = (
     'Return only rows of {"path": text, "data": text, "cites": [served table id], '
     '"claim": text}, one JSON object per line. A cite must be an id in this file. '
-    "Nothing else is read."
+    'For an idea of your own that no table supports, give "cites": []; it is '
+    "marked as yours and read only alongside this file. Nothing else is read."
 )
 
 _HASH = re.compile(r"[0-9a-f]{64}")

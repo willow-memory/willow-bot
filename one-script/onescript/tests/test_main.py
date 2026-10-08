@@ -95,12 +95,43 @@ def test_no_willows_grove_means_no_law_and_nothing_runs(tmp_path, monkeypatch, c
 
 def test_the_tests_gate_never_nests(monkeypatch):
     """The gate's suite runs checkin; a checkin under the gate must not run the
-    gate again (2026-10-06: an unguarded loop took the box's memory)."""
-    monkeypatch.setenv(cli.NESTED, "x")  # so undo leaves it unset, as found
-    monkeypatch.delenv(cli.NESTED)
-    assert "tests" in cli._gate_cfg(False, "", Path("/v"))
-    assert cli.os.environ[cli.NESTED] == "1"
+    gate again (2026-10-06: an unguarded loop took the box's memory). The marker
+    is the child's alone: this process never carries it (Loki A276BE90 N1)."""
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    first = cli._gate_cfg(False, "", Path("/v"))
+    assert "tests" in first and first["tests"][0]["env"] == {cli.NESTED: "1"}
+    assert cli.NESTED not in cli.os.environ
+    monkeypatch.setenv(cli.NESTED, "1")  # now we are the child
     assert "tests" not in cli._gate_cfg(False, "", Path("/v"))
+
+
+def test_two_checkins_in_one_process_both_run_the_tests_gate(tmp_path, monkeypatch):
+    """A long-lived process (the app) checks in again and again; the first
+    check-in must not switch the gate off for the rest."""
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    seen = []
+
+    def runner(argv, cwd, timeout=600, env=None):
+        seen.append(env)
+        return 0, "ok"
+
+    for _ in range(2):
+        gcfg = cli._gate_cfg(False, "", tmp_path)
+        gcfg["tests"][0]["cwd"] = str(tmp_path)
+        gcfg["tests"][0]["needs"] = []
+        rows = cli.boot.tests_gate(gcfg["tests"], runner=runner)
+        assert [r["verdict"] for r in rows] == ["satisfied"]
+    assert seen == [{cli.NESTED: "1"}, {cli.NESTED: "1"}]
+    assert cli.NESTED not in cli.os.environ
+
+
+def test_the_child_alone_gets_the_marker(tmp_path, monkeypatch):
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    code = "import os,sys; sys.exit(0 if os.environ.get(sys.argv[1]) == '1' else 7)"
+    argv = [cli.sys.executable, "-c", code, cli.NESTED]
+    assert cli.boot._run(argv, str(tmp_path), env={cli.NESTED: "1"})[0] == 0
+    assert cli.boot._run(argv, str(tmp_path))[0] == 7
+    assert cli.NESTED not in cli.os.environ
 
 
 def test_a_breached_checkin_closes_the_box_for_later_turns(
