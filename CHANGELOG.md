@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [0.19.0](https://github.com/willow-memory/willow-bot/compare/v0.18.0...v0.19.0) (2026-10-08)
+
+
+### Added
+
+* **one-script:** a wager outcome counts only under the human's sealed anchor tip ([43d3b33](https://github.com/willow-memory/willow-bot/commit/43d3b33d925b4fd52fa5ee6d11fb531f712eae14))
+* **one-script:** declared wagers are recorded and reconciled against human seals ([06e4b85](https://github.com/willow-memory/willow-bot/commit/06e4b857f2dd2e2f1f0355c7eb14a2ec45958c20))
+* **onescript:** carry wager predictions and reconcile them against human seals ([db50397](https://github.com/willow-memory/willow-bot/commit/db503972ad4cab97f367cea317b60afa8536b96b))
+
 ## [0.18.0](https://github.com/willow-memory/willow-bot/compare/v0.17.0...v0.18.0) (2026-10-07)
 
 
