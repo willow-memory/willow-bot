@@ -19,20 +19,24 @@ What is checked, and what is refused:
   status      the pair is `sealed`; a draft or pending pair is not a seal
   conclusion  `target_text` equals the subject exactly; a seal over a
               different string covers nothing
-  verifier    a name in the keyring, not compromised; an unknown name has no
-              key, so no seal. The keyring's `legacy_key` is NOT accepted: it
-              proves the deployment signed, not that a person did
-  signature   HMAC-SHA256 under the verifier's key, or ed25519 under their
-              public key (needs `cryptography`; without it an ed25519 seal is
-              refused, never waved through)
+  verifier    a name in the OPERATOR's keyring (fixed in `Config`, never from the
+              caller or the pair), not compromised, revoked or inactive; an
+              unknown name has no key, so no seal. The keyring's `legacy_key`
+              is NOT accepted: it proves the deployment signed, not that a
+              person did
+  signature   ed25519 under the verifier's public key. An HMAC entry is a
+              shared secret, so it is refused when the keyring is loaded.
+              Without `cryptography` the answer is `unreachable`, never a
+              silent refusal of every real seal, and never a pass
+  standing    the pair must still be `sealed` and unsuperseded in Nestor's
+              store right now (`current`); a pair handed in as a dict is only
+              ever a claim about a row, never the row
 
-Stdlib only: willow-bot's CI and the box both run it without Nestor installed.
+Needs `cryptography` for ed25519. Nestor itself need not be installed.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import sqlite3
 from pathlib import Path
@@ -51,41 +55,78 @@ def message(source_norm: str, target_text: str, verifier: str) -> bytes:
     ).encode("utf-8")
 
 
+#: Said when the ed25519 check can't run here. It is `unreachable`, not a
+#: refusal of the seal itself: the seal was never judged.
+NO_CRYPTO = "unreachable: an ed25519 seal needs the cryptography package here"
+
+#: A keyring is public keys. An entry with a field named for private material is
+#: refused, whatever else it holds.
+_PRIVATE = ("priv", "secret", "seed", "passphrase", "signing", "hmac")
+
+
+def have_ed25519() -> bool:
+    """Whether this interpreter can check an ed25519 seal at all."""
+    try:
+        import cryptography.hazmat.primitives.asymmetric.ed25519  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def load_keyring(path: str | Path) -> dict:
-    """Nestor's keyring file, as the verifying side needs it: name -> key."""
+    """The operator's keyring file, as the verifying side needs it: name -> key.
+
+    Only ed25519 public keys are accepted. An HMAC entry is a shared secret
+    (whoever can verify with it can also forge with it), and an entry that
+    carries private material is a keyring someone else could have written from
+    the signing side; both are refused, naming the entry, never skipped."""
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
         entries = {}
         for v in raw.get("verifiers", []):
-            entries[str(v["name"])] = {
-                "key": bytes.fromhex(v["key"]),
-                "kind": str(v.get("kind", "hmac")) or "hmac",
+            name = str(v["name"])
+            odd = sorted(k for k in v if any(p in str(k).lower() for p in _PRIVATE))
+            if odd:
+                raise Unverifiable(
+                    f"keyring entry {name!r} carries {odd}; a keyring holds public "
+                    "keys only"
+                )
+            kind = str(v.get("kind", ""))
+            if kind != "ed25519":
+                raise Unverifiable(
+                    f"keyring entry {name!r} is kind {kind!r}; only ed25519 "
+                    "public keys are accepted"
+                )
+            key = bytes.fromhex(v["key"])
+            if len(key) != 32:
+                raise Unverifiable(f"keyring entry {name!r} is not a 32-byte key")
+            entries[name] = {
+                "key": key,
+                "kind": kind,
                 "compromised": bool(v.get("compromised", False)),
+                "revoked": bool(v.get("revoked", False)),
+                "active": bool(v.get("active", True)),
             }
+    except Unverifiable:
+        raise
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
         raise Unverifiable(f"keyring unreadable: {type(e).__name__}") from e
     return {"verifiers": entries}
 
 
 def _sig_ok(kind: str, key: bytes, msg: bytes, sig: str) -> tuple[bool, str]:
-    if kind == "ed25519":
-        try:
-            from cryptography.exceptions import InvalidSignature
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-                Ed25519PublicKey,
-            )
-        except ImportError:
-            return False, "an ed25519 seal needs the cryptography package here"
-        try:
-            Ed25519PublicKey.from_public_bytes(key).verify(bytes.fromhex(sig), msg)
-        except (InvalidSignature, ValueError):
-            return False, "the seal's signature does not verify"
-        return True, ""
-    if kind == "hmac":
-        good = hmac.new(key, msg, hashlib.sha256).hexdigest().encode()
-        ok = hmac.compare_digest(good, sig.encode("utf-8", "replace"))
-        return ok, "" if ok else "the seal's signature does not verify"
-    return False, f"unknown key kind {kind!r}"
+    if kind != "ed25519":
+        return False, f"key kind {kind!r} is not accepted; only ed25519 public keys"
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError:
+        return False, NO_CRYPTO
+    try:
+        Ed25519PublicKey.from_public_bytes(key).verify(bytes.fromhex(sig), msg)
+    except (InvalidSignature, ValueError):
+        return False, "the seal's signature does not verify"
+    return True, ""
 
 
 def check(
@@ -110,6 +151,8 @@ def check(
         return None, f"{who!r} is not in the keyring; no key backs the name"
     if entry["compromised"]:
         return None, f"{who!r}'s key is reported compromised; nothing it signed holds"
+    if entry.get("revoked") or not entry.get("active", True):
+        return None, f"{who!r}'s key is revoked or inactive; it seals nothing now"
     ok, why = _sig_ok(
         entry["kind"],
         entry["key"],
@@ -138,3 +181,20 @@ def pairs_for(db: str | Path, subject: str) -> list[dict]:
             con.close()
     except sqlite3.Error as e:
         raise Unverifiable(f"nestor store unreadable: {type(e).__name__}") from e
+
+
+_PAIR_FIELDS = ("source_norm", "target_text", "verifier", "seal_sig", "status")
+
+
+def current(db: str | Path, subject: str, pair: object = None) -> list[dict]:
+    """The live sealed pairs in Nestor's store for `subject`, read just now.
+    With a `pair` handed in, only the stored rows that are that pair: what the
+    caller holds is a claim, and the store's current row is the answer. A pair
+    since superseded, unsealed or rejected is not in the store's live set, so
+    it comes back empty."""
+    live = pairs_for(db, subject)
+    if pair is None:
+        return live
+    if not isinstance(pair, dict):
+        return []
+    return [p for p in live if all(p[k] == pair.get(k) for k in _PAIR_FIELDS)]

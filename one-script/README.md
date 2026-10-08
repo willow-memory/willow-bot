@@ -88,13 +88,22 @@ an apk." So no step needs a tty. A seal is either:
   human's key in the keys file; or
 - a sealed Nestor pair whose conclusion (`target_text`) is the exact subject
   string (`nestor_seal`, `gate.human_nestor`). The human seals it in Nestor's
-  own UI. This repo only reads it: from a pair the caller hands over, or from
-  Nestor's store opened read-only, checked against Nestor's keyring the way
-  Nestor checks it (status `sealed`, conclusion equal, verifier in the keyring
-  and not compromised, signature over Nestor's frozen `[source_norm,
-  target_text, verifier]` encoding). The keyring's `legacy_key` is not
-  accepted: it proves the deployment, not a person. No change to Nestor was
-  needed.
+  own UI. This repo only reads it, and only from two places fixed in `Config`,
+  never from the caller:
+  - Nestor's store (`Config.nestor_db`, `$WILLOW_NESTOR_DB`), opened
+    read-only. The pair must be `sealed` and unsuperseded there right now; a
+    pair handed in as a dict only points at a stored row (a superseded,
+    rejected or missing one seals nothing).
+  - The operator's keyring (`Config.keyring`: `$WILLOW_KEYRING`, else
+    `$WILLOW_HOME/config/verifiers.json`), outside the box. ed25519 public
+    keys only; an HMAC entry or an entry carrying private material refuses the
+    whole file, and a compromised, revoked or inactive key seals nothing. The
+    signature is over Nestor's frozen `[source_norm, target_text, verifier]`
+    encoding. The keyring's `legacy_key` is not accepted: it proves the
+    deployment, not a person.
+
+  ed25519 needs the `cryptography` package. Where it is absent the answer is
+  `unreachable` with that reason, never a silent refusal of every real seal.
 
 ## The function API
 
@@ -106,10 +115,10 @@ exception. Nothing moves before a check-in or after a check-out.
 |---|---|
 | `checkin(cfg)` | Boot: record, probes, the four gates. Makes this session's serve key |
 | `scope(cfg, by, match, upto)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack |
-| `seal_scope(cfg, subject, proof / pair / nestor_db + keyring)` | The human's seal over the scope's exact set |
-| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, `empty`, never truncated |
+| `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
+| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
-| `seal_proposal(cfg, subject, proof / pair / nestor_db + keyring)` | The human's seal over one proposal; a sealed `pass` is written |
+| `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
 | `checkout(cfg)` | Reverse, then the morning screen |
 
 The record is the only state between calls, except the serve key, which is
@@ -128,11 +137,17 @@ whole injected text.
 ## Gates on the phone
 
 The gates that shell out (toolchain/ruff, tests/pytest, repos/git) report
-`unreachable` when their tool or clone is absent. The row is marked
-`deferred`: the box opens, because nothing ran, and it isn't a pass either.
-The next check-in where the gate CAN run (the box, when the record comes home)
-runs it and writes a `deferred_result` row against the deferred one, once. A
-gate that runs and fails still hard-closes, as before.
+`unreachable` when their tool or clone is absent, but only when the run says it
+is on the phone: `Config.phone` (`--phone`), a flag the APK sets, never
+inferred from a missing tool. The row is marked `deferred`: the box opens,
+because nothing ran, and it isn't a pass either. The next check-in where the
+gate CAN run (the box, when the record comes home) runs it and writes a
+`deferred_result` row against the deferred one, once. On the box the same gap
+is a `failing` gate and hard-closes. A gate that runs and fails still
+hard-closes, as before.
+
+`--no-tests`, and a check-in nested inside the tests gate's own suite, each
+leave a `differently` row on the tests gate saying it was skipped and why.
 
 ## Running it
 
@@ -140,10 +155,10 @@ gate that runs and fails still hard-closes, as before.
 cd one-script
 python3 -m onescript checkin                       # boot: record, probes, the four gates
 python3 -m onescript scope --by who --match who=run   # card, subject, spec (JSON)
-python3 -m onescript seal serve:<hash> --pair p.json --keyring keyring.json
+python3 -m onescript seal serve:<hash> --pair p.json   # keyring/store: $WILLOW_KEYRING, $WILLOW_NESTOR_DB
 python3 -m onescript serve --by who --match who=run --upto <n> --max-chars 20000
 python3 -m onescript turn "the bite" --proposal f.jsonl
-python3 -m onescript seal proposal:<hash> --nestor-db nestor.db --keyring keyring.json
+python3 -m onescript seal proposal:<hash>              # found in Nestor's store (--keyring/--nestor-db before the command)
 python3 -m onescript checkout                      # reverse, then the morning screen
 
 python3 -m pytest -q onescript/tests            # its tests (willows-grove beside this repo)

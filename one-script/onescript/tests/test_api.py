@@ -6,10 +6,10 @@ the human's seal over one -> only that one written -> check-out.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
+import sqlite3
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,7 +20,24 @@ from onescript import __main__ as cli  # noqa: E402
 from onescript import api, gate, nestor_seal  # noqa: E402
 
 HUMAN_KEY = b"passkey-in-a-coat-pocket"
-NESTOR_KEY = b"nestor-keyring-hmac-key-0123456"
+CAP = 10**6  # the caller's cap on served text; serve needs one
+
+try:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+except ImportError:  # CI installs it; the ed25519 tests below skip without it
+    Ed25519PrivateKey = None
+
+needs_ed25519 = pytest.mark.skipif(
+    Ed25519PrivateKey is None, reason="cryptography is not installed"
+)
+# the operator's key: its public half is in the keyring file, the private half
+# is in Nestor's UI; tests hold it only to play the human sealing a pair
+OPERATOR = Ed25519PrivateKey.generate() if Ed25519PrivateKey else None
+
+
+def pub(priv) -> str:
+    return priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
 
 
 @pytest.fixture
@@ -35,6 +52,11 @@ def cfg(tmp_path):
     keys.parent.mkdir(mode=0o700)
     keys.write_text(json.dumps({"desk": "aa" * 32, "human": HUMAN_KEY.hex()}))
     keys.chmod(0o600)
+    ring = tmp_path / "operator" / "verifiers.json"
+    ring.parent.mkdir()
+    if OPERATOR is not None:
+        entry = {"name": "sean campbell", "key": pub(OPERATOR), "kind": "ed25519"}
+        ring.write_text(json.dumps({"verifiers": [entry]}))
     return api.Config(
         box=tmp_path / "box",
         keys=keys,
@@ -45,6 +67,9 @@ def cfg(tmp_path):
         venv=tmp_path / "no-venv",
         now="2026-10-07T00:00:00Z",
         no_tests=True,
+        keyring=ring,
+        nestor_db=tmp_path / "operator" / "nestor.db",
+        phone=True,
     )
 
 
@@ -57,7 +82,7 @@ def proof(subject: str) -> str:
     return gate.sign(HUMAN_KEY, "seal", subject)
 
 
-def line(path="notes/a.md", data="hello\n", cites=(), claim="a note") -> str:
+def line(path="notes/a.md", data="hello\n", cites=("x",), claim="a note") -> str:
     return json.dumps(
         {"path": path, "data": data, "cites": list(cites), "claim": claim}
     )
@@ -69,7 +94,7 @@ def served(cfg) -> tuple[dict, list[str]]:
     card = api.scope(cfg, by=("who",), match={"who": "run"})
     assert card["code"] == 0 and card["subject"].startswith("serve:")
     assert api.seal_scope(cfg, card["subject"], proof=proof(card["subject"]))["sealed"]
-    res = api.serve(cfg, card["spec"])
+    res = api.serve(cfg, card["spec"], max_chars=CAP)
     assert res["state"] == "populated", res
     return card, [t["id"] for t in res["doc"]["tables"]]
 
@@ -183,10 +208,13 @@ def test_a_scope_seal_is_not_a_proposal_seal(cfg):
         (line("../outside.md"), "relative to the box"),
         (line("/etc/passwd"), "relative to the box"),
         (line("a/../../b"), "relative to the box"),
+        (line("a//b"), "relative to the box"),
+        (line("./a"), "relative to the box"),
         (line("record.jsonl"), "temp or one the run keeps"),
         (line("served.json"), "temp or one the run keeps"),
         (line("tmp/x"), "temp or one the run keeps"),
         (line(data="\ud800"), "UTF-8"),
+        (line(cites=[]), "at least one served table id"),
         ("[" * 100000, "not valid JSON"),
     ],
 )
@@ -236,7 +264,7 @@ def test_nothing_moves_after_a_checkout(cfg):
 
 def test_serve_obeys_the_callers_cap_and_never_truncates(cfg):
     card, ids = served(cfg)
-    full = api.serve(cfg, card["spec"])["doc"]
+    full = api.serve(cfg, card["spec"], max_chars=CAP)["doc"]
     size = len(
         json.dumps(full, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     )
@@ -252,8 +280,19 @@ def test_serve_obeys_the_callers_cap_and_never_truncates(cfg):
 def test_an_unsealed_scope_serves_nothing(cfg):
     assert api.checkin(cfg)["code"] == 0
     card = api.scope(cfg, match={"who": "run"})
-    res = api.serve(cfg, card["spec"])
+    res = api.serve(cfg, card["spec"], max_chars=CAP)
     assert res["state"] == "empty" and "no human seal" in res["why"]
+
+
+def test_serve_without_a_cap_serves_nothing(cfg):
+    """Loki 8E0652F5 F9: the caller sizes the cap; no cap is `empty`, with the
+    reason, on the record and on disk, never an uncapped document."""
+    card, _ = served(cfg)
+    res = api.serve(cfg, card["spec"])
+    assert res["state"] == "empty" and "no max_chars" in res["why"]
+    assert res["doc"]["tables"] == []
+    assert json.loads((cfg.box / "served.json").read_text())["state"] == "empty"
+    assert api.serve(cfg, card["spec"], max_chars=CAP)["state"] == "populated"
 
 
 def test_the_serve_key_lives_beside_the_keys_and_is_fresh_each_checkin(cfg):
@@ -266,7 +305,8 @@ def test_the_serve_key_lives_beside_the_keys_and_is_fresh_each_checkin(cfg):
     assert key.read_text() != first  # ids can't be linked from one session to the next
     card2 = api.scope(cfg, match={"who": "run"})
     api.seal_scope(cfg, card2["subject"], proof=proof(card2["subject"]))
-    assert api.serve(cfg, card2["spec"])["doc"]["tables"][0]["id"] not in ids
+    doc = api.serve(cfg, card2["spec"], max_chars=CAP)["doc"]
+    assert doc["tables"][0]["id"] not in ids
 
 
 def test_a_scope_stays_the_same_while_the_record_grows(cfg):
@@ -274,102 +314,349 @@ def test_a_scope_stays_the_same_while_the_record_grows(cfg):
     every later command appends can't move a table id out from under a seal."""
     card, _ = served(cfg)
     api.take_proposals(cfg, [line()])
-    again = api.serve(cfg, card["spec"])
+    again = api.serve(cfg, card["spec"], max_chars=CAP)
     assert again["state"] == "populated"
 
 
 # ── the seal without a terminal ──────────────────────────────────────────────
-def nestor_pair(subject: str, who="sean campbell", **over) -> dict:
+def nestor_pair(
+    subject: str, who="sean campbell", priv=None, **over
+) -> dict:  # signed by the operator's key unless `priv` says otherwise
     msg = nestor_seal.message("approve", subject, who)
-    sig = hmac.new(NESTOR_KEY, msg, hashlib.sha256).hexdigest()
     p = {
         "source_norm": "approve",
         "target_text": subject,
         "verifier": who,
-        "seal_sig": sig,
+        "seal_sig": (priv or OPERATOR).sign(msg).hex(),
         "status": "sealed",
     }
     return {**p, **over}
 
 
-RING = {
-    "verifiers": {
-        "sean campbell": {"key": NESTOR_KEY, "kind": "hmac", "compromised": False}
-    }
-}
+def nestor_store(cfg, *pairs: dict, **over) -> None:
+    """Nestor's store as the operator's box holds it, with these pairs in it."""
+    con = sqlite3.connect(cfg.nestor_db)
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS tm_pairs (source_norm TEXT, target_text TEXT,"
+        " status TEXT, verifier TEXT, seal_sig TEXT,"
+        " superseded_by TEXT NOT NULL DEFAULT '')"
+    )
+    for p in pairs:
+        p = {**p, **over}
+        con.execute(
+            "INSERT INTO tm_pairs VALUES (?,?,?,?,?,?)",
+            (
+                p["source_norm"],
+                p["target_text"],
+                p["status"],
+                p["verifier"],
+                p["seal_sig"],
+                p.get("superseded_by", ""),
+            ),
+        )
+    con.commit()
+    con.close()
 
 
-def test_a_scope_and_a_proposal_are_sealed_by_nestor_pairs_no_key_typed(cfg, tmp_path):
+def human_less(cfg) -> None:
     keys = json.loads(cfg.keys.read_text())
     del keys["human"]  # this box holds no human key at all
     cfg.keys.write_text(json.dumps(keys))
+
+
+@needs_ed25519
+def test_a_scope_and_a_proposal_are_sealed_by_nestor_pairs_no_key_typed(cfg):
+    human_less(cfg)
     assert api.checkin(cfg)["code"] == 0
     card = api.scope(cfg, match={"who": "run"})
     s = card["subject"]
     assert api.seal_scope(cfg, s, proof=proof(s))["sealed"] is False  # no key here
-    ok = api.seal_scope(cfg, s, pair=nestor_pair(s), keyring=RING)
+    nestor_store(cfg, nestor_pair(s))
+    ok = api.seal_scope(cfg, s, pair=nestor_pair(s))
     assert ok["sealed"] and ok["row"]["via"] == "nestor"
     assert ok["row"]["verifier"] == "sean campbell" and ok["row"]["who"] == "human"
 
-    doc = api.serve(cfg, card["spec"])["doc"]
+    doc = api.serve(cfg, card["spec"], max_chars=CAP)["doc"]
     ids = [t["id"] for t in doc["tables"]]
     (p,) = api.take_proposals(cfg, [line(cites=ids[:1])])["out"]["proposals"]
-    wrong = api.seal_proposal(
-        cfg,
-        p["subject"],
-        pair=nestor_pair(s),
-        keyring=RING,  # a pair for the scope
-    )
-    assert wrong["sealed"] is False and "not this subject" in wrong["row"]["reason"]
+    wrong = api.seal_proposal(cfg, p["subject"], pair=nestor_pair(s))  # the scope's
+    assert wrong["sealed"] is False and "sealed in Nestor" in wrong["row"]["reason"]
     assert not (cfg.box / "notes").exists()
-    done = api.seal_proposal(
-        cfg, p["subject"], pair=nestor_pair(p["subject"]), keyring=RING
-    )
+    nestor_store(cfg, nestor_pair(p["subject"]))
+    done = api.seal_proposal(cfg, p["subject"])  # found in the store, no pair given
     assert done["sealed"] and (cfg.box / "notes" / "a.md").exists()
 
 
+@needs_ed25519
 def test_a_nestor_seal_that_does_not_verify_seals_nothing(cfg):
     assert api.checkin(cfg)["code"] == 0
     s = api.scope(cfg, match={"who": "run"})["subject"]
+    forger = Ed25519PrivateKey.generate()
     for bad in (
-        nestor_pair(s, status="draft"),
-        nestor_pair(s, seal_sig="00" * 32),
+        nestor_pair(s, seal_sig="00" * 64),
         nestor_pair(s, who="stranger"),
-        nestor_pair("serve:" + "cd" * 32),
+        nestor_pair(s, priv=forger),  # the right name, a key the operator never had
     ):
-        got = api.seal_scope(cfg, s, pair=bad, keyring=RING)
+        nestor_store(cfg, bad)
+        got = api.seal_scope(cfg, s, pair=bad)
         assert got["sealed"] is False and got["row"]["kind"] == "refused"
     assert not [r for r in rows(cfg) if r["kind"] == "seal"]
-    no_ring = api.seal_scope(cfg, s, pair=nestor_pair(s))
-    assert "needs the keyring" in no_ring["row"]["reason"]
+    assert api.seal_scope(cfg, s)["sealed"] is False  # none of the store's rows verify
 
 
-def test_a_nestor_store_and_keyring_file_seal_it(cfg, tmp_path):
-    import sqlite3
+@needs_ed25519
+def test_a_key_the_caller_minted_cannot_stand_in_for_the_operators(cfg):
+    """Loki 8E0652F5 F1 / probe P2. The keyring is Config's, not the call's: a
+    keyring handed to the call is not a parameter at all, and a pair signed by a
+    fresh key labelled 'sean campbell' fails against the operator's own."""
+    _, ids = served(cfg)
+    (p,) = api.take_proposals(cfg, [line(cites=ids[:1])])["out"]["proposals"]
+    forger = Ed25519PrivateKey.generate()
+    pair = nestor_pair(p["subject"], priv=forger)
+    nestor_store(cfg, pair)  # even a pair that is in Nestor's store
+    with pytest.raises(TypeError):
+        api.seal_proposal(cfg, p["subject"], pair=pair, keyring={"verifiers": {}})
+    got = api.seal_proposal(cfg, p["subject"], pair=pair)
+    assert got["sealed"] is False and "does not verify" in got["row"]["reason"]
+    sealed_it = [
+        r for r in rows(cfg) if r["kind"] == "seal" and r["subject"] == p["subject"]
+    ]
+    assert not sealed_it
+    assert not (cfg.box / "notes").exists()
 
+
+@needs_ed25519
+def test_a_pair_the_store_no_longer_holds_as_sealed_is_not_a_seal(cfg):
+    """Loki 8E0652F5 F6: a pair handed in as a dict is only a claim. Its current
+    row in Nestor's store decides: superseded, rejected or gone seals nothing."""
     assert api.checkin(cfg)["code"] == 0
     s = api.scope(cfg, match={"who": "run"})["subject"]
-    db = tmp_path / "nestor.db"
-    con = sqlite3.connect(db)
-    con.execute(
-        "CREATE TABLE tm_pairs (source_norm TEXT, target_text TEXT, status TEXT,"
-        " verifier TEXT, seal_sig TEXT, superseded_by TEXT NOT NULL DEFAULT '')"
+    pair = nestor_pair(s)
+    gone = api.seal_scope(cfg, s, pair=pair)  # the store does not exist at all
+    assert gone["sealed"] is False and "unreachable" in gone["row"]["reason"]
+    nestor_store(cfg, pair, superseded_by="newer")
+    assert api.seal_scope(cfg, s, pair=pair)["sealed"] is False
+    cfg.nestor_db.unlink()
+    nestor_store(cfg, pair, status="rejected")
+    assert api.seal_scope(cfg, s, pair=pair)["sealed"] is False
+    cfg.nestor_db.unlink()
+    nestor_store(cfg, pair)
+    assert api.seal_scope(cfg, s, pair=pair)["sealed"] is True
+
+
+@needs_ed25519
+def test_a_revoked_operator_key_seals_nothing(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    s = api.scope(cfg, match={"who": "run"})["subject"]
+    nestor_store(cfg, nestor_pair(s))
+    ring = json.loads(cfg.keyring.read_text())
+    ring["verifiers"][0]["revoked"] = True
+    cfg.keyring.write_text(json.dumps(ring))
+    got = api.seal_scope(cfg, s)
+    assert got["sealed"] is False and "revoked or inactive" in got["row"]["reason"]
+
+
+@needs_ed25519
+def test_a_keyring_with_private_material_seals_nothing(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    s = api.scope(cfg, match={"who": "run"})["subject"]
+    nestor_store(cfg, nestor_pair(s))
+    ring = json.loads(cfg.keyring.read_text())
+    ring["verifiers"][0]["private_key"] = "ab" * 32
+    cfg.keyring.write_text(json.dumps(ring))
+    got = api.seal_scope(cfg, s)
+    assert got["sealed"] is False and "public keys only" in got["row"]["reason"]
+
+
+def test_no_keyring_or_store_configured_is_unreachable_not_a_pass(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    s = api.scope(cfg, match={"who": "run"})["subject"]
+    for bare in (replace(cfg, keyring=None), replace(cfg, nestor_db=None)):
+        got = api.seal_scope(bare, s, pair={"status": "sealed"})
+        assert got["sealed"] is False
+        assert got["row"]["state"] == "unreachable"
+
+
+@needs_ed25519
+def test_without_cryptography_a_nestor_seal_is_unreachable_with_that_reason(
+    cfg, monkeypatch
+):
+    """Loki 8E0652F5 F7: not a silent refusal of every real seal."""
+    assert api.checkin(cfg)["code"] == 0
+    s = api.scope(cfg, match={"who": "run"})["subject"]
+    nestor_store(cfg, nestor_pair(s))
+    monkeypatch.setattr(nestor_seal, "have_ed25519", lambda: False)
+    got = api.seal_scope(cfg, s)
+    assert got["sealed"] is False
+    assert got["row"]["state"] == "unreachable"
+    assert "cryptography" in got["row"]["reason"]
+
+
+def test_the_keyring_and_the_store_cannot_live_in_the_box(cfg):
+    for field in ("keyring", "nestor_db"):
+        inside = replace(cfg, **{field: cfg.box / "x.json"})
+        assert "can't live inside the box" in api.checkin(inside)["refused"]
+
+
+# ── the stored row is not the proposal (Loki 8E0652F5 F2) ───────────────────
+def forge_row(cfg, **fields) -> dict:
+    """What anyone who can write the box's record can do: append a row that
+    chains and carries no token the run issued."""
+    from onescript import record
+
+    rs = rows(cfg)
+    row = {
+        "n": len(rs),
+        "kind": None,
+        "who": "desk",
+        "family": "claude",
+        "standing": "unattested",
+        "version": rs[-1]["version"],
+        "ts": "2026-10-07T00:00:00Z",
+        "prev": rs[-1]["hash"],
+        "where": None,
+        **fields,
+    }
+    row["hash"] = record.h256(record.canon(row))
+    with (cfg.box / "record.jsonl").open("a") as f:
+        f.write(record.canon(row) + "\n")
+    return row
+
+
+def test_a_forged_proposal_row_with_a_harmless_hash_writes_nothing(cfg, tmp_path):
+    """Probe P1: a benign subject, a forged row carrying '../ESCAPED.txt' and other
+    bytes. The seal covers the benign hash, not these bytes."""
+    _, ids = served(cfg)
+    (good,) = api.take_proposals(cfg, [line("ok.txt", "hello", ids[:1])])["out"][
+        "proposals"
+    ]
+    forge_row(
+        cfg,
+        kind="proposal",
+        where="../ESCAPED.txt",
+        path="../ESCAPED.txt",
+        data="EVIL",
+        cites=ids[:1],
+        claim="a note",
+        subject=good["subject"],
+        verdict="pass",
     )
-    p = nestor_pair(s)
-    con.execute(
-        "INSERT INTO tm_pairs VALUES (?,?,?,?,?,'')",
-        (p["source_norm"], p["target_text"], p["status"], p["verifier"], p["seal_sig"]),
+    # the forged row is the latest for the subject; it still must not be used
+    res = api.seal_proposal(cfg, good["subject"], proof=proof(good["subject"]))
+    assert not (tmp_path / "ESCAPED.txt").exists()
+    assert (cfg.box / "ok.txt").read_text() == "hello"  # the real one, its own bytes
+    assert res["written"]["path"] == "ok.txt"
+
+
+def test_a_forged_row_alone_hashes_to_nothing_and_is_never_sealed_or_written(
+    cfg, tmp_path
+):
+    _, ids = served(cfg)
+    subject = "proposal:" + "ab" * 32
+    forge_row(
+        cfg,
+        kind="proposal",
+        where="../ESCAPED.txt",
+        path="../ESCAPED.txt",
+        data="EVIL",
+        cites=ids[:1],
+        claim="c",
+        subject=subject,
+        verdict="pass",
     )
-    con.commit()
-    con.close()
-    ring = tmp_path / "keyring.json"
-    ring.write_text(
-        json.dumps({"verifiers": [{"name": "sean campbell", "key": NESTOR_KEY.hex()}]})
-    )
-    got = api.seal_scope(cfg, s, nestor_db=db, keyring=ring)
-    assert got["sealed"] and got["row"]["via"] == "nestor"
-    gone = api.seal_scope(cfg, s, nestor_db=tmp_path / "gone.db", keyring=ring)
-    assert gone["sealed"] is False and "unreadable" in gone["row"]["reason"]
+    res = api.seal_proposal(cfg, subject, proof=proof(subject))
+    assert res["sealed"] is False and res["written"] is None
+    assert "hashes to this subject" in res["row"]["reason"]
+    # even with a seal already on the record (a human sealed this hash), the
+    # write recomputes from the stored bytes and writes nothing
+    forge_row(cfg, kind="seal", who="human", subject=subject, where=subject)
+    run, _ = api._open(cfg, "probe", ())
+    out = run.write_proposal(subject)
+    assert out["kind"] == "refused" and "hashes to this subject" in out["reason"]
+    assert not (tmp_path / "ESCAPED.txt").exists()
+    assert not [r for r in rows(cfg) if r["kind"] == "write" and "ESCAPED" in r["path"]]
+
+
+def test_a_stored_row_that_no_longer_passes_the_path_rule_or_the_door_writes_nothing(
+    cfg,
+):
+    """The subject is a real hash of a real row, but the row's path breaks the
+    rule (a row from an older, laxer run). The write re-runs the rule and the
+    door on the bytes about to be written."""
+    from onescript import proposals
+
+    _, ids = served(cfg)
+    for path, claim in (("../up.txt", "a note"), ("fine.txt", "   ")):
+        p = {"path": path, "data": "x", "cites": ids[:1], "claim": claim}
+        subject = proposals.subject(p)
+        forge_row(
+            cfg, kind="proposal", subject=subject, verdict="pass", where=path, **p
+        )
+        forge_row(cfg, kind="seal", who="human", subject=subject, where=subject)
+        run, _ = api._open(cfg, "probe", ())
+        out = run.write_proposal(subject)
+        assert out["kind"] == "refused", path
+        assert (
+            "fails the contract now" in out["reason"]
+            or "the door says" in out["reason"]
+        )
+    assert not (cfg.box / "fine.txt").exists()
+    assert not (cfg.box.parent / "up.txt").exists()
+
+
+# ── a symlink in the box is not a way out of it (F3) ────────────────────────
+def test_a_symlink_in_the_box_does_not_carry_a_write_outside(cfg, tmp_path):
+    """Probe P4: box/link -> outside; a sealed proposal at link/pwn.txt."""
+    _, ids = served(cfg)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (cfg.box / "link").symlink_to(outside)
+    (p,) = api.take_proposals(cfg, [line("link/pwn.txt", "S", ids[:1])])["out"][
+        "proposals"
+    ]
+    res = api.seal_proposal(cfg, p["subject"], proof=proof(p["subject"]))
+    assert res["written"] is None and res["code"] == 1
+    assert not (outside / "pwn.txt").exists() and not list(outside.iterdir())
+    assert "symlink" in res["write"]["reason"]
+
+
+def test_a_symlinked_file_is_replaced_not_followed(cfg, tmp_path):
+    _, ids = served(cfg)
+    target = tmp_path / "target.txt"
+    target.write_text("keep")
+    (cfg.box / "notes").mkdir()
+    (cfg.box / "notes" / "a.md").symlink_to(target)
+    (p,) = api.take_proposals(cfg, [line(cites=ids[:1])])["out"]["proposals"]
+    api.seal_proposal(cfg, p["subject"], proof=proof(p["subject"]))
+    assert target.read_text() == "keep"
+    assert not (cfg.box / "notes" / "a.md").is_symlink()
+
+
+# ── a path is judged as written (F4) ─────────────────────────────────────────
+@pytest.mark.parametrize(
+    "path",
+    [
+        " /etc/passwd",
+        "\t/abs",
+        " lead.txt",
+        "trail.txt ",
+        "~/.bashrc",
+        "a~b",
+        "%2e%2e/x",
+        "a\nb",
+        "a\x1b[2Jb",
+        "‮exe.txt",  # right-to-left override
+        "a​b",  # zero-width space (format character)
+        "a\\b",
+        " ",
+        "x" * 300,
+    ],
+)
+def test_a_path_that_is_not_plain_relative_posix_is_refused(cfg, path):
+    _, ids = served(cfg)
+    (p,) = api.take_proposals(cfg, [line(path, "x", ids[:1])])["out"]["proposals"]
+    assert p["verdict"] == "refused" and "path" in p["reason"]
+    assert "subject" not in p
 
 
 # ── the CLI is the same path ─────────────────────────────────────────────────
@@ -380,7 +667,7 @@ def test_the_cli_walks_the_same_path(cfg, tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli, "GROVE", cfg.grove)
     base = [
         "--box", str(cfg.box), "--keys", str(cfg.keys), "--venv", str(cfg.venv),
-        "--now", cfg.now, "--no-tests",
+        "--now", cfg.now, "--no-tests", "--phone",
     ]  # fmt: skip
 
     def go(*cmd) -> tuple[int, str]:
@@ -398,7 +685,9 @@ def test_the_cli_walks_the_same_path(cfg, tmp_path, capsys, monkeypatch):
     sealed = js("seal", card["subject"], "--proof", proof(card["subject"]))
     assert sealed["sealed"] is True
     flags = ["--by", "who", "--match", "who=run", "--upto", str(spec["upto"])]
-    assert js("serve", *flags)["state"] == "populated"
+    rc, out = go("serve", *flags)  # no cap: nothing is served uncapped
+    assert rc == 1 and "--max-chars" in out
+    assert js("serve", *flags, "--max-chars", str(CAP))["state"] == "populated"
     ids = [t["id"] for t in json.loads((cfg.box / "served.json").read_text())["tables"]]
 
     f = tmp_path / "f.jsonl"

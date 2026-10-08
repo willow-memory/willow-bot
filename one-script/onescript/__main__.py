@@ -58,8 +58,8 @@ CONSTITUTION = GROVE / "governance" / "CONSTITUTION.md"
 CI = GROVE / ".github" / "workflows" / "tests.yml"
 
 
-def _gate_cfg(no_tests: bool, ci_text: str, venv: Path) -> dict:
-    return api._gate_cfg(no_tests, ci_text, venv, ROOT, GROVE)
+def _gate_cfg(no_tests: bool, ci_text: str, venv: Path, phone: bool = False) -> dict:
+    return api._gate_cfg(no_tests, ci_text, venv, ROOT, GROVE, phone)
 
 
 ANCHOR_SAYS = {
@@ -136,7 +136,31 @@ def main(argv: list[str] | None = None) -> int:
         help="the venv whose tools the toolchain gate checks (the bot's)",
     )
     p.add_argument("--now", help="fixed clock, for replays and tests")
-    p.add_argument("--no-tests", action="store_true", help="skip the tests gate")
+    p.add_argument(
+        "--no-tests",
+        action="store_true",
+        help="skip the tests gate (a gate row says it was skipped)",
+    )
+    p.add_argument(
+        "--phone",
+        action="store_true",
+        help="this run is on the phone: a gate whose tool or clone is missing "
+        "defers. Without it, a missing tool hard-closes",
+    )
+    p.add_argument(
+        "--keyring",
+        type=Path,
+        default=api.default_keyring(),
+        help="the operator's keyring of public keys ($WILLOW_KEYRING, else "
+        "$WILLOW_HOME/config/verifiers.json); a Nestor seal is checked by it",
+    )
+    p.add_argument(
+        "--nestor-db",
+        type=Path,
+        default=api.default_nestor_db(),
+        help="Nestor's store, read-only ($WILLOW_NESTOR_DB): a pair seals only "
+        "while it is sealed there",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("checkin")
     t = sub.add_parser("turn")
@@ -159,9 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("seal")
     sl.add_argument("subject", help="serve:<hash> (a scope) or proposal:<hash>")
     sl.add_argument("--proof", help="the human's HMAC proof over the subject")
-    sl.add_argument("--pair", type=Path, help="a sealed Nestor pair, as JSON")
-    sl.add_argument("--nestor-db", type=Path, help="Nestor's store, read-only")
-    sl.add_argument("--keyring", type=Path, help="Nestor's keyring file")
+    sl.add_argument(
+        "--pair", type=Path, help="a sealed Nestor pair, as JSON, to find in the store"
+    )
     sl.add_argument("--verifier", action="append", help="only these may seal")
     args = p.parse_args(argv)
     raw = list(argv if argv is not None else sys.argv[1:])
@@ -176,6 +200,9 @@ def main(argv: list[str] | None = None) -> int:
         venv=args.venv,
         now=args.now,
         no_tests=args.no_tests,
+        keyring=args.keyring,
+        nestor_db=args.nestor_db,
+        phone=args.phone,
     )
 
     if args.cmd == "checkin":
@@ -198,6 +225,9 @@ def main(argv: list[str] | None = None) -> int:
         if spec["upto"] is None:
             print("refused: serve needs --upto, the row scope named")
             return 1
+        if args.max_chars is None:
+            print("refused: serve needs --max-chars; nothing is served uncapped")
+            return 1
         res = api.serve(cfg, spec, max_chars=args.max_chars, argv=raw)
     else:
         seal = (
@@ -211,8 +241,6 @@ def main(argv: list[str] | None = None) -> int:
             args.subject,
             proof=args.proof,
             pair=pair,
-            nestor_db=args.nestor_db,
-            keyring=args.keyring,
             verifiers=args.verifier,
             argv=raw,
         )

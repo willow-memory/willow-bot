@@ -22,6 +22,14 @@ ALSO = {"rows": [{"who": "willow", "what": "seal"}], "source": "record.jsonl@n=9
 OUT = {"rows": [{"who": "operator", "what": "PIN 4471"}], "source": "vault@n=1"}
 
 
+CAP = 10**6  # serve needs the caller's cap; most tests don't care what it is
+
+
+def capped(*args, **kw):
+    kw.setdefault("max_chars", CAP)
+    return serve.serve(*args, **kw)
+
+
 def clock():
     n = iter(range(10**6))
     return lambda: f"2026-10-07T00:00:{next(n):06d}Z"
@@ -45,7 +53,7 @@ def scoped(rec, *tables):
 def test_only_the_scope_is_served_and_the_rest_is_never_named(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN, ALSO)
-    doc = serve.serve(rec, [IN, ALSO, OUT], ids, SERVE_KEY)
+    doc = capped(rec, [IN, ALSO, OUT], ids, SERVE_KEY)
     assert doc["state"] == "populated"
     assert len(doc["tables"]) == 2
     raw = (tmp_path / serve.OUT).read_text()
@@ -57,7 +65,7 @@ def test_only_the_scope_is_served_and_the_rest_is_never_named(tmp_path):
 def test_served_ids_are_keyed_never_the_content_hash(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY)
+    doc = capped(rec, [IN], ids, SERVE_KEY)
     raw = (tmp_path / serve.OUT).read_text()
     assert ids[0] not in raw
     assert doc["tables"][0]["id"] == serve.served_id(SERVE_KEY, ids[0])
@@ -65,7 +73,7 @@ def test_served_ids_are_keyed_never_the_content_hash(tmp_path):
 
 
 def test_no_scope_serves_nothing_and_says_why(tmp_path):
-    doc = serve.serve(box(tmp_path), [IN], None, SERVE_KEY)
+    doc = capped(box(tmp_path), [IN], None, SERVE_KEY)
     assert doc == {
         "state": "empty",
         "why": doc["why"],
@@ -77,7 +85,7 @@ def test_no_scope_serves_nothing_and_says_why(tmp_path):
 
 def test_an_unsealed_scope_serves_nothing(tmp_path):
     rec = box(tmp_path)
-    doc = serve.serve(rec, [IN], [serve.table_id(IN)], SERVE_KEY)
+    doc = capped(rec, [IN], [serve.table_id(IN)], SERVE_KEY)
     assert doc["state"] == "empty" and doc["tables"] == []
     assert "no human seal" in doc["why"]
 
@@ -86,7 +94,7 @@ def test_a_seal_binds_to_the_exact_set_never_a_wider_one(tmp_path):
     rec = box(tmp_path)
     scoped(rec, IN)  # sealed {IN}
     wider = [serve.table_id(IN), serve.table_id(OUT)]
-    doc = serve.serve(rec, [IN, OUT], wider, SERVE_KEY)
+    doc = capped(rec, [IN, OUT], wider, SERVE_KEY)
     assert doc["state"] == "empty"
     assert "PIN 4471" not in (tmp_path / serve.OUT).read_text()
 
@@ -104,7 +112,7 @@ def test_a_forged_seal_never_reaches_the_record(tmp_path):
 def test_a_sealed_table_that_is_missing_is_unreachable_not_empty(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN, ALSO)
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY)
+    doc = capped(rec, [IN], ids, SERVE_KEY)
     assert doc["state"] == "unreachable" and doc["tables"] == []
 
 
@@ -113,7 +121,7 @@ def test_trust_comes_from_the_record_not_the_table(tmp_path):
     ids = scoped(rec, IN, ALSO)
     seal(rec, serve.table_id(ALSO))
     claims = {**IN, "trust": "human-sealed"}  # a table can't label itself
-    doc = serve.serve(rec, [claims, ALSO], ids, SERVE_KEY)
+    doc = capped(rec, [claims, ALSO], ids, SERVE_KEY)
     trust = {t["rows"][0]["who"]: t["trust"] for t in doc["tables"]}
     assert trust == {"hanuman": "untrusted", "willow": "human-sealed"}
 
@@ -121,14 +129,14 @@ def test_trust_comes_from_the_record_not_the_table(tmp_path):
 def test_a_table_without_a_receipt_fails_the_whole_serve(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    doc = serve.serve(rec, [IN, {"rows": [], "source": ""}], ids, SERVE_KEY)
+    doc = capped(rec, [IN, {"rows": [], "source": ""}], ids, SERVE_KEY)
     assert doc["state"] == "empty" and "receipt" in doc["why"]
 
 
 def test_every_serve_is_recorded_with_where_and_the_file_is_in_the_pile(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY)
+    doc = capped(rec, [IN], ids, SERVE_KEY)
     row = rec.rows()[-1]
     assert row["kind"] == "serve" and row["where"] == serve.OUT
     assert row["served"] == [doc["tables"][0]["id"]]
@@ -141,7 +149,7 @@ def test_every_serve_is_recorded_with_where_and_the_file_is_in_the_pile(tmp_path
 def test_a_cite_outside_the_served_file_is_link_fail(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY)
+    doc = capped(rec, [IN], ids, SERVE_KEY)
     good = doc["tables"][0]["id"]
     guessed = serve.served_id(SERVE_KEY, serve.table_id(OUT))
     fails = serve.check_cites(doc, [good, guessed, ids[0]])
@@ -191,9 +199,9 @@ def test_code_proposes_the_stack_and_the_seal_makes_it_the_scope(tmp_path):
         "who=hanuman · where=docs/a.md",
         "who=willow · where=docs/a.md",
     ]
-    assert serve.serve(rec, stack, card["ids"], SERVE_KEY)["state"] == "empty"
+    assert capped(rec, stack, card["ids"], SERVE_KEY)["state"] == "empty"
     seal(rec, card["subject"])
-    doc = serve.serve(rec, stack, card["ids"], SERVE_KEY)
+    doc = capped(rec, stack, card["ids"], SERVE_KEY)
     assert doc["state"] == "populated" and len(doc["tables"]) == 2
     raw = (tmp_path / serve.OUT).read_text()
     assert "docs/b.md" not in raw  # the pile out of the stack isn't there
@@ -213,7 +221,7 @@ def test_a_pile_whose_receipt_does_not_match_the_record_serves_nothing(tmp_path)
     forged = {**pile, "rows": [{**pile["rows"][0], "who": "operator"}]}
     ids = [serve.table_id(forged)]
     seal(rec, serve.scope_subject(ids))
-    doc = serve.serve(rec, [forged], ids, SERVE_KEY)
+    doc = capped(rec, [forged], ids, SERVE_KEY)
     assert doc["state"] == "empty" and "receipt" in doc["why"]
 
 
@@ -233,7 +241,7 @@ def served_where(tmp_path, where="docs/a.md"):
     stack = serve.piles(rec.rows(), "where")
     card = serve.propose(stack, where=where)
     seal(rec, card["subject"])
-    return rec, stack, card, serve.serve(rec, stack, card["ids"], SERVE_KEY)
+    return rec, stack, card, capped(rec, stack, card["ids"], SERVE_KEY)
 
 
 def test_the_model_cannot_count_name_or_reverse_the_rest(tmp_path):
@@ -254,14 +262,14 @@ def test_a_hash_inside_served_text_is_withheld(tmp_path):
     stack = serve.piles(rec.rows(), "where")
     card = serve.propose(stack)
     seal(rec, card["subject"])
-    doc = serve.serve(rec, stack, card["ids"], SERVE_KEY)
+    doc = capped(rec, stack, card["ids"], SERVE_KEY)
     assert doc["tables"][0]["rows"][0]["reason"] == "cites " + serve.WITHHELD
 
 
 def test_unreachable_says_how_many_never_which(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN, ALSO)
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY)
+    doc = capped(rec, [IN], ids, SERVE_KEY)
     assert doc["why"] == "1 sealed table(s) not found"
     assert not HEX64.search((tmp_path / serve.OUT).read_text())
 
@@ -269,9 +277,7 @@ def test_unreachable_says_how_many_never_which(tmp_path):
 def test_every_served_file_says_what_to_return(tmp_path):
     _, _, _, doc = served_where(tmp_path)
     assert doc["return"] == serve.RETURN
-    assert serve.serve(box(tmp_path / "b"), [], None, SERVE_KEY)["return"] == (
-        serve.RETURN
-    )
+    assert capped(box(tmp_path / "b"), [], None, SERVE_KEY)["return"] == (serve.RETURN)
 
 
 def test_a_where_pile_says_what_it_cannot_hold(tmp_path):
@@ -296,8 +302,8 @@ def test_the_card_lists_the_joins_the_model_could_make(tmp_path):
 def test_a_new_session_gives_the_same_table_a_different_id(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    a = serve.serve(rec, [IN], ids, serve.session_key())["tables"][0]["id"]
-    b = serve.serve(rec, [IN], ids, serve.session_key())["tables"][0]["id"]
+    a = capped(rec, [IN], ids, serve.session_key())["tables"][0]["id"]
+    b = capped(rec, [IN], ids, serve.session_key())["tables"][0]["id"]
     assert a != b
 
 
@@ -305,34 +311,51 @@ def test_a_new_session_gives_the_same_table_a_different_id(tmp_path):
 def test_serve_takes_its_cap_from_the_caller_and_never_truncates(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    size = len(serve.canon(serve.serve(rec, [IN], ids, SERVE_KEY)))
-    assert (
-        serve.serve(rec, [IN], ids, SERVE_KEY, max_chars=size)["state"] == "populated"
-    )
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY, max_chars=size - 1)
+    size = len(serve.canon(capped(rec, [IN], ids, SERVE_KEY)))
+    assert capped(rec, [IN], ids, SERVE_KEY, max_chars=size)["state"] == "populated"
+    doc = capped(rec, [IN], ids, SERVE_KEY, max_chars=size - 1)
     assert doc["state"] == "empty" and "narrow the stack" in doc["why"]
     assert doc["tables"] == []
     assert "hanuman" not in (tmp_path / serve.OUT).read_text()  # whole or nothing
 
 
-def test_no_cap_means_the_caller_set_none(tmp_path):
+def test_no_cap_serves_nothing_never_an_uncapped_document(tmp_path):
+    """Loki 8E0652F5 F9: the caller sizes the cap. Without one the answer is
+    `empty` with the reason, and no table reaches the file."""
     rec = box(tmp_path)
+    ids = scoped(rec, IN)
+    doc = serve.serve(rec, [IN], ids, SERVE_KEY)
+    assert doc["state"] == "empty" and doc["tables"] == []
+    assert "no max_chars" in doc["why"]
+    assert "hanuman" not in (tmp_path / serve.OUT).read_text()
     big = {"rows": [{"who": "x" * 50_000, "what": "write"}], "source": "r@n=1"}
-    ids = scoped(rec, big)
-    assert serve.serve(rec, [big], ids, SERVE_KEY)["state"] == "populated"
+    rec2 = box(tmp_path / "b")
+    ids2 = scoped(rec2, big)
+    assert (
+        capped(rec2, [big], ids2, SERVE_KEY)["state"] == "populated"
+    )  # a caller's cap
+
+
+def test_the_return_line_is_the_proposal_contract():
+    """Loki 8E0652F5 F8: what the model is told to return is what the proposal
+    reader accepts: path, data, cites, claim."""
+    from onescript import proposals
+
+    for key in sorted(proposals.KEYS):
+        assert f'"{key}"' in serve.RETURN
 
 
 @pytest.mark.parametrize("bad", [0, -1, 1.5, "90", True])
 def test_a_cap_that_is_not_a_positive_whole_number_serves_nothing(tmp_path, bad):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    doc = serve.serve(rec, [IN], ids, SERVE_KEY, max_chars=bad)
+    doc = capped(rec, [IN], ids, SERVE_KEY, max_chars=bad)
     assert doc["state"] == "empty" and "positive whole number" in doc["why"]
 
 
 def test_a_cite_the_model_cannot_have_known_never_crashes_the_check(tmp_path):
     rec = box(tmp_path)
-    doc = serve.serve(rec, [IN], scoped(rec, IN), SERVE_KEY)
+    doc = capped(rec, [IN], scoped(rec, IN), SERVE_KEY)
     fails = serve.check_cites(doc, ["é✓", "\ud800", ""])
     assert len(fails) == 3 and {f["verdict"] for f in fails} == {"link_fail"}
 
@@ -340,7 +363,7 @@ def test_a_cite_the_model_cannot_have_known_never_crashes_the_check(tmp_path):
 def test_no_serve_key_serves_nothing(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN)
-    doc = serve.serve(rec, [IN], ids, None)
+    doc = capped(rec, [IN], ids, None)
     assert doc["state"] == "empty" and "check-in" in doc["why"]
 
 

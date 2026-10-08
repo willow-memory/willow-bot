@@ -18,6 +18,7 @@ different proposal that needs its own seal.
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import PurePosixPath
 from typing import Iterable
 
@@ -35,11 +36,31 @@ def subject(p: dict) -> str:
     return SUBJECT + h256(canon({k: p[k] for k in ("path", "data", "cites", "claim")}))
 
 
-def _path_problem(path: str) -> str | None:
-    if not path or "\x00" in path or "\\" in path:
-        return "path is empty or has a character a path can't carry"
-    pp = PurePosixPath(path)
-    if pp.is_absolute() or any(part in ("", ".", "..") for part in path.split("/")):
+#: A path longer than this is not a name a person can read on a card.
+MAX_PATH = 240
+
+
+def path_problem(path: object) -> str | None:
+    """Why `path` is not a plain relative POSIX path, or None when it is.
+
+    Judged as written, the way ratatosk judges it (`plain_relative_path`): the
+    card shows exactly the bytes that will be written, so nothing is
+    normalized or decoded first. No leading or trailing whitespace, no control,
+    format or bidi character (U+202E included), no newline, `~`, `%` or
+    backslash, no '.', '..' or empty segment, and not absolute."""
+    if not isinstance(path, str) or not path:
+        return "path is empty or not text"
+    if len(path) > MAX_PATH:
+        return f"path is longer than {MAX_PATH} characters"
+    if path != path.strip():
+        return "path must be plain text: no leading or trailing whitespace"
+    if any(unicodedata.category(c).startswith("C") for c in path):
+        return "path must be plain text: no control, format or bidi character"
+    if any(c in path for c in ("~", "%", "\\")):
+        return "path must be plain text: no '~', '%' or backslash"
+    if PurePosixPath(path).is_absolute() or any(
+        part in ("", ".", "..") for part in path.split("/")
+    ):
         return "path must be relative to the box, with no '.', '..' or empty part"
     if path.startswith("tmp/") or path in RESERVED:
         return "path is temp or one the run keeps for itself"
@@ -63,9 +84,11 @@ def check(obj: object) -> tuple[dict | None, str]:
     cites = obj["cites"]
     if not isinstance(cites, list) or not all(isinstance(c, str) and c for c in cites):
         return None, "cites must be a list of served table ids"
-    bad = _path_problem(obj["path"])
+    bad = path_problem(obj["path"])
     if bad:
         return None, bad
+    if not cites:  # strict until the operator rules on a proposal that cites nothing
+        return None, "cites must name at least one served table id"
     try:
         canon(obj).encode("utf-8")  # every field, as the subject will hash it
     except (UnicodeEncodeError, ValueError):

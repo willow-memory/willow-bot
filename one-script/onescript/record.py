@@ -21,9 +21,11 @@ never a crash, so the hard-close rule (report, options, wait) still applies.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
+import secrets
 import tempfile
 from pathlib import Path
 from typing import Callable
@@ -257,9 +259,7 @@ class Record:
             raise PermissionError(
                 f"record: '{rel}' is temp; nothing kept is written to temp"
             )
-        target = self.box / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _atomic(target, data)
+        _write_in_box(self.box, rel, data)
         ptr = {
             "where": rel,
             "sha": h256(data),
@@ -281,6 +281,63 @@ class Record:
 def tip_subject(tip: dict) -> str:
     """What the human signs to seal a tip: the row number and its full hash."""
     return f"{TIP}{tip['n']}:{tip['hash']}"
+
+
+def _write_in_box(box: Path, rel: str, data: bytes) -> None:
+    """Write `data` at `rel` under `box`, and nowhere else.
+
+    Every component of `rel` is opened relative to the one before it with
+    O_NOFOLLOW, so a symlink in the box (planted by anyone who can write there)
+    is refused rather than followed out. The file lands by an atomic rename in
+    the directory held open, never by a path resolved again after the check.
+    Raises PermissionError for a path that is not plain relative, or that
+    crosses a symlink."""
+    parts = rel.split("/")
+    if not rel or rel.startswith("/") or any(p in ("", ".", "..") for p in parts):
+        raise PermissionError(f"record: '{rel}' is not a path inside the box")
+    box.mkdir(parents=True, exist_ok=True)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    held = [os.open(box, os.O_RDONLY | os.O_DIRECTORY)]
+    try:
+        for part in parts[:-1]:
+            try:
+                nxt = os.open(part, flags, dir_fd=held[-1])
+            except FileNotFoundError:
+                os.mkdir(part, 0o755, dir_fd=held[-1])
+                nxt = os.open(part, flags, dir_fd=held[-1])
+            held.append(nxt)
+        name = parts[-1]
+        tmp = f".{name}.{secrets.token_hex(8)}.tmp"
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o644,
+            dir_fd=held[-1],
+        )
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fchmod(f.fileno(), 0o644)
+                os.fsync(f.fileno())
+            os.replace(tmp, name, src_dir_fd=held[-1], dst_dir_fd=held[-1])
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=held[-1])
+            except OSError:
+                pass
+            raise
+    except OSError as e:
+        if isinstance(e, PermissionError):
+            raise
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise PermissionError(
+                f"record: '{rel}' crosses a symlink or a file; nothing written"
+            ) from e
+        raise
+    finally:
+        for d in held:
+            os.close(d)
 
 
 def _atomic(path: Path, data: bytes) -> None:

@@ -241,30 +241,73 @@ class Run:
             )
         return rows
 
+    def find_proposal(self, subject: str) -> tuple[dict | None, str | None]:
+        """The stored proposal row for `subject` that really is that proposal,
+        or (None, why). The record's rows are only a place the bytes were put:
+        a row is the proposal the human sealed only if the hash of its own
+        path, data, cites and claim is the subject. A row that says one subject
+        and carries other bytes is skipped, not trusted; and the path rule and
+        the door run again on the bytes that would be written."""
+        rows = [
+            r
+            for r in self.rec.rows()
+            if r["kind"] == "proposal" and r.get("subject") == subject
+        ]
+        if not rows:
+            return None, "no such proposal on record"
+        whole = [
+            r
+            for r in rows
+            if all(k in r for k in proposals.KEYS) and self._hashes_to(r, subject)
+        ]
+        if not whole:
+            return None, "no stored row hashes to this subject; nothing written"
+        prop = whole[-1]
+        if prop["verdict"] != "pass":
+            return (
+                None,
+                f"the proposal is {prop['verdict']}, not a pass; nothing written",
+            )
+        fields = {k: prop[k] for k in proposals.KEYS}
+        _, bad = proposals.check(fields)
+        if bad:
+            return None, f"the stored proposal fails the contract now: {bad}"
+        d = gate.door(
+            {
+                "kind": "edit",
+                "path": prop["path"],
+                "who": prop["who"],
+                "none_because": prop["claim"],
+            },
+            self.law,
+            self._script_index(),
+        )
+        if d.verdict != "pass":
+            return None, f"the door says {d.verdict} on these bytes: {d.reason}"
+        return prop, None
+
+    @staticmethod
+    def _hashes_to(row: dict, subject: str) -> bool:
+        try:
+            return proposals.subject({k: row[k] for k in proposals.KEYS}) == subject
+        except (TypeError, ValueError):
+            return False
+
     def write_proposal(self, subject: str) -> dict:
         """Write one proposal, only if it passed and the human sealed it. The
-        seal is read from the record, never taken on a caller's word."""
+        seal is read from the record, never taken on a caller's word; and what
+        is written is recomputed from the stored path and data, which must hash
+        to the sealed subject, so a row edited after the fact writes nothing."""
         rows = self.rec.rows()
-        prop = next(
-            (
-                r
-                for r in reversed(rows)
-                if r["kind"] == "proposal" and r.get("subject") == subject
-            ),
-            None,
-        )
-        why = None
-        if prop is None:
-            why = "no such proposal on record"
-        elif prop["verdict"] != "pass":
-            why = f"the proposal is {prop['verdict']}, not a pass; nothing written"
-        elif subject not in serve.sealed(rows):
+        prop, why = self.find_proposal(subject)
+        if why is None and subject not in serve.sealed(rows):
             why = "no human seal over this proposal; nothing written"
         if why is not None:
             return self.rec.append(
                 "refused", self.sys, at="write_proposal", reason=why, subject=subject
             )
         data = prop["data"].encode("utf-8")
+        on_disk = self.rec.box / prop["path"]
         done = [
             r
             for r in rows
@@ -272,11 +315,21 @@ class Run:
             and r["path"] == prop["path"]
             and r["sha"] == h256(data)
         ]
-        if done:
+        # a write row is a claim: it counts only while the bytes are really there
+        if done and on_disk.is_file() and on_disk.read_bytes() == data:
             return done[-1]
-        return self.rec.write_file(
-            self.sys, prop["path"], data, cites=prop["cites"], provenance="authored"
-        )
+        try:
+            return self.rec.write_file(
+                self.sys, prop["path"], data, cites=prop["cites"], provenance="authored"
+            )
+        except (PermissionError, OSError) as e:
+            return self.rec.append(
+                "refused",
+                self.sys,
+                at="write_proposal",
+                reason=f"the write was refused: {e}",
+                subject=subject,
+            )
 
     def say(self, text: str, facts: dict) -> list[dict]:
         """Layer 5: the claims in an output, checked before the human reads it.

@@ -51,7 +51,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install pytest ruff==0.16.7
+        run: pip install pytest cryptography ruff==0.16.7
 
       - name: Lint
         working-directory: willow-bot/one-script

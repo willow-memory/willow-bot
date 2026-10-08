@@ -67,8 +67,9 @@ CANNOT_HOLD = {
 }
 
 RETURN = (
-    'Return only rows of {"cites": [served table id], "claim": text}. A cite '
-    "must be an id in this file. Nothing else is read."
+    'Return only rows of {"path": text, "data": text, "cites": [served table id], '
+    '"claim": text}, one JSON object per line. A cite must be an id in this file. '
+    "Nothing else is read."
 )
 
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -222,7 +223,7 @@ def serve(
     `max_chars` is the caller's cap on the served document's text (its
     canonical JSON). The caller sizes it, from the model's context: serve does
     not know the model. Over the cap the answer is `empty`, "narrow the stack",
-    never a truncation. None means the caller set no cap."""
+    never a truncation. No cap is `empty` too: nothing is served uncapped."""
     try:
         doc = _serve(rec.rows(), tables, scope, serve_key, max_chars)
     except gate.Refused as e:
@@ -255,9 +256,11 @@ def _nothing(state: str, why: str) -> dict:
 
 
 def _serve(rows, tables, scope, serve_key, max_chars=None) -> dict:
-    if max_chars is not None and (
-        isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1
-    ):
+    if max_chars is None:
+        return _nothing(
+            "empty", "no max_chars given; the caller sizes the cap, nothing is uncapped"
+        )
+    if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1:
         return _nothing("empty", "max_chars must be a positive whole number")
     if not serve_key:
         return _nothing("empty", "no serve key; ids are made only after check-in")
@@ -291,7 +294,7 @@ def _serve(rows, tables, scope, serve_key, max_chars=None) -> dict:
         )
     served.sort(key=lambda t: t["id"])
     doc = {"state": "populated", "why": "", "return": RETURN, "tables": served}
-    if max_chars is not None and len(canon(doc)) > max_chars:
+    if len(canon(doc)) > max_chars:
         return _nothing(
             "empty", "the scope is too large for this model; narrow the stack"
         )

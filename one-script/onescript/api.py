@@ -1,7 +1,7 @@
 """api — the one script as functions the app calls. No terminal, no tty.
 
     cfg = Config(box=..., keys=..., constitution=..., ci=..., root=..., grove=...,
-                 venv=...)
+                 venv=..., keyring=..., nestor_db=..., phone=...)
     checkin(cfg)                      # boot: record, probes, the four gates
     scope(cfg, by=("who",))           # code proposes a stack; the card and subject
     seal_scope(cfg, subject, ...)     # the human's seal over that exact set
@@ -22,8 +22,10 @@ key.
 
 Seals without a terminal: a seal is either the human's HMAC proof over the
 subject (needs a key in the keys file) or a sealed Nestor pair whose conclusion
-is the exact subject (`nestor_seal`), read from a pair the caller hands over or
-from Nestor's store, opened read-only. The app uses the second.
+is the exact subject (`nestor_seal`). The app uses the second. The pair must be
+`sealed` in Nestor's store right now (`Config.nestor_db`, opened read-only), and
+its signature is checked against the operator's keyring (`Config.keyring`, ed25519
+public keys only), both fixed in `Config` and never taken from the caller.
 """
 
 from __future__ import annotations
@@ -66,6 +68,34 @@ class Config:
     venv: Path
     now: str | None = None  # a fixed clock, for replays and tests
     no_tests: bool = False
+    #: The operator's keyring of public keys, fixed here and resolved outside the
+    #: box. A seal is checked against this and nothing the caller hands over.
+    keyring: Path | None = None
+    #: Nestor's store, read-only: a pair is a seal only while it is `sealed`
+    #: there right now.
+    nestor_db: Path | None = None
+    #: Set by the APK when the run is on the phone, and only then. A gate whose
+    #: tool, venv or clone is missing defers on the phone and hard-closes on the
+    #: box; a missing tool never makes a run a phone run.
+    phone: bool = False
+
+
+def default_keyring() -> Path | None:
+    """The operator's keyring: `$WILLOW_KEYRING`, else
+    `$WILLOW_HOME/config/verifiers.json`; None when neither is set."""
+    if os.environ.get("WILLOW_KEYRING"):
+        return Path(os.environ["WILLOW_KEYRING"]).expanduser()
+    if os.environ.get("WILLOW_HOME"):
+        return (
+            Path(os.environ["WILLOW_HOME"]).expanduser() / "config" / "verifiers.json"
+        )
+    return None
+
+
+def default_nestor_db() -> Path | None:
+    """Nestor's store as the broker names it (`$WILLOW_NESTOR_DB`), else None."""
+    got = os.environ.get("WILLOW_NESTOR_DB")
+    return Path(got).expanduser() if got else None
 
 
 def _now() -> str:
@@ -178,7 +208,12 @@ def _in_venv(venv: Path):
 
 
 def _gate_cfg(
-    no_tests: bool, ci_text: str, venv: Path, root: Path, grove: Path
+    no_tests: bool,
+    ci_text: str,
+    venv: Path,
+    root: Path,
+    grove: Path,
+    phone: bool = False,
 ) -> dict:
     pin = re.search(r"ruff==([\d.]+)", ci_text)
     cfg: dict = {
@@ -186,8 +221,18 @@ def _gate_cfg(
         "version_of": _in_venv(venv),
         "found_in": f"in {venv}",
         "repos": [str(root), str(grove)],
+        "phone": phone,
     }
-    if not no_tests and not os.environ.get(NESTED):
+    if no_tests:
+        cfg["tests_skipped"] = [{"name": "onescript", "why": "--no-tests was given"}]
+    elif os.environ.get(NESTED):
+        cfg["tests_skipped"] = [
+            {
+                "name": "onescript",
+                "why": f"this check-in runs inside the tests gate ({NESTED})",
+            }
+        ]
+    else:
         os.environ[NESTED] = "1"  # inherited by the suite the gate runs
         cfg["tests"] = [
             {
@@ -234,6 +279,9 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
         )
     if cfg.keys.resolve().is_relative_to(cfg.box.resolve()):
         return None, _refused("the keys file can't live inside the box", 2)
+    for what, where in (("keyring", cfg.keyring), ("Nestor store", cfg.nestor_db)):
+        if where is not None and where.resolve().is_relative_to(cfg.box.resolve()):
+            return None, _refused(f"the {what} can't live inside the box", 2)
     try:
         keys = _keys(cfg.keys)
     except KeysExposed as e:
@@ -252,6 +300,10 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
         grove=str(cfg.grove),
         box=str(cfg.box),
         venv=str(cfg.venv),
+        phone=cfg.phone,
+        no_tests=cfg.no_tests,
+        keyring=str(cfg.keyring) if cfg.keyring else None,
+        nestor_db=str(cfg.nestor_db) if cfg.nestor_db else None,
         inputs={
             "governance/CONSTITUTION.md": law_sha,
             ".github/workflows/tests.yml": ci_sha,
@@ -296,7 +348,14 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
         return info
     try:
         rep = run.checkin(
-            _gate_cfg(cfg.no_tests, info["ci_text"], cfg.venv, cfg.root, cfg.grove)
+            _gate_cfg(
+                cfg.no_tests,
+                info["ci_text"],
+                cfg.venv,
+                cfg.root,
+                cfg.grove,
+                cfg.phone,
+            )
         )
     except boot.BoxWontOpen as e:
         # Recorded as a closed boot, so no later turn opens on an older,
@@ -402,42 +461,52 @@ def scope(
 
 def _seal(
     run: Run,
+    cfg: Config,
     subject: str,
     proof: str | None,
     pair: object,
-    nestor_db: str | Path | None,
-    keyring: dict | str | Path | None,
     verifiers: Iterable[str] | None,
 ) -> dict:
     """One seal, by whichever means the caller brought. A row either way: the
-    seal, or the refusal and why."""
+    seal, or the refusal and why.
+
+    A Nestor seal is checked against the operator's keyring and Nestor's store,
+    both fixed in `cfg`: the caller can hand over a pair to point at, never a
+    keyring to check it by, and never a pair the store no longer holds as
+    sealed."""
 
     def refuse(why: str) -> dict:
+        state = {"state": "unreachable"} if why.startswith("unreachable") else {}
         return run.rec.append(
-            "refused", run.sys, at="seal", reason=why, subject=subject
+            "refused", run.sys, at="seal", reason=why, subject=subject, **state
         )
 
-    if pair is not None or nestor_db is not None:
-        if keyring is None:
-            return refuse("a Nestor seal needs the keyring to check its signature")
-        try:
-            ring = (
-                keyring
-                if isinstance(keyring, dict)
-                else nestor_seal.load_keyring(keyring)
+    if pair is not None or (proof is None and cfg.nestor_db is not None):
+        if cfg.keyring is None:
+            return refuse(
+                "unreachable: no operator keyring is configured "
+                "($WILLOW_KEYRING or $WILLOW_HOME/config/verifiers.json)"
             )
-            found = [pair] if pair is not None else []
-            if nestor_db is not None:
-                found += nestor_seal.pairs_for(nestor_db, subject)
+        if cfg.nestor_db is None:
+            return refuse("unreachable: no Nestor store is configured to confirm it")
+        if not nestor_seal.have_ed25519():
+            return refuse(nestor_seal.NO_CRYPTO)
+        try:
+            ring = nestor_seal.load_keyring(cfg.keyring)
+            found = nestor_seal.current(cfg.nestor_db, subject, pair)
         except nestor_seal.Unverifiable as e:
-            return refuse(str(e))
+            return refuse(f"unreachable: {e}")
+        if not found:
+            return refuse(
+                "no pair for this subject is sealed in Nestor's store right now"
+                if pair is not None
+                else "no sealed Nestor pair has this subject as its conclusion"
+            )
         allowed = frozenset(verifiers) if verifiers is not None else None
         good = next(
             (p for p in found if nestor_seal.check(p, subject, ring, allowed)[0]),
-            found[0] if found else None,  # none verifies: the refusal says why
+            found[0],  # none verifies: the refusal says why
         )
-        if good is None:
-            return refuse("no sealed Nestor pair has this subject as its conclusion")
         return run.seal_nestor(subject, good, ring, allowed)
     if proof is not None:
         human_key = run.keys.get(gate.HUMAN)
@@ -453,12 +522,11 @@ def seal_scope(
     *,
     proof: str | None = None,
     pair: object = None,
-    nestor_db: str | Path | None = None,
-    keyring: dict | str | Path | None = None,
     verifiers: Iterable[str] | None = None,
     argv: Iterable[str] = ("seal",),
 ) -> dict:
-    """The human's seal over a scope's exact subject (`serve:<hash>`)."""
+    """The human's seal over a scope's exact subject (`serve:<hash>`). A Nestor
+    seal is checked against `cfg.keyring` and `cfg.nestor_db`, never the caller's."""
     run, info = _open(cfg, "seal", argv)
     if run is None:
         return info
@@ -469,7 +537,7 @@ def seal_scope(
             "refused", run.sys, at="seal", reason="not a scope subject", subject=subject
         )
         return {"row": row, "sealed": False, "code": 1}
-    row = _seal(run, subject, proof, pair, nestor_db, keyring, verifiers)
+    row = _seal(run, cfg, subject, proof, pair, verifiers)
     return {
         "row": row,
         "sealed": row["kind"] == "seal",
@@ -486,7 +554,8 @@ def serve(
     """Write the one file the model reads, for the stack `spec` names. Served
     only if the human sealed that exact set. `max_chars` is the caller's cap on
     the served text, sized from the model's context; over it the answer is
-    `empty`, never truncated."""
+    `empty`, never truncated. Without one it is `empty` too: nothing is served
+    uncapped."""
     run, info = _open(cfg, "serve", argv)
     if run is None:
         return info
@@ -506,38 +575,22 @@ def seal_proposal(
     *,
     proof: str | None = None,
     pair: object = None,
-    nestor_db: str | Path | None = None,
-    keyring: dict | str | Path | None = None,
     verifiers: Iterable[str] | None = None,
     argv: Iterable[str] = ("seal",),
 ) -> dict:
     """The human's seal over one proposal's hash (`proposal:<hash>`). Only a
-    proposal that passed is sealable, and only a sealed pass is written."""
+    proposal that passed is sealable, and only a sealed pass is written. The
+    stored proposal must hash to the subject, or there is nothing to seal."""
     run, info = _open(cfg, "seal", argv)
     if run is None:
         return info
     if (refusal := _need_open(run, "seal", subject=subject)) is not None:
         return refusal
-    rows = run.rec.rows()
-    prop = next(
-        (
-            r
-            for r in reversed(rows)
-            if r["kind"] == "proposal" and r.get("subject") == subject
-        ),
-        None,
-    )
-    why = (
-        "no such proposal on record"
-        if prop is None
-        else f"the proposal is {prop['verdict']}, not a pass; there is nothing to seal"
-        if prop["verdict"] != "pass"
-        else None
-    )
+    _, why = run.find_proposal(subject)
     if why is not None:
         row = run.rec.append("refused", run.sys, at="seal", reason=why, subject=subject)
         return {"row": row, "sealed": False, "written": None, "code": 1}
-    row = _seal(run, subject, proof, pair, nestor_db, keyring, verifiers)
+    row = _seal(run, cfg, subject, proof, pair, verifiers)
     if row["kind"] != "seal":
         return {"row": row, "sealed": False, "written": None, "code": 1}
     wrote = run.write_proposal(subject)

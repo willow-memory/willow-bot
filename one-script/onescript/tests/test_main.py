@@ -24,7 +24,7 @@ def venv_with(tmp: Path, ruff: str | None) -> Path:
     return v
 
 
-def run(tmp: Path, venv: Path, *cmd: str) -> int:
+def run(tmp: Path, venv: Path, *cmd: str, phone: bool = False) -> int:
     return cli.main(
         [
             "--box",
@@ -36,6 +36,7 @@ def run(tmp: Path, venv: Path, *cmd: str) -> int:
             "--now",
             "2026-10-06T00:00:00Z",
             "--no-tests",
+            *(["--phone"] if phone else []),
             *cmd,
         ]
     )
@@ -208,7 +209,7 @@ def test_a_venv_without_ruff_is_unreachable_and_deferred_not_a_hard_close(
     """No ruff (the phone): nothing ran, so the box opens, the row says it is
     deferred, and a later check-in with ruff settles it."""
     bare = venv_with(tmp_path / "bare", None)
-    assert run(tmp_path, bare, "checkin") == 0
+    assert run(tmp_path, bare, "checkin", phone=True) == 0
     out = capsys.readouterr().out
     assert "unreachable  toolchain: ruff — not installed" in out
     assert "deferred" in out and "HARD CLOSE" not in out
@@ -219,6 +220,39 @@ def test_a_venv_without_ruff_is_unreachable_and_deferred_not_a_hard_close(
     assert run(tmp_path, good, "checkin") == 0
     assert "settled      toolchain: ruff: satisfied" in capsys.readouterr().out
     assert [r["kind"] for r in rows(tmp_path)].count("deferred_result") == 1
+
+
+def test_the_same_venv_on_the_box_hard_closes(tmp_path, capsys):
+    """Loki 8E0652F5 F5: no ruff is a deferral only when the run says it is on
+    the phone. On the box (no --phone) it is a hard close, and the record
+    says the run was not a phone run."""
+    bare = venv_with(tmp_path / "bare", None)
+    assert run(tmp_path, bare, "checkin") == 1
+    out = capsys.readouterr().out
+    assert "HARD CLOSE" in out and "can't run on the box" in out
+    assert "deferred" not in out
+    assert rows(tmp_path)[0]["phone"] is False
+
+
+def test_no_tests_leaves_a_gate_row_saying_it_was_skipped(tmp_path, capsys):
+    v = venv_with(tmp_path, "0.16.7")
+    assert run(tmp_path, v, "checkin") == 0  # the helper passes --no-tests
+    assert "tests: onescript — skipped: --no-tests was given" in capsys.readouterr().out
+    boot_row = [r for r in rows(tmp_path) if r["kind"] == "boot"][-1]
+    assert [(g["gate"], g["verdict"]) for g in boot_row["gates"]][0] == (
+        "tests",
+        "differently",
+    )
+    assert rows(tmp_path)[0]["no_tests"] is True
+
+
+def test_a_nested_checkin_leaves_a_gate_row_saying_why(monkeypatch):
+    monkeypatch.setenv(cli.NESTED, "1")
+    gcfg = cli._gate_cfg(False, "", Path("/v"))
+    (skip,) = gcfg["tests_skipped"]
+    assert cli.NESTED in skip["why"] and "tests" not in gcfg
+    (row,) = cli.boot.gates(gcfg)[:1]
+    assert (row["gate"], row["verdict"]) == ("tests", "differently")
 
 
 def test_keys_never_live_in_the_box(tmp_path, capsys):

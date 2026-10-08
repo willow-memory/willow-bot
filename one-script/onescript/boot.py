@@ -13,10 +13,13 @@ takes an injectable runner, so the gates are tested without the tools they
 check.
 
 A gate that shells out reports `unreachable` when its tool or repo is absent
-(the phone has no ruff, no pytest, no clone). That row is `deferred`: it does
-not close the box, because nothing ran, and it isn't a pass either. The next
-check-in where the gate CAN run runs it and records the result against the
-deferred row (`settle`). A gate that runs and fails still hard-closes.
+AND the run says it is on the phone (the phone has no ruff, no pytest, no
+clone). That row is `deferred`: it does not close the box, because nothing
+ran, and it isn't a pass either. The next check-in where the gate CAN run runs
+it and records the result against the deferred row (`settle`). The phone is an
+explicit flag, never inferred from a missing tool: on the box the same gap is
+`failing` and hard-closes. A gate that runs and fails still hard-closes. A
+gate the caller chose to skip says so in a row (`differently`), never silently.
 """
 
 from __future__ import annotations
@@ -88,9 +91,14 @@ def _row(gate_name: str, where: str, verdict: str, why: str = "", **extra) -> di
     return {"gate": gate_name, "where": where, "verdict": verdict, "why": why, **extra}
 
 
-def _unreachable(gate_name: str, where: str, why: str) -> dict:
-    """The gate couldn't run here: not a pass, not a failure, and deferred."""
-    return _row(gate_name, where, UNREACHABLE, why, deferred=True)
+def _unreachable(gate_name: str, where: str, why: str, phone: bool = False) -> dict:
+    """The gate couldn't run here. On the phone that is `unreachable` and
+    deferred: not a pass, not a failure, and run when the record comes home.
+    On the box it is a failure: a missing tool, venv or clone there is a box
+    that can't check itself, and a gate that can't run must not read as open."""
+    if phone:
+        return _row(gate_name, where, UNREACHABLE, why, deferred=True)
+    return _row(gate_name, where, "failing", f"can't run on the box: {why}")
 
 
 def _run(argv: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
@@ -99,15 +107,27 @@ def _run(argv: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
     return p.returncode, lines[-1] if lines else ""
 
 
-def tests_gate(suites: list[dict], runner=_run) -> list[dict]:
-    """Run each suite. Pass, fail, or unreachable (can't run here), with why."""
-    out = []
+def tests_gate(
+    suites: list[dict], runner=_run, phone: bool = False, skipped: list | None = None
+) -> list[dict]:
+    """Run each suite. Pass, fail, or unreachable (can't run here, phone only),
+    with why. A suite the caller chose not to run (`skipped`: `--no-tests`, or a
+    check-in nested in the gate's own suite) is a row saying so and why, never
+    an absence."""
+    out = [
+        _row("tests", s["name"], "differently", f"skipped: {s['why']}")
+        for s in sorted(skipped or [], key=lambda s: s["name"])
+    ]
     for s in sorted(suites, key=lambda s: s["name"]):
         missing = [m for m in s.get("needs", []) if importlib.util.find_spec(m) is None]
         if missing:
-            out.append(_unreachable("tests", s["name"], f"can't run: needs {missing}"))
+            out.append(
+                _unreachable("tests", s["name"], f"can't run: needs {missing}", phone)
+            )
         elif not Path(s["cwd"]).is_dir():
-            out.append(_unreachable("tests", s["name"], "can't run: no such directory"))
+            out.append(
+                _unreachable("tests", s["name"], "can't run: no such directory", phone)
+            )
         else:
             rc, last = runner(s["argv"], s["cwd"])
             out.append(
@@ -132,6 +152,7 @@ def toolchain_gate(
     version_of=_tool_version,
     py: str | None = None,
     found_in: str = "on PATH",
+    phone: bool = False,
 ) -> list:
     """Installed versions against the repo's pins, and whether a venv is active.
     `found_in` says where `version_of` looked, so the why names the right place."""
@@ -139,7 +160,9 @@ def toolchain_gate(
     for tool, want in sorted(pins.get("tools", {}).items()):
         have = version_of(tool)
         if have is None:
-            out.append(_unreachable("toolchain", tool, f"not installed; pinned {want}"))
+            out.append(
+                _unreachable("toolchain", tool, f"not installed; pinned {want}", phone)
+            )
         elif have != want:
             out.append(
                 _row("toolchain", tool, "failing", f"{have} {found_in}; pinned {want}")
@@ -184,18 +207,26 @@ def _git_here(repo: str) -> bool:
 
 
 def freshness_gate(
-    repos: list[str], docs: list[dict], law_version: str, git=_git, here=None
+    repos: list[str],
+    docs: list[dict],
+    law_version: str,
+    git=_git,
+    here=None,
+    phone: bool = False,
 ) -> list[dict]:
     """Clones against their last-fetched remote (fetching is egress, so it isn't
     done here), and documents against the law they were built on. A clone that
-    isn't here, or no git to ask, is unreachable: deferred, not a failure.
-    With an injected `git` the caller is the one saying what is here."""
+    isn't here, or no git to ask, is unreachable on the phone (deferred) and a
+    failure on the box. With an injected `git` the caller is the one saying what
+    is here."""
     if here is None:
         here = _git_here if git is _git else (lambda repo: True)
     out = []
     for repo in sorted(repos):
         if not here(repo):
-            out.append(_unreachable("freshness", repo, "no clone or no git here"))
+            out.append(
+                _unreachable("freshness", repo, "no clone or no git here", phone)
+            )
             continue
         if not git(repo, "rev-parse", "@{u}"):
             out.append(_row("freshness", repo, "differently", "no upstream to compare"))
@@ -287,20 +318,30 @@ def settle(rows: list[dict], checked: list[dict]) -> list[dict]:
 
 
 def gates(cfg: dict) -> list[dict]:
-    """The four gates, in a fixed order. `cfg` keys are all optional."""
+    """The four gates, in a fixed order. `cfg` keys are all optional. `phone` is
+    the explicit flag the app sets when this run is on the phone; it is never
+    inferred from a tool being missing."""
+    phone = bool(cfg.get("phone", False))
     return (
-        tests_gate(cfg.get("tests", []), cfg.get("runner", _run))
+        tests_gate(
+            cfg.get("tests", []),
+            cfg.get("runner", _run),
+            phone,
+            cfg.get("tests_skipped", []),
+        )
         + toolchain_gate(
             cfg.get("pins", {}),
             cfg.get("version_of", _tool_version),
             cfg.get("python"),
             cfg.get("found_in", "on PATH"),
+            phone,
         )
         + freshness_gate(
             cfg.get("repos", []),
             cfg.get("docs", []),
             cfg.get("law_version", ""),
             cfg.get("git", _git),
+            phone=phone,
         )
         + reachability_gate(cfg.get("deps", []))
     )
