@@ -15,7 +15,6 @@ of the seven parts, and this file only calls them in order.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -181,14 +180,30 @@ class Run:
 
     # ── proposals: the model's Write is a row, and a seal is what writes it ──
     def served_doc(self) -> dict:
-        """What the model was last served, read back from the box. Nothing
-        served, or a file that isn't a served document, is a document with no
-        tables, so every cite against it fails."""
-        try:
-            doc = json.loads((self.rec.box / serve.OUT).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        """What the model was served in THIS check-in, judged from the record.
+
+        The state and the served ids come from the current check-in's last
+        `serve` row, and only while the file in the box hashes to that row's
+        `sha`. A file left by an earlier session, edited, or written by hand
+        doesn't match any row of this check-in, so it counts for nothing: the
+        document is empty, every cite fails and no idea of its own is accepted.
+        The file is never the authority; the record's row is."""
+        rows = self.rec.rows()
+        start = max((i for i, r in enumerate(rows) if r["kind"] == "boot"), default=-1)
+        mine = [r for r in rows[start + 1 :] if r["kind"] == "serve"]
+        if not mine:
             return {"tables": []}
-        return doc if isinstance(doc, dict) else {"tables": []}
+        last = mine[-1]
+        try:
+            data = (self.rec.box / serve.OUT).read_bytes()
+        except OSError:
+            return {"tables": []}
+        if h256(data) != last.get("sha"):
+            return {"tables": []}
+        ids = last.get("served")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            return {"tables": []}
+        return {"state": last.get("state"), "tables": [{"id": i} for i in ids]}
 
     def _take(self, who, n: int, items: Iterable) -> list[dict]:
         """Each proposal through the door and the served cites. Recorded and
@@ -234,6 +249,7 @@ class Run:
                         verdict="refused",
                         reason="no cites, and nothing is served as populated; "
                         "an idea of its own is accepted only alongside served state",
+                        own_idea=True,
                     )
                 )
                 continue

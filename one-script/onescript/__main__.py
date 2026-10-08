@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         try:
-            res = nestor_seal.export_public(args.src, args.dst)
+            res = nestor_seal.export_public(args.src, args.dst, box=args.box)
         except nestor_seal.Unverifiable as e:
             print(f"refused: {e}")
             return 2
@@ -288,7 +288,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "checkout":
         print(res["screen"])
     elif args.cmd == "turn":
-        _print_json(res["out"])
+        out = dict(res["out"])
+        if "proposals" in out:  # own_idea leads each proposal row (null: never parsed)
+            out["proposals"] = [
+                {"own_idea": p.get("own_idea"), **{k: v for k, v in p.items()}}
+                for p in out["proposals"]
+            ]
+        print(json.dumps(out, indent=1, default=str))
     else:
         _print_json({k: v for k, v in res.items() if k != "code"})
     return res["code"]

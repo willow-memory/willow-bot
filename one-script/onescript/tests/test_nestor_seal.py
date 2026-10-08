@@ -421,6 +421,69 @@ def test_the_export_refuses_to_overwrite_its_source(tmp_path):
     assert PRIV_HEX in src.read_text()  # untouched
 
 
+def test_a_planted_tmp_symlink_cannot_make_the_export_clobber_another_file(tmp_path):
+    """Loki 46C49FF9 R1: a predictable `<dst>.tmp` that is a symlink to a decoy
+    "keyring" must leave the decoy untouched, whatever the export does."""
+    src = signing_ring(tmp_path / "verifiers.json")
+    decoy = tmp_path / "decoy-keyring.json"
+    decoy.write_text("DECOY-KEYRING")
+    decoy.chmod(0o600)
+    out = tmp_path / "out"
+    out.mkdir()
+    dst = out / "verifiers.public.json"
+    for planted in (dst.name + ".tmp", dst.name + ".0.tmp", "tmp"):
+        (out / planted).symlink_to(decoy)
+    nestor_seal.export_public(src, dst)
+    assert decoy.read_text() == "DECOY-KEYRING"
+    import stat
+
+    assert stat.S_IMODE(decoy.stat().st_mode) == 0o600
+    assert not dst.is_symlink() and nestor_seal.load_keyring(dst)
+
+
+def test_the_export_refuses_a_destination_that_is_a_symlink(tmp_path):
+    src = signing_ring(tmp_path / "verifiers.json")
+    other = tmp_path / "other.txt"
+    other.write_text("keep")
+    link = tmp_path / "link.json"
+    link.symlink_to(other)
+    with pytest.raises(nestor_seal.Unverifiable, match="symlink"):
+        nestor_seal.export_public(src, link)
+    assert other.read_text() == "keep" and link.is_symlink()
+    ln_src = tmp_path / "to-src.json"
+    ln_src.symlink_to(src)
+    with pytest.raises(nestor_seal.Unverifiable):
+        nestor_seal.export_public(src, ln_src)
+    assert PRIV_HEX in src.read_text()
+
+
+def test_the_export_refuses_a_destination_inside_the_box(tmp_path):
+    src = signing_ring(tmp_path / "verifiers.json")
+    box = tmp_path / "box"
+    (box / "sub").mkdir(parents=True)
+    for inside in (box / "v.json", box / "sub" / "v.json", box / "new" / "v.json"):
+        with pytest.raises(nestor_seal.Unverifiable, match="inside the box"):
+            nestor_seal.export_public(src, inside, box=box)
+    assert not list(box.rglob("v.json"))
+    nestor_seal.export_public(src, tmp_path / "outside.json", box=box)  # fine
+
+
+def test_a_planted_tmp_symlink_is_refused_by_the_cli_too(tmp_path, capsys):
+    from onescript import __main__ as cli
+
+    src = signing_ring(tmp_path / "verifiers.json")
+    decoy = tmp_path / "decoy.json"
+    decoy.write_text("DECOY")
+    dst = tmp_path / "config" / "verifiers.public.json"
+    dst.parent.mkdir()
+    (dst.parent / (dst.name + ".tmp")).symlink_to(decoy)
+    args = ["--box", str(tmp_path / "box"), "keys", "export", "--from", str(src)]
+    assert cli.main([*args, "--to", str(dst)]) == 0
+    assert decoy.read_text() == "DECOY"
+    assert cli.main([*args, "--to", str(tmp_path / "box" / "v.json")]) == 2
+    assert "inside the box" in capsys.readouterr().out
+
+
 def test_a_file_that_holds_private_is_still_refused_by_the_reader(tmp_path):
     f = keyring_file(tmp_path / "k.json", nestors_own_entry())
     with pytest.raises(nestor_seal.Unverifiable, match="public keys only"):

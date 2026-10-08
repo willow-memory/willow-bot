@@ -174,6 +174,12 @@ def reconcile(
         ),
         key=lambda r: r["ts"],
     )
+    # proposals nobody has sealed: shown with `own_idea` leading each row
+    proposals = [
+        {k: r[k] for k in ("path", "line", "verdict", "reason", "own_idea") if k in r}
+        for r in rows
+        if r["kind"] == "proposal" and r.get("subject") not in sealed_rows
+    ]
     counts: dict[str, int] = {}
     for i in items:
         counts[i["verdict"]] = counts.get(i["verdict"], 0) + 1
@@ -190,6 +196,7 @@ def reconcile(
         "grades": grades(list(answers), sealed or {}, task_of or {}),
         "predictions": list(predictions),
         "awaiting": awaiting,
+        "proposals": proposals,
         # Opus P3: the queue's depth and age are reported state. It authorizes
         # nothing; it only stops a stall from looking like a quiet period.
         "backpressure": {

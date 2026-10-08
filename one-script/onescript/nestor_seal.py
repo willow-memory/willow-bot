@@ -42,6 +42,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import tempfile
 from pathlib import Path
 
 
@@ -119,7 +120,9 @@ def load_keyring(path: str | Path) -> dict:
     return {"verifiers": entries}
 
 
-def export_public(src: str | Path, dst: str | Path) -> dict:
+def export_public(
+    src: str | Path, dst: str | Path, box: str | Path | None = None
+) -> dict:
     """Write the public half of the signing keyring `src` to `dst`.
 
     The signing keyring holds secrets, and the box must never read it. This is
@@ -129,10 +132,21 @@ def export_public(src: str | Path, dst: str | Path) -> dict:
     carried over, and drops every HMAC entry (a shared
     secret: whoever can verify with it can forge with it) and `legacy_key`.
     The file is written 0644 and moved into place atomically. Returns
-    {"exported": [names], "dropped_hmac": [names]}."""
+    {"exported": [names], "dropped_hmac": [names]}.
+
+    `dst` is refused when it is itself a symlink (a link could point the write
+    at any file), and, when `box` is given, when it lies inside the box: the
+    export is made outside, and the box only reads it."""
     src, dst = Path(src), Path(dst)
+    if dst.is_symlink():
+        raise Unverifiable("the export's destination is a symlink; it is refused")
     if src.resolve() == dst.resolve():
         raise Unverifiable("the export can't overwrite the keyring it reads")
+    if box is not None:
+        inside = dst.resolve()
+        root = Path(box).resolve()
+        if inside == root or root in inside.parents:
+            raise Unverifiable("the export's destination is inside the box; refused")
     try:
         raw = json.loads(src.read_text(encoding="utf-8"))
         entries = raw["verifiers"]
@@ -162,12 +176,18 @@ def export_public(src: str | Path, dst: str | Path) -> dict:
         raise Unverifiable(f"keyring unreadable: {type(e).__name__}") from e
     body = json.dumps({"version": 1, "verifiers": out}, indent=2, ensure_ascii=False)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    # The temp file is made by mkstemp: a fresh name, O_CREAT|O_EXCL, never
+    # following a link someone planted at a name we could have guessed. The mode
+    # is set on the open descriptor, so it can't land on any other file.
+    fd, name = tempfile.mkstemp(dir=dst.parent, prefix=dst.name + ".", suffix=".tmp")
+    tmp = Path(name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            # the umask must not narrow what the box has to read
+            os.fchmod(fh.fileno(), 0o644)
             fh.write(body + "\n")
-        os.chmod(tmp, 0o644)  # the umask must not narrow what the box has to read
+            fh.flush()
+            os.fsync(fh.fileno())
         load_keyring(tmp)  # what was written is what the box will accept
         os.replace(tmp, dst)
     finally:

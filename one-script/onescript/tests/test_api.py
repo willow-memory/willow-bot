@@ -795,6 +795,81 @@ def test_the_served_return_line_allows_an_idea_of_its_own(cfg):
     assert '"cites": []' in doc["return"] and "marked as yours" in doc["return"]
 
 
+# ── served state is this check-in's, from the record (Loki 46C49FF9 R2) ────
+def test_a_stale_served_file_from_an_earlier_checkin_is_not_populated(cfg):
+    _, ids = served(cfg)
+    assert api.checkout(cfg)["code"] == 0
+    assert api.checkin(cfg)["code"] == 0  # a new session; served.json still sits there
+    assert (cfg.box / "served.json").exists()
+    (own,) = api.take_proposals(cfg, [line(cites=[])])["out"]["proposals"]
+    assert own["verdict"] == "refused" and "populated" in own["reason"]
+    (old,) = api.take_proposals(cfg, [line(cites=ids[:1])])["out"]["proposals"]
+    assert old["verdict"] == "link_fail"
+
+
+def test_a_hand_written_served_file_is_not_populated(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    (cfg.box / "served.json").write_text(
+        json.dumps({"state": "populated", "tables": [{"id": "ab" * 32}]})
+    )
+    (own,) = api.take_proposals(cfg, [line(cites=[])])["out"]["proposals"]
+    assert own["verdict"] == "refused"
+    (c,) = api.take_proposals(cfg, [line(cites=["ab" * 32])])["out"]["proposals"]
+    assert c["verdict"] == "link_fail"
+
+
+def test_an_edited_served_file_no_longer_matches_its_serve_row(cfg):
+    _, ids = served(cfg)
+    f = cfg.box / "served.json"
+    doc = json.loads(f.read_text())
+    doc["tables"].append({"id": "cd" * 32})
+    f.write_text(json.dumps(doc))  # same session, but not the bytes that were served
+    (own,) = api.take_proposals(cfg, [line(cites=[])])["out"]["proposals"]
+    assert own["verdict"] == "refused"
+    (c,) = api.take_proposals(cfg, [line(cites=ids[:1])])["out"]["proposals"]
+    assert c["verdict"] == "link_fail"
+
+
+def test_a_serve_this_checkin_makes_own_ideas_and_cites_good_again(cfg):
+    served(cfg)
+    assert api.checkout(cfg)["code"] == 0
+    card, ids = served(cfg)  # check in again and serve again
+    (own, cited) = api.take_proposals(
+        cfg, [line(cites=[]), line("n/b.md", "x", ids[:1], "c")]
+    )["out"]["proposals"]
+    assert own["verdict"] == "pass" and cited["verdict"] == "pass"
+
+
+# ── own_idea leads each proposal row, on the screen and the CLI ─────────────
+def test_the_checkout_screen_leads_each_proposal_row_with_own_idea(cfg):
+    _, ids = served(cfg)
+    api.take_proposals(cfg, [line(cites=[]), line("n/b.md", "x", ids[:1], "c")])
+    api.take_proposals(cfg, ["not json"])
+    screen = api.checkout(cfg)["screen"]
+    rows_ = [x for x in screen.splitlines() if "proposal ·" in x]
+    assert len(rows_) == 3
+    assert rows_[0].split("proposal · ")[1].startswith("own_idea: yes")
+    assert rows_[1].split("proposal · ")[1].startswith("own_idea: no")
+    assert rows_[2].split("proposal · ")[1].startswith("own_idea: n/a")
+
+
+def test_the_cli_turn_output_leads_each_proposal_row_with_own_idea(
+    cfg, capsys, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(cli, "CONSTITUTION", cfg.constitution)
+    monkeypatch.setattr(cli, "CI", cfg.ci)
+    monkeypatch.setattr(cli, "GROVE", cfg.grove)
+    served(cfg)
+    capsys.readouterr()
+    f = tmp_path / "f.jsonl"
+    f.write_text(line(cites=[]) + "\nnope\n")
+    base = ["--box", str(cfg.box), "--keys", str(cfg.keys), "--no-tests"]
+    assert cli.main([*base, "turn", "the bite", "--proposal", str(f)]) == 0
+    props = json.loads(capsys.readouterr().out)["proposals"]
+    assert [next(iter(p)) for p in props] == ["own_idea", "own_idea"]
+    assert [p["own_idea"] for p in props] == [True, None]
+
+
 # ── the Nestor store and the keyring defaults ───────────────────────────────
 def test_the_store_is_willow_nestor_db_else_nestor_db(monkeypatch, tmp_path):
     monkeypatch.delenv("WILLOW_NESTOR_DB", raising=False)
