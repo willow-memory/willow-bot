@@ -15,6 +15,7 @@ of the seven parts, and this file only calls them in order.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -179,6 +180,36 @@ class Run:
         return serve.serve(self.rec, tables, scope, self.serve_key, max_chars=max_chars)
 
     # ── proposals: the model's Write is a row, and a seal is what writes it ──
+    def _current_serve(self) -> tuple[dict, bytes] | None:
+        """This check-in's last `serve` row and the served file's bytes, only
+        while the file hashes to that row's `sha`; else None."""
+        rows = self.rec.rows()
+        start = max((i for i, r in enumerate(rows) if r["kind"] == "boot"), default=-1)
+        mine = [r for r in rows[start + 1 :] if r["kind"] == "serve"]
+        if not mine:
+            return None
+        last = mine[-1]
+        try:
+            data = (self.rec.box / serve.OUT).read_bytes()
+        except OSError:
+            return None
+        if h256(data) != last.get("sha"):
+            return None
+        return last, data
+
+    def served_file(self) -> dict | None:
+        """The whole served document (state, return, tables with their rows)
+        as the model was handed it in THIS check-in, under the same hash
+        match as `served_doc`; None when no such file stands."""
+        cur = self._current_serve()
+        if cur is None:
+            return None
+        try:
+            doc = json.loads(cur[1])
+        except ValueError:
+            return None
+        return doc if isinstance(doc, dict) else None
+
     def served_doc(self) -> dict:
         """What the model was served in THIS check-in, judged from the record.
 
@@ -188,18 +219,10 @@ class Run:
         doesn't match any row of this check-in, so it counts for nothing: the
         document is empty, every cite fails and no idea of its own is accepted.
         The file is never the authority; the record's row is."""
-        rows = self.rec.rows()
-        start = max((i for i, r in enumerate(rows) if r["kind"] == "boot"), default=-1)
-        mine = [r for r in rows[start + 1 :] if r["kind"] == "serve"]
-        if not mine:
+        cur = self._current_serve()
+        if cur is None:
             return {"tables": []}
-        last = mine[-1]
-        try:
-            data = (self.rec.box / serve.OUT).read_bytes()
-        except OSError:
-            return {"tables": []}
-        if h256(data) != last.get("sha"):
-            return {"tables": []}
+        last = cur[0]
         ids = last.get("served")
         if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
             return {"tables": []}

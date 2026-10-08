@@ -7,6 +7,7 @@
     seal_scope(cfg, subject, ...)     # the human's seal over that exact set
     serve(cfg, spec, max_chars=N)     # write the one file the model reads
     take_proposals(cfg, rows)         # the model's rows in, judged, nothing written
+    escalate(cfg, task)               # the deterministic chain on the served scope
     seal_proposal(cfg, subject, ...)  # the human's seal; a sealed pass is written
     checkout(cfg)                     # reverse, then the morning screen
 
@@ -41,6 +42,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from . import boot, gate, nestor_seal, record
+from . import escalate as esc
 from . import serve as served
 from .run import PKG, Run
 
@@ -611,6 +613,51 @@ def seal_proposal(
         "write": wrote,
         "code": 0 if wrote["kind"] == "write" else 1,
     }
+
+
+def escalate(
+    cfg: Config,
+    task: str,
+    *,
+    rung: esc.Rung | None = None,
+    model: str = esc.DEFAULT_MODEL,
+    piece_chars: int = esc.PIECE_CHARS,
+    ratatosk: Iterable[str] = ("ratatosk",),
+    rung_timeout: float = esc.RUNG_TIMEOUT_S,
+    argv: Iterable[str] = ("escalate",),
+) -> dict:
+    """willow-bot's deterministic chain on the current check-in's sealed served
+    scope: D0, then pieces to the local rung, every result recorded by hash,
+    whatever no rung answered as one human card (see `escalate`). `rung` is the
+    local rung, injectable; by default Rat, per piece. Escalation is not a
+    failure: the code is 0 unless the box won't allow it."""
+    run, info = _open(cfg, "escalate", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "escalate", task=task)) is not None:
+        return refusal
+    if not isinstance(task, str) or not task.strip():
+        return _refused("escalate needs a task", 1)
+    if (
+        isinstance(piece_chars, bool)
+        or not isinstance(piece_chars, int)
+        or piece_chars < 1
+    ):
+        return _refused("piece_chars must be a positive whole number", 1)
+    who, family = DESK
+    ident = {"who": who, "family": family, "sig": gate.sign(run.keys[who], who, family)}
+    try:
+        out = esc.run_escalate(
+            run,
+            ident,
+            task,
+            rung=rung or esc.ratatosk_rung(tuple(ratatosk), rung_timeout),
+            model=model,
+            piece_chars=piece_chars,
+        )
+    except esc.ChainUnavailable as e:
+        return _refused(str(e), 2)
+    return {**out, "code": 0}
 
 
 def read_proposals(path: Path) -> list[str]:

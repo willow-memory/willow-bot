@@ -18,7 +18,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | Path | What it is |
 |---|---|
 | `onescript/api.py` | The function API the app calls: check-in, scope, seal, serve, proposals, check-out |
-| `onescript/` | The parts, `run`, serve, xref, proposals, nestor_seal, and the CLI (`__main__.py`, a thin wrapper over `api`) |
+| `onescript/` | The parts, `run`, serve, xref, proposals, nestor_seal, escalate, and the CLI (`__main__.py`, a thin wrapper over `api`) |
 | `onescript/tests/` | Its tests |
 | `prompt.py` | The served tables, put into a prompt as framed data, so the model never holds a path |
 | `foundation/` | `prompt.py`'s tests run on a bare interpreter, without pytest |
@@ -119,12 +119,42 @@ exception. Nothing moves before a check-in or after a check-out.
 | `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
 | `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
+| `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below) |
 | `checkout(cfg)` | Reverse, then the morning screen |
 
 The record is the only state between calls, except the serve key, which is
 kept beside the keys (`serve.key`, 0600), fresh at every check-in, and is
 never the seal key. A `spec` pins the stack to the record's rows up to `upto`,
 so rows added later can't move a table id out from under a seal.
+
+### Escalate: the deterministic chain
+
+`python3 -m onescript escalate "<task>"` (`api.escalate`) runs the chain over the
+current check-in's sealed served scope (the served file, only while it hashes to
+this check-in's `serve` row). D0 (`resolve_fixture`) answers what code can; an
+empty or unreachable scope is escalated straight up and never handed to a model
+("only along side"); what D0 escalates is cut into small pieces (one per table,
+then row groups under `--piece-chars`), each handed to the local rung
+(`ratatosk --onescript --served <piece.json> --out <rows.jsonl> --model M
+"<question>"`). Every result is a `escalate_rung` record row keyed by the
+piece's hash; a hash already on record is reused and no model runs. A model's
+rows go through the proposal handling and are never written; a row with
+`path == "ESCALATE"` is an escalation, its reason in `claim`. Pieces no rung
+answered become one `review` card routed to `willow` (an `escalate_card` row,
+printed; the willow-mcp verb files it).
+
+One vocabulary: `answered`, or `escalated:<reason>`.
+
+| Reason | Meaning |
+|---|---|
+| `d0_escalate` | D0 had no answer for the act and said so (or needs flowering) |
+| `local_escalate` | the model returned `ESCALATE`, with its reason |
+| `uncited` | an answer row with no cites, or a cite not in this piece |
+| `silent` | the rung returned nothing |
+| `timeout` | the rung did not return in time |
+| `cap` | a piece, or a rung's output, was over its cap |
+| `rung_error` | the rung failed: non-zero exit, unreadable output, or a row the contract or door refused |
+| `empty_scope` | nothing populated is served in this check-in |
 
 ### The served-text cap
 
@@ -159,6 +189,7 @@ python3 -m onescript seal serve:<hash> --pair p.json   # keyring/store: $WILLOW_
 python3 -m onescript serve --by who --match who=run --upto <n> --max-chars 20000
 python3 -m onescript turn "the bite" --proposal f.jsonl
 python3 -m onescript seal proposal:<hash>              # found in Nestor's store (--keyring/--nestor-db before the command)
+python3 -m onescript escalate "the task"           # D0, then small pieces to the local rung
 python3 -m onescript checkout                      # reverse, then the morning screen
 
 python3 -m pytest -q onescript/tests            # its tests (willows-grove beside this repo)

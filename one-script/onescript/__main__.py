@@ -7,6 +7,7 @@
     python3 -m onescript serve --by who     # write the one file the model reads
     python3 -m onescript turn "the bite"    # one turn as the desk
     python3 -m onescript turn "the bite" --proposal f.jsonl   # the model's rows
+    python3 -m onescript escalate "the task"  # D0, then small pieces to the local rung
     python3 -m onescript checkout           # reverse, then the morning screen
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
@@ -36,10 +37,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
+from . import escalate as escalate_mod
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -183,6 +186,23 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument(
         "--proposal", type=Path, help="the model's rows: JSONL of path/data/cites/claim"
     )
+    es = sub.add_parser(
+        "escalate", help="the deterministic chain on the sealed served scope"
+    )
+    es.add_argument("task")
+    es.add_argument("--model", default=escalate_mod.DEFAULT_MODEL)
+    es.add_argument(
+        "--piece-chars",
+        type=int,
+        default=escalate_mod.PIECE_CHARS,
+        help="the most characters in one piece handed to the local rung",
+    )
+    es.add_argument("--rung-timeout", type=float, default=escalate_mod.RUNG_TIMEOUT_S)
+    es.add_argument(
+        "--ratatosk",
+        default="ratatosk",
+        help="the local rung's command (it is run with --onescript ...)",
+    )
     sub.add_parser("checkout")
     for name in ("scope", "serve"):
         s = sub.add_parser(name)
@@ -245,6 +265,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)
+    elif args.cmd == "escalate":
+        res = api.escalate(
+            cfg,
+            args.task,
+            model=args.model,
+            piece_chars=args.piece_chars,
+            ratatosk=shlex.split(args.ratatosk),
+            rung_timeout=args.rung_timeout,
+            argv=raw,
+        )
     elif args.cmd == "scope":
         res = api.scope(
             cfg,
