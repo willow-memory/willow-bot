@@ -12,6 +12,17 @@ from __future__ import annotations
 import json
 
 
+def proposal_line(row: dict) -> str:
+    """One proposal row for a person: `own_idea` leads, then where it lands, the
+    verdict and why. Said the same on the check-out screen and the CLI. A row
+    that never parsed has no `own_idea` to report, and says so."""
+    own = row.get("own_idea")
+    lead = "own_idea: n/a" if own is None else f"own_idea: {'yes' if own else 'no'}"
+    where = row.get("path") or f"line {row.get('line')}"
+    why = f" · {row['reason']}" if row.get("reason") else ""
+    return f"{lead} · {where} · {row.get('verdict')}{why}"
+
+
 def morning(
     report: dict,
     boot: dict | None = None,
@@ -34,6 +45,7 @@ def morning(
     for a in report["awaiting"]:
         card = json.dumps(a.get("card", {}), sort_keys=True)
         needs.append(f"{a['verdict']} · {a.get('reason', '')} · {card}")
+    needs += [f"proposal · {proposal_line(p)}" for p in report.get("proposals", [])]
     needs += [
         f"seen {o['seen']}x · {o['procedure']} · {o['offer']}" for o in report["offers"]
     ]

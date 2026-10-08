@@ -24,7 +24,7 @@ def venv_with(tmp: Path, ruff: str | None) -> Path:
     return v
 
 
-def run(tmp: Path, venv: Path, *cmd: str) -> int:
+def run(tmp: Path, venv: Path, *cmd: str, phone: bool = False) -> int:
     return cli.main(
         [
             "--box",
@@ -36,6 +36,7 @@ def run(tmp: Path, venv: Path, *cmd: str) -> int:
             "--now",
             "2026-10-06T00:00:00Z",
             "--no-tests",
+            *(["--phone"] if phone else []),
             *cmd,
         ]
     )
@@ -94,12 +95,43 @@ def test_no_willows_grove_means_no_law_and_nothing_runs(tmp_path, monkeypatch, c
 
 def test_the_tests_gate_never_nests(monkeypatch):
     """The gate's suite runs checkin; a checkin under the gate must not run the
-    gate again (2026-10-06: an unguarded loop took the box's memory)."""
-    monkeypatch.setenv(cli.NESTED, "x")  # so undo leaves it unset, as found
-    monkeypatch.delenv(cli.NESTED)
-    assert "tests" in cli._gate_cfg(False, "", Path("/v"))
-    assert cli.os.environ[cli.NESTED] == "1"
+    gate again (2026-10-06: an unguarded loop took the box's memory). The marker
+    is the child's alone: this process never carries it (Loki A276BE90 N1)."""
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    first = cli._gate_cfg(False, "", Path("/v"))
+    assert "tests" in first and first["tests"][0]["env"] == {cli.NESTED: "1"}
+    assert cli.NESTED not in cli.os.environ
+    monkeypatch.setenv(cli.NESTED, "1")  # now we are the child
     assert "tests" not in cli._gate_cfg(False, "", Path("/v"))
+
+
+def test_two_checkins_in_one_process_both_run_the_tests_gate(tmp_path, monkeypatch):
+    """A long-lived process (the app) checks in again and again; the first
+    check-in must not switch the gate off for the rest."""
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    seen = []
+
+    def runner(argv, cwd, timeout=600, env=None):
+        seen.append(env)
+        return 0, "ok"
+
+    for _ in range(2):
+        gcfg = cli._gate_cfg(False, "", tmp_path)
+        gcfg["tests"][0]["cwd"] = str(tmp_path)
+        gcfg["tests"][0]["needs"] = []
+        rows = cli.boot.tests_gate(gcfg["tests"], runner=runner)
+        assert [r["verdict"] for r in rows] == ["satisfied"]
+    assert seen == [{cli.NESTED: "1"}, {cli.NESTED: "1"}]
+    assert cli.NESTED not in cli.os.environ
+
+
+def test_the_child_alone_gets_the_marker(tmp_path, monkeypatch):
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    code = "import os,sys; sys.exit(0 if os.environ.get(sys.argv[1]) == '1' else 7)"
+    argv = [cli.sys.executable, "-c", code, cli.NESTED]
+    assert cli.boot._run(argv, str(tmp_path), env={cli.NESTED: "1"})[0] == 0
+    assert cli.boot._run(argv, str(tmp_path))[0] == 7
+    assert cli.NESTED not in cli.os.environ
 
 
 def test_a_breached_checkin_closes_the_box_for_later_turns(
@@ -202,9 +234,56 @@ def test_an_exposed_keys_file_is_refused(tmp_path, capsys):
     assert stat.S_IMODE(k.parent.stat().st_mode) == 0o700
 
 
-def test_a_venv_without_ruff_is_a_hard_close(tmp_path, capsys):
-    assert run(tmp_path, venv_with(tmp_path, None), "checkin") == 1
-    assert "ruff: not installed" in capsys.readouterr().out
+def test_a_venv_without_ruff_is_unreachable_and_deferred_not_a_hard_close(
+    tmp_path, capsys
+):
+    """No ruff (the phone): nothing ran, so the box opens, the row says it is
+    deferred, and a later check-in with ruff settles it."""
+    bare = venv_with(tmp_path / "bare", None)
+    assert run(tmp_path, bare, "checkin", phone=True) == 0
+    out = capsys.readouterr().out
+    assert "unreachable  toolchain: ruff — not installed" in out
+    assert "deferred" in out and "HARD CLOSE" not in out
+    good = venv_with(
+        tmp_path / "good",
+        cli._gate_cfg(True, cli.CI.read_text(), tmp_path)["pins"]["tools"]["ruff"],
+    )
+    assert run(tmp_path, good, "checkin") == 0
+    assert "settled      toolchain: ruff: satisfied" in capsys.readouterr().out
+    assert [r["kind"] for r in rows(tmp_path)].count("deferred_result") == 1
+
+
+def test_the_same_venv_on_the_box_hard_closes(tmp_path, capsys):
+    """Loki 8E0652F5 F5: no ruff is a deferral only when the run says it is on
+    the phone. On the box (no --phone) it is a hard close, and the record
+    says the run was not a phone run."""
+    bare = venv_with(tmp_path / "bare", None)
+    assert run(tmp_path, bare, "checkin") == 1
+    out = capsys.readouterr().out
+    assert "HARD CLOSE" in out and "can't run on the box" in out
+    assert "deferred" not in out
+    assert rows(tmp_path)[0]["phone"] is False
+
+
+def test_no_tests_leaves_a_gate_row_saying_it_was_skipped(tmp_path, capsys):
+    v = venv_with(tmp_path, "0.16.7")
+    assert run(tmp_path, v, "checkin") == 0  # the helper passes --no-tests
+    assert "tests: onescript — skipped: --no-tests was given" in capsys.readouterr().out
+    boot_row = [r for r in rows(tmp_path) if r["kind"] == "boot"][-1]
+    assert [(g["gate"], g["verdict"]) for g in boot_row["gates"]][0] == (
+        "tests",
+        "differently",
+    )
+    assert rows(tmp_path)[0]["no_tests"] is True
+
+
+def test_a_nested_checkin_leaves_a_gate_row_saying_why(monkeypatch):
+    monkeypatch.setenv(cli.NESTED, "1")
+    gcfg = cli._gate_cfg(False, "", Path("/v"))
+    (skip,) = gcfg["tests_skipped"]
+    assert cli.NESTED in skip["why"] and "tests" not in gcfg
+    (row,) = cli.boot.gates(gcfg)[:1]
+    assert (row["gate"], row["verdict"]) == ("tests", "differently")
 
 
 def test_keys_never_live_in_the_box(tmp_path, capsys):

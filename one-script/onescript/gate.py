@@ -19,6 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import nestor_seal
 from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
@@ -74,7 +75,9 @@ def system() -> Verified:
 
 def verify_seal(subject: str, proof: str, human_key: bytes) -> bool:
     """Only the human's key produces this. Presence is a label; this is authority."""
-    return hmac.compare_digest(sign(human_key, "seal", subject), proof)
+    return hmac.compare_digest(
+        sign(human_key, "seal", subject).encode(), proof.encode("utf-8", "replace")
+    )
 
 
 def human(subject: str, proof: str, human_key: bytes) -> Verified:
@@ -82,6 +85,18 @@ def human(subject: str, proof: str, human_key: bytes) -> Verified:
     if not verify_seal(subject, proof, human_key):
         raise Refused("seal proof does not verify; presence is a label, not a key")
     return Verified(HUMAN, HUMAN, _TOKEN)
+
+
+def human_nestor(
+    subject: str, pair: object, keyring: dict, verifiers: frozenset | None = None
+) -> tuple[Verified, str]:
+    """The other way a 'human' stamp exists, with no terminal: a sealed Nestor
+    pair whose conclusion is exactly `subject`, signed by a verifier in the
+    keyring. Returns the stamp and the verifier's name. Refused otherwise."""
+    who, why = nestor_seal.check(pair, subject, keyring, verifiers)
+    if who is None:
+        raise Refused(f"nestor seal does not verify: {why}")
+    return Verified(HUMAN, HUMAN, _TOKEN), who
 
 
 def door(change: dict, law: dict, index: list[dict] | None = None) -> Decision:

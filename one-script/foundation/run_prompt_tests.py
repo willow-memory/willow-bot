@@ -1,9 +1,10 @@
-"""Run the hooks' tests (hook.py, prompt.py) on any Python, without pytest.
+"""Run prompt.py's tests on any Python, without pytest.
 
-    pythonX run_hook_tests.py
+    pythonX run_prompt_tests.py
 
 For a bare interpreter (a verified source build) where installing pytest would
-mean fetching new code. Supports the one fixture the hook tests use, tmp_path.
+mean fetching new code. Supports the one fixture the prompt tests use, tmp_path.
+(Was run_hook_tests.py; the hook went with the Docker seat, 2026-10-07.)
 """
 
 import inspect
@@ -14,12 +15,10 @@ from pathlib import Path
 TESTS = Path(__file__).resolve().parent.parent / "onescript" / "tests"
 sys.path.insert(0, str(TESTS))
 
-import test_hook  # noqa: E402
 import test_prompt  # noqa: E402
 
 ok = bad = 0
-tests = [*sorted(vars(test_hook).items()), *sorted(vars(test_prompt).items())]
-for name, fn in tests:
+for name, fn in sorted(vars(test_prompt).items()):
     if not name.startswith("test_"):
         continue
     with tempfile.TemporaryDirectory() as d:

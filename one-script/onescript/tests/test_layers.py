@@ -46,13 +46,15 @@ def test_tests_gate_pass_fail_and_cant_run(tmp_path):
             },
         ],
         runner=lambda argv, cwd: next(calls),
+        phone=True,
     )
     assert [(r["where"], r["verdict"]) for r in rows] == [
         ("a-onescript", "satisfied"),
         ("b-sketch", "failing"),
-        ("c-reliability", "failing"),
+        ("c-reliability", "unreachable"),
     ]
     assert rows[2]["why"].startswith("can't run: needs")
+    assert rows[2]["deferred"] is True and "deferred" not in rows[1]
 
 
 def test_toolchain_gate_catches_the_ruff_that_bit_twice():
@@ -80,6 +82,138 @@ def test_freshness_gate_stale_clone_and_doc_built_on_old_law():
     assert [r["verdict"] for r in rows] == ["failing", "failing"]
     assert rows[0]["why"] == "3 commit(s) behind its remote"
     assert rows[1]["why"] == "built on Draft 0.7; the law is 0.8"
+
+
+def test_a_missing_tool_is_unreachable_and_deferred_not_a_pass():
+    """The phone has no ruff: nothing ran, so the gate is neither satisfied nor
+    failing, and it is marked to run at the next check-in that can."""
+    rows = boot.toolchain_gate(
+        {"tools": {"ruff": "0.16.7"}},
+        version_of=lambda tool: None,
+        py="3.11",
+        phone=True,
+    )
+    assert rows[0]["verdict"] == "unreachable" and rows[0]["deferred"] is True
+    assert "not installed" in rows[0]["why"]
+
+
+def test_a_missing_directory_is_unreachable_too(tmp_path):
+    rows = boot.tests_gate(
+        [{"name": "s", "argv": ["x"], "cwd": str(tmp_path / "gone")}],
+        runner=lambda argv, cwd: (0, "never called"),
+        phone=True,
+    )
+    assert rows[0]["verdict"] == "unreachable" and rows[0]["deferred"] is True
+
+
+# ── deferral is for the phone only (Loki 8E0652F5 F5) ───────────────────────
+def test_on_the_box_a_gate_that_cant_run_hard_closes_it_does_not_defer(tmp_path):
+    """The operator's ruling: unreachable on the phone, run when it comes home.
+    The box is not the phone, so the same gaps are failures, not deferrals."""
+    tool = boot.toolchain_gate(
+        {"tools": {"ruff": "0.16.7"}}, version_of=lambda tool: None, py="3.11"
+    )
+    nodir = boot.tests_gate(
+        [{"name": "s", "argv": ["x"], "cwd": str(tmp_path / "gone")}],
+        runner=lambda argv, cwd: (0, "never called"),
+    )
+    nomod = boot.tests_gate(
+        [
+            {
+                "name": "s",
+                "argv": ["x"],
+                "cwd": str(tmp_path),
+                "needs": ["no_such_mod_x"],
+            }
+        ],
+        runner=lambda argv, cwd: (0, "never called"),
+    )
+    clone = boot.freshness_gate(
+        ["absent"], [], "0.8", git=lambda r, *a: "", here=lambda repo: False
+    )
+    for rows in (tool, nodir, nomod, clone):
+        assert rows[0]["verdict"] == "failing", rows
+        assert "deferred" not in rows[0] and "can't run on the box" in rows[0]["why"]
+
+
+def test_a_missing_tool_never_makes_a_phone_run(run):
+    """The phone is a flag the caller sets, never inferred from a gap."""
+    cfg = {"pins": {"tools": {"ruff": "0.16.7"}}, "version_of": lambda tool: None}
+    assert run.checkin(cfg)["hard_close"]
+    assert not run.checkin({**cfg, "phone": True})["hard_close"]
+
+
+def test_a_skipped_tests_gate_leaves_a_row_saying_why():
+    rows = boot.gates(
+        {"tests_skipped": [{"name": "onescript", "why": "--no-tests was given"}]}
+    )
+    assert [(r["gate"], r["where"], r["verdict"]) for r in rows] == [
+        ("tests", "onescript", "differently")
+    ]
+    assert rows[0]["why"] == "skipped: --no-tests was given"
+
+
+def test_an_absent_clone_is_unreachable_and_a_present_one_is_still_checked():
+    git = {
+        ("rev-parse", "@{u}"): "abc",
+        ("rev-list", "--left-right", "--count", "HEAD...@{u}"): "0\t2",
+    }
+    here = lambda repo: repo == "present"  # noqa: E731
+    rows = boot.freshness_gate(
+        ["absent", "present"],
+        [],
+        "0.8",
+        git=lambda r, *a: git.get(a, ""),
+        here=here,
+        phone=True,
+    )
+    assert [(r["where"], r["verdict"]) for r in rows] == [
+        ("absent", "unreachable"),
+        ("present", "failing"),
+    ]
+    assert rows[0]["deferred"] is True
+
+
+def test_an_unreachable_gate_does_not_close_the_box_but_a_failing_one_does(run):
+    b = run.checkin(
+        {
+            "pins": {"tools": {"ruff": "0.16.7"}},
+            "version_of": lambda tool: None,
+            "phone": True,
+        }
+    )
+    assert not b["hard_close"] and b["lines"] == []
+    assert [g["verdict"] for g in b["gates"]] == ["unreachable"]
+    b2 = run.checkin(
+        {"pins": {"tools": {"ruff": "0.16.7"}}, "version_of": lambda tool: "0.15.0"}
+    )
+    assert b2["hard_close"]
+
+
+def test_the_next_checkin_that_can_run_the_gate_records_the_result(run):
+    """The deferred row stays open until a check-in runs the gate; the result is
+    written against the row it was deferred from, once."""
+    cfg = {"pins": {"tools": {"ruff": "0.16.7"}}, "phone": True}
+    first = run.checkin({**cfg, "version_of": lambda tool: None})
+    assert first["settled"] == []
+    again = run.checkin({**cfg, "version_of": lambda tool: None})
+    assert again["settled"] == []  # still unreachable: still open
+    ran = run.checkin({**cfg, "version_of": lambda tool: "0.16.7"})
+    assert [(s["gate"], s["where"], s["verdict"]) for s in ran["settled"]] == [
+        ("toolchain", "ruff", "satisfied")
+    ]
+    results = [r for r in run.rec.rows() if r["kind"] == "deferred_result"]
+    boots = [r for r in run.rec.rows() if r["kind"] == "boot"]
+    assert len(results) == 1 and results[0]["deferred_at"] == boots[0]["n"]
+    # closed: a later check-in has nothing left to settle
+    assert run.checkin({**cfg, "version_of": lambda tool: "0.16.7"})["settled"] == []
+
+
+def test_a_deferred_gate_that_runs_and_fails_still_hard_closes(run):
+    cfg = {"pins": {"tools": {"ruff": "0.16.7"}}, "phone": True}
+    run.checkin({**cfg, "version_of": lambda tool: None})
+    ran = run.checkin({**cfg, "version_of": lambda tool: "0.15.0"})
+    assert ran["hard_close"] and ran["settled"][0]["verdict"] == "failing"
 
 
 def test_reachability_gate_keeps_three_states():

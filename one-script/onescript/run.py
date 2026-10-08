@@ -5,7 +5,9 @@ of the seven parts, and this file only calls them in order.
 
   check-in  = boot (probes + the four gates) -> predict
   each turn = verify -> open -> predict -> door -> (resolve) -> record -> grade -> close
-  each act  = mandate (layer 7) -> push card (layer 6, when it leaves the box)
+  each proposal = parse -> door -> served cites -> record (nothing written)
+  each seal = the human's, over one subject; a sealed pass is the only write
+  each act = mandate (layer 7) -> push card (layer 6, when it leaves the box)
   each say  = claims checked against the record (layer 5) before the human reads
   check-out = reverse -> view
   night     = resolve.night_pool inside a budget, yielding to presence
@@ -14,9 +16,9 @@ of the seven parts, and this file only calls them in order.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
-from . import boot, gate, predict, record, resolve, reverse, serve, view
+from . import boot, gate, predict, proposals, record, resolve, reverse, serve, view
 from .record import h256
 
 PKG = Path(__file__).resolve().parent
@@ -55,6 +57,8 @@ class Run:
             egress=report["egress"],
             anchor=report["anchor"],
         )
+        for s in report["settled"]:  # a deferred gate ran: the result, beside its row
+            self.rec.append("deferred_result", self.sys, **s)
         return report
 
     def turn(
@@ -66,6 +70,7 @@ class Run:
         sources=(),
         models=(),
         budget: resolve.Budget | None = None,
+        proposed: Iterable | None = None,
     ) -> dict:
         try:
             who = gate.verify(identity, self.keys)
@@ -108,6 +113,8 @@ class Run:
                     expect_vanish=change.get("expect_vanish", False),
                     cites=change.get("cites", []),
                 )
+        if proposed is not None:
+            out["proposals"] = self._take(who, n, proposed)
         if question:
             a = resolve.answer(
                 question,
@@ -161,10 +168,203 @@ class Run:
         )
         return row
 
-    def serve(self, tables: list[dict], scope: list[str] | None) -> dict:
+    def serve(
+        self,
+        tables: list[dict],
+        scope: list[str] | None,
+        max_chars: int | None = None,
+    ) -> dict:
         """Write the one file the model reads. Before check-in there's no serve
-        key, and serve fails closed."""
-        return serve.serve(self.rec, tables, scope, self.serve_key)
+        key, and serve fails closed. `max_chars` is the caller's cap."""
+        return serve.serve(self.rec, tables, scope, self.serve_key, max_chars=max_chars)
+
+    # ── proposals: the model's Write is a row, and a seal is what writes it ──
+    def served_doc(self) -> dict:
+        """What the model was served in THIS check-in, judged from the record.
+
+        The state and the served ids come from the current check-in's last
+        `serve` row, and only while the file in the box hashes to that row's
+        `sha`. A file left by an earlier session, edited, or written by hand
+        doesn't match any row of this check-in, so it counts for nothing: the
+        document is empty, every cite fails and no idea of its own is accepted.
+        The file is never the authority; the record's row is."""
+        rows = self.rec.rows()
+        start = max((i for i, r in enumerate(rows) if r["kind"] == "boot"), default=-1)
+        mine = [r for r in rows[start + 1 :] if r["kind"] == "serve"]
+        if not mine:
+            return {"tables": []}
+        last = mine[-1]
+        try:
+            data = (self.rec.box / serve.OUT).read_bytes()
+        except OSError:
+            return {"tables": []}
+        if h256(data) != last.get("sha"):
+            return {"tables": []}
+        ids = last.get("served")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            return {"tables": []}
+        return {"state": last.get("state"), "tables": [{"id": i} for i in ids]}
+
+    def _take(self, who, n: int, items: Iterable) -> list[dict]:
+        """Each proposal through the door and the served cites. Recorded and
+        judged; nothing is written. A malformed row is `refused`, not a crash."""
+        doc = self.served_doc()
+        rows = []
+        for got in proposals.read(items):
+            p = got["proposal"]
+            if p is None:
+                rows.append(
+                    self.rec.append(
+                        "proposal",
+                        who,
+                        turn=n,
+                        line=got["line"],
+                        verdict="refused",
+                        reason=got["why"],
+                    )
+                )
+                continue
+            d = gate.door(
+                {
+                    "kind": "edit",
+                    "path": p["path"],
+                    "who": who.who,
+                    "none_because": p["claim"],  # the door wants a stated why
+                },
+                self.law,
+                self._script_index(),
+            )
+            lost = serve.check_cites(doc, p["cites"])
+            # The model's own idea: no cites. Code, never the model, marks it, and
+            # accepts it only alongside a populated served state ("only along
+            # side"); with nothing served it is refused, not guessed at.
+            own = not p["cites"]
+            if own and doc.get("state") != "populated":
+                rows.append(
+                    self.rec.append(
+                        "proposal",
+                        who,
+                        turn=n,
+                        line=got["line"],
+                        verdict="refused",
+                        reason="no cites, and nothing is served as populated; "
+                        "an idea of its own is accepted only alongside served state",
+                        own_idea=True,
+                    )
+                )
+                continue
+            card = {"own_idea": True, **d.card} if own else d.card
+            rows.append(
+                self.rec.append(
+                    "proposal",
+                    who,
+                    where=p["path"],
+                    turn=n,
+                    line=got["line"],
+                    path=p["path"],
+                    sha=h256(p["data"]),
+                    data=p["data"],
+                    cites=p["cites"],
+                    claim=p["claim"],
+                    subject=proposals.subject(p),
+                    verdict="link_fail" if lost else d.verdict,
+                    reason="a cite is not in the served file" if lost else d.reason,
+                    link_fail=lost,
+                    own_idea=own,
+                    card=card,
+                )
+            )
+        return rows
+
+    def find_proposal(self, subject: str) -> tuple[dict | None, str | None]:
+        """The stored proposal row for `subject` that really is that proposal,
+        or (None, why). The record's rows are only a place the bytes were put:
+        a row is the proposal the human sealed only if the hash of its own
+        path, data, cites and claim is the subject. A row that says one subject
+        and carries other bytes is skipped, not trusted; and the path rule and
+        the door run again on the bytes that would be written."""
+        rows = [
+            r
+            for r in self.rec.rows()
+            if r["kind"] == "proposal" and r.get("subject") == subject
+        ]
+        if not rows:
+            return None, "no such proposal on record"
+        whole = [
+            r
+            for r in rows
+            if all(k in r for k in proposals.KEYS) and self._hashes_to(r, subject)
+        ]
+        if not whole:
+            return None, "no stored row hashes to this subject; nothing written"
+        prop = whole[-1]
+        if prop["verdict"] != "pass":
+            return (
+                None,
+                f"the proposal is {prop['verdict']}, not a pass; nothing written",
+            )
+        fields = {k: prop[k] for k in proposals.KEYS}
+        _, bad = proposals.check(fields)
+        if bad:
+            return None, f"the stored proposal fails the contract now: {bad}"
+        d = gate.door(
+            {
+                "kind": "edit",
+                "path": prop["path"],
+                "who": prop["who"],
+                "none_because": prop["claim"],
+            },
+            self.law,
+            self._script_index(),
+        )
+        if d.verdict != "pass":
+            return None, f"the door says {d.verdict} on these bytes: {d.reason}"
+        return prop, None
+
+    @staticmethod
+    def _hashes_to(row: dict, subject: str) -> bool:
+        try:
+            return proposals.subject({k: row[k] for k in proposals.KEYS}) == subject
+        except (TypeError, ValueError):
+            return False
+
+    def write_proposal(self, subject: str) -> dict:
+        """Write one proposal, only if it passed and the human sealed it. The
+        seal is read from the record, never taken on a caller's word; and what
+        is written is recomputed from the stored path and data, which must hash
+        to the sealed subject, so a row edited after the fact writes nothing."""
+        rows = self.rec.rows()
+        prop, why = self.find_proposal(subject)
+        if why is None and subject not in serve.sealed(rows):
+            why = "no human seal over this proposal; nothing written"
+        if why is not None:
+            return self.rec.append(
+                "refused", self.sys, at="write_proposal", reason=why, subject=subject
+            )
+        data = prop["data"].encode("utf-8")
+        on_disk = self.rec.box / prop["path"]
+        done = [
+            r
+            for r in rows
+            if r["kind"] == "write"
+            and r["path"] == prop["path"]
+            and r["sha"] == h256(data)
+        ]
+        # a write row is a claim: it counts only while the bytes are really there
+        if done and on_disk.is_file() and on_disk.read_bytes() == data:
+            return done[-1]
+        try:
+            return self.rec.write_file(
+                self.sys, prop["path"], data, cites=prop["cites"], provenance="authored"
+            )
+        except (PermissionError, OSError) as e:
+            return self.rec.append(
+                "refused",
+                self.sys,
+                at="write_proposal",
+                reason=f"the write was refused: {e}",
+                subject=subject,
+            )
 
     def say(self, text: str, facts: dict) -> list[dict]:
         """Layer 5: the claims in an output, checked before the human reads it.
@@ -182,6 +382,25 @@ class Run:
                 "refused", self.sys, at="seal", reason=str(e), subject=subject
             )
         return self.rec.append("seal", hum, where=subject, subject=subject)
+
+    def seal_nestor(
+        self,
+        subject: str,
+        pair: object,
+        keyring: dict,
+        verifiers: frozenset | None = None,
+    ) -> dict:
+        """The human's seal as a sealed Nestor pair whose conclusion is exactly
+        `subject`: no terminal, no key typed. The row says whose pair it was."""
+        try:
+            hum, who = gate.human_nestor(subject, pair, keyring, verifiers)
+        except gate.Refused as e:
+            return self.rec.append(
+                "refused", self.sys, at="seal", reason=str(e), subject=subject
+            )
+        return self.rec.append(
+            "seal", hum, where=subject, subject=subject, via="nestor", verifier=who
+        )
 
     def seal_tip(self, proof: str, human_key: bytes) -> dict:
         """The human seals the record's tip; the anchor keeps it outside the box.
