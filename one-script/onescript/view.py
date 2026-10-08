@@ -104,8 +104,20 @@ def morning(
         f"  · {m}: floor {g['floor']} on {g['floor_task']} · {json.dumps(g['by_task'], sort_keys=True)}"
         for m, g in report["grades"].items()
     ]
+    for w in report.get("wagers", {}).get("rows", []):
+        if w["state"] == "reconciled":
+            what = (
+                f"band {w['predicted_band']} p {w['predicted_p']}"
+                f" · happened: {w['actual_path']}"
+                if "actual_path" in w
+                else f"winner {w['winner']}"
+            )
+            L.append(f"  · wager {w['id']} reconciled · {what} · grade is yours")
+        else:
+            L.append(f"  · wager {w['id']} escalate to human · {w['reason']}")
     if not report["predictions"] and not report["grades"]:
-        L.append("  · nothing graded yet")
+        if not report.get("wagers", {}).get("rows"):
+            L.append("  · nothing graded yet")
 
     c = report["pile"]["counts"]
     L.append("QUIET")
