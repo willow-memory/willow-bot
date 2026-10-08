@@ -397,14 +397,39 @@ class Run:
         self.rec.append("claims", self.sys, text_hash=h256(text), claims=rows)
         return rows
 
-    def seal(self, subject: str, proof: str, human_key: bytes) -> dict:
+    def wager(
+        self,
+        wid: str,
+        distribution: list[dict] | None = None,
+        scores: dict | None = None,
+    ) -> dict:
+        """Record a declared wager. Its row hash is the subject a human seal
+        names to say what happened; nothing here grades it."""
+        return self.rec.append(
+            "wager",
+            self.sys,
+            id=wid,
+            distribution=distribution or [],
+            scores=scores,
+        )
+
+    def seal(
+        self,
+        subject: str,
+        proof: str,
+        human_key: bytes,
+        outcome: dict | None = None,
+    ) -> dict:
+        """`outcome` rides on the row for a wager seal (path_index / path /
+        winner). The proof signs the subject only, not the outcome."""
         try:
             hum = gate.human(subject, proof, human_key)
         except gate.Refused as e:
             return self.rec.append(
                 "refused", self.sys, at="seal", reason=str(e), subject=subject
             )
-        return self.rec.append("seal", hum, where=subject, subject=subject)
+        extra = {"outcome": outcome} if outcome is not None else {}
+        return self.rec.append("seal", hum, where=subject, subject=subject, **extra)
 
     def seal_nestor(
         self,

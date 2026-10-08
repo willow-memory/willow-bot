@@ -150,6 +150,89 @@ def grades(
     return out
 
 
+def _match_distribution(wager: dict, outcome: dict) -> tuple[int | None, dict | None]:
+    """The distribution entry a sealed outcome names: by `path_index`, else by a
+    case-insensitive substring of `path`. (None, None) when it names none."""
+    dist = wager.get("distribution") or []
+    if "path_index" in outcome:
+        i = outcome["path_index"]
+        if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(dist):
+            return i, dist[i]
+        return None, None
+    needle = str(outcome.get("path") or "").strip().lower()
+    if needle:
+        for i, entry in enumerate(dist):
+            if needle in str(entry.get("path") or "").lower():
+                return i, entry
+    return None, None
+
+
+def _outcome_of(wager: dict, rows: list[dict]) -> dict | None:
+    """The outcome a human seal carries over this wager, or None. Only a
+    `seal` row stamped by the human counts, and only one whose subject is the
+    wager's own hash; the latest such seal wins."""
+    got = [
+        r
+        for r in rows
+        if r["kind"] == "seal"
+        and r["who"] == "human"
+        and r.get("subject") == wager["hash"]
+        and isinstance(r.get("outcome"), dict)
+    ]
+    return got[-1]["outcome"] if got else None
+
+
+def reconcile_wagers(rows: list[dict]) -> dict:
+    """Line each declared wager up against the outcome a human sealed. Never
+    grades: `graded_by` stays None. With no sealed outcome, or one that names
+    nothing the wager declared, the row escalates to the human, never to a model."""
+    out = []
+    for w in (r for r in rows if r["kind"] == "wager"):
+        row = {"id": w.get("id", "?"), "subject": w["hash"], "graded_by": None}
+        outcome = _outcome_of(w, rows)
+        if outcome is None:
+            row |= {
+                "state": "escalate",
+                "escalate_to": "human",
+                "reason": "no human seal names an outcome; the grade is the human's",
+            }
+        elif w.get("distribution"):
+            idx, entry = _match_distribution(w, outcome)
+            if entry is None:
+                row |= {
+                    "state": "escalate",
+                    "escalate_to": "human",
+                    "reason": "the sealed outcome names no distribution path",
+                }
+            else:
+                row |= {
+                    "state": "reconciled",
+                    "path_index": idx,
+                    "predicted_p": entry.get("p"),
+                    "predicted_band": entry.get("band"),
+                    "actual_path": entry.get("path"),
+                }
+        elif w.get("scores") is not None and "winner" in outcome:
+            row |= {
+                "state": "reconciled",
+                "winner": outcome["winner"],
+                "scores": w["scores"],
+            }
+        else:
+            row |= {
+                "state": "escalate",
+                "escalate_to": "human",
+                "reason": "the wager declares no distribution or scores to line up",
+            }
+        out.append(row)
+    return {
+        "reconciled": [r["id"] for r in out if r["state"] == "reconciled"],
+        "escalate": [r["id"] for r in out if r["state"] == "escalate"],
+        "escalate_to": "human" if any(r["state"] == "escalate" for r in out) else None,
+        "rows": out,
+    }
+
+
 def reconcile(
     box: Path,
     pile: dict,
@@ -194,7 +277,8 @@ def reconcile(
         "surfaced": surfaced(rows, set(changed_law), version),
         "witness": witnesses(list(answers)),
         "grades": grades(list(answers), sealed or {}, task_of or {}),
-        "predictions": list(predictions),
+        "predictions": list(predictions),  # the mechanical bite grades, untouched
+        "wagers": reconcile_wagers(rows),  # declared wagers vs human seals
         "awaiting": awaiting,
         "proposals": proposals,
         # Opus P3: the queue's depth and age are reported state. It authorizes
