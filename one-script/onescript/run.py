@@ -484,7 +484,10 @@ class Run:
         sealed=None,
         task_of=None,
         boot_report: dict | None = None,
+        human_key: bytes | None = None,
     ) -> tuple[dict, str]:
+        """`human_key` lets reverse check the sealed anchor tip; without it no
+        wager outcome counts (it cannot be shown to be covered)."""
         rep = reverse.reconcile(
             self.rec.box,
             self.rec.pile(),
@@ -495,6 +498,7 @@ class Run:
             sealed=sealed,
             task_of=task_of,
             predictions=self.graded,
+            wagers_through=reverse.covered_through(self.rec, human_key),
         )
         screen = view.morning(rep, boot_report, self.claims, self.acts)
         self.rec.append("reconcile", self.sys, report_hash=h256(screen))

@@ -167,10 +167,31 @@ def _match_distribution(wager: dict, outcome: dict) -> tuple[int | None, dict | 
     return None, None
 
 
-def _outcome_of(wager: dict, rows: list[dict]) -> dict | None:
+def covered_through(rec, human_key: bytes | None) -> int | None:
+    """The row number the human's sealed anchor tip provably covers, or None.
+
+    The seal proof signs the subject only, never the outcome a seal row carries.
+    The outcome is bound by the tip instead: the human signs the tip (row n and
+    its full hash), and the chain hash commits to every row before it. So rows
+    up to n are covered only while ALL hold: an anchor is on record, the whole
+    chain verifies, the chain reaches the sealed tip with the human's proof
+    checked, and the human's key is present to check it. Otherwise None."""
+    if human_key is None or rec.anchor_state() != "sealed":
+        return None
+    if rec.verify_chain() or rec.verify_anchor(human_key):
+        return None
+    return rec.anchor()["n"]
+
+
+def _outcome_of(
+    wager: dict, rows: list[dict], through: int | None = None
+) -> dict | None:
     """The outcome a human seal carries over this wager, or None. Only a
-    `seal` row stamped by the human counts, and only one whose subject is the
-    wager's own hash; the latest such seal wins."""
+    `seal` row stamped by the human counts, only one whose subject is the
+    wager's own hash, and only one the sealed anchor tip covers (row number
+    <= `through`); the latest such seal wins."""
+    if through is None:
+        return None
     got = [
         r
         for r in rows
@@ -178,23 +199,28 @@ def _outcome_of(wager: dict, rows: list[dict]) -> dict | None:
         and r["who"] == "human"
         and r.get("subject") == wager["hash"]
         and isinstance(r.get("outcome"), dict)
+        and r["n"] <= through
     ]
     return got[-1]["outcome"] if got else None
 
 
-def reconcile_wagers(rows: list[dict]) -> dict:
+def reconcile_wagers(rows: list[dict], through: int | None = None) -> dict:
     """Line each declared wager up against the outcome a human sealed. Never
-    grades: `graded_by` stays None. With no sealed outcome, or one that names
-    nothing the wager declared, the row escalates to the human, never to a model."""
+    grades: `graded_by` stays None. `through` is the row number the human's
+    verified anchor tip covers (see `covered_through`); a seal after it, or no
+    verified anchor at all, counts for nothing. With no covered outcome, or one
+    that names nothing the wager declared, the row escalates to the human,
+    never to a model."""
     out = []
     for w in (r for r in rows if r["kind"] == "wager"):
         row = {"id": w.get("id", "?"), "subject": w["hash"], "graded_by": None}
-        outcome = _outcome_of(w, rows)
+        outcome = _outcome_of(w, rows, through)
         if outcome is None:
             row |= {
                 "state": "escalate",
                 "escalate_to": "human",
-                "reason": "no human seal names an outcome; the grade is the human's",
+                "reason": "no human seal covered by the sealed anchor tip names an "
+                "outcome; the grade is the human's",
             }
         elif w.get("distribution"):
             idx, entry = _match_distribution(w, outcome)
@@ -244,6 +270,7 @@ def reconcile(
     sealed=None,
     task_of=None,
     predictions=(),
+    wagers_through: int | None = None,
 ) -> dict:
     items = three_way(box, pile, rows)
     sealed_rows = {r["subject"] for r in rows if r["kind"] == "seal"}
@@ -278,7 +305,9 @@ def reconcile(
         "witness": witnesses(list(answers)),
         "grades": grades(list(answers), sealed or {}, task_of or {}),
         "predictions": list(predictions),  # the mechanical bite grades, untouched
-        "wagers": reconcile_wagers(rows),  # declared wagers vs human seals
+        "wagers": reconcile_wagers(
+            rows, wagers_through
+        ),  # declared wagers vs human seals
         "awaiting": awaiting,
         "proposals": proposals,
         # Opus P3: the queue's depth and age are reported state. It authorizes
