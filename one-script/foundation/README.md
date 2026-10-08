@@ -67,7 +67,7 @@ python3 gen.py cases.pkl                      # once, any Python
 python3.9  probe.py cases.pkl > a.json        # each foundation
 python3.16 probe.py cases.pkl > b.json
 python3 compare.py a.json b.json cases.pkl    # exit 1 on any unexplained difference
-python3.9  run_hook_tests.py                  # the hook's tests, no pytest
+python3.9  run_prompt_tests.py                # prompt.py's tests, no pytest (was run_hook_tests.py)
 ```
 
 `cases.pkl` isn't kept: `gen.py` rebuilds it from a fixed seed. Generate it

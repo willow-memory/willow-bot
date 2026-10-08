@@ -61,56 +61,18 @@ jobs:
         working-directory: willow-bot/one-script
         run: python -m pytest -q -p no:cacheprovider onescript/tests
 
-      - name: Run the hook's tests without pytest
+      - name: Run prompt.py's tests without pytest
         working-directory: willow-bot/one-script
-        run: python foundation/run_hook_tests.py
-
-  # The one script's model seat: build the image, then check what doesn't
-  # need a model: the doors are shut at start, the seat's user can't touch
-  # them, each hook answers as it should, and a swapped door stops the seat.
-  seat:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Build the seat
-        working-directory: one-script
-        run: docker build -f seat/Dockerfile -t onescript-seat .
-
-      - name: The doors are checked before Claude Code starts
-        run: docker run --rm onescript-seat --version | tee out.txt && ! grep -q failing out.txt
-
-      - name: The seat's user can't write a door
-        run: |
-          docker run --rm --entrypoint sh onescript-seat -c '
-            for f in /etc/claude-code/managed-settings.json /opt/onescript/hook.py /opt/onescript/prompt.py; do
-              if (echo x >> "$f") 2>/dev/null; then echo "wrote $f"; exit 1; fi
-            done'
-
-      - name: The hook in the seat
-        run: |
-          for pair in Read:deny Bash:deny Edit:deny mcp__x__y:deny Write:ask; do
-            got=$(echo "{\"tool_name\":\"${pair%%:*}\"}" \
-              | docker run --rm -i --entrypoint python3 onescript-seat /opt/onescript/hook.py \
-              | python3 -c 'import json,sys;print(json.load(sys.stdin)["hookSpecificOutput"]["permissionDecision"])')
-            [ "$got" = "${pair##*:}" ] || { echo "${pair%%:*}: $got"; exit 1; }
-          done
-
-      - name: A swapped door stops the seat
-        run: |
-          docker run --rm --user root --entrypoint sh onescript-seat -c '
-            echo "POLICY = {}" >> /opt/onescript/hook.py
-            su seat -s /bin/sh -c "python3 /opt/onescript/doors.py exec --pins /opt/onescript/doors.json -- claude --version"
-            test $? -eq 2'
+        run: python foundation/run_prompt_tests.py
 
   test:
-    needs: [test-matrix, one-script, seat]
+    needs: [test-matrix, one-script]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Assert every matrix leg actually succeeded
-        if: ${{ needs.test-matrix.result != 'success' || needs.one-script.result != 'success' || needs.seat.result != 'success' }}
+        if: ${{ needs.test-matrix.result != 'success' || needs.one-script.result != 'success' }}
         run: |
-          echo "::error::test-matrix: ${{ needs.test-matrix.result }}, one-script: ${{ needs.one-script.result }}, seat: ${{ needs.seat.result }}"
+          echo "::error::test-matrix: ${{ needs.test-matrix.result }}, one-script: ${{ needs.one-script.result }}"
           exit 1
       - run: echo "all matrix legs green"

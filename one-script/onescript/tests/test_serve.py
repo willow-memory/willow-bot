@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import gate, serve  # noqa: E402
@@ -297,6 +299,42 @@ def test_a_new_session_gives_the_same_table_a_different_id(tmp_path):
     a = serve.serve(rec, [IN], ids, serve.session_key())["tables"][0]["id"]
     b = serve.serve(rec, [IN], ids, serve.session_key())["tables"][0]["id"]
     assert a != b
+
+
+# ── the cap is the caller's, never truncated ─────────────────────────────────
+def test_serve_takes_its_cap_from_the_caller_and_never_truncates(tmp_path):
+    rec = box(tmp_path)
+    ids = scoped(rec, IN)
+    size = len(serve.canon(serve.serve(rec, [IN], ids, SERVE_KEY)))
+    assert (
+        serve.serve(rec, [IN], ids, SERVE_KEY, max_chars=size)["state"] == "populated"
+    )
+    doc = serve.serve(rec, [IN], ids, SERVE_KEY, max_chars=size - 1)
+    assert doc["state"] == "empty" and "narrow the stack" in doc["why"]
+    assert doc["tables"] == []
+    assert "hanuman" not in (tmp_path / serve.OUT).read_text()  # whole or nothing
+
+
+def test_no_cap_means_the_caller_set_none(tmp_path):
+    rec = box(tmp_path)
+    big = {"rows": [{"who": "x" * 50_000, "what": "write"}], "source": "r@n=1"}
+    ids = scoped(rec, big)
+    assert serve.serve(rec, [big], ids, SERVE_KEY)["state"] == "populated"
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, "90", True])
+def test_a_cap_that_is_not_a_positive_whole_number_serves_nothing(tmp_path, bad):
+    rec = box(tmp_path)
+    ids = scoped(rec, IN)
+    doc = serve.serve(rec, [IN], ids, SERVE_KEY, max_chars=bad)
+    assert doc["state"] == "empty" and "positive whole number" in doc["why"]
+
+
+def test_a_cite_the_model_cannot_have_known_never_crashes_the_check(tmp_path):
+    rec = box(tmp_path)
+    doc = serve.serve(rec, [IN], scoped(rec, IN), SERVE_KEY)
+    fails = serve.check_cites(doc, ["é✓", "\ud800", ""])
+    assert len(fails) == 3 and {f["verdict"] for f in fails} == {"link_fail"}
 
 
 def test_no_serve_key_serves_nothing(tmp_path):

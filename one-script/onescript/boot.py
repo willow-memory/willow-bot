@@ -8,9 +8,15 @@ Any change without a recorded cause is a hard close: report, options, wait.
 If any probe gets through, the box does not open at all.
 
 The four gates (tests, toolchain, freshness, reachability) report on the
-Appendix A scale, and every failing row says why. They run at check-in and
-again at check-out. Each takes an injectable runner, so the gates are tested
-without the tools they check.
+Appendix A scale, and every failing row says why. They run at check-in. Each
+takes an injectable runner, so the gates are tested without the tools they
+check.
+
+A gate that shells out reports `unreachable` when its tool or repo is absent
+(the phone has no ruff, no pytest, no clone). That row is `deferred`: it does
+not close the box, because nothing ran, and it isn't a pass either. The next
+check-in where the gate CAN run runs it and records the result against the
+deferred row (`settle`). A gate that runs and fails still hard-closes.
 """
 
 from __future__ import annotations
@@ -22,9 +28,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import json
+from . import gate, reverse
 
-from . import doors, gate, reverse
+UNREACHABLE = "unreachable"
 
 OPTIONS = [
     "put it back and continue",
@@ -82,6 +88,11 @@ def _row(gate_name: str, where: str, verdict: str, why: str = "", **extra) -> di
     return {"gate": gate_name, "where": where, "verdict": verdict, "why": why, **extra}
 
 
+def _unreachable(gate_name: str, where: str, why: str) -> dict:
+    """The gate couldn't run here: not a pass, not a failure, and deferred."""
+    return _row(gate_name, where, UNREACHABLE, why, deferred=True)
+
+
 def _run(argv: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
     p = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     lines = (p.stdout + p.stderr).strip().splitlines()
@@ -89,18 +100,14 @@ def _run(argv: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
 
 
 def tests_gate(suites: list[dict], runner=_run) -> list[dict]:
-    """Run each suite. Pass, fail, or can't run, with why."""
+    """Run each suite. Pass, fail, or unreachable (can't run here), with why."""
     out = []
     for s in sorted(suites, key=lambda s: s["name"]):
         missing = [m for m in s.get("needs", []) if importlib.util.find_spec(m) is None]
         if missing:
-            out.append(
-                _row("tests", s["name"], "failing", f"can't run: needs {missing}")
-            )
+            out.append(_unreachable("tests", s["name"], f"can't run: needs {missing}"))
         elif not Path(s["cwd"]).is_dir():
-            out.append(
-                _row("tests", s["name"], "failing", "can't run: no such directory")
-            )
+            out.append(_unreachable("tests", s["name"], "can't run: no such directory"))
         else:
             rc, last = runner(s["argv"], s["cwd"])
             out.append(
@@ -132,9 +139,7 @@ def toolchain_gate(
     for tool, want in sorted(pins.get("tools", {}).items()):
         have = version_of(tool)
         if have is None:
-            out.append(
-                _row("toolchain", tool, "failing", f"not installed; pinned {want}")
-            )
+            out.append(_unreachable("toolchain", tool, f"not installed; pinned {want}"))
         elif have != want:
             out.append(
                 _row("toolchain", tool, "failing", f"{have} {found_in}; pinned {want}")
@@ -166,17 +171,32 @@ def toolchain_gate(
 
 
 def _git(repo: str, *args: str) -> str:
-    p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    try:
+        p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    except OSError:  # no git on this machine
+        return ""
     return p.stdout.strip() if p.returncode == 0 else ""
 
 
+def _git_here(repo: str) -> bool:
+    """Whether a clone is here to ask: git exists and the repo is a directory."""
+    return shutil.which("git") is not None and Path(repo).is_dir()
+
+
 def freshness_gate(
-    repos: list[str], docs: list[dict], law_version: str, git=_git
+    repos: list[str], docs: list[dict], law_version: str, git=_git, here=None
 ) -> list[dict]:
     """Clones against their last-fetched remote (fetching is egress, so it isn't
-    done here), and documents against the law they were built on."""
+    done here), and documents against the law they were built on. A clone that
+    isn't here, or no git to ask, is unreachable: deferred, not a failure.
+    With an injected `git` the caller is the one saying what is here."""
+    if here is None:
+        here = _git_here if git is _git else (lambda repo: True)
     out = []
     for repo in sorted(repos):
+        if not here(repo):
+            out.append(_unreachable("freshness", repo, "no clone or no git here"))
+            continue
         if not git(repo, "rev-parse", "@{u}"):
             out.append(_row("freshness", repo, "differently", "no upstream to compare"))
             continue
@@ -233,18 +253,37 @@ def reachability_gate(deps: list[dict]) -> list[dict]:
     return out
 
 
-def doors_gate(repo: str | None) -> list[dict]:
-    """The seat's doors in the repo still match their pins (seat/doors.json).
-    A hook changed without a new pin is a hard close, not a quiet drift."""
-    if not repo:
-        return []
-    try:
-        pins = json.loads((Path(repo) / "seat" / "doors.json").read_text())
-    except (OSError, ValueError) as e:
-        return [
-            _row("doors", "seat/doors.json", "failing", f"no pins: {type(e).__name__}")
-        ]
-    return doors.check_repo(Path(repo), pins)
+def settle(rows: list[dict], checked: list[dict]) -> list[dict]:
+    """Deferred gates that can run now, and what they found.
+
+    A gate row marked `deferred` in an earlier boot stays open until a
+    `deferred_result` row closes it. For each still-open one that this
+    check-in's gates ran (any verdict but unreachable), the result goes against
+    the row it was deferred from. Pure: it reads the record, it writes nothing;
+    `Run.checkin` appends the rows. A result that is `failing` is also a
+    hard-close line in this same boot, as any failing gate is."""
+    open_: dict[tuple[str, str], int] = {}
+    for r in rows:
+        if r["kind"] == "boot":
+            for g in r.get("gates", []):
+                if g.get("verdict") == UNREACHABLE and g.get("deferred"):
+                    open_.setdefault((g["gate"], g["where"]), r["n"])  # the first
+        elif r["kind"] == "deferred_result":
+            open_.pop((r["gate"], r["where"]), None)
+    out = []
+    for g in checked:
+        key = (g["gate"], g["where"])
+        if key in open_ and g["verdict"] != UNREACHABLE:
+            out.append(
+                {
+                    "gate": g["gate"],
+                    "where": g["where"],
+                    "deferred_at": open_[key],
+                    "verdict": g["verdict"],
+                    "why": g["why"],
+                }
+            )
+    return out
 
 
 def gates(cfg: dict) -> list[dict]:
@@ -264,7 +303,6 @@ def gates(cfg: dict) -> list[dict]:
             cfg.get("git", _git),
         )
         + reachability_gate(cfg.get("deps", []))
-        + doors_gate(cfg.get("doors"))
     )
 
 
@@ -305,6 +343,7 @@ def boot(rec, keys: dict, law: dict, gate_cfg: dict | None = None) -> dict:
     return {
         "report": report,
         "gates": checked,
+        "settled": settle(rows, checked),
         "hard_close": bool(lines),
         "lines": lines,
         "options": OPTIONS if lines else [],

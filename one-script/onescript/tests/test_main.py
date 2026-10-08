@@ -202,9 +202,23 @@ def test_an_exposed_keys_file_is_refused(tmp_path, capsys):
     assert stat.S_IMODE(k.parent.stat().st_mode) == 0o700
 
 
-def test_a_venv_without_ruff_is_a_hard_close(tmp_path, capsys):
-    assert run(tmp_path, venv_with(tmp_path, None), "checkin") == 1
-    assert "ruff: not installed" in capsys.readouterr().out
+def test_a_venv_without_ruff_is_unreachable_and_deferred_not_a_hard_close(
+    tmp_path, capsys
+):
+    """No ruff (the phone): nothing ran, so the box opens, the row says it is
+    deferred, and a later check-in with ruff settles it."""
+    bare = venv_with(tmp_path / "bare", None)
+    assert run(tmp_path, bare, "checkin") == 0
+    out = capsys.readouterr().out
+    assert "unreachable  toolchain: ruff — not installed" in out
+    assert "deferred" in out and "HARD CLOSE" not in out
+    good = venv_with(
+        tmp_path / "good",
+        cli._gate_cfg(True, cli.CI.read_text(), tmp_path)["pins"]["tools"]["ruff"],
+    )
+    assert run(tmp_path, good, "checkin") == 0
+    assert "settled      toolchain: ruff: satisfied" in capsys.readouterr().out
+    assert [r["kind"] for r in rows(tmp_path)].count("deferred_result") == 1
 
 
 def test_keys_never_live_in_the_box(tmp_path, capsys):

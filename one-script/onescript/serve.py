@@ -163,15 +163,20 @@ def joins(stack: list[dict]) -> dict:
     }
 
 
-def propose(stack: list[dict], **match: str) -> dict:
-    """Code proposes the stack: every pile whose group matches. The card is for
-    the human; sealing `subject` is the only thing that makes it a scope."""
-    chosen = [
+def choose(stack: list[dict], **match: str) -> list[dict]:
+    """The piles of a stack whose group matches every given W."""
+    return [
         p
         for p in stack
         if isinstance(p["source"], dict)
         and all(p["source"]["group"].get(k) == v for k, v in match.items())
     ]
+
+
+def propose(stack: list[dict], **match: str) -> dict:
+    """Code proposes the stack: every pile whose group matches. The card is for
+    the human; sealing `subject` is the only thing that makes it a scope."""
+    chosen = choose(stack, **match)
     ids = [table_id(p) for p in chosen]
     return {
         "subject": scope_subject(ids) if ids else None,
@@ -198,7 +203,8 @@ def served_id(serve_key: bytes, tid: str) -> str:
     return gate.sign(serve_key, "served", tid)
 
 
-def _sealed(rows: list[dict]) -> set[str]:
+def sealed(rows: list[dict]) -> set[str]:
+    """Every subject the record holds a human seal over."""
     return {r["subject"] for r in rows if r["kind"] == "seal" and r["who"] == "human"}
 
 
@@ -208,11 +214,17 @@ def serve(
     scope: list[str] | None,
     serve_key: bytes | None,
     out: str = OUT,
+    max_chars: int | None = None,
 ) -> dict:
     """Write the served file and record it. Returns the served document.
-    The receipts and the scope stay in the record's row, never in the file."""
+    The receipts and the scope stay in the record's row, never in the file.
+
+    `max_chars` is the caller's cap on the served document's text (its
+    canonical JSON). The caller sizes it, from the model's context: serve does
+    not know the model. Over the cap the answer is `empty`, "narrow the stack",
+    never a truncation. None means the caller set no cap."""
     try:
-        doc = _serve(rec.rows(), tables, scope, serve_key)
+        doc = _serve(rec.rows(), tables, scope, serve_key, max_chars)
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
     except Exception as e:  # serve that can't think clearly serves nothing
@@ -242,13 +254,17 @@ def _nothing(state: str, why: str) -> dict:
     return {"state": state, "why": why, "return": RETURN, "tables": []}
 
 
-def _serve(rows, tables, scope, serve_key) -> dict:
+def _serve(rows, tables, scope, serve_key, max_chars=None) -> dict:
+    if max_chars is not None and (
+        isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1
+    ):
+        return _nothing("empty", "max_chars must be a positive whole number")
     if not serve_key:
         return _nothing("empty", "no serve key; ids are made only after check-in")
     if not scope:
         return _nothing("empty", "no scope given; nothing is served without one")
-    sealed = _sealed(rows)
-    if scope_subject(scope) not in sealed:
+    seals = sealed(rows)
+    if scope_subject(scope) not in seals:
         return _nothing(
             "empty", "the scope has no human seal over this exact set; nothing served"
         )
@@ -267,14 +283,19 @@ def _serve(rows, tables, scope, serve_key) -> dict:
         served.append(
             {
                 "id": served_id(serve_key, tid),
-                "trust": "human-sealed" if tid in sealed else "untrusted",
+                "trust": "human-sealed" if tid in seals else "untrusted",
                 "group": _scrub(group),
                 "cannot_hold": [CANNOT_HOLD[w] for w in group if w in CANNOT_HOLD],
                 "rows": [view(r) for r in t["rows"]],
             }
         )
     served.sort(key=lambda t: t["id"])
-    return {"state": "populated", "why": "", "return": RETURN, "tables": served}
+    doc = {"state": "populated", "why": "", "return": RETURN, "tables": served}
+    if max_chars is not None and len(canon(doc)) > max_chars:
+        return _nothing(
+            "empty", "the scope is too large for this model; narrow the stack"
+        )
+    return doc
 
 
 def _receipt(table: dict, rows: list[dict]) -> None:
@@ -297,9 +318,9 @@ def _receipt(table: dict, rows: list[dict]) -> None:
 def check_cites(doc: dict, cited: list[str]) -> list[dict]:
     """A cite outside what was served is `link_fail`: a name the model can't
     have known. Caught here and escalated, never accepted as an answer."""
-    known = {t["id"] for t in doc.get("tables", [])}
+    known = [t["id"].encode() for t in doc.get("tables", [])]
     return [
         {"cite": c, "verdict": "link_fail", "why": "not in the served file"}
         for c in cited
-        if not any(hmac.compare_digest(c, k) for k in known)
+        if not any(hmac.compare_digest(c.encode(errors="replace"), k) for k in known)
     ]
