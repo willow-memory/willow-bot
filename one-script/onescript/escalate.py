@@ -528,7 +528,11 @@ def run_escalate(
             settle(_result(row, group, ch))
             continue
         if p["oversize"]:
-            at_d0(h, _j(ESCALATED, CAP, f"a row is over {piece_chars} characters"), group=group)
+            at_d0(
+                h,
+                _j(ESCALATED, CAP, f"a row is over {piece_chars} characters"),
+                group=group,
+            )
             continue
         try:
             got = rung(p["piece"], question, model)
@@ -548,9 +552,7 @@ def run_escalate(
         if j["outcome"] == ANSWERED:
             # through the proposal handling: door, served cites, own_idea.
             # Judged and recorded; nothing is written.
-            turned = run.turn(
-                ident, f"escalate piece {h[:12]}", proposed=list(got)
-            )
+            turned = run.turn(ident, f"escalate piece {h[:12]}", proposed=list(got))
             props = turned.get("proposals") if isinstance(turned, dict) else None
             bad = None
             if not isinstance(props, list) or len(props) != len(got):

@@ -638,7 +638,11 @@ def escalate(
         return refusal
     if not isinstance(task, str) or not task.strip():
         return _refused("escalate needs a task", 1)
-    if isinstance(piece_chars, bool) or not isinstance(piece_chars, int) or piece_chars < 1:
+    if (
+        isinstance(piece_chars, bool)
+        or not isinstance(piece_chars, int)
+        or piece_chars < 1
+    ):
         return _refused("piece_chars must be a positive whole number", 1)
     who, family = DESK
     ident = {"who": who, "family": family, "sig": gate.sign(run.keys[who], who, family)}

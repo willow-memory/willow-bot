@@ -100,7 +100,9 @@ def good(piece, question, model):
 
 def mark(reason="not enough here"):
     def fn(piece, question, model):
-        return [{"path": "ESCALATE", "data": "", "cites": [tid(piece)], "claim": reason}]
+        return [
+            {"path": "ESCALATE", "data": "", "cites": [tid(piece)], "claim": reason}
+        ]
 
     return fn
 
@@ -228,8 +230,12 @@ def test_a_recorded_answer_is_reused_and_no_model_runs(cfg):
     assert {p["rung"] for p in b["pieces"]} == {"hash"}
     assert [p["piece"] for p in b["pieces"]] == [p["piece"] for p in a["pieces"]]
     assert [p["rows"] for p in b["pieces"]] == [p["rows"] for p in a["pieces"]]
-    reused = [r for r in rows(cfg) if r["kind"] == "escalate_rung" and r["rung"] == "hash"]
-    assert len(reused) == len(b["pieces"]) and all(r["reused"] is not None for r in reused)
+    reused = [
+        r for r in rows(cfg) if r["kind"] == "escalate_rung" and r["rung"] == "hash"
+    ]
+    assert len(reused) == len(b["pieces"]) and all(
+        r["reused"] is not None for r in reused
+    )
 
 
 def test_a_recorded_escalation_is_reused_too(cfg):
@@ -251,7 +257,9 @@ def test_escalate_rows_never_write_and_are_never_proposals(cfg):
     assert {p["detail"] for p in res["pieces"]} == {"the rows don't say"}
     assert not (cfg.box / "ESCALATE").exists()
     assert not [r for r in rows(cfg) if r["kind"] == "proposal"]
-    assert not [r for r in rows(cfg) if r["kind"] == "write" and r["path"] != "served.json"]
+    assert not [
+        r for r in rows(cfg) if r["kind"] == "write" and r["path"] != "served.json"
+    ]
     assert not [r for r in rows(cfg) if r.get("path") == "ESCALATE"]
     assert not any(p.name == "ESCALATE" for p in cfg.box.rglob("*"))
 
@@ -263,7 +271,9 @@ def test_an_answer_goes_through_the_proposal_handling_and_nothing_is_written(cfg
     assert len(props) == res["answered"] > 0
     assert {r["verdict"] for r in props} == {"pass"}
     assert not (cfg.box / "notes").exists()
-    assert not [r for r in rows(cfg) if r["kind"] == "write" and r["path"] != "served.json"]
+    assert not [
+        r for r in rows(cfg) if r["kind"] == "write" and r["path"] != "served.json"
+    ]
 
 
 # ── what a rung can fail at is an escalation with a reason ──────────────────
@@ -310,7 +320,9 @@ def test_a_failed_rung_is_an_escalation_with_its_reason(cfg, fn, reason):
     assert res["answered"] == 0
     assert {p["label"] for p in res["pieces"]} == {f"escalated:{reason}"}
     assert res["card"] is not None
-    assert not [r for r in rows(cfg) if r["kind"] == "write" and r["path"] != "served.json"]
+    assert not [
+        r for r in rows(cfg) if r["kind"] == "write" and r["path"] != "served.json"
+    ]
 
 
 def test_a_cite_to_another_piece_is_uncited(cfg):
@@ -357,8 +369,10 @@ def test_a_mixed_run_answers_some_and_cards_the_rest(cfg):
     first = doc["tables"][0]["id"]
 
     def fn(piece, question, model):
-        return good(piece, question, model) if tid(piece) == first else mark("no")(
-            piece, question, model
+        return (
+            good(piece, question, model)
+            if tid(piece) == first
+            else mark("no")(piece, question, model)
         )
 
     res = go(cfg, Stub(fn))
@@ -383,7 +397,9 @@ def test_every_rung_row_is_recorded_by_hash_and_the_chain_holds(cfg):
     res = go(cfg, Stub(mark("no")))
     rung_rows = [r for r in rows(cfg) if r["kind"] == "escalate_rung"]
     assert [r["piece"] for r in rung_rows] == [p["piece"] for p in res["pieces"]]
-    assert all(len(r["piece"]) == 64 and r["label"].startswith("escalated:") for r in rung_rows)
+    assert all(
+        len(r["piece"]) == 64 and r["label"].startswith("escalated:") for r in rung_rows
+    )
     from onescript import record
 
     assert record.Record(cfg.box, lambda: "", "", gate.token()).verify_chain() == []
@@ -457,7 +473,12 @@ def test_the_default_rung_runs_rat_with_the_fixed_argv(fake_in, monkeypatch):
         return real(argv, **kw)
 
     monkeypatch.setattr(escalate.subprocess, "run", spy)
-    piece = {"state": "populated", "why": "", "return": "r", "tables": [{"id": "abc", "rows": []}]}
+    piece = {
+        "state": "populated",
+        "why": "",
+        "return": "r",
+        "tables": [{"id": "abc", "rows": []}],
+    }
     got = escalate.ratatosk_rung(fake, 20)(piece, "what is it?", "m1")
     assert got == [{"path": "n/a.md", "data": "d", "cites": ["abc"], "claim": "c"}]
     argv = seen["argv"][2:]
