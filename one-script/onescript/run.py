@@ -344,6 +344,32 @@ class Run:
             return None, f"the door says {d.verdict} on these bytes: {d.reason}"
         return prop, None
 
+    def pooled(self) -> list[dict]:
+        """The pooled unsealed pass set, read-only: every proposal on record
+        that stands as a pass (`find_proposal`: hashes to its subject, fits the
+        contract, passes the door now) and that the record holds no human seal
+        over. One entry per subject, in the order each subject first appeared;
+        the latest valid row for a subject is the one that counts. Nothing is
+        written and nothing is sealed."""
+        rows = self.rec.rows()
+        held = serve.sealed(rows)
+        subjects = dict.fromkeys(
+            r["subject"]
+            for r in rows
+            if r["kind"] == "proposal"
+            and r.get("verdict") == "pass"
+            and isinstance(r.get("subject"), str)
+            and r["subject"] not in held
+        )
+        out = []
+        for s in subjects:
+            prop, why = self.find_proposal(s)
+            if why is None and prop is not None:
+                out.append(
+                    {"subject": s, **{k: prop[k] for k in sorted(proposals.KEYS)}}
+                )
+        return out
+
     @staticmethod
     def _hashes_to(row: dict, subject: str) -> bool:
         try:

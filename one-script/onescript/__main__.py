@@ -8,6 +8,7 @@
     python3 -m onescript turn "the bite"    # one turn as the desk
     python3 -m onescript turn "the bite" --proposal f.jsonl   # the model's rows
     python3 -m onescript escalate "the task"  # D0, then small pieces to the local rung
+    python3 -m onescript pooled             # unsealed pass proposals, JSON lines
     python3 -m onescript checkout           # reverse, then the morning screen
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
@@ -203,6 +204,10 @@ def main(argv: list[str] | None = None) -> int:
         default="ratatosk",
         help="the local rung's command (it is run with --onescript ...)",
     )
+    sub.add_parser(
+        "pooled",
+        help="the unsealed pass proposals on record, one JSON object per line",
+    )
     sub.add_parser("checkout")
     for name in ("scope", "serve"):
         s = sub.add_parser(name)
@@ -262,6 +267,14 @@ def main(argv: list[str] | None = None) -> int:
         res = api.checkin(cfg, raw)
     elif args.cmd == "checkout":
         res = api.checkout(cfg, raw)
+    elif args.cmd == "pooled":
+        res = api.pooled(cfg, raw)
+        if "refused" in res:  # stdout stays parseable: the reason goes to stderr
+            print(f"refused: {res['refused']}", file=sys.stderr)
+        else:  # JSON lines; an empty pool prints nothing and exits 0
+            for item in res["pooled"]:
+                print(json.dumps(item, sort_keys=True, ensure_ascii=False))
+        return res["code"]
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)

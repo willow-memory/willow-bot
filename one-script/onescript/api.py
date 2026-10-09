@@ -615,6 +615,19 @@ def seal_proposal(
     }
 
 
+def pooled(cfg: Config, argv: Iterable[str] = ("pooled",)) -> dict:
+    """The pooled unsealed pass set, for the close-out deposit: every passing
+    proposal on record that no human seal covers, one per subject, each as
+    {subject, path, data, cites, claim}. Read-only: it writes an `invocation`
+    row like every verb and nothing else; it seals and writes nothing. It does
+    not need an open box, so a deposit may follow check-out."""
+    run, info = _open(cfg, "pooled", argv)
+    if run is None:
+        return info
+    items = run.pooled()
+    return {"pooled": items, "count": len(items), "code": 0}
+
+
 def escalate(
     cfg: Config,
     task: str,
