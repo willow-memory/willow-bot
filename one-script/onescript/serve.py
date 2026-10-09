@@ -30,7 +30,9 @@ permission. Code fills out every field here; the model never sees a box.
           ids; it never signs authority and is never the seal key.
   trust   `human-sealed` when the record holds the human's seal over that
           table's hash, else `untrusted`. The label is read from the record,
-          never from the table.
+          never from the table. It covers the table's authored rows, which
+          are all that is served: the run's own rows (`who == "run"`) are
+          not bound by a seal, so they are never served.
   return  one fixed line, the same every time, says what the model may return.
   fails   closed and loud. No sealed scope, a seal that covers nothing, a table
           without a receipt, no serve key: nothing is served, and the file
@@ -197,8 +199,9 @@ def authored(rows: list[dict]) -> list[dict]:
     (`who == "run"`: invocation, boot, serve, ...). Every launch appends that, so
     a table id over it would move on each launch, the scope subject with it, and
     a scope the human sealed once would never match again. The seal binds the
-    authored rows and the pile's group; the run's rows in a sealed pile are still
-    served, checked against the chain by `_receipt`, but not bound by the seal."""
+    authored rows and the pile's group; the run's rows in a sealed pile are
+    checked against the chain by `_receipt` but never served, since the seal
+    does not bind them (served content is exactly the sealed content)."""
     return [r for r in rows if r.get("who") != SYSTEM]
 
 
@@ -313,7 +316,10 @@ def _serve(rows, tables, scope, serve_key, max_chars=None) -> dict:
                 "trust": "human-sealed" if tid in seals else "untrusted",
                 "group": _scrub(group),
                 "cannot_hold": [CANNOT_HOLD[w] for w in group if w in CANNOT_HOLD],
-                "rows": [view(r) for r in t["rows"]],
+                # served == sealed: the seal binds the authored rows only, so a
+                # run row (`who == "run"`) is never served, let alone labelled
+                # human-sealed. `_receipt` above still chain-checks every row.
+                "rows": [view(r) for r in authored(t["rows"])],
             }
         )
     served.sort(key=lambda t: t["id"])
