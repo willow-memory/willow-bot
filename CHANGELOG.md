@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.21.0](https://github.com/willow-memory/willow-bot/compare/v0.20.1...v0.21.0) (2026-10-09)
+
+
+### Added
+
+* **one-script:** pool unsealed pass proposals for session-close deposit ([e539989](https://github.com/willow-memory/willow-bot/commit/e5399898d3c0b503fa07b19b2787b2066c715ad1))
+* **one-script:** the pooled unsealed pass set, api.pooled + `onescript pooled` ([392ae2e](https://github.com/willow-memory/willow-bot/commit/392ae2e33ff1b15cd2e0b9ff3236dce6ce249f0b))
+
+
+### Fixed
+
+* **one-script:** pooled emits ASCII-only JSON so one record is one physical line ([f1f2660](https://github.com/willow-memory/willow-bot/commit/f1f2660c101f23fab2b9d4360254731ac4e88261))
+
 ## [0.20.1](https://github.com/willow-memory/willow-bot/compare/v0.20.0...v0.20.1) (2026-10-09)
 
 
