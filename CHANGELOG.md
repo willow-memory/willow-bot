@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [0.20.0](https://github.com/willow-memory/willow-bot/compare/v0.19.0...v0.20.0) (2026-10-09)
+
+
+### Added
+
+* **onescript:** scope subject excludes who==run so a sealed scope keeps matching at session start ([061285e](https://github.com/willow-memory/willow-bot/commit/061285e0ba125f4bf781941f6cd03ce7c5606012))
+* **onescript:** the scope subject holds still across launches ([40c09b7](https://github.com/willow-memory/willow-bot/commit/40c09b7ce9de63b20da1a62bc820247ee2fd3376))
+
+
+### Fixed
+
+* **one-script:** table_id fails closed when source.rows misaligns with rows ([c3e7118](https://github.com/willow-memory/willow-bot/commit/c3e7118eb2d828cbf93f9f4340bdd5fbf3403e89))
+
 ## [0.19.0](https://github.com/willow-memory/willow-bot/compare/v0.18.0...v0.19.0) (2026-10-08)
 
 
