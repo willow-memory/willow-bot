@@ -180,6 +180,32 @@ def test_the_cli_prints_one_json_object_per_line(cfg, capsys, monkeypatch):
     assert all(set(o) == FIELDS for o in objs)
 
 
+def test_the_cli_keeps_one_physical_line_per_proposal_for_unicode_separators(
+    cfg, capsys, monkeypatch
+):
+    # U+2028 / U+2029 / U+0085 are line breaks to str.splitlines(); the CLI must
+    # escape them so a splitlines() consumer sees exactly one line per record.
+    # api.pooled is stubbed: record.py reads its own rows with splitlines(), so a
+    # row holding these characters never reaches the pool through the real chain.
+    # This test pins the CLI's emission alone.
+    base = _cli(cfg, monkeypatch)
+    tricky = "a b c\u0085d\n"
+    items = [
+        {"subject": "proposal:1", "path": "notes/a.md", "data": tricky,
+         "cites": ["x"], "claim": "a"},
+        {"subject": "proposal:2", "path": "notes/b.md", "data": "plain",
+         "cites": ["x"], "claim": "b"},
+    ]  # fmt: skip
+    monkeypatch.setattr(
+        cli.api, "pooled", lambda c, raw=None: {"code": 0, "pooled": items}
+    )
+    assert cli.main([*base, "pooled"]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert len(lines) == 2 and out.endswith("\n")
+    assert [json.loads(x) for x in lines] == items
+
+
 def test_the_cli_prints_nothing_for_an_empty_pool(cfg, capsys, monkeypatch):
     base = _cli(cfg, monkeypatch)
     assert cli.main([*base, "checkin"]) == 0

@@ -273,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"refused: {res['refused']}", file=sys.stderr)
         else:  # JSON lines; an empty pool prints nothing and exits 0
             for item in res["pooled"]:
-                print(json.dumps(item, sort_keys=True, ensure_ascii=False))
+                print(json.dumps(item, sort_keys=True, ensure_ascii=True))
         return res["code"]
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
