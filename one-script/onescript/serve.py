@@ -206,7 +206,12 @@ def table_id(table: dict) -> str:
     """A table's content hash: its authored rows and its source receipt,
     canonically. The run's own rows are in no id, under any W."""
     rows, src = table["rows"], table["source"]
-    if isinstance(src, dict) and len(src.get("rows", ())) == len(rows):
+    if isinstance(src, dict) and "rows" in src:
+        if len(src["rows"]) != len(rows):
+            raise ValueError(
+                f"table_id: source.rows ({len(src['rows'])}) does not line up "
+                f"with rows ({len(rows)}); refusing an id that could carry run provenance"
+            )
         src = {
             **src,
             "rows": [s for s, r in zip(src["rows"], rows) if r.get("who") != SYSTEM],

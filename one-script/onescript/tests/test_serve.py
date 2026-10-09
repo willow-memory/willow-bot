@@ -50,6 +50,18 @@ def scoped(rec, *tables):
     return ids
 
 
+def test_table_id_fails_closed_when_source_rows_misalign():
+    rows = [{"who": "hanuman", "what": "write"}, {"who": "run", "what": "boot"}]
+    good = {"rows": rows, "source": {"rows": ["a", "b"], "group": {"who": "x"}}}
+    assert serve.table_id(good)
+    bad = {"rows": rows, "source": {"rows": ["a"], "group": {"who": "x"}}}
+    with pytest.raises(ValueError):
+        serve.table_id(bad)
+    # a source that is not the per-row dict shape keeps working
+    assert serve.table_id({"rows": rows, "source": "record.jsonl@n=4"})
+    assert serve.table_id({"rows": rows, "source": {"group": {"who": "x"}}})
+
+
 def test_only_the_scope_is_served_and_the_rest_is_never_named(tmp_path):
     rec = box(tmp_path)
     ids = scoped(rec, IN, ALSO)
@@ -218,7 +230,10 @@ def test_a_pile_whose_receipt_does_not_match_the_record_serves_nothing(tmp_path)
     rec = box(tmp_path)
     activity(rec)
     pile = serve.piles(rec.rows(), "where")[0]
-    forged = {**pile, "rows": [{**pile["rows"][0], "who": "operator"}]}
+    forged = {
+        **pile,
+        "rows": [{**pile["rows"][0], "who": "operator"}, *pile["rows"][1:]],
+    }
     ids = [serve.table_id(forged)]
     seal(rec, serve.scope_subject(ids))
     doc = capped(rec, [forged], ids, SERVE_KEY)
