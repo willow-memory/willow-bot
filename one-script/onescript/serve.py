@@ -51,6 +51,7 @@ from .record import Record, canon, h256
 
 OUT = "served.json"
 WS = ("who", "what", "when", "where")
+SYSTEM = "run"  # gate.system()'s who: the run's rows about its own steps
 
 # The payload a served row may carry besides its W's. Anything not named here
 # is left out: a new field reaches the model only when someone adds it here.
@@ -191,9 +192,31 @@ def propose(stack: list[dict], **match: str) -> dict:
     }
 
 
+def authored(rows: list[dict]) -> list[dict]:
+    """The rows a scope can bind: everything but the run's own bookkeeping
+    (`who == "run"`: invocation, boot, serve, ...). Every launch appends that, so
+    a table id over it would move on each launch, the scope subject with it, and
+    a scope the human sealed once would never match again. The seal binds the
+    authored rows and the pile's group; the run's rows in a sealed pile are still
+    served, checked against the chain by `_receipt`, but not bound by the seal."""
+    return [r for r in rows if r.get("who") != SYSTEM]
+
+
 def table_id(table: dict) -> str:
-    """A table's content hash: its rows and its source receipt, canonically."""
-    return h256(canon({"rows": table["rows"], "source": table["source"]}))
+    """A table's content hash: its authored rows and its source receipt,
+    canonically. The run's own rows are in no id, under any W."""
+    rows, src = table["rows"], table["source"]
+    if isinstance(src, dict) and "rows" in src:
+        if len(src["rows"]) != len(rows):
+            raise ValueError(
+                f"table_id: source.rows ({len(src['rows'])}) does not line up "
+                f"with rows ({len(rows)}); refusing an id that could carry run provenance"
+            )
+        src = {
+            **src,
+            "rows": [s for s, r in zip(src["rows"], rows) if r.get("who") != SYSTEM],
+        }
+    return h256(canon({"rows": authored(rows), "source": src}))
 
 
 def scope_subject(ids) -> str:
