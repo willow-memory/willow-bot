@@ -65,10 +65,20 @@ def rows(cfg) -> list[dict]:
 def served(cfg, by=("what",), max_chars=CAP) -> dict:
     """Check in, scope, seal, serve. The served document."""
     assert api.checkin(cfg)["code"] == 0
+    # A scope serves the authored rows of a sealed pile, never the run's own
+    # bookkeeping (`who == "run"`), so a fresh check-in alone serves nothing.
+    # One desk turn gives the pile authored rows (turn_open / turn_close).
+    assert api.turn(cfg, "seed the pile")["code"] == 0
     card = api.scope(cfg, by=by)
     assert card["code"] == 0 and card["subject"].startswith("serve:")
     assert api.seal_scope(cfg, card["subject"], proof=proof(card["subject"]))["sealed"]
     return api.serve(cfg, card["spec"], max_chars=max_chars)["doc"]
+
+
+def piled(doc) -> list[dict]:
+    """The served tables that hold rows. A table of only run bookkeeping is
+    served with no rows (served == sealed), and escalate cuts no piece from it."""
+    return [t for t in doc["tables"] if t["rows"]]
 
 
 class Stub:
@@ -136,7 +146,7 @@ def test_d0_escalate_is_what_goes_on_to_the_pieces(cfg):
     stub = Stub(good)
     res = go(cfg, stub)
     assert res["d0"]["status"] == "escalate"
-    assert len(stub.calls) == len(doc["tables"])
+    assert len(stub.calls) == len(piled(doc))
     assert {p["rung"] for p in res["pieces"]} == {"local"}
 
 
@@ -188,7 +198,7 @@ def test_pieces_are_deterministic_and_hashed(cfg):
     a = escalate.cut(doc, TASK, 10**6)
     b = escalate.cut(json.loads(json.dumps(doc)), TASK, 10**6)
     assert a == b
-    assert [p["table"] for p in a] == [t["id"] for t in doc["tables"]]
+    assert [p["table"] for p in a] == [t["id"] for t in piled(doc)]
     assert len({p["hash"] for p in a}) == len(a)
     for p in a:
         assert p["piece"]["state"] == "populated"
@@ -197,8 +207,8 @@ def test_pieces_are_deterministic_and_hashed(cfg):
 
 
 def test_a_table_over_the_budget_is_cut_into_row_groups(cfg):
-    doc = served(cfg, by=("who",))  # every row of the run in one table
-    (big,) = doc["tables"]
+    doc = served(cfg, by=("who",))  # every authored row in one table
+    (big,) = piled(doc)  # the run's own table is served with no rows
     assert len(big["rows"]) > 1
     one = {"state": "populated", "why": "", "return": doc["return"], "tables": [big]}
     budget = len(json.dumps(one)) // 2
@@ -327,7 +337,7 @@ def test_a_failed_rung_is_an_escalation_with_its_reason(cfg, fn, reason):
 
 def test_a_cite_to_another_piece_is_uncited(cfg):
     doc = served(cfg)
-    other = doc["tables"][-1]["id"]
+    other = piled(doc)[-1]["id"]
 
     def fn(piece, question, model):
         return [
@@ -341,7 +351,7 @@ def test_a_cite_to_another_piece_is_uncited(cfg):
 
     res = go(cfg, Stub(fn))
     labels = [p["label"] for p in res["pieces"]]
-    assert len(labels) == len(doc["tables"]) > 1
+    assert len(labels) == len(piled(doc)) > 1
     # only the last table's own piece cites a table that is in it
     assert labels[-1] == "answered"
     assert set(labels[:-1]) == {"escalated:uncited"}
@@ -351,7 +361,7 @@ def test_a_cite_to_another_piece_is_uncited(cfg):
 def test_everything_unanswered_is_one_card(cfg):
     doc = served(cfg)
     res = go(cfg, Stub(mark("no")))
-    n = len(doc["tables"])
+    n = len(piled(doc))
     assert res["escalated"] == n and res["answered"] == 0
     card = res["card"]
     assert card["kind"] == "review" and card["route"] == "willow"
@@ -366,7 +376,7 @@ def test_everything_unanswered_is_one_card(cfg):
 
 def test_a_mixed_run_answers_some_and_cards_the_rest(cfg):
     doc = served(cfg)
-    first = doc["tables"][0]["id"]
+    first = piled(doc)[0]["id"]
 
     def fn(piece, question, model):
         return (
@@ -376,7 +386,7 @@ def test_a_mixed_run_answers_some_and_cards_the_rest(cfg):
         )
 
     res = go(cfg, Stub(fn))
-    assert res["answered"] == 1 and res["escalated"] == len(doc["tables"]) - 1
+    assert res["answered"] == 1 and res["escalated"] == len(piled(doc)) - 1
     card = res["card"]
     assert card["summary"].count("\n- ") + 1 == res["escalated"]
     answered = [p for p in res["pieces"] if p["outcome"] == "answered"]

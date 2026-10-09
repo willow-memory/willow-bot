@@ -440,6 +440,29 @@ def test_a_sealed_subject_survives_launches_that_add_only_run_rows(tmp_path, by,
     assert doc["state"] == "populated"  # the old seal still opens the new run
 
 
+def test_a_run_row_in_a_sealed_pile_is_never_served_as_sealed_content(tmp_path):
+    """Loki A91DFED4 F1: the seal binds the authored rows, so served == sealed.
+    A who==run row in a sealed pile is checked by the receipt but not served."""
+    rec = box(tmp_path)
+    activity(rec)
+    launch(rec)  # run rows now sit in the docs/a.md pile beside the authored ones
+    stack = serve.piles(rec.rows(), "where")
+    pile = next(p for p in stack if serve.name(p) == "where=docs/a.md")
+    assert {r["who"] for r in pile["rows"]} >= {"run", "hanuman", "willow"}
+    card = serve.propose(stack, where="docs/a.md")
+    seal(rec, card["subject"])
+    seal(rec, card["ids"][0])  # the table itself sealed too: label is human-sealed
+    doc = capped(rec, stack, card["ids"], SERVE_KEY)
+    assert doc["state"] == "populated"
+    table = doc["tables"][0]
+    assert table["trust"] == "human-sealed"
+    served_who = [r["who"] for r in table["rows"]]
+    assert "run" not in served_who  # no run row rides under the sealed label
+    assert served_who == [r["who"] for r in serve.authored(pile["rows"])]
+    assert {"hanuman", "willow"} <= set(served_who)  # authored rows still served
+    assert "invocation" not in (tmp_path / serve.OUT).read_text()
+
+
 @pytest.mark.parametrize("w", serve.WS)
 def test_run_rows_alone_never_move_the_subject_under_any_w(tmp_path, w):
     rec = box(tmp_path)
