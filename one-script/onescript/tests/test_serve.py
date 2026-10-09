@@ -381,3 +381,75 @@ def test_every_record_row_carries_where(tmp_path):
     ]
     assert [r["where"] for r in rows if r["kind"] == "door"] == [None]
     assert rec.verify_chain() == []
+
+
+# ── the subject holds still: the run's own rows are in no scope ──────────────
+def launch(rec):
+    """What every launch appends: the run's bookkeeping, shaped to land in the
+    same who/what/when/where groups the authored rows do."""
+    run = gate.system()
+    rec.append("invocation", run, where="docs/a.md")
+    rec.append("door", run, verdict="pass", where="docs/a.md")
+    rec.write_file(run, "docs/a.md", b"boot", provenance="authored")
+
+
+# The seal is itself a human row, so a pile that holds it (the human's, the
+# seal kind's, the whole day's) moves when sealed: those are not what a scope
+# names. Each case names the authored pile(s) a scope would, per W.
+STABLE = [
+    (("who",), {"who": "hanuman"}),
+    (("what",), {"what": "door"}),
+    (("where",), {"where": "docs/a.md"}),
+    (("who", "where"), {"where": "docs/a.md"}),
+]
+
+
+@pytest.mark.parametrize("by,match", STABLE)
+def test_a_sealed_subject_survives_launches_that_add_only_run_rows(tmp_path, by, match):
+    rec = box(tmp_path)
+    activity(rec)
+    launch(rec)  # the first launch: the run's piles exist before anything is sealed
+    stack = serve.piles(rec.rows(), *by)
+    card = serve.propose(stack, **match)
+    assert card["subject"] and card["ids"]
+    seal(rec, card["subject"])
+    assert card["subject"] in serve.sealed(rec.rows())
+
+    launch(rec)
+    launch(rec)
+    again_stack = serve.piles(rec.rows(), *by)
+    again = serve.propose(again_stack, **match)
+    assert again["subject"] == card["subject"] and again["ids"] == card["ids"]
+    assert again["subject"] in serve.sealed(rec.rows())
+    doc = capped(rec, again_stack, again["ids"], SERVE_KEY)
+    assert doc["state"] == "populated"  # the old seal still opens the new run
+
+
+@pytest.mark.parametrize("w", serve.WS)
+def test_run_rows_alone_never_move_the_subject_under_any_w(tmp_path, w):
+    rec = box(tmp_path)
+    activity(rec)
+    launch(rec)  # the first launch: the run's piles exist before anything is sealed
+    before = serve.propose(serve.piles(rec.rows(), w))
+    launch(rec)
+    after = serve.propose(serve.piles(rec.rows(), w))
+    assert before["subject"] and after["subject"] == before["subject"]
+    assert after["ids"] == before["ids"]
+
+
+def test_an_authored_row_still_moves_the_subject_and_needs_a_new_seal(tmp_path):
+    rec = box(tmp_path)
+    activity(rec)
+    card = serve.propose(serve.piles(rec.rows(), "who"))
+    seal(rec, card["subject"])
+    rec.write_file(
+        gate.Verified("hanuman", "qwen", gate.token()),
+        "docs/c.md",
+        b"c",
+        provenance="authored",
+    )
+    moved = serve.propose(serve.piles(rec.rows(), "who"))
+    assert moved["subject"] != card["subject"]
+    assert moved["subject"] not in serve.sealed(rec.rows())
+    doc = capped(rec, serve.piles(rec.rows(), "who"), moved["ids"], SERVE_KEY)
+    assert doc["state"] == "empty" and "no human seal" in doc["why"]
