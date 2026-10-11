@@ -26,6 +26,14 @@ class Policy:
     chat_allowed_models: tuple[str, ...] = ()
     chat_max_request_bytes: int = 262144
     chat_timeout_s: float = 600.0
+    # Socket ``chat`` op call log: one metadata-only JSONL row per call (never
+    # prompt or reply text), beside the socket. ``"chat_call_log": false`` in
+    # the policy file turns it off.
+    chat_call_log: bool = True
+
+    @property
+    def chat_call_log_path(self) -> Path:
+        return self.socket_path.parent / "chat-calls.jsonl"
 
     @property
     def chat_models(self) -> tuple[str, ...]:
@@ -99,7 +107,10 @@ def load_policy() -> Policy:
         chat_t = float(raw_chat_t)
     else:
         chat_t = chat_timeout
+    log_raw = raw.get("chat_call_log")
+    call_log = log_raw if isinstance(log_raw, bool) else base.chat_call_log
     return Policy(
+        chat_call_log=call_log,
         chat_allowed_models=allowed,
         chat_max_request_bytes=max_bytes,
         chat_timeout_s=chat_t,

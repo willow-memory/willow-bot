@@ -5,16 +5,22 @@ to drop a model from memory now, so a caller walking a ladder of models holds
 one in memory at a time. The model must be in the policy's allow-list. No cloud
 route, no escalation, no retry: one request, one answer or one refusal.
 
+Every call, refused or answered, leaves one metadata-only row in
+``chat-calls.jsonl`` beside the socket (``Policy.chat_call_log``): model, outcome
+code, tokens, latency, sizes. No prompt or reply text, ever.
+
 Errors are ``{"ok": False, "error": "<CODE>: <detail>"}`` with codes
 ``EBADREQ``, ``ESIZE``, ``EMODEL``, ``ELOOPBACK``, ``ECHAT``.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from willow_bot.deterministic.policy import Policy
@@ -73,7 +79,60 @@ def _post(policy: Policy, path: str, payload: dict) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+# Call log: metadata only. One size cap with one rotated backup, the rule
+# steward/heartbeat.py uses for its receipts file.
+CALL_LOG_MAX_BYTES = 5 * 1024 * 1024
+_MODEL_LOG_CAP = 128
+
+
+def _log_call(policy: Policy, req: dict, out: dict, started: str) -> None:
+    """Append one row to ``policy.chat_call_log_path``: when, model, outcome
+    (``ok`` or the error code), ``done_reason``, tokens, ``latency_ms`` and the
+    request/reply sizes in bytes. Never the system prompt, the user prompt or the
+    reply, nor anything derived from their text. Best effort: a log that cannot
+    be written never fails the call."""
+    if not policy.chat_call_log:
+        return
+    model = req.get("model")
+    system, user = req.get("system"), req.get("user")
+    bytes_in = (
+        len(system.encode("utf-8")) + len(user.encode("utf-8"))
+        if isinstance(system, str) and isinstance(user, str)
+        else None
+    )
+    text = out.get("text")
+    row = {
+        "at": started,
+        "op": "chat",
+        "model": model[:_MODEL_LOG_CAP] if isinstance(model, str) else None,
+        "ok": bool(out.get("ok")),
+        "outcome": "ok" if out.get("ok") else str(out.get("error", "")).split(":", 1)[0],
+        "done_reason": out.get("done_reason"),
+        "tokens_in": out.get("tokens_in"),
+        "tokens_out": out.get("tokens_out"),
+        "latency_ms": out.get("latency_ms"),
+        "bytes_in": bytes_in,
+        "bytes_out": len(text.encode("utf-8")) if isinstance(text, str) else None,
+    }
+    path = policy.chat_call_log_path
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size >= CALL_LOG_MAX_BYTES:
+            os.replace(path, path.with_name(path.name + ".1"))
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
 def run_chat(policy: Policy, req: dict) -> dict:
+    started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out = _run_chat(policy, req)
+    _log_call(policy, req, out, started)
+    return out
+
+
+def _run_chat(policy: Policy, req: dict) -> dict:
     model = req.get("model")
     system = req.get("system")
     user = req.get("user")

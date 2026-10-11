@@ -263,3 +263,93 @@ def test_existing_ops_unchanged(tmp_path, fake_ollama):
     pol.runs_dir.mkdir()
     assert _dispatch({"op": "nope"}, pol) == {"ok": False, "error": "unknown op: 'nope'"}
     assert _dispatch({"op": "runs_summary"}, pol)["ok"] is True
+
+
+# ── call log, content off (IDEAS 66) ──────────────────────────────────────
+
+
+def _rows(tmp_path) -> list[dict]:
+    path = tmp_path / "chat-calls.jsonl"
+    return [json.loads(ln) for ln in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_call_log_records_metadata_and_never_content(tmp_path, fake_ollama):
+    secret_prompt, secret_system = "TOP-SECRET-USER-TEXT", "TOP-SECRET-SYSTEM-TEXT"
+    out = _dispatch(_req(user=secret_prompt, system=secret_system), _policy(tmp_path, fake_ollama))
+    assert out["ok"] is True
+    [row] = _rows(tmp_path)
+    assert row["model"] == "llama3.2:3b" and row["ok"] is True and row["outcome"] == "ok"
+    assert (row["tokens_in"], row["tokens_out"]) == (11, 7)
+    assert row["done_reason"] == "stop" and isinstance(row["latency_ms"], int)
+    assert row["bytes_in"] == len(secret_prompt) + len(secret_system)
+    assert row["bytes_out"] == len(out["text"])
+    assert row["at"].endswith("Z")
+    raw = (tmp_path / "chat-calls.jsonl").read_text()
+    assert "TOP-SECRET" not in raw and out["text"] not in raw
+    assert set(row) == {
+        "at", "op", "model", "ok", "outcome", "done_reason", "tokens_in",
+        "tokens_out", "latency_ms", "bytes_in", "bytes_out",
+    }  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("kw", "code"),
+    [({"model": "gpt-5"}, "EMODEL"), ({"user": "x" * 50}, "ESIZE"), ({"temperature": "hot"}, "EBADREQ")],
+)
+def test_call_log_records_refusals_by_code(tmp_path, fake_ollama, kw, code):
+    extra = {"chat_max_request_bytes": 10} if code == "ESIZE" else {}
+    out = _dispatch(_req(**kw), _policy(tmp_path, fake_ollama, **extra))
+    assert out["ok"] is False
+    [row] = _rows(tmp_path)
+    assert row["ok"] is False and row["outcome"] == code
+    assert row["tokens_in"] is None and row["bytes_out"] is None
+
+
+def test_call_log_records_a_failed_call(tmp_path, fake_ollama):
+    _FakeOllama.delay_s = 1.5
+    _dispatch(_req(), _policy(tmp_path, fake_ollama, chat_timeout_s=0.3))
+    [row] = _rows(tmp_path)
+    assert row["outcome"] == "ECHAT" and row["ok"] is False
+
+
+def test_call_log_appends_one_row_per_call(tmp_path, fake_ollama):
+    pol = _policy(tmp_path, fake_ollama)
+    for _ in range(3):
+        _dispatch(_req(), pol)
+    assert len(_rows(tmp_path)) == 3
+
+
+def test_call_log_can_be_turned_off(tmp_path, fake_ollama):
+    out = _dispatch(_req(), _policy(tmp_path, fake_ollama, chat_call_log=False))
+    assert out["ok"] is True
+    assert not (tmp_path / "chat-calls.jsonl").exists()
+
+
+def test_call_log_is_bounded_with_one_rotated_backup(tmp_path, fake_ollama, monkeypatch):
+    from willow_bot.deterministic import chat_op
+
+    monkeypatch.setattr(chat_op, "CALL_LOG_MAX_BYTES", 200)
+    pol = _policy(tmp_path, fake_ollama)
+    for _ in range(12):
+        _dispatch(_req(), pol)
+    live, backup = tmp_path / "chat-calls.jsonl", tmp_path / "chat-calls.jsonl.1"
+    assert backup.exists() and live.stat().st_size < 600
+    assert not (tmp_path / "chat-calls.jsonl.2").exists()
+
+
+def test_a_log_that_cannot_be_written_never_fails_the_call(tmp_path, fake_ollama):
+    (tmp_path / "chat-calls.jsonl").mkdir()  # a directory where the file goes
+    out = _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    assert out["ok"] is True and out["text"] == '{"a": 1}'
+
+
+def test_policy_file_can_turn_the_log_off(tmp_path):
+    from willow_bot import paths
+    from willow_bot.deterministic.policy import load_policy
+
+    assert load_policy().chat_call_log is True
+    (paths.bot_dir()).mkdir(parents=True, exist_ok=True)
+    (paths.bot_dir() / "deterministic-policy.json").write_text('{"chat_call_log": false}')
+    assert load_policy().chat_call_log is False
+    (paths.bot_dir() / "deterministic-policy.json").write_text('{"chat_call_log": "no"}')
+    assert load_policy().chat_call_log is True  # not a bool: the default stands
