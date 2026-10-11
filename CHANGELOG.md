@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [1.0.0](https://github.com/willow-memory/willow-bot/compare/v0.21.0...v1.0.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* an existing install must copy its profile into the box (cp deploy/operator.willow-memory.json "$WILLOW_HOME/willow-bot/operator.json") or it runs with no orgs, no upstream watch, a silent voice and no Grove CI-red lines.
+
+### Added
+
+* contributions ledger, more webhook events, read-only App helpers ([a51ec2e](https://github.com/willow-memory/willow-bot/commit/a51ec2e2ea7c3bc802de5de53e489beb0f01f760))
+* willow-bot-contribute — any user's projects, next steps, openings ([40015a7](https://github.com/willow-memory/willow-bot/commit/40015a74f0e9570fbc7d854850df520ee88e2b16))
+
+
+### Changed
+
+* operator profile — no operator's setup lives in code ([70b7a81](https://github.com/willow-memory/willow-bot/commit/70b7a818277d652d3a00e94c2430a06009b81f03))
+
 ## [0.21.0](https://github.com/willow-memory/willow-bot/compare/v0.20.1...v0.21.0) (2026-10-09)
 
 
