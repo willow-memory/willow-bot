@@ -1258,3 +1258,48 @@ def test_verdict_empty_live_head_is_unverified_not_confirmed(home, monkeypatch):
 def test_verdict_confirmed_live_head_has_no_note(home, monkeypatch):
     monkeypatch.setattr(tick, "_ci_fetch_pull", _Pulls({(RAT, 48): ("open", False, SHA)}))
     assert tick._ci_head_verdict(RAT, 48, SHA, {}, SEEN) == (None, None)
+
+
+# ── ci-comments-retire: the one explicit, receipted way to stop owing ────────
+
+
+def _owe(where: str, sha: str = "a" * 40) -> None:
+    from willow_bot.steward import ci_comments
+
+    owed, _ = ci_comments.load()
+    repo, pr = where.split("#")
+    e = ci_comments.entry_for(owed, f"{where}@{sha}", repo=repo, pr=int(pr), head_sha=sha, where=where)
+    e["comment"].update(status="stalled", attempts=275, last_error="list: 404 Client Error")
+    ci_comments.save(owed)
+
+
+def test_retire_is_a_dry_run_by_default_and_needs_a_reason(capsys):
+    from willow_bot.steward import ci_comments, tick
+
+    _owe("o/fork#1702")
+    with pytest.raises(SystemExit):
+        tick.main(["ci-comments-retire", "o/fork#1702"])  # no --reason
+    capsys.readouterr()
+    assert tick.main(["ci-comments-retire", "o/fork#1702", "--reason", "upstream PR number"]) == 0
+    assert "would_retire" in capsys.readouterr().out
+    owed, _ = ci_comments.load()
+    assert ci_comments.head_keys(owed)  # nothing removed
+
+
+def test_retire_apply_removes_only_that_pr_and_leaves_a_receipt(capsys):
+    from willow_bot.steward import ci_comments, tick
+
+    _owe("o/fork#1702")
+    _owe("o/fork#5")
+    assert tick.main(["ci-comments-retire", "o/fork#1702", "--reason", "upstream PR number", "--apply"]) == 0
+    owed, _ = ci_comments.load()
+    assert [owed[k]["where"] for k in ci_comments.head_keys(owed)] == ["o/fork#5"]
+    receipt = [json.loads(ln) for ln in tick._receipts_path().read_text().splitlines()][-1]
+    assert receipt["event"] == "steward_ci_comments_retire"
+    assert receipt["reason"] == "upstream PR number" and receipt["retired"][0]["attempts"] == 275
+
+
+def test_retire_with_nothing_owed_says_so(capsys):
+    from willow_bot.steward import tick
+
+    assert tick.main(["ci-comments-retire", "o/none#1", "--reason", "x", "--apply"]) == 1

@@ -3600,6 +3600,8 @@ def main(argv: list[str] | None = None) -> int:
         return inbox_mod.ingest(Path(args[1]))
     if args[0] == "scan":
         return scan_mod.main()
+    if args[0] == "ci-comments-retire":
+        return run_ci_comments_retire(args[1:])
     if args[0] == "annul":
         return run_annul(args[1:])
     if args[0] == "contributions":
@@ -3607,10 +3609,57 @@ def main(argv: list[str] | None = None) -> int:
 
         return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
+
+
+def run_ci_comments_retire(argv: list[str]) -> int:
+    """``willow-bot-steward ci-comments-retire <owner/repo#N> --reason … [--apply]``
+
+    The one way to stop the ci step owing a comment on a PR: an owed entry is
+    never dropped by age or by failure (``ci_comments``: "never silently
+    abandon"), which is right for a flaky GitHub and wrong for a target that
+    cannot exist, such as a fork's ``#N`` filed from the fork's PR into
+    upstream (``check_prs``). Dry-run by default: prints the entries for that
+    PR and changes nothing. ``--apply`` removes them and writes one
+    ``steward_ci_comments_retire`` receipt naming each key and the reason, so
+    the removal is never silent. Refuses without a reason."""
+    import argparse
+
+    from willow_bot.steward import ci_comments
+
+    parser = argparse.ArgumentParser(prog="willow-bot-steward ci-comments-retire")
+    parser.add_argument("where", help="owner/repo#N, as the stalled report names it")
+    parser.add_argument("--reason", required=True)
+    parser.add_argument("--apply", action="store_true")
+    a = parser.parse_args(argv)
+    if not a.reason.strip():
+        print("ci-comments-retire: a reason is required", file=sys.stderr)
+        return 2
+    owed, corrupt = ci_comments.load()
+    if corrupt:
+        print(f"ci-comments-retire: the ci_comments table is unreadable ({corrupt}); nothing changed",
+              file=sys.stderr)
+        return 1
+    keys = [k for k in ci_comments.head_keys(owed) if owed[k].get("where", k) == a.where]
+    if not keys:
+        print(f"ci-comments-retire: no owed entry for {a.where}")
+        return 1
+    found = [{"key": k, "comment": (owed[k].get("comment") or {}).get("status"),
+              "attempts": (owed[k].get("comment") or {}).get("attempts"),
+              "last_error": (owed[k].get("comment") or {}).get("last_error")} for k in keys]
+    if not a.apply:
+        print(json.dumps({"dry_run": True, "where": a.where, "would_retire": found}, indent=2))
+        return 0
+    for k in keys:
+        del owed[k]
+    ci_comments.save(owed)
+    _emit({"event": "steward_ci_comments_retire",
+           "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "where": a.where, "reason": a.reason, "retired": found})
+    return 0
 
 
 def run_annul(argv: list[str]) -> int:

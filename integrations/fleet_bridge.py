@@ -332,8 +332,12 @@ def handle(event: str, payload: dict) -> None:
             # is unique per run and stable across redeliveries, so the dedup
             # still holds where it should (the same completion twice) and
             # nowhere it should not.
-            prs = check.get("pull_requests") or []
-            pr_number = prs[0].get("number") if prs else None
+            # Only a PR of THIS repo: a check on a fork also lists the fork's
+            # PR into upstream, whose number names nothing here.
+            from willow_bot.check_prs import pr_numbers
+
+            prs = pr_numbers(check, repo)
+            pr_number = prs[0] if prs else None
             _queue_upstream(
                 {
                     **base,
