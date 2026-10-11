@@ -52,15 +52,17 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff==0.16.7"]
 #   arrows point into willow-mcp), and tests/test_seat_extra.py guards that.
 #   willow-ratatosk: willow-mcp already pulls it transitively, but it is listed
 #   here because the seat needs its `ratatosk` console script on the venv bin
-#   and must not lose it if willow-mcp ever drops the dependency. Floor 1.7.0
-#   matches willow-mcp's own floor; capped at the next major.
+#   and must not lose it if willow-mcp ever drops the dependency. Floor 1.16.0:
+#   the seat's flowering turns run `ratatosk --onescript --class flowering`,
+#   and `--class` first ships in 1.16.0 (1.7.x has neither flag; --onescript
+#   arrives in 1.13.0). Capped at the next major.
 # willow-mcp requires Python >=3.11, so this extra does not resolve on 3.10.
 #   willow-mcp[nestor]: the deposit's draft goes through decision_propose, which
 #   returns `nestor_unavailable` unless the Nestor engine is importable. The
 #   `nestor` extra of willow-mcp brings `nestor-meaning` (import name `nestor`),
 #   so the seat names the extra rather than pinning nestor-meaning itself; its
 #   floor/cap live in willow-mcp (gap 672dba733856).
-seat = ["willow-mcp[nestor]>=2.96.0,<3.0.0", "willow-ratatosk>=1.7.0,<2.0.0"]
+seat = ["willow-mcp[nestor]>=2.96.0,<3.0.0", "willow-ratatosk>=1.16.0,<2.0.0"]
 
 [project.scripts]
 willow-bot = "willow_bot.cli:webhook_main"
