@@ -47,9 +47,9 @@ def _dispatch(req: dict, policy: Policy) -> dict:
         result = run_chain(policy, fixtures_dir=fixtures_dir, model=model)
         return {"ok": True, "d0_wrong": d0_wrong(result["rows"]), **result["summary"]}
     if op == "health":
-        return health(policy.ollama_base)
+        return health(policy.ollama_base, policy=policy)
     if op == "ollama_tags":
-        return ollama_tags(policy.ollama_base)
+        return ollama_tags(policy.ollama_base, policy=policy)
     if op == "ollama_ps":
         return ollama_ps(policy.ollama_base)
     if op == "probe_model":
@@ -64,7 +64,7 @@ def _dispatch(req: dict, policy: Policy) -> dict:
 
         body = {
             "ok": True,
-            "health": health(policy.ollama_base),
+            "health": health(policy.ollama_base, policy=policy),
             "runs": runs_summary(policy.runs_dir),
             "runner": {
                 "ollama_chat_timeout_s": policy.ollama_chat_timeout_s,
