@@ -130,10 +130,6 @@ class Accumulator:
         """
         if new_spec_path in self._state["seen_specs"]:
             return None
-        if github_root is None:
-            from willow_bot import operator_profile
-
-            github_root = str(operator_profile.github_root())
 
         # Mark as seen regardless — a spec is raised at most once.
         self._state["seen_specs"].append(new_spec_path)
