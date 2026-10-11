@@ -124,8 +124,13 @@ def reconcile_labels(
     desired: Iterable[str],
     *,
     owned_prefix: str = DEFAULT_PREFIX,
+    keep: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Bring the PR's owned-prefix label set to exactly ``desired``.
+
+    ``keep`` names label prefixes the caller could not decide this time (a
+    fact it could not read): an owned label under one of them is left on,
+    never removed for being absent from ``desired``.
 
     Labels outside ``owned_prefix`` are read (for the receipt) but not
     touched. Every string in ``desired`` must start with ``owned_prefix``
@@ -161,7 +166,8 @@ def reconcile_labels(
     current_set = set(current)
     owned_current = {c for c in current_set if c.startswith(owned_prefix)}
     to_add = sorted(desired_set - owned_current)
-    to_remove = sorted(owned_current - desired_set)
+    keep_prefixes = tuple(k for k in keep if isinstance(k, str) and k)
+    to_remove = sorted(c for c in owned_current - desired_set if not c.startswith(keep_prefixes))
 
     receipt["found_owned"] = sorted(owned_current)
     receipt["found_other"] = sorted(current_set - owned_current)

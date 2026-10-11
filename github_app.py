@@ -291,6 +291,24 @@ def _repo_get_pages(repo_full_name: str, path: str, *, params: dict | None = Non
     return out
 
 
+def get_commit_date(repo_full_name: str, sha: str) -> str:
+    """The committer date of ``sha`` (ISO 8601), under the install token."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — cannot get_commit_date")
+    r = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/commits/{sha}",
+        headers=_auth_headers(repo_full_name),
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+    commit = data.get("commit") if isinstance(data, dict) else None
+    when = ((commit or {}).get("committer") or {}).get("date") or ((commit or {}).get("author") or {}).get("date")
+    if not when:
+        raise RuntimeError(f"no commit date for {repo_full_name}@{sha}")
+    return str(when)
+
+
 def list_issue_comments(repo_full_name: str, number: int, *, max_pages: int = 3) -> list[dict]:
     """Conversation comments on an issue or PR, oldest first."""
     return _repo_get_pages(repo_full_name, f"/issues/{int(number)}/comments", max_pages=max_pages)

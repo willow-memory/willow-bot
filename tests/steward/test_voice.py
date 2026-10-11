@@ -32,7 +32,7 @@ class _RecordReconcile:
         self.result = result or {"status": "ok", "action": "no-op",
                                  "added": [], "removed": [], "found_owned": []}
 
-    def __call__(self, repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX):
+    def __call__(self, repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX, keep=()):
         self.calls.append((repo, pr_number, set(desired)))
         return dict(self.result)
 
@@ -223,7 +223,7 @@ def test_run_voice_partial_when_some_reconciles_fail(home: Path, monkeypatch):
          "refused": [{"op": "add", "labels": pr_labels.LABEL_AUDIT_DISPATCHED, "error": "auth"}]},
     ]
 
-    def _fake(repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX):
+    def _fake(repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX, keep=()):
         return outcomes.pop(0)
 
     monkeypatch.setattr(pr_labels, "reconcile_labels", _fake)
@@ -241,7 +241,7 @@ def test_run_voice_partial_when_some_reconciles_fail(home: Path, monkeypatch):
 def test_run_voice_could_not_run_when_all_fail(home: Path, monkeypatch):
     monkeypatch.setattr(
         pr_labels, "reconcile_labels",
-        lambda repo, pr, desired, owned_prefix=pr_labels.DEFAULT_PREFIX:
+        lambda repo, pr, desired, owned_prefix=pr_labels.DEFAULT_PREFIX, keep=():
             {"status": "could-not-run", "detail": "auth: no PEM"},
     )
     state = {"open": ["owner/repo#1"], "audit_dispatched": {"owner/repo#1": "D1"}}
@@ -332,14 +332,14 @@ def test_ci_red_legs_for_sha_filters_by_prefix():
 
 def test_status_comment_body_names_audit_and_ci_state():
     state = {"audit_dispatched": {"o/r#1": "D1"}, "ci_filed": {"aaa111:1": "id"}}
-    body = voice._status_comment_body("o/r#1", "aaa111", state, at="2026-09-16T00:00:00Z")
+    body = voice._status_comment_body("o/r#1", "aaa111", state)
     assert "dispatched" in body and "not dispatched" not in body
     assert "1 red leg(s) filed" in body
-    assert "2026-09-16T00:00:00Z" in body
+    assert "tick" not in body  # no clock: the body changes only when the view does
 
 
 def test_status_comment_body_reports_absence_honestly():
-    body = voice._status_comment_body("o/r#1", "aaa111", {}, at="2026-09-16T00:00:00Z")
+    body = voice._status_comment_body("o/r#1", "aaa111", {})
     assert "not dispatched" in body
     assert "none filed" in body
 
@@ -369,23 +369,61 @@ def test_run_voice_same_sha_twice_updates_one_comment(
     home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
     fake_publish_check: _RecordPublishCheck,
 ):
-    """Two ticks against the same head_sha update the same comment —
-    `pr_voice`'s own fake reports `updated` the second time, and this
-    step's receipt reflects that, not a second `created`."""
+    """A second tick with nothing new writes nothing: no edit, no event."""
     state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
     voice.run_voice(dict(state))
     receipt = voice.run_voice(dict(state))
+    assert len(fake_upsert.calls) == 1
+    assert receipt["voiced"] == [{"repo_pr": "o/r#1", "head_sha": "aaa111", "action": "unchanged"}]
+
+
+def test_run_voice_rewrites_when_the_view_changes(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck,
+):
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    voice.run_voice(dict(state))
+    receipt = voice.run_voice({**state, "audit_dispatched": {"o/r#1": "D1"}})
     assert len(fake_upsert.calls) == 2
-    assert receipt["voiced"] == [{"repo_pr": "o/r#1", "head_sha": "aaa111", "action": "updated"}]
+    assert receipt["voiced"][0]["action"] == "updated"
+
+
+def test_run_voice_rechecks_an_unchanged_comment_daily(
+    home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
+    fake_publish_check: _RecordPublishCheck, monkeypatch,
+):
+    """A human may have deleted the comment: once a day it is written anyway."""
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    voice.run_voice(dict(state))
+    real = voice.time.time
+    monkeypatch.setattr(voice.time, "time", lambda: real() + voice._RECHECK_S + 1)
+    voice.run_voice(dict(state))
+    assert len(fake_upsert.calls) == 2 and len(fake_publish_check.calls) == 2
+
+
+def test_run_voice_refused_comment_is_retried_next_tick(
+    home: Path, fake_reconcile: _RecordReconcile, fake_publish_check: _RecordPublishCheck,
+    monkeypatch,
+):
+    calls = []
+
+    def _refuse(repo, pr_number, head_sha, body):
+        calls.append(head_sha)
+        return {"status": "could-not-run", "detail": "403"}
+
+    monkeypatch.setattr(pr_voice, "upsert_status_comment", _refuse)
+    state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
+    voice.run_voice(dict(state))
+    voice.run_voice(dict(state))
+    assert len(calls) == 2
 
 
 def test_run_voice_new_sha_opens_a_second_comment(
     home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
     fake_publish_check: _RecordPublishCheck,
 ):
-    """A force-push's new head_sha is a fresh comment, not a rewrite of
-    the old one — the old comment is left as-is (this step never deletes
-    or edits a comment keyed on a different sha)."""
+    """A force-push's new head_sha is written (the step hands `pr_voice`
+    the new head; `pr_voice` keeps one comment per PR and edits it)."""
     state1 = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
     voice.run_voice(state1)
     state2 = {"open": ["o/r#1"], "webhook_signals": [
@@ -442,13 +480,12 @@ def test_run_voice_same_sha_twice_updates_one_check(
     home: Path, fake_reconcile: _RecordReconcile, fake_upsert: _RecordUpsert,
     fake_publish_check: _RecordPublishCheck,
 ):
-    """Idempotent per head sha: re-running a tick against the same sha
-    updates the same check, never a second one."""
+    """Idempotent per head sha: a tick with nothing new republishes nothing."""
     state = {"open": ["o/r#1"], "webhook_signals": [_pr_signal("o/r#1", "aaa111")]}
     voice.run_voice(dict(state))
     receipt = voice.run_voice(dict(state))
-    assert len(fake_publish_check.calls) == 2
-    assert receipt["checked"][0]["action"] == "updated"
+    assert len(fake_publish_check.calls) == 1
+    assert receipt["checked"][0]["action"] == "unchanged"
 
 
 def test_run_voice_new_sha_opens_a_second_check(
@@ -616,10 +653,125 @@ def test_a_green_rerun_on_the_same_head_clears_ci_red():
     state["ci_head_legs"][f"o/r#1@{sha}"]["Tests"] = "success"  # the re-run went green
     assert pr_labels.LABEL_CI_RED not in voice._desired_labels_by_pr(state).get("o/r#1", set())
     assert voice._check_conclusion("o/r#1", sha, state) != "failure"
-    assert "green since" in voice._status_comment_body("o/r#1", sha, state, at="t")
+    assert "green since" in voice._status_comment_body("o/r#1", sha, state)
 
 
 def test_without_current_legs_the_filed_record_still_says_red():
     sha = "b" * 40
     state = {"pr_heads": {"o/r#2": {"head_sha": sha, "at": "t"}}, "ci_filed": {f"{sha}:12": "item"}}
     assert pr_labels.LABEL_CI_RED in voice._desired_labels_by_pr(state)["o/r#2"]
+
+
+# ── hygiene labels: size, conflict, stale, title ─────────────────────────
+
+
+def _pull(**over):
+    pull = {"additions": 3, "deletions": 2, "mergeable": True, "mergeable_state": "clean",
+            "title": "feat: a thing", "head": {"sha": "h" * 40}}
+    pull.update(over)
+    return pull
+
+
+@pytest.fixture
+def live(monkeypatch):
+    pulls: dict[tuple[str, int], dict] = {}
+    monkeypatch.setattr(voice, "_fetch_pull", lambda repo, pr: pulls[(repo, pr)])
+    return pulls
+
+
+def _labels_for(fake_reconcile, pr_num=1):
+    return next(c[2] for c in fake_reconcile.calls if c[1] == pr_num)
+
+
+@pytest.mark.parametrize("changed,label", [(0, "xs"), (9, "xs"), (10, "s"), (49, "s"),
+                                           (50, "m"), (249, "m"), (250, "l"), (999, "l"), (1000, "xl")])
+def test_size_buckets(changed, label):
+    assert voice.size_label(changed) == f"willow-bot/size/{label}"
+
+
+def test_run_voice_adds_size_and_conflict(home, fake_reconcile, live):
+    live[("o/r", 1)] = _pull(additions=200, deletions=100, mergeable=False, mergeable_state="dirty")
+    voice.run_voice({"open": ["o/r#1"]})
+    assert _labels_for(fake_reconcile) >= {"willow-bot/size/l", voice.CONFLICT_LABEL}
+
+
+def test_unknown_mergeability_keeps_the_conflict_label(home, monkeypatch, live):
+    seen = {}
+
+    def _rec(repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX, keep=()):
+        seen.update(desired=set(desired), keep=set(keep))
+        return {"status": "ok", "action": "no-op"}
+
+    monkeypatch.setattr(pr_labels, "reconcile_labels", _rec)
+    live[("o/r", 1)] = _pull(mergeable=None, mergeable_state="unknown")
+    voice.run_voice({"open": ["o/r#1"]})
+    assert voice.CONFLICT_LABEL not in seen["desired"] and voice.CONFLICT_LABEL in seen["keep"]
+
+
+def test_an_unreadable_pr_keeps_every_hygiene_label(home, monkeypatch):
+    seen = {}
+
+    def _rec(repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX, keep=()):
+        seen.update(keep=set(keep))
+        return {"status": "ok", "action": "no-op"}
+
+    monkeypatch.setattr(pr_labels, "reconcile_labels", _rec)
+    receipt = voice.run_voice({"open": ["o/r#1"]})  # conftest: no GitHub
+    assert seen["keep"] == set(voice.HYGIENE_PREFIXES)
+    assert receipt["unread"][0]["repo_pr"] == "o/r#1"
+
+
+def test_stale_from_the_push_record_not_updated_at(home, fake_reconcile, live):
+    sha = "h" * 40
+    live[("o/r", 1)] = _pull(updated_at="2099-01-01T00:00:00Z")
+    voice.run_voice({"open": ["o/r#1"], "pr_heads": {"o/r#1": {"head_sha": sha, "at": "2020-01-01T00:00:00Z"}}})
+    assert voice.STALE_LABEL in _labels_for(fake_reconcile)
+
+
+def test_a_fresh_head_is_not_stale(home, fake_reconcile, live):
+    sha = "h" * 40
+    now = voice.datetime.now(voice.timezone.utc).isoformat()
+    live[("o/r", 1)] = _pull()
+    voice.run_voice({"open": ["o/r#1"], "pr_heads": {"o/r#1": {"head_sha": sha, "at": now}}})
+    assert voice.STALE_LABEL not in _labels_for(fake_reconcile)
+
+
+def test_stale_falls_back_to_the_commit_date_read_once(home, fake_reconcile, live, monkeypatch):
+    reads = []
+    monkeypatch.setattr(voice, "_fetch_commit_date",
+                        lambda repo, sha: reads.append(sha) or "2020-01-01T00:00:00Z")
+    live[("o/r", 1)] = _pull()
+    voice.run_voice({"open": ["o/r#1"]})
+    voice.run_voice({"open": ["o/r#1"]})
+    assert reads == ["h" * 40]  # cached per sha across ticks
+    assert voice.STALE_LABEL in _labels_for(fake_reconcile)
+
+
+def test_titles_are_checked_only_when_the_profile_asks(home, fake_reconcile, live, monkeypatch, tmp_path):
+    import json as _json
+
+    from willow_bot import operator_profile
+
+    live[("o/r", 1)] = _pull(title="Update stuff")
+    voice.run_voice({"open": ["o/r#1"]})
+    assert voice.TITLE_LABEL not in _labels_for(fake_reconcile)
+
+    prof = tmp_path / "operator.json"
+    prof.write_text(_json.dumps({"pr_hygiene": {"conventional_titles": True, "size": False}}))
+    monkeypatch.setenv(operator_profile.PROFILE_ENV, str(prof))
+    operator_profile.reset()
+    try:
+        fake_reconcile.calls.clear()
+        voice.run_voice({"open": ["o/r#1"]})
+        labels = _labels_for(fake_reconcile)
+        assert voice.TITLE_LABEL in labels
+        assert not any(lbl.startswith(voice.SIZE_PREFIX) for lbl in labels)
+    finally:
+        operator_profile.reset()
+
+
+@pytest.mark.parametrize("title,ok", [("feat: x", True), ("fix(api)!: y", True),
+                                      ("chore(deps): bump", True), ("Fix: y", False),
+                                      ("feat:x", False), ("WIP", False)])
+def test_conventional_titles(title, ok):
+    assert bool(voice._CONVENTIONAL.match(title)) is ok

@@ -282,3 +282,17 @@ def test_the_owned_label_is_encoded_in_the_delete_url(monkeypatch):
     monkeypatch.setattr(pr_labels.requests, "delete", lambda url, **kw: seen.append(url) or _R())
     pr_labels._remove_label("o/r", 1, "willow-bot/ci-red", {})
     assert seen == ["https://api.github.com/repos/o/r/issues/1/labels/willow-bot%2Fci-red"]
+
+
+def test_keep_leaves_an_undecided_owned_label_on(rec: _Recorder):
+    """A fact the caller could not read this time (GitHub has not computed
+    mergeability yet) must not strip its label for being absent."""
+    rec.responses[("GET", LABELS_URL)] = [
+        _FakeResp(_payload=[_label("willow-bot/conflict"), _label("willow-bot/size/m")]),
+    ]
+    del_url = f"{LABELS_URL}/{quote('willow-bot/size/m', safe='')}"
+    rec.responses[("DELETE", del_url)] = [_FakeResp(_status=200)]
+
+    receipt = pr_labels.reconcile_labels(REPO, PR, {"willow-bot/size/l"}, keep=["willow-bot/conflict"])
+    assert receipt["removed"] == ["willow-bot/size/m"]
+    assert not any(c[0] == "DELETE" and "conflict" in c[1] for c in rec.calls)
