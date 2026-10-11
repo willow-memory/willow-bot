@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.1](https://github.com/willow-memory/willow-bot/compare/v1.2.0...v1.2.1) (2026-10-11)
+
+
+### Fixed
+
+* **status:** inbox reports what is pending; journal says what it counts ([a51b307](https://github.com/willow-memory/willow-bot/commit/a51b307cab414b497df0162ac1624b2699d12fd3))
+* **status:** inbox reports what is pending; journal says what it counts ([5b02001](https://github.com/willow-memory/willow-bot/commit/5b02001253fffdf5afe48849cf547ae53e717bf2))
+
 ## [1.2.0](https://github.com/willow-memory/willow-bot/compare/v1.1.0...v1.2.0) (2026-10-11)
 
 
