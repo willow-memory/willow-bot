@@ -232,3 +232,131 @@ def test_an_unconfigured_app_raises(monkeypatch):
     monkeypatch.setattr(github_app, "_configured", lambda: False)
     with pytest.raises(RuntimeError):
         github_app.list_issue_comments(REPO, 1)
+
+
+# ── backfill ──────────────────────────────────────────────────────────────
+
+BF_NOW = datetime(2026, 10, 11, tzinfo=timezone.utc)
+
+
+def _gh_pr(n, created, merged=None, closed=None, assoc="CONTRIBUTOR", login="ada"):
+    return {"number": n, "title": f"pr {n}", "html_url": f"https://x/{n}", "created_at": created,
+            "merged_at": merged, "closed_at": closed or merged, "author_association": assoc,
+            "user": {"login": login, "type": "User"}}
+
+
+def _fetch(pulls, issues):
+    return lambda repo: (pulls, issues)
+
+
+def test_backfill_stamps_rows_with_when_they_happened():
+    pulls = [_gh_pr(1, "2026-10-01T00:00:00Z", merged="2026-10-02T00:00:00Z"),
+             _gh_pr(2, "2026-10-03T00:00:00Z", closed="2026-10-04T00:00:00Z"),
+             _gh_pr(3, "2026-01-01T00:00:00Z")]  # outside the window
+    issues = [{"number": 9, "title": "bug", "created_at": "2026-10-05T00:00:00Z", "closed_at": None,
+               "author_association": "NONE", "user": {"login": "bo", "type": "User"}}]
+    out = contributions.backfill([REPO], days=30, now=BF_NOW, fetch=_fetch(pulls, issues))
+    assert out["added"] == 5 and out["repos"] == {REPO: 5}
+    rows = [json.loads(ln) for ln in contributions.ledger_path().read_text().splitlines()]
+    assert [(r["kind"], r["number"]) for r in rows] == [
+        ("pr_opened", 1), ("pr_merged", 1), ("pr_opened", 2), ("pr_closed", 2), ("issue_opened", 9)]
+    assert rows[1]["at"].startswith("2026-10-02") and all(r["backfill"] for r in rows)
+    assert rows[4]["outsider"] is True
+
+
+def test_backfill_twice_adds_nothing_and_skips_live_rows():
+    contributions.record("pull_request", _pr_event("opened"))  # live row: pr_opened #5
+    pulls = [_gh_pr(5, "2026-10-09T00:00:00Z")]
+    first = contributions.backfill([REPO], days=30, now=BF_NOW, fetch=_fetch(pulls, []))
+    assert first["added"] == 0
+    pulls.append(_gh_pr(6, "2026-10-09T00:00:00Z"))
+    assert contributions.backfill([REPO], days=30, now=BF_NOW, fetch=_fetch(pulls, []))["added"] == 1
+    assert contributions.backfill([REPO], days=30, now=BF_NOW, fetch=_fetch(pulls, []))["added"] == 0
+
+
+def test_one_unreadable_repo_does_not_stop_the_rest():
+    def fetch(repo):
+        if repo == "bad/repo":
+            raise RuntimeError("404")
+        return [_gh_pr(1, "2026-10-09T00:00:00Z")], []
+
+    out = contributions.backfill(["bad/repo", REPO], days=30, now=BF_NOW, fetch=fetch)
+    assert "bad/repo" in out["errors"] and out["repos"] == {REPO: 1}
+
+
+def test_backfill_cli_defaults_to_the_profiles_core_repos(monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(contributions, "backfill", lambda repos, days: seen.append((repos, days)) or {"added": 0})
+    assert contributions.main(["--backfill"]) == 0
+    assert seen[0][1] == 90 and "willow-memory/willow-mcp" in seen[0][0]
+    assert contributions.main(["--backfill", "--repo", "a/b", "--days", "7"]) == 0
+    assert seen[1] == (["a/b"], 7)
+
+
+def test_backfill_cli_with_no_repos_says_so(monkeypatch, tmp_path, capsys):
+    from willow_bot import operator_profile
+
+    monkeypatch.setenv(operator_profile.PROFILE_ENV, str(tmp_path / "none.json"))
+    operator_profile.reset()
+    assert contributions.main(["--backfill"]) == 2
+    assert "no repos" in capsys.readouterr().err
+
+
+# ── first-timer welcome ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def welcoming(monkeypatch, tmp_path):
+    from willow_bot import operator_profile
+
+    path = tmp_path / "operator.json"
+    path.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"]}}))
+    monkeypatch.setenv(operator_profile.PROFILE_ENV, str(path))
+    operator_profile.reset()
+    return path
+
+
+def test_a_first_timers_pr_gets_one_welcome(posts, welcoming):
+    out, post = posts
+    router.route("pull_request", _pr_event("opened", assoc="FIRST_TIME_CONTRIBUTOR"), post)
+    welcomes = [b for _, _, b in out if "first contribution" in b]
+    assert welcomes == [f"Thanks for your first contribution to {REPO}, @ada! A maintainer will take a look soon."]
+    router.route("pull_request", _pr_event("opened", assoc="FIRST_TIME_CONTRIBUTOR"), post)
+    assert len([b for _, _, b in out if "first contribution" in b]) == 1  # once per person per repo
+
+
+def test_a_first_timers_issue_gets_the_welcome_instead_of_a_quip(posts, welcoming):
+    out, post = posts
+    payload = {"action": "opened", "repository": {"full_name": REPO},
+               "issue": {"number": 4, "author_association": "FIRST_TIMER", "user": {"login": "bo", "type": "User"}}}
+    router.route("issues", payload, post)
+    assert len(out) == 1 and "@bo" in out[0][2]
+
+
+@pytest.mark.parametrize("assoc,typ,repo", [
+    ("CONTRIBUTOR", "User", REPO),               # not a first-timer
+    ("FIRST_TIME_CONTRIBUTOR", "Bot", REPO),     # a bot
+    ("FIRST_TIME_CONTRIBUTOR", "User", "other-org/x"),  # outside welcome.orgs
+])
+def test_no_welcome(posts, welcoming, assoc, typ, repo):
+    from willow_bot import welcome
+
+    assert welcome.line_for(repo, {"login": "ada", "type": typ}, assoc) == ""
+
+
+def test_off_unless_the_profile_turns_it_on(posts):
+    from willow_bot import welcome
+
+    # The suite's profile (willow-memory) has no welcome section.
+    assert welcome.line_for(REPO, {"login": "ada", "type": "User"}, "FIRST_TIMER") == ""
+
+
+def test_a_custom_message_and_a_broken_one(posts, welcoming):
+    from willow_bot import operator_profile, welcome
+
+    welcoming.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"], "message": "Hi {login} in {repo}"}}))
+    operator_profile.reset()
+    assert welcome.line_for(REPO, {"login": "ada", "type": "User"}, "FIRST_TIMER") == f"Hi ada in {REPO}"
+    welcoming.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"], "message": "Hi {nope}"}}))
+    operator_profile.reset()
+    assert "first contribution" in welcome.line_for(REPO, {"login": "cy", "type": "User"}, "FIRST_TIMER")

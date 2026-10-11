@@ -61,11 +61,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Through the module, at call time — never `from willow_bot.paths import
+# willow_home`: a name bound at import keeps whatever `willow_home` was then,
+# so a later re-point of the box (a test's sandbox, an env change) is missed.
+from willow_bot import paths as _paths
 from willow_bot.paths import (
     bot_dir as _bot_dir,
     deposits_dir as _deposits_dir,
     webhook_inbox_dir as _inbox_dir,
-    willow_home as _willow_home,
 )
 from willow_bot.steward import ci_comments as _ci_comments
 
@@ -349,7 +352,7 @@ def _read_upstream_ledger() -> dict[str, Any]:
 
 
 def _read_upstream_pending() -> dict[str, Any]:
-    pending_dir = _willow_home() / "upstream_steward" / "pending"
+    pending_dir = _paths.willow_home() / "upstream_steward" / "pending"
     if not pending_dir.is_dir():
         return {"status": "empty", "total": 0, "by_lane": {}}
     try:
@@ -608,7 +611,8 @@ def _read_app_grant() -> dict[str, Any]:
     if not isinstance(data, dict) or not isinstance(data.get("last"), dict):
         return {"status": "unreachable", "detail": "app_grant.json has no last verdict"}
     last = data["last"]
-    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"), "last": last}
+    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"), "last": last,
+            "flag": data.get("flag")}
 
 
 # ── operator profile ─────────────────────────────────────────────────────
@@ -681,13 +685,13 @@ def report() -> dict[str, Any]:
     from willow_bot.paths import BoxNotConfigured
 
     try:
-        _willow_home()
+        _paths.willow_home()
     except BoxNotConfigured as exc:
         return {"at": _now(), "willow_home": None, "status": "no-box", "detail": str(exc),
                 "version": _read_version(), "running_commit": _read_running_commit()}
     return {
         "at": _now(),
-        "willow_home": str(_willow_home()),
+        "willow_home": str(_paths.willow_home()),
         "version": _read_version(),
         "running_commit": _read_running_commit(),
         "heartbeat": _read_last_receipt(_heartbeat_receipts_path()),
@@ -704,3 +708,64 @@ def report() -> dict[str, Any]:
         "operator": _read_operator(),
         "contributions": _read_contributions(),
     }
+
+
+# ── brief ────────────────────────────────────────────────────────────────
+
+
+def _brief_detail(name: str, sec: dict[str, Any]) -> str:
+    """The one fact worth reading on a section's line."""
+    if sec.get("status") not in ("populated",):
+        return str(sec.get("detail") or "")[:100]
+    if name == "version":
+        return str(sec.get("version") or "")
+    if name == "running_commit":
+        return str(sec.get("sha") or "")[:12]
+    if name in ("heartbeat", "tick", "sync"):
+        return str(sec.get("at") or "")
+    if name == "journal":
+        return f"{sec.get('count', 0)} recent rows"
+    if name == "inbox":
+        return f"{sec.get('total', 0)} queued " + json.dumps(sec.get("depth_by_kind") or {}, separators=(",", ":"))
+    if name == "notifier":
+        return f"{len(sec.get('blocked') or [])} blocked"
+    if name == "ingress":
+        return f"{sec.get('verdict')} at {sec.get('at')}" + (" — FLAG OPEN" if sec.get("flag") else "")
+    if name == "upstream":
+        ledger = sec.get("ledger") or {}
+        return f"watching {len(sec.get('watch_repos') or [])} repos, {ledger.get('open_count', 0)} open PRs"
+    if name == "open_prs":
+        return f"{sec.get('count', 0)} open " + json.dumps(sec.get("by_ci") or {}, separators=(",", ":"))
+    if name == "app":
+        last = sec.get("last") or {}
+        bits = [str(sec.get("verdict"))]
+        if last.get("missing_permissions"):
+            bits.append("missing perms: " + ",".join(sorted(last["missing_permissions"])))
+        if last.get("missing_events"):
+            bits.append("missing events: " + ",".join(last["missing_events"]))
+        if last.get("unsubscribed"):
+            bits.append("unsubscribed: " + ",".join(last["unsubscribed"]))
+        if sec.get("flag"):
+            bits.append("FLAG OPEN")
+        return "; ".join(bits)
+    if name == "operator":
+        return f"{sec.get('login') or '(no login)'} via {sec.get('path')}"
+    if name == "contributions":
+        return f"{sec.get('rows', 0)} in {sec.get('days')}d, {len(sec.get('outside_contributors') or [])} outside"
+    return ""
+
+
+def brief(rep: dict[str, Any] | None = None) -> str:
+    """``report()`` as one line per section: name, state, the fact that
+    matters. ``willow-bot-steward status --brief``."""
+    rep = report() if rep is None else rep
+    lines = [f"willow-bot status at {rep.get('at')}  box={rep.get('willow_home')}"]
+    if rep.get("status") == "no-box":
+        lines.append(f"  no-box        {rep.get('detail')}")
+        return "\n".join(lines)
+    for name, sec in rep.items():
+        if not isinstance(sec, dict) or name == "cursors":
+            continue
+        state = str(sec.get("status") or "?")
+        lines.append(f"  {name:<15}{state:<12}{_brief_detail(name, sec)}".rstrip())
+    return "\n".join(lines)

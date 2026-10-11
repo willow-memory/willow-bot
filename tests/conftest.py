@@ -110,6 +110,12 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
     monkeypatch.setattr(_ingress, "_fetch_deliveries", _no_network_ingress)
     monkeypatch.setattr(_ingress, "_fetch_hook_url", _no_network_ingress)
 
+    # No test reads the runner's real `gh` token (willow-bot-contribute and the
+    # upstream desk fall back to `gh auth token`).
+    from willow_bot import contribute as _contribute
+
+    monkeypatch.setattr(_contribute, "_gh_token", lambda: "")
+
     from willow_bot.steward import app_grant as _app_grant
 
     monkeypatch.setattr(_app_grant, "_fetch_app", _no_network_ingress)

@@ -2,13 +2,39 @@
   "_doc": "Copy to $WILLOW_HOME/willow-bot/operator.json (or point WILLOW_BOT_OPERATOR_PROFILE at it). Every key is optional; an absent key is discovered from GitHub where it can be (login: gh api /user; orgs: your org memberships) and is otherwise empty. See willow_bot/operator_profile.py.",
   "login": "your-github-login",
   "bot_name": "your-app-name",
-  "orgs": ["your-org"],
-  "core_repos": ["your-org/your-main-repo"],
-  "upstream_watch": ["someone-else/project-you-contribute-to"],
+  "orgs": [
+    "your-org"
+  ],
+  "core_repos": [
+    "your-org/your-main-repo"
+  ],
+  "upstream_watch": [
+    "someone-else/project-you-contribute-to"
+  ],
   "github_root": "~/github",
-  "checkouts": {"your-org/odd-layout-repo": "elsewhere/odd-layout-repo"},
+  "checkouts": {
+    "your-org/odd-layout-repo": "elsewhere/odd-layout-repo"
+  },
   "clone_orgs": [],
-  "broker_pairs": {"your-org/your-main-repo": {"venv": "your-venv", "extras": []}},
-  "voice": {"orgs": ["your-org"]},
-  "grove": {"ci_red_orgs": [], "operator_sender": ""}
+  "broker_pairs": {
+    "your-org/your-main-repo": {
+      "venv": "your-venv",
+      "extras": []
+    }
+  },
+  "voice": {
+    "orgs": [
+      "your-org"
+    ]
+  },
+  "grove": {
+    "ci_red_orgs": [],
+    "operator_sender": ""
+  },
+  "welcome": {
+    "orgs": [
+      "your-org"
+    ],
+    "message": "Thanks for your first contribution to {repo}, @{login}! A maintainer will take a look soon."
+  }
 }

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -211,14 +212,111 @@ def summary(*, days: int | None = 30, repo: str | None = None, path: Path | None
     }
 
 
+def _backfill_rows(repo: str, pulls: list[dict], issues: list[dict], cutoff: datetime) -> list[dict]:
+    """Ledger rows from GitHub's PR and issue lists, each stamped with when
+    it happened (not now), within ``cutoff``. Comments, reviews, stars and
+    forks are not listed this way and are not backfilled."""
+    out: list[dict] = []
+
+    def _when(value: object) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            t = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return t.isoformat() if t >= cutoff else None
+
+    def _add(kind: str, at: str | None, item: dict, **extra: Any) -> None:
+        if at is None:
+            return
+        row = _row(kind, {"repository": {"full_name": repo}, "action": kind.split("_", 1)[1]},
+                   actor=item.get("user"), association=item.get("author_association"),
+                   number=item.get("number"), title=item.get("title", ""), url=item.get("html_url", ""),
+                   **extra)
+        row["at"] = at
+        row["backfill"] = True
+        out.append(row)
+
+    for pr in pulls:
+        _add("pr_opened", _when(pr.get("created_at")), pr)
+        if pr.get("merged_at"):
+            _add("pr_merged", _when(pr.get("merged_at")), pr)
+        elif pr.get("closed_at"):
+            _add("pr_closed", _when(pr.get("closed_at")), pr)
+    for issue in issues:
+        _add("issue_opened", _when(issue.get("created_at")), issue)
+        if issue.get("closed_at"):
+            _add("issue_closed", _when(issue.get("closed_at")), issue)
+    return out
+
+
+def backfill(repos: list[str], *, days: int = 90, path: Path | None = None,
+             now: datetime | None = None, fetch=None) -> dict:
+    """Fill the ledger from GitHub's PR and issue history for ``repos``,
+    under the App's install token. A row already in the ledger (same repo,
+    kind and number) is not written twice, so a re-run adds only what is
+    new. Returns counts per repo, and the error for a repo that could not
+    be read."""
+    path = path or ledger_path()
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+    if fetch is None:
+        import github_app
+
+        def fetch(repo: str) -> tuple[list[dict], list[dict]]:
+            return (github_app.list_recent_pulls(repo, max_pages=3),
+                    github_app.list_recent_issues(repo, since=cutoff.isoformat(), max_pages=3))
+
+    have = {(r.get("repo"), r.get("kind"), r.get("number")) for r in _read(path)}
+    result: dict[str, Any] = {"days": days, "repos": {}, "errors": {}}
+    new_rows: list[dict] = []
+    for repo in repos:
+        try:
+            pulls, issues = fetch(repo)
+        except Exception as exc:  # noqa: BLE001 — one unreadable repo never stops the rest
+            result["errors"][repo] = f"{type(exc).__name__}: {exc}"[:200]
+            continue
+        added = 0
+        for row in _backfill_rows(repo, pulls, issues, cutoff):
+            key = (row["repo"], row["kind"], row["number"])
+            if key in have:
+                continue
+            have.add(key)
+            new_rows.append(row)
+            added += 1
+        result["repos"][repo] = added
+    if new_rows:
+        new_rows.sort(key=lambda r: r["at"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            for row in new_rows:
+                f.write(json.dumps(row, separators=(",", ":"), ensure_ascii=True) + "\n")
+    result["added"] = len(new_rows)
+    return result
+
+
 def main(argv: list[str]) -> int:
-    """``willow-bot-steward contributions [--days N|--all] [--repo owner/name]``"""
+    """``willow-bot-steward contributions [--days N|--all] [--repo owner/name] [--backfill]``"""
     import argparse
 
     p = argparse.ArgumentParser(prog="willow-bot-steward contributions")
-    p.add_argument("--days", type=int, default=30)
+    p.add_argument("--days", type=int, default=None, help="window (default 30; 90 with --backfill)")
     p.add_argument("--all", action="store_true", help="read the whole ledger")
-    p.add_argument("--repo", default=None)
+    p.add_argument("--repo", action="append", default=None,
+                   help="owner/name; repeat for several (backfill default: the profile's core_repos)")
+    p.add_argument("--backfill", action="store_true",
+                   help="fill the ledger from GitHub's PR and issue history, under the App's token")
     a = p.parse_args(argv)
-    print(json.dumps(summary(days=None if a.all else a.days, repo=a.repo), indent=2))
+    if a.backfill:
+        from willow_bot import operator_profile
+
+        repos = a.repo or operator_profile.core_repos()
+        if not repos:
+            print("contributions --backfill: no repos; pass --repo owner/name or set core_repos "
+                  "in the operator profile", file=sys.stderr)
+            return 2
+        print(json.dumps(backfill(repos, days=a.days or 90), indent=2))
+        return 0
+    repo = a.repo[0] if a.repo else None
+    print(json.dumps(summary(days=None if a.all else (a.days or 30), repo=repo), indent=2))
     return 0

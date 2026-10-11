@@ -3424,7 +3424,13 @@ def run_app_grant() -> dict:
     (``willow_bot.steward.app_grant``) and receipt the answer."""
     from willow_bot.steward import app_grant
 
-    return _emit(app_grant.run())
+    enable_mcp = mcp_enabled()
+    call = None
+    if enable_mcp:
+        from willow_bot.steward import mcp_client
+
+        call = mcp_client.call
+    return _emit(app_grant.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
 def _run_upstream_desk() -> dict:
@@ -3574,6 +3580,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "status":
         from willow_bot import status
 
+        if "--brief" in args[1:]:
+            print(status.brief())
+            return 0
         print(json.dumps(status.report(), separators=(",", ":"), default=str))
         return 0
     if args[0] == "loop":
@@ -3598,7 +3607,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
