@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.1.0](https://github.com/willow-memory/willow-bot/compare/v1.0.0...v1.1.0) (2026-10-11)
+
+
+### Added
+
+* **status:** operator, App grant, and open-PR CI on the status surface ([5fcfca4](https://github.com/willow-memory/willow-bot/commit/5fcfca4e12d6a0af4ba6cfd0a94b342dbbb42316))
+
 ## [1.0.0](https://github.com/willow-memory/willow-bot/compare/v0.21.0...v1.0.0) (2026-10-11)
 
 
