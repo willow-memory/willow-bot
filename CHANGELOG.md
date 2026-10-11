@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.5](https://github.com/willow-memory/willow-bot/compare/v1.2.4...v1.2.5) (2026-10-11)
+
+
+### Fixed
+
+* 20 places the bot didn't do what its own docs say ([c6919f2](https://github.com/willow-memory/willow-bot/commit/c6919f228c1c81b6ef4889c3838698d80aa9259a))
+* **steward:** mirror past a torn line, desk keeps what it can't read, bounded CI maps ([09c31c5](https://github.com/willow-memory/willow-bot/commit/09c31c54f6b9086ad800dc1e58f6888630ea8496))
+* **voice:** durable PR heads; ci-red follows the head's current legs ([abcb6b8](https://github.com/willow-memory/willow-bot/commit/abcb6b8d9db2ad8e9eac2bf4b0cc4e1a5351a7a9))
+* **voice:** owned labels removable, recovery gated, red commits not legs, shame per PR ([91ab09a](https://github.com/willow-memory/willow-bot/commit/91ab09a368d657dea66dea5782dd1fc03c47bd31))
+* **webhook:** dedup redelivers failures, default branch, exact origin, app-scoped checks ([c145c73](https://github.com/willow-memory/willow-bot/commit/c145c7366f7e03ebcfdeb8c57edb08155947afce))
+
 ## [1.2.4](https://github.com/willow-memory/willow-bot/compare/v1.2.3...v1.2.4) (2026-10-11)
 
 
