@@ -37,6 +37,8 @@ box and the clone root as inside or OUTSIDE (`status` carries the same counts).
 `willow-bot-steward venvs --plan` prints, for each one outside, the commands that
 recreate it inside. It runs nothing.
 
+`status` (and `venvs`) also show each venv's installed set (count and a hash) and, for the bot's own venvs, drift from a lock you generate: `pip-compile --generate-hashes` into `$WILLOW_HOME/willow-bot/locks/<venv>.requirements.lock`. No lock reads as "none", never as "no drift". The bot never writes a lock.
+
 Recreate, never `mv`: every script in a venv's `bin/` names the old interpreter
 path in its shebang. The plan freezes the old venv's packages, builds a new venv,
 re-installs the editable checkouts (add back their extras, e.g. `[dev,seat]`),
