@@ -223,10 +223,35 @@ def _read_journal_excerpt(path: Path, n: int = _JOURNAL_TAIL) -> dict[str, Any]:
 # ── inbox depth by kind ───────────────────────────────────────────────────
 
 
+def _read_inbox_consumed() -> set[str] | None:
+    """The work_ids the inbox step has consumed, from the steward state.
+    An absent state file is an empty set (nothing consumed yet); an
+    unreadable one is ``None``."""
+    from willow_bot.steward.config import state_path
+
+    p = state_path()
+    if not p.is_file():
+        return set()
+    try:
+        state = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(state, dict):
+        return None
+    return {str(w) for w in state.get("inbox_consumed") or []}
+
+
 def _read_inbox_depth() -> dict[str, Any]:
-    """Count the pending inbox rows grouped by ``kind``. Cheap: only the
-    file's JSON key is parsed, not the whole payload (a webhook body can
-    be a few KB and this box has 500+ deposits already)."""
+    """Count the inbox files grouped by ``kind`` (``total``,
+    ``depth_by_kind``), and how many of them the inbox step has not yet
+    consumed (``pending``, ``pending_by_kind``).
+
+    The inbox step never deletes a file: it records each consumed
+    ``work_id`` in the steward state's ``inbox_consumed``. So ``total`` is
+    what sits on disk, and ``pending`` is what is actually waiting. When
+    the state cannot be read, ``pending`` is ``None`` (unknown), never a
+    guess."""
+    consumed = _read_inbox_consumed()
     inbox = _inbox_dir()
     if not inbox.is_dir():
         return {"status": "empty", "total": 0, "depth_by_kind": {}}
@@ -236,6 +261,7 @@ def _read_inbox_depth() -> dict[str, Any]:
         return {"status": "unreachable", "total": 0, "depth_by_kind": {},
                 "detail": str(exc)[:200]}
     by_kind: dict[str, int] = {}
+    pending_by_kind: dict[str, int] = {}
     unreadable = 0
     for entry in entries:
         try:
@@ -249,10 +275,14 @@ def _read_inbox_depth() -> dict[str, Any]:
             continue
         kind = str(item.get("kind") or "unknown")
         by_kind[kind] = by_kind.get(kind, 0) + 1
+        if consumed is not None and item.get("work_id") not in consumed:
+            pending_by_kind[kind] = pending_by_kind.get(kind, 0) + 1
     result: dict[str, Any] = {
         "status": "populated" if entries else "empty",
         "total": len(entries),
         "depth_by_kind": dict(sorted(by_kind.items())),
+        "pending": sum(pending_by_kind.values()) if consumed is not None else None,
+        "pending_by_kind": dict(sorted(pending_by_kind.items())) if consumed is not None else None,
     }
     if unreadable:
         result["unreadable"] = unreadable
@@ -724,9 +754,13 @@ def _brief_detail(name: str, sec: dict[str, Any]) -> str:
     if name in ("heartbeat", "tick", "sync"):
         return str(sec.get("at") or "")
     if name == "journal":
-        return f"{sec.get('count', 0)} recent rows"
+        return f"{sec.get('count', 0)} rows in the tick log"
     if name == "inbox":
-        return f"{sec.get('total', 0)} queued " + json.dumps(sec.get("depth_by_kind") or {}, separators=(",", ":"))
+        files = f"{sec.get('total', 0)} files on disk"
+        if sec.get("pending") is None:
+            return f"pending unknown (state unreadable), {files}"
+        return (f"{sec['pending']} pending " + json.dumps(sec.get("pending_by_kind") or {}, separators=(",", ":"))
+                + f", {files}")
     if name == "notifier":
         return f"{len(sec.get('blocked') or [])} blocked"
     if name == "ingress":
