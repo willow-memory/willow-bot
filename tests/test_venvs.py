@@ -151,3 +151,169 @@ def test_status_carries_the_counts(roots):
     assert (sec["inside"], sec["outside"]) == (0, 1)
     line = [ln for ln in status.brief().splitlines() if ln.strip().startswith("venvs")]
     assert line and "1 outside" in line[0] and "venvs --plan" in line[0]
+
+
+# ── the installed set, and drift from the human's lock (IDEAS 54, 57) ─────
+
+
+def _install(venv: Path, name: str, version: str, editable: bool = False) -> None:
+    site = venv / "lib" / "python3.12" / "site-packages"
+    dist = site / f"{name}-{version}.dist-info"
+    dist.mkdir(parents=True, exist_ok=True)
+    if editable:
+        (dist / "direct_url.json").write_text(json.dumps({"url": "file:///x", "dir_info": {"editable": True}}))
+
+
+def _lock(venv: Path, text: str) -> Path:
+    path = venvs.lock_path(venv)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def _bot_venv(name: str = "willow-bot") -> Path:
+    return _fake_venv(paths.venvs_dir() / name)
+
+
+def test_installed_set_is_hashed_and_dated(roots):
+    v = _bot_venv()
+    _install(v, "Requests", "2.32.3")
+    _install(v, "typing_extensions", "4.12.2")
+    have = venvs.installed(v)
+    assert have["status"] == "populated" and have["count"] == 2
+    assert have["packages"] == {"requests": "2.32.3", "typing-extensions": "4.12.2"}
+    assert have["modified"].endswith("Z")
+    first = have["hash"]
+    _install(v, "idna", "3.7")
+    assert venvs.installed(v)["hash"] != first  # the set changed, the hash moved
+
+
+def test_installed_empty_is_not_unreachable(roots):
+    v = _bot_venv()
+    (v / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+    assert venvs.installed(v)["status"] == "empty"
+
+
+def test_a_venv_with_no_site_packages_is_unknown_not_empty(roots):
+    have = venvs.installed(_bot_venv())  # pyvenv.cfg only
+    assert have["status"] == "unreachable" and "hash" not in have
+
+
+def test_unlistable_site_packages_is_unreachable(roots, monkeypatch):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+
+    def boom(self):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "iterdir", boom)
+    have = venvs.installed(v)
+    assert have["status"] == "unreachable" and "Permission denied" in have["detail"]
+
+
+def test_no_lock_is_empty_never_no_drift(roots):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    [row] = venvs.inventory()["venvs"]
+    assert row["lock"]["status"] == "empty"
+    assert row["lock"]["drift"] is None
+    assert "no lock" in row["lock"]["detail"]
+
+
+def test_lock_that_matches_is_populated_without_drift(roots):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    _install(v, "pip", "24.0")  # tooling: not drift when unpinned
+    _install(v, "willow_bot", "1.7.0", editable=True)  # editable: cannot be pinned
+    _lock(v, "requests==2.32.3 \\\n    --hash=sha256:abc\n# comment\n")
+    lock = venvs.drift(v, venvs.installed(v))
+    assert lock["status"] == "populated" and lock["drift"] is False
+
+
+def test_drift_names_missing_changed_and_extra(roots):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    _install(v, "urllib3", "2.2.1")
+    _install(v, "rich", "13.0")
+    _lock(v, "requests==2.31.0 \\\n    --hash=sha256:abc\nurllib3==2.2.1\nidna==3.7\n")
+    lock = venvs.drift(v, venvs.installed(v))
+    assert lock["status"] == "populated" and lock["drift"] is True
+    assert lock["missing"] == ["idna"]
+    assert lock["extra"] == ["rich"]
+    assert lock["changed"] == [{"name": "requests", "installed": "2.32.3", "locked": "2.31.0"}]
+
+
+def test_exact_match_has_no_drift(roots):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    _lock(v, "requests==2.32.3 \\\n    --hash=sha256:abc\n")
+    lock = venvs.drift(v, venvs.installed(v))
+    assert lock["drift"] is False and not (lock["missing"] or lock["changed"] or lock["extra"])
+
+
+def test_unreadable_lock_is_unreachable_not_empty(roots):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    _lock(v, "")
+    venvs.lock_path(v).write_bytes(b"\xff\xfe\x00 not utf8")
+    lock = venvs.drift(v, venvs.installed(v))
+    assert lock["status"] == "unreachable" and lock["drift"] is None
+
+
+def test_lock_that_pins_nothing_is_empty(roots):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    _lock(v, "# nothing here\n")
+    assert venvs.drift(v, venvs.installed(v))["status"] == "empty"
+
+
+def test_lock_with_unknown_install_is_unreachable_not_drifted(roots):
+    v = _bot_venv()  # no site-packages
+    _lock(v, "requests==2.32.3\n")
+    lock = venvs.drift(v, venvs.installed(v))
+    assert lock["status"] == "unreachable" and lock["drift"] is None
+
+
+def test_outside_venv_is_not_checked_against_a_lock(roots):
+    box, _ = roots
+    old = _fake_venv(box / "venvs" / "willow-mcp")
+    _install(old, "requests", "2.32.3")
+    [row] = venvs.inventory()["venvs"]
+    assert row["inside"] is False and row["lock"]["status"] == "unchecked"
+    assert row["lock"]["drift"] is None
+
+
+def test_status_carries_per_venv_detail_and_drift(roots):
+    from willow_bot import status
+
+    v = _bot_venv("willow-bot")
+    _install(v, "requests", "2.32.3")
+    _lock(v, "requests==2.31.0\n")
+    sec = status.report()["venvs"]
+    [row] = sec["venvs"]
+    assert row["python"] == "3.12.4" and row["installed"]["count"] == 1
+    assert row["installed"]["hash"] and "packages" not in row["installed"]
+    assert row["lock"]["drift"] is True
+    assert sec["drifted"] == [row["path"]] and sec["unlocked"] == []
+    [line] = [ln for ln in status.brief().splitlines() if ln.strip().startswith("venvs")]
+    assert "1 drifted from the lock" in line
+
+
+def test_status_names_a_venv_without_a_lock(roots):
+    from willow_bot import status
+
+    v = _bot_venv("willow-bot")
+    _install(v, "requests", "2.32.3")
+    sec = status.report()["venvs"]
+    assert sec["drifted"] == [] and sec["unlocked"] == [sec["venvs"][0]["path"]]
+    [line] = [ln for ln in status.brief().splitlines() if ln.strip().startswith("venvs")]
+    assert "1 without a lock" in line
+
+
+def test_cli_text_shows_hash_and_lock_word(roots, capsys):
+    v = _bot_venv()
+    _install(v, "requests", "2.32.3")
+    _lock(v, "requests==2.32.3\n")
+    assert venvs.main([]) == 0
+    out = capsys.readouterr().out
+    assert "1 pkgs #" in out and "lock: matches" in out

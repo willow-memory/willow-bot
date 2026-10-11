@@ -31,6 +31,9 @@ One operation: ``report()`` returns a dict of the form:
       "app": {"status": ..., "verdict": "ok"|"partial"|"failing"|..., "last": {...}},
       "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
       "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
+      "venvs": {"status": ..., "inside": N, "outside": N, "venvs": [{"path", "inside", "python",
+                "installed": {"status", "count", "hash", "modified"}, "lock": {"status", "drift", ...}}],
+                "drifted": [...], "unlocked": [...]},
     }
 
 Three states per source, chosen deliberately:
@@ -725,6 +728,21 @@ def _read_venvs() -> dict[str, Any]:
         "outside": inv["outside"],
         "outside_paths": [v["path"] for v in inv["venvs"] if not v["inside"]],
         "unreadable": inv["unreadable"],
+        # Per venv: python, a hash of the installed set, when it last changed,
+        # and installed-versus-lock. A set or lock the bot cannot read is
+        # "unreachable", and no lock is "empty" with drift None, never "no drift".
+        "venvs": [
+            {
+                "path": v["path"],
+                "inside": v["inside"],
+                "python": v["python"] or None,
+                "installed": v["installed"],
+                "lock": v["lock"],
+            }
+            for v in inv["venvs"]
+        ],
+        "drifted": [v["path"] for v in inv["venvs"] if v["lock"]["drift"] is True],
+        "unlocked": [v["path"] for v in inv["venvs"] if v["inside"] and v["lock"]["status"] == "empty"],
     }
 
 
@@ -814,6 +832,10 @@ def _brief_detail(name: str, sec: dict[str, Any]) -> str:
         line = f"{sec.get('inside', 0)} inside the bot, {sec.get('outside', 0)} outside"
         if sec.get("outside"):
             line += " — D2: `venvs --plan`"
+        if sec.get("drifted"):
+            line += f"; {len(sec['drifted'])} drifted from the lock"
+        if sec.get("unlocked"):
+            line += f"; {len(sec['unlocked'])} without a lock"
         if sec.get("unreadable"):
             line += f"; {len(sec['unreadable'])} dirs unreadable"
         return line
