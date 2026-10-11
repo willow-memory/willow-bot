@@ -53,11 +53,11 @@ Checked and absent: slash commands (`router._handle_comment` only logs outside c
 
 21. **Weekly digest** per repo: opened/merged/stale/red counts. M, low-med. Builds on the repo-state report. Fit: write it to `status --brief` or the inbox rather than opening an issue in the repo.
 22. **Flaky test detection**: a leg red then green on the same sha, counted per test. L, med. Builds on `ci_log.py` and `ci_backfill.py`. No source; per-test names need log parsing.
-23. **Conditional requests** (ETag / `If-None-Match`) for per-tick GETs. S-M, low-med. Source: [GitHub best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) (a 304 costs no primary rate limit; not re-fetched). Note: `github_app.list_open_pulls` documents its own cost as under 1% of the 5000/hr budget, so measure before spending effort. Fit: cache beside the other tick state; a failed cache read falls back to a normal GET.
+23. **Conditional requests** (ETag / `If-None-Match`) for per-tick GETs. S-M, med-high. Source: [GitHub best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) (a 304 costs no primary rate limit; not re-fetched). Note: the "under 1%" figure in `github_app.list_open_pulls` predates #123; the voice step now reads every open PR every tick (`get_pull` plus the label GET, ~24/hr per PR), and items 7-11 add a files read, so the cost scales with open PRs. Fit: cache beside the other tick state; a failed cache read falls back to a normal GET.
 
 ## Next batch (one PR: "PR hygiene checks and opt-in housekeeping")
 
-All seven share the hygiene pass in `voice.py` and the profile settings block, and none needs a new webhook handler.
+All eight share the hygiene pass in `voice.py` and the profile settings block, and none needs a new webhook handler.
 
 1. **WIP, title and linked-issue statuses (7, 8, 9)**: three checks through the existing `publish_check`, no comment noise.
 2. **Path labels (10)**: small, and the owned prefix keeps it safe.
@@ -66,6 +66,7 @@ All seven share the hygiene pass in `voice.py` and the profile settings block, a
 5. **Stale warn-then-close, warn-only default (15)**: the most common request; builds on the stale label.
 6. **Needs-info loop (16)**: closes the issue-side gap with a single owned label.
 7. **Auto-update branch (4)**: one API call on a state the hygiene pass already reads; per-PR opt-in label.
+8. **Conditional requests (23)**: ETag / `If-None-Match` on the per-tick reads (`get_pull`, the PR's labels, its files) so an unchanged PR answers 304 and costs no rate limit; lands first so 1-3 don't multiply the read cost.
 
 Next PR after that: **slash commands (1)**, since 2, 13 and a rerun command all hang off it.
 
