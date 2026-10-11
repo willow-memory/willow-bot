@@ -408,9 +408,9 @@ def launch(rec):
     rec.write_file(run, "docs/a.md", b"boot", provenance="authored")
 
 
-# The seal is itself a human row, so a pile that holds it (the human's, the
-# seal kind's, the whole day's) moves when sealed: those are not what a scope
-# names. Each case names the authored pile(s) a scope would, per W.
+# A scope seal is in no pile (`serve.scope_seal`), so sealing never moves the
+# subject it seals; the "who", "what=seal" and day piles are covered by the
+# scope-seal tests below. Each case names the authored pile(s) a scope would.
 STABLE = [
     (("who",), {"who": "hanuman"}),
     (("what",), {"what": "door"}),
@@ -491,3 +491,76 @@ def test_an_authored_row_still_moves_the_subject_and_needs_a_new_seal(tmp_path):
     assert moved["subject"] not in serve.sealed(rec.rows())
     doc = capped(rec, serve.piles(rec.rows(), "who"), moved["ids"], SERVE_KEY)
     assert doc["state"] == "empty" and "no human seal" in doc["why"]
+
+
+# ── a scope seal never moves the scope it seals ───────────────────────────────
+def human_act(rec, subject="tip:7:" + "ab" * 32):
+    """A seal the human makes that is not a scope seal (a tip or wager seal):
+    the human's own act, so it is content in the human's pile."""
+    seal(rec, subject)
+
+
+@pytest.mark.parametrize(
+    "by,match",
+    [
+        (("who",), {}),  # every who pile, the human's among them
+        (("who",), {"who": "human"}),  # the human's pile alone
+        (("what",), {"what": "seal"}),  # the seal kind's pile
+        (("when",), {}),  # every row, one pile per timestamp
+    ],
+)
+def test_sealing_a_scope_does_not_move_its_subject(tmp_path, by, match):
+    """gap 54b88478b658: a scope seal is a who=="human" row. Were it in the
+    human's pile, sealing would change that pile's id and so the subject, and
+    the seal would never match again (nor would the next one)."""
+    rec = box(tmp_path)
+    activity(rec)
+    human_act(rec)
+    launch(rec)
+    card = serve.propose(serve.piles(rec.rows(), *by), **match)
+    assert card["subject"] and card["ids"]
+    seal(rec, card["subject"])
+    again = serve.propose(serve.piles(rec.rows(), *by), **match)
+    assert again["subject"] == card["subject"] and again["ids"] == card["ids"]
+    assert again["subject"] in serve.sealed(rec.rows())
+    doc = capped(rec, serve.piles(rec.rows(), *by), again["ids"], SERVE_KEY)
+    assert doc["state"] == "populated"
+    assert "serve:" not in json.dumps(doc["tables"])  # no scope seal is served
+
+
+def test_a_first_scope_seal_adds_no_pile(tmp_path):
+    """With no human row before it, a scope seal in a pile would add a new
+    who=human pile, and a scope over every pile would move by gaining it."""
+    rec = box(tmp_path)
+    activity(rec)
+    card = serve.propose(serve.piles(rec.rows(), "who"))
+    seal(rec, card["subject"])
+    stack = serve.piles(rec.rows(), "who")
+    assert "who=human" not in {serve.name(p) for p in stack}
+    assert serve.propose(stack)["subject"] == card["subject"]
+
+
+def test_a_tip_or_wager_seal_is_still_content_and_moves_the_subject(tmp_path):
+    """Only scope seals are left out: the human's other seals are what the
+    human's pile holds, and a new one is a new authored row."""
+    rec = box(tmp_path)
+    activity(rec)
+    human_act(rec)
+    card = serve.propose(serve.piles(rec.rows(), "who"), who="human")
+    human_act(rec, "tip:9:" + "cd" * 32)
+    moved = serve.propose(serve.piles(rec.rows(), "who"), who="human")
+    assert moved["subject"] != card["subject"]
+
+
+def test_mutant_seal_rows_back_in_the_pile_drift_the_subject(tmp_path, monkeypatch):
+    """The mutation proof: put scope seals back in the piles and the ids, as
+    before the fix, and sealing the scope moves its subject."""
+    monkeypatch.setattr(serve, "scope_seal", lambda row: False)
+    rec = box(tmp_path)
+    activity(rec)
+    human_act(rec)
+    card = serve.propose(serve.piles(rec.rows(), "who"), who="human")
+    seal(rec, card["subject"])
+    again = serve.propose(serve.piles(rec.rows(), "who"), who="human")
+    assert again["subject"] != card["subject"]  # the drift the fix removes
+    assert again["subject"] not in serve.sealed(rec.rows())
