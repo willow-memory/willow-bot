@@ -41,6 +41,21 @@ mcp = ["mcp>=1.0,<3"]
 # `ruff` is pinned exactly to the fleet's CI pin: the one script's toolchain
 # gate checks the bot venv's ruff against it (D2: the venvs live in the bot).
 dev = ["pytest>=8", "httpx>=0.27", "ruff==0.16.7"]
+# The grove CLI seat's runtime (D2: the venvs live in the bot). The seat's
+# close-out deposit lazy-imports `willow_mcp` (onescript_deposit, db.Store) and
+# its flowering turns shell out to the `ratatosk` console script, so a
+# provisioned bot venv must carry both: `pip install -e ".[seat]"`.
+# docs/design/fleet-versioning.md Rule 1 (every pin carries its why):
+#   willow-mcp: floor 2.96.0 is the release the seat's deposit path was
+#   verified against; capped at the next major. Both are PyPI packages (no
+#   direct-URL dep). No cycle: willow-mcp's deps do not name willow-bot (the
+#   arrows point into willow-mcp), and tests/test_seat_extra.py guards that.
+#   willow-ratatosk: willow-mcp already pulls it transitively, but it is listed
+#   here because the seat needs its `ratatosk` console script on the venv bin
+#   and must not lose it if willow-mcp ever drops the dependency. Floor 1.7.0
+#   matches willow-mcp's own floor; capped at the next major.
+# willow-mcp requires Python >=3.11, so this extra does not resolve on 3.10.
+seat = ["willow-mcp>=2.96.0,<3.0.0", "willow-ratatosk>=1.7.0,<2.0.0"]
 
 [project.scripts]
 willow-bot = "willow_bot.cli:webhook_main"
