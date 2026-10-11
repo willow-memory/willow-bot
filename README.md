@@ -5,14 +5,17 @@ fleet. Propose-only: the App may comment and deposit draft CI outcomes; it
 cannot commit.
 
 Install: `pip install willow-bot`  
-Docs: [INSTALL.md](INSTALL.md) · [docs/MOVE-STAY-BORROW.md](docs/MOVE-STAY-BORROW.md) · [docs/ideas.md](docs/ideas.md)
+Docs: [INSTALL.md](INSTALL.md) · [docs/MOVE-STAY-BORROW.md](docs/MOVE-STAY-BORROW.md)
 
 ```bash
 willow-bot              # webhook (uvicorn)
 willow-bot-steward tick    # PR watch one-shot
 willow-bot-steward status  # read-only surface: version, tick, inbox depth, cursors
+willow-bot-steward status --brief  # one line per section
+willow-bot-steward app-grant  # does the App have the permissions and events the code needs?
 willow-bot-steward contributions --days 30  # who contributed: outsiders, first-timers, per repo
-willow-bot-contribute [--user LOGIN]   # anyone: your projects, what waits on you, openings (uses your GITHUB_TOKEN, never the App's)
+willow-bot-steward contributions --backfill  # fill the ledger from GitHub history (core_repos, 90 days)
+willow-bot-contribute [--user LOGIN]   # anyone: your projects, what waits on you, openings (your GITHUB_TOKEN or gh login, never the App's)
 willow-bot-steward heartbeat  # curated willow-mcp tools when WILLOW_BOT_MCP=1
 willow-bot-deterministic serve   # host loopback runner (Unix socket for Kart)
 willow-bot-deterministic client --fixtures /path/to/S-growth-*.json dir
