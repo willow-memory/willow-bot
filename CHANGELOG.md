@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.0](https://github.com/willow-memory/willow-bot/compare/v1.6.0...v1.7.0) (2026-10-11)
+
+
+### Added
+
+* **venvs:** D2 — the bot's venvs live in the bot ([fcf6346](https://github.com/willow-memory/willow-bot/commit/fcf63464a7f885007e6925888ea34ce5b96ff107))
+* **venvs:** D2 — the bot's venvs live in the bot, plus the ideas doc ([2efb932](https://github.com/willow-memory/willow-bot/commit/2efb932d38a479a78f13e9383e9799ddc43b86df))
+
 ## [1.6.0](https://github.com/willow-memory/willow-bot/compare/v1.5.0...v1.6.0) (2026-10-11)
 
 
