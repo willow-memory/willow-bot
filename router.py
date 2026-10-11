@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Callable
 
+import github_app
 import horoscope
 import quips
 import rebase_shame
@@ -94,6 +95,20 @@ def _welcome(repo: str, number: object, user: dict | None, association: object, 
     return True
 
 
+def _may_on_pr(repo: str, number: object, moment: str) -> bool:
+    """`_may` for a moment whose payload names no author (a check run): the
+    PR's own author and association, read from GitHub, decide. Calling `_may`
+    as a bot would let it speak on an outside contributor's PR; an unreadable
+    PR is silence, never a guess."""
+    try:
+        pr = github_app.get_pull(repo, int(number))
+    except Exception:  # noqa: BLE001 — the voice must never break the webhook
+        log.info("[%s] #%s %s: PR unreadable — silent", repo, number, moment)
+        return False
+    user = pr.get("user") or {}
+    return _may(repo, number, moment, pr.get("author_association"), bot=user.get("type") == "Bot")
+
+
 def _troll_line(event: str, repo: str, facts: dict, sha: str = "") -> str:
     try:
         line, tag = troll.say(event, repo, facts, sha=sha)
@@ -116,6 +131,17 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
 
     if action == "opened":
         _welcome(repo, number, pr.get("user"), assoc, post)
+
+    # The branch's force-push count belongs to this PR only: read it once the
+    # PR closes, then forget it. Only a branch in this repo counts; a fork's
+    # head is a branch of another repo that merely shares the name.
+    shame = ""
+    if action == "closed":
+        head = pr.get("head") or {}
+        ref = str(head.get("ref") or "")
+        if ref and str((head.get("repo") or {}).get("full_name") or "").lower() == str(repo).lower():
+            shame = rebase_shame.header(rebase_shame.get(repo, ref))
+            rebase_shame.reset(repo, ref)
 
     if _mode_override():
         # The old single-voice path, behind the same scope and limits.
@@ -141,7 +167,6 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
             return
         if human:
             line = f"**{title.capitalize()} {login}** — {line}\n\n{horoscope.reading(login, title=title)}"
-        shame = rebase_shame.header(rebase_shame.get(repo, pr.get("head", {}).get("ref", "")))
         post(repo, number, f"{shame}\n\n{line}" if shame else line)
     elif action == "closed":
         if not _may(repo, number, "closed", assoc, bot=not human):
@@ -223,21 +248,22 @@ def _handle_check_run(payload: dict, post: Callable) -> None:
     if action == "completed":
         if conclusion == "success":
             msg = quips.pick("ci_pass")
+            head = str(check.get("head_sha") or "")
             for pr in prs:
-                reds = sigh.get(repo, pr)
-                sigh.reset(repo, pr)
-                # Once per recovery: the first green leg resets the streak,
-                # so later legs of the same head see 0 and say nothing.
-                head = str(check.get("head_sha") or "")
-                if (reds >= troll.RECOVERY_REDS and not _mode_override()
-                        and _may(repo, pr, f"recovered:{head}", None, bot=True)):
+                # Red COMMITS, not legs (sigh.recover): a green leg beside a
+                # red one on the same head is no recovery. Once per recovery:
+                # the first green leg on a new head ends the streak, so later
+                # legs of that head see 0 and say nothing.
+                reds = sigh.recover(repo, pr, head)
+                if reds >= troll.RECOVERY_REDS and not _mode_override() and _may_on_pr(
+                        repo, pr, f"recovered:{head}"):
                     line = _troll_line("ci_recovered", repo, {"reds": reds}, head)
                     if line:
                         post(repo, pr, line)
         elif conclusion in ("failure", "timed_out", "startup_failure"):
             msg = quips.pick("ci_fail")
             for pr in prs:
-                streak = sigh.bump_fail(repo, pr)
+                streak = sigh.fail(repo, pr, str(check.get("head_sha") or ""))
                 line = sigh.sigh_line(streak)
                 if line:
                     msg = line

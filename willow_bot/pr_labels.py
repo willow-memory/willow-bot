@@ -35,6 +35,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterable
 
+from urllib.parse import quote
+
 import requests
 
 import github_app
@@ -102,9 +104,12 @@ def _remove_label(repo: str, pr_number: int, label: str, headers: dict) -> None:
     """DELETE /labels/{name} removes one. 404 on that URL means the label
     was already gone (a concurrent reconcile beat us) — the caller reads
     the final list and moves on."""
-    # requests handles path encoding of the label name.
+    # Encoded by hand: requests does NOT escape a `/` in the path, and every
+    # label this module owns has one (`willow-bot/ci-red`). Unencoded, GitHub
+    # answered 404 for /labels/willow-bot/ci-red, the 404 read as "already
+    # gone", and the label stayed while the receipt said it was removed.
     r = requests.delete(
-        f"https://api.github.com/repos/{repo}/issues/{pr_number}/labels/{label}",
+        f"https://api.github.com/repos/{repo}/issues/{pr_number}/labels/{quote(label, safe='')}",
         headers=headers,
         timeout=10,
     )
