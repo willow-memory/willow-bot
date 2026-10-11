@@ -17,6 +17,7 @@ willow-bot-steward redeliver  # ask GitHub to resend webhook deliveries the bot 
 willow-bot-steward ci-backfill  # fill CI for open PRs with none recorded, from GitHub's check runs (also every tick)
 willow-bot-steward contributions --days 30  # who contributed: outsiders, first-timers, per repo
 willow-bot-steward contributions --backfill  # fill the ledger from GitHub history (core_repos, 90 days)
+willow-bot-steward venvs [--plan]  # D2: which venvs are inside the bot, and how to recreate the rest inside (prints, runs nothing)
 willow-bot-contribute [--user LOGIN]   # anyone: your projects, what waits on you, openings (your GITHUB_TOKEN or gh login, never the App's)
 willow-bot-steward heartbeat  # curated willow-mcp tools when WILLOW_BOT_MCP=1
 willow-bot-deterministic serve   # host loopback runner (Unix socket for Kart)

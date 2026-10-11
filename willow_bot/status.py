@@ -707,6 +707,27 @@ def _read_contributions() -> dict[str, Any]:
     }
 
 
+def _read_venvs() -> dict[str, Any]:
+    """Seal D2: every venv lives in the bot. How many are inside, and which
+    are not (``willow-bot-steward venvs --plan`` prints the way in)."""
+    from willow_bot import venvs
+
+    try:
+        inv = venvs.inventory()
+    except Exception as exc:  # noqa: BLE001 — one section's failure hides no other
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    if inv.get("status") == "no-box":
+        return inv
+    return {
+        "status": inv["status"],
+        "home": inv["home"],
+        "inside": inv["inside"],
+        "outside": inv["outside"],
+        "outside_paths": [v["path"] for v in inv["venvs"] if not v["inside"]],
+        "unreadable": inv["unreadable"],
+    }
+
+
 # ── the surface ──────────────────────────────────────────────────────────
 
 
@@ -739,6 +760,7 @@ def report() -> dict[str, Any]:
         "app": _read_app_grant(),
         "operator": _read_operator(),
         "contributions": _read_contributions(),
+        "venvs": _read_venvs(),
     }
 
 
@@ -788,6 +810,13 @@ def _brief_detail(name: str, sec: dict[str, Any]) -> str:
         return f"{sec.get('login') or '(no login)'} via {sec.get('path')}"
     if name == "contributions":
         return f"{sec.get('rows', 0)} in {sec.get('days')}d, {len(sec.get('outside_contributors') or [])} outside"
+    if name == "venvs":
+        line = f"{sec.get('inside', 0)} inside the bot, {sec.get('outside', 0)} outside"
+        if sec.get("outside"):
+            line += " — D2: `venvs --plan`"
+        if sec.get("unreadable"):
+            line += f"; {len(sec['unreadable'])} dirs unreadable"
+        return line
     return ""
 
 
