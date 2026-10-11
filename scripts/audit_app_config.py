@@ -38,35 +38,14 @@ UPSTREAM_ACTIVE = operator_profile.upstream_watch_repos()
 # Forks count — the App on the operator's account covers fork webhooks, not upstream org events.
 UPSTREAM_FORK_OK = True  # document-only
 
-REQUIRED_PERMISSIONS = {
-    "metadata": "read",
-    "issues": "write",
-    "pull_requests": "write",
-    "checks": "read",
-    "contents": "read",
-}
-
-# GitHub sends installation + installation_repositories to every App by default;
-# they are not in the Subscribe-to-events UI and do not appear in GET /app events.
-IMPLICIT_EVENTS = {"installation", "installation_repositories"}
-
-REQUIRED_EVENTS = {
-    "pull_request",
-    "push",
-    "issues",
-    "check_run",
-    "create",
-    "issue_comment",
-    "pull_request_review",  # the troll's review lines (approved / changes requested)
-}
-
-OPTIONAL_EVENTS = {"workflow_run", "status"}
-
-DO_NOT_NEED = {
-    "contents": "write",  # bot comments only; commits use Kart/PAT
-    "actions": "write",
-    "administration": "write",
-}
+# One source of truth: what the code needs (willow_bot/steward/app_grant.py).
+from willow_bot.steward.app_grant import (  # noqa: E402
+    BROADER_THAN_NEEDED as DO_NOT_NEED,
+    HANDLED_EVENTS as OPTIONAL_EVENTS,
+    IMPLICIT_EVENTS,
+    REQUIRED_EVENTS,
+    REQUIRED_PERMISSIONS,
+)
 
 
 def _key_path(env: dict) -> Path:

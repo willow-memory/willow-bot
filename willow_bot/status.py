@@ -27,6 +27,7 @@ One operation: ``report()`` returns a dict of the form:
         "pending": {"status": ..., "total": N, "by_lane": {...}},
         "last_tick": {"status": ..., "last": <receipt>, "at": ...},
       },
+      "app": {"status": ..., "verdict": "ok"|"partial"|"failing"|..., "last": {...}},
       "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
       "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
     }
@@ -508,6 +509,30 @@ def _read_ingress() -> dict[str, Any]:
             "last": last, "flag": data.get("flag")}
 
 
+# ── App grant ────────────────────────────────────────────────────────────
+
+
+def _read_app_grant() -> dict[str, Any]:
+    """The steward's last ``steward_app_grant`` verdict: what the App may do
+    and which events it hears, against what the code needs. ``empty``
+    before the step has run; ``unreachable`` when the file is unreadable;
+    else ``populated`` with ``verdict`` (``ok``/``partial``/``failing``/
+    ``malformed``/``unreachable`` — see ``willow_bot.steward.app_grant``)."""
+    from willow_bot.steward import app_grant as _app_grant
+
+    p = _app_grant.path()
+    if not p.is_file():
+        return {"status": "empty", "detail": f"no file at {p}"}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    if not isinstance(data, dict) or not isinstance(data.get("last"), dict):
+        return {"status": "unreachable", "detail": "app_grant.json has no last verdict"}
+    last = data["last"]
+    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"), "last": last}
+
+
 # ── operator profile ─────────────────────────────────────────────────────
 
 
@@ -596,6 +621,7 @@ def report() -> dict[str, Any]:
         "notifier": _read_notifier(),
         "ingress": _read_ingress(),
         "upstream": _read_upstream(),
+        "app": _read_app_grant(),
         "operator": _read_operator(),
         "contributions": _read_contributions(),
     }

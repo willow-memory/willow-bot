@@ -110,6 +110,10 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
     monkeypatch.setattr(_ingress, "_fetch_deliveries", _no_network_ingress)
     monkeypatch.setattr(_ingress, "_fetch_hook_url", _no_network_ingress)
 
+    from willow_bot.steward import app_grant as _app_grant
+
+    monkeypatch.setattr(_app_grant, "_fetch_app", _no_network_ingress)
+
     # The voice's counters live in the box now (tmp_path above). The retired
     # ~/.willow they are carried over from is pointed at an empty dir under
     # tmp_path, so no test reads — or copies — the real one.

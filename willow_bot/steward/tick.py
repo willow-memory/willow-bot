@@ -3419,6 +3419,14 @@ def run_ingress(*, enable_mcp: bool | None = None) -> dict:
     return _emit(ingress.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
+def run_app_grant() -> dict:
+    """Ask GitHub what the App may do and which events it is subscribed to
+    (``willow_bot.steward.app_grant``) and receipt the answer."""
+    from willow_bot.steward import app_grant
+
+    return _emit(app_grant.run())
+
+
 def _run_upstream_desk() -> dict:
     from willow_bot.steward.upstream_desk import run_upstream_desk
 
@@ -3499,6 +3507,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("upstream-desk", _run_upstream_desk),
             ("audit", run_audit),
             ("ingress", run_ingress),
+            ("app-grant", run_app_grant),
             ("voice", run_voice),
         ):
             try:
@@ -3547,6 +3556,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "ingress":
         run_ingress()
         return 0
+    if args[0] == "app-grant":
+        run_app_grant()
+        return 0
     if args[0] == "upstream-desk":
         _run_upstream_desk()
         return 0
@@ -3586,7 +3598,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|voice|status|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
