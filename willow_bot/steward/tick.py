@@ -3424,7 +3424,13 @@ def run_app_grant() -> dict:
     (``willow_bot.steward.app_grant``) and receipt the answer."""
     from willow_bot.steward import app_grant
 
-    return _emit(app_grant.run())
+    enable_mcp = mcp_enabled()
+    call = None
+    if enable_mcp:
+        from willow_bot.steward import mcp_client
+
+        call = mcp_client.call
+    return _emit(app_grant.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
 def _run_upstream_desk() -> dict:

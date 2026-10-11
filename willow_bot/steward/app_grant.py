@@ -21,8 +21,12 @@ States, never collapsed:
   subscribed (``unsubscribed``).
 - ``ok`` — everything required and everything handled is there.
 
-Writes ``willow-bot/app_grant.json`` (``{"last": <verdict>}``) for the status
-surface. Read-only toward GitHub; files nothing.
+``failing`` files ONE ``human_required`` item (with ``WILLOW_BOT_MCP``), kept
+in ``app_grant.json`` as the open flag until a later tick reads ``ok`` or
+``partial`` (everything required is back) and resolves it. ``unreachable``
+and ``malformed`` say nothing about the grant, so the flag stands through
+them. Writes ``willow-bot/app_grant.json`` (``{"last": <verdict>, "flag":
+...}``) for the status surface. Read-only toward GitHub.
 """
 from __future__ import annotations
 
@@ -145,15 +149,71 @@ def _save(state: dict[str, Any]) -> None:
     tmp.replace(p)
 
 
-def run() -> dict[str, Any]:
+def _flag_summary(verdict: dict) -> str:
+    lines = [f"GitHub's own record of the App ({verdict.get('app') or 'this install'}) lacks what willow-bot needs."]
+    for k, v in (verdict.get("missing_permissions") or {}).items():
+        lines.append(f"- permission {k}: need {v.get('need')}, have {v.get('have') or 'none'}")
+    for e in verdict.get("missing_events") or []:
+        lines.append(f"- event {e}: not subscribed")
+    lines.append("Fix in the App's settings (Permissions & events); installations must accept new permissions.")
+    return "\n".join(lines)
+
+
+def run(*, enable_mcp: bool = False, call=None, app: str = "") -> dict[str, Any]:
     """One read of the App's grant. Returns the receipt (the caller emits it)."""
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    state = load()
+    flag = state.get("flag") if isinstance(state.get("flag"), dict) else None
     try:
-        app = _fetch_app()
+        app_info = _fetch_app()
     except Exception as exc:  # noqa: BLE001 — unreachable is its own state, never "ok"
         verdict: dict[str, Any] = {"status": "unreachable", "detail": f"{type(exc).__name__}: {exc}"[:300]}
     else:
-        verdict = assess(app)
+        verdict = assess(app_info)
     verdict["at"] = at
-    _save({"last": verdict})
-    return {"event": "steward_app_grant", **verdict}
+    receipt: dict[str, Any] = {"event": "steward_app_grant", **verdict}
+
+    if verdict["status"] == "failing":
+        if flag and flag.get("id"):
+            receipt["flag"] = {"state": "open", "id": flag["id"], "since": flag.get("since")}
+        elif not enable_mcp or call is None:
+            receipt["flag"] = {"state": "unfiled", "reason": "WILLOW_BOT_MCP not enabled"}
+        else:
+            try:
+                result = call("human_required_enqueue", {
+                    "app_id": app, "kind": "review", "priority": "high",
+                    "title": "App is missing permissions or events willow-bot needs",
+                    "summary": _flag_summary(verdict), "source_ref": "github:/app",
+                })
+                err = result.get("error") if isinstance(result, dict) else None
+            except Exception as exc:  # noqa: BLE001 — retried next tick
+                result, err = None, str(exc)[:300]
+            item_id = result.get("id") if isinstance(result, dict) and not err else None
+            if err or not item_id:
+                receipt["flag"] = {"state": "could-not-file",
+                                   "error": str(err)[:300] if err else "enqueue returned no item id"}
+            else:
+                flag = {"id": item_id, "since": at}
+                receipt["flag"] = {"state": "filed", "id": item_id}
+    elif verdict["status"] in ("ok", "partial") and flag and flag.get("id"):
+        if not enable_mcp or call is None:
+            receipt["flag"] = {"state": "open", "id": flag["id"], "detail": "recovered; resolve owed"}
+        else:
+            try:
+                result = call("human_required_resolve", {
+                    "app_id": app, "item_id": flag["id"], "status": "resolved",
+                    "note": f"App grant has every required permission and event again at {at}",
+                })
+                err = result.get("error") if isinstance(result, dict) else None
+            except Exception as exc:  # noqa: BLE001 — retried next tick
+                err = str(exc)[:300]
+            if err:
+                receipt["flag"] = {"state": "resolve-refused", "id": flag["id"], "error": str(err)[:300]}
+            else:
+                receipt["flag"] = {"state": "resolved", "id": flag["id"]}
+                flag = None
+    elif flag and flag.get("id"):
+        receipt["flag"] = {"state": "open", "id": flag["id"], "since": flag.get("since")}
+
+    _save({"last": verdict, "flag": flag})
+    return receipt

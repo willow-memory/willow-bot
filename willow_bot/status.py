@@ -608,7 +608,8 @@ def _read_app_grant() -> dict[str, Any]:
     if not isinstance(data, dict) or not isinstance(data.get("last"), dict):
         return {"status": "unreachable", "detail": "app_grant.json has no last verdict"}
     last = data["last"]
-    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"), "last": last}
+    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"), "last": last,
+            "flag": data.get("flag")}
 
 
 # ── operator profile ─────────────────────────────────────────────────────
@@ -741,6 +742,8 @@ def _brief_detail(name: str, sec: dict[str, Any]) -> str:
             bits.append("missing events: " + ",".join(last["missing_events"]))
         if last.get("unsubscribed"):
             bits.append("unsubscribed: " + ",".join(last["unsubscribed"]))
+        if sec.get("flag"):
+            bits.append("FLAG OPEN")
         return "; ".join(bits)
     if name == "operator":
         return f"{sec.get('login') or '(no login)'} via {sec.get('path')}"

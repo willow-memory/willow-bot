@@ -82,3 +82,64 @@ def test_every_routed_event_is_accounted_for():
 def test_the_written_file_is_json_with_a_last_verdict():
     app_grant.run()
     assert json.loads(app_grant.path().read_text())["last"]["status"] == "unreachable"
+
+
+# ── the flag ───────────────────────────────────────────────────────────────
+
+
+class _Broker:
+    def __init__(self, refuse=False):
+        self.calls, self.refuse = [], refuse
+
+    def __call__(self, tool, args):
+        self.calls.append((tool, args))
+        if self.refuse:
+            return {"error": "refused"}
+        return {"id": "item-1"} if tool == "human_required_enqueue" else {"ok": True}
+
+
+def _failing():
+    return _app(perms={**FULL_PERMS, "checks": "none"})
+
+
+def test_failing_files_one_flag_and_holds_it(monkeypatch):
+    broker = _Broker()
+    monkeypatch.setattr(app_grant, "_fetch_app", _failing)
+    r = app_grant.run(enable_mcp=True, call=broker, app="willow")
+    assert r["flag"] == {"state": "filed", "id": "item-1"}
+    assert "permission checks: need read" in broker.calls[0][1]["summary"]
+    r = app_grant.run(enable_mcp=True, call=broker, app="willow")
+    assert r["flag"]["state"] == "open" and len(broker.calls) == 1
+
+
+def test_recovery_resolves_the_flag_and_partial_counts(monkeypatch):
+    broker = _Broker()
+    monkeypatch.setattr(app_grant, "_fetch_app", _failing)
+    app_grant.run(enable_mcp=True, call=broker, app="willow")
+    monkeypatch.setattr(app_grant, "_fetch_app", lambda: _app(events=sorted(app_grant.REQUIRED_EVENTS)))
+    r = app_grant.run(enable_mcp=True, call=broker, app="willow")
+    assert r["status"] == "partial" and r["flag"] == {"state": "resolved", "id": "item-1"}
+    assert broker.calls[-1][0] == "human_required_resolve"
+    assert app_grant.load()["flag"] is None
+
+
+def test_unreachable_does_not_resolve(monkeypatch):
+    broker = _Broker()
+    monkeypatch.setattr(app_grant, "_fetch_app", _failing)
+    app_grant.run(enable_mcp=True, call=broker, app="willow")
+    monkeypatch.setattr(app_grant, "_fetch_app", lambda: (_ for _ in ()).throw(OSError("down")))
+    r = app_grant.run(enable_mcp=True, call=broker, app="willow")
+    assert r["status"] == "unreachable" and r["flag"]["state"] == "open"
+
+
+def test_without_mcp_failing_is_unfiled_and_a_refusal_retries(monkeypatch):
+    monkeypatch.setattr(app_grant, "_fetch_app", _failing)
+    assert app_grant.run()["flag"]["state"] == "unfiled"
+    r = app_grant.run(enable_mcp=True, call=_Broker(refuse=True), app="willow")
+    assert r["flag"]["state"] == "could-not-file" and app_grant.load()["flag"] is None
+
+
+def test_status_shows_the_open_flag(monkeypatch):
+    monkeypatch.setattr(app_grant, "_fetch_app", _failing)
+    app_grant.run(enable_mcp=True, call=_Broker(), app="willow")
+    assert "FLAG OPEN" in status.brief()
