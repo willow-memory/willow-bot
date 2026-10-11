@@ -522,3 +522,46 @@ def test_cli_brief(home: Path, capsys):
 
     assert main(["status", "--brief"]) == 0
     assert capsys.readouterr().out.startswith("willow-bot status at ")
+
+
+# ── inbox: pending vs on disk ─────────────────────────────────────────────
+
+
+def _inbox_files(home: Path, items: list[dict]) -> None:
+    inbox = home / "upstream_steward" / "webhook_inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    for i, item in enumerate(items):
+        (inbox / f"w-{i}.json").write_text(json.dumps(item), encoding="utf-8")
+
+
+def test_inbox_pending_excludes_what_the_inbox_step_consumed(home: Path):
+    from willow_bot.steward.config import state_path
+
+    _inbox_files(home, [{"kind": "pull_request", "work_id": "a"}, {"kind": "pull_request", "work_id": "b"},
+                        {"kind": "check_run", "work_id": "c"}, {"kind": "issue_comment", "work_id": "d"}])
+    _write(state_path(), json.dumps({"inbox_consumed": ["a", "c"]}))
+    r = status.report()["inbox"]
+    assert r["total"] == 4
+    assert r["pending"] == 2 and r["pending_by_kind"] == {"issue_comment": 1, "pull_request": 1}
+    line = [ln for ln in status.brief().splitlines() if ln.strip().startswith("inbox")][0]
+    assert "2 pending" in line and "4 files on disk" in line and "queued" not in line
+
+
+def test_inbox_without_state_is_all_pending(home: Path):
+    _inbox_files(home, [{"kind": "pull_request", "work_id": "a"}])
+    assert status.report()["inbox"]["pending"] == 1
+
+
+def test_inbox_pending_is_unknown_when_state_is_unreadable(home: Path):
+    from willow_bot.steward.config import state_path
+
+    _inbox_files(home, [{"kind": "pull_request", "work_id": "a"}])
+    _write(state_path(), "{broken")
+    r = status.report()["inbox"]
+    assert r["pending"] is None and r["total"] == 1
+    assert "pending unknown" in status.brief()
+
+
+def test_brief_journal_counts_the_whole_tick_log(home: Path):
+    rep = {"at": "t", "willow_home": "/b", "journal": {"status": "populated", "count": 47590, "lines": []}}
+    assert "47590 rows in the tick log" in status.brief(rep)
