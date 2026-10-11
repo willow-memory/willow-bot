@@ -28,7 +28,7 @@ Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` |
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
-Seat provisioning: the grove CLI seat runs from this venv and needs `ratatosk` on its bin and `willow_mcp` importable (Python >=3.11). Install the `seat` extra: `$WILLOW_HOME/venvs/willow-bot/bin/pip install -e '.[dev,seat]'`. Re-provision the existing venv with that command after this lands.
+Seat provisioning: the grove CLI seat runs from this venv and needs `ratatosk` on its bin and `willow_mcp` importable (Python >=3.11). The Nestor engine (`nestor-meaning`, import `nestor`, via `willow-mcp[nestor]`) comes with `[seat]`, so the close-out deposit's draft lands instead of `nestor_unavailable`. Install the `seat` extra: `$WILLOW_HOME/venvs/willow-bot/bin/pip install -e '.[dev,seat]'`. Re-provision the existing venv with that command after this lands.
 
 ## Local service / secrets
 

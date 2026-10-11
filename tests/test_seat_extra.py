@@ -68,6 +68,17 @@ def test_seat_names_resolve():
     assert importlib.import_module("ratatosk") is not None
 
 
+def test_seat_extra_pulls_the_nestor_engine():
+    # The deposit's draft goes through decision_propose, which returns
+    # `nestor_unavailable` when the Nestor engine is not importable.
+    assert any(
+        _name(r) == "willow-mcp" and "[nestor]" in r.replace(" ", "")
+        for r in _seat_extra()
+    ), "seat must name willow-mcp[nestor]"
+    pytest.importorskip("willow_mcp", reason="seat extra not installed")
+    assert importlib.import_module("nestor") is not None
+
+
 def test_ratatosk_console_script_is_on_the_venv_bin():
     pytest.importorskip("ratatosk", reason="seat extra not installed")
     venv_bin = Path(sys.executable).parent
