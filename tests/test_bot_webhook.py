@@ -212,3 +212,28 @@ def test_dispatch_only_runs_once_per_delivery_id(bot_app) -> None:
     assert len(calls) == 1
     _post(bot_app, {"action": "opened"}, delivery="d-count-other")
     assert len(calls) == 2
+
+
+def test_a_delivery_whose_dispatch_failed_runs_on_redelivery(bot_app, monkeypatch) -> None:
+    """The id is marked before dispatch; when the handler raises, it is
+    forgotten, so a manual redelivery of the same id dispatches again
+    instead of being skipped as already seen."""
+    import bot
+
+    calls = []
+
+    def flaky(event, payload, post):
+        calls.append(event)
+        if len(calls) == 1:
+            raise RuntimeError("handler broke")
+
+    monkeypatch.setattr(bot.router, "route", flaky)
+    from fastapi.testclient import TestClient
+
+    client = TestClient(bot.app, raise_server_exceptions=False)
+    status, _ = _post(client, {"action": "opened"}, delivery="d-flaky")
+    assert status == 500
+    status, body = _post(client, {"action": "opened"}, delivery="d-flaky")
+    assert status == 200 and body.get("dedup") is None and len(calls) == 2
+    status, body = _post(client, {"action": "opened"}, delivery="d-flaky")
+    assert body.get("dedup") == "delivery_seen" and len(calls) == 2

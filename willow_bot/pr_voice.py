@@ -87,6 +87,13 @@ def _list_pr_comments(repo: str, pr_number: int, headers: dict) -> list[dict]:
     return out
 
 
+def _by_a_bot(comment: dict) -> bool:
+    """Only a Bot-authored comment can be ours to edit: a person quoting the
+    marker would otherwise be PATCHed (a 403 for the App, every tick). By
+    `type`, never login (BOT-INVENTORY.md)."""
+    return (comment.get("user") or {}).get("type") == "Bot"
+
+
 def _create_comment(repo: str, pr_number: int, body: str, headers: dict) -> dict:
     r = requests.post(
         f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments",
@@ -137,7 +144,7 @@ def upsert_status_comment(
         receipt.update(status="could-not-run", detail=f"list: {exc}"[:400], action="skipped")
         return receipt
 
-    existing = next((c for c in comments if _has_marker(c.get("body", ""), head_sha)), None)
+    existing = next((c for c in comments if _by_a_bot(c) and _has_marker(c.get("body", ""), head_sha)), None)
     try:
         if existing:
             result = _update_comment(repo, int(existing["id"]), full_body, headers)
@@ -205,7 +212,8 @@ def upsert_ci_red_comment(repo: str, pr_number: int, head_sha: str, body: str) -
         receipt.update(status="could-not-run", detail=f"list: {exc}"[:400], action="skipped")
         return receipt
 
-    existing = next((c for c in comments if _has_ci_red_marker(c.get("body", ""), head_sha)), None)
+    existing = next((c for c in comments
+                     if _by_a_bot(c) and _has_ci_red_marker(c.get("body", ""), head_sha)), None)
     try:
         if existing:
             r = requests.patch(
@@ -265,8 +273,14 @@ _CONCLUSIONS = frozenset({
 def _list_check_runs(repo: str, head_sha: str, headers: dict, *, check_name: str | None = None) -> list[dict]:
     """Every check-run this App has on that head_sha, optionally filtered
     to a single name (server-side filter, so we do not scan pages we do
-    not need)."""
-    params = {"filter": "app", "per_page": 100}
+    not need). GitHub's `filter` takes only `latest` / `all`; scoping to
+    this App is `app_id`, and the answer is checked by each run's own
+    `app.id`, so a same-named check from another app or workflow is never
+    PATCHed."""
+    app_id = _own_app_id()
+    params: dict = {"filter": "latest", "per_page": 100}
+    if app_id is not None:
+        params["app_id"] = app_id
     if check_name:
         params["check_name"] = check_name
     r = requests.get(
@@ -280,7 +294,19 @@ def _list_check_runs(repo: str, head_sha: str, headers: dict, *, check_name: str
     if not isinstance(data, dict):
         return []
     runs = data.get("check_runs")
-    return runs if isinstance(runs, list) else []
+    if not isinstance(runs, list):
+        return []
+    if app_id is None:
+        return runs
+    return [r for r in runs if isinstance(r, dict) and (r.get("app") or {}).get("id") == app_id]
+
+
+def _own_app_id() -> int | None:
+    """This install's App id, or None when it cannot be read."""
+    try:
+        return int(github_app._cred().app_id)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _create_check_run(repo: str, payload: dict, headers: dict) -> dict:

@@ -164,8 +164,11 @@ def _local_clone_path_with_layout(repo_full_name: str) -> tuple[Path | None, str
             rc, out = proc.returncode, proc.stdout
             if rc != 0:
                 return False
-            url = out.strip().lower().removesuffix(".git")
-            return url.endswith(target) or target in url
+            url = out.strip().lower().removesuffix(".git").rstrip("/")
+            # The whole owner/name at the end of the URL, after a `/`
+            # (https) or a `:` (scp-style ssh): `owner/willow` must not
+            # match `owner/willow-bot`, nor `xowner/willow`.
+            return url == target or url.endswith("/" + target) or url.endswith(":" + target)
         except Exception:
             return False
 
@@ -372,28 +375,40 @@ def handle(event: str, payload: dict) -> None:
         return
 
     if event == "push":
+        # The repo's own default branch, as the push payload states it; main /
+        # master only when the payload names none.
         ref = payload.get("ref", "")
-        if ref in ("refs/heads/main", "refs/heads/master"):
+        default = str((payload.get("repository") or {}).get("default_branch") or "")
+        wanted = {f"refs/heads/{default}"} if default else {"refs/heads/main", "refs/heads/master"}
+        if ref in wanted:
             _request_gitsync(repo)
         return
 
     if event == "installation" or event == "installation_repositories":
+        # `installation` names its repos under `repositories` (created) and
+        # carries no added/removed lists; `installation_repositories` does.
+        added = payload.get("repositories_added")
+        if added is None and event == "installation" and payload.get("action") == "created":
+            added = payload.get("repositories")
+        added_names = [r.get("full_name") for r in (added or [])]
+        removed_names = [r.get("full_name") for r in (payload.get("repositories_removed") or [])]
         _queue_upstream(
             {
                 **base,
+                # Installation changes repeat (add A, remove A, add A; suspend,
+                # unsuspend, suspend) with identical payloads, so the moment it
+                # arrived is part of its name; the delivery guard in bot.py
+                # already stops a redelivery before it gets here.
                 "work_id": _work_id("app", event, _event_key(
                     payload.get("action", "change"),
                     (payload.get("installation") or {}).get("id"),
-                    ",".join(sorted(str(r.get("full_name")) for r in (payload.get("repositories_added") or []))),
-                    ",".join(sorted(str(r.get("full_name")) for r in (payload.get("repositories_removed") or []))),
+                    ",".join(sorted(map(str, added_names))),
+                    ",".join(sorted(map(str, removed_names))),
+                    base["received_at"],
                 )),
                 "kind": event,
-                "repositories_added": [
-                    r.get("full_name") for r in (payload.get("repositories_added") or [])
-                ],
-                "repositories_removed": [
-                    r.get("full_name") for r in (payload.get("repositories_removed") or [])
-                ],
+                "repositories_added": added_names,
+                "repositories_removed": removed_names,
                 "lane_hint": "catalog",
             }
         )

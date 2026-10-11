@@ -222,3 +222,15 @@ def test_both_endpoints_fail_is_a_could_not_run(rec: _Recorder, monkeypatch):
     assert receipt["status"] == "could-not-run"
     assert "assign:" in receipt["detail"]
     assert "review:" in receipt["detail"]
+
+
+def test_assignee_match_is_case_insensitive(monkeypatch):
+    """GitHub logins are case-insensitive; an env value of `Rudi193` against
+    the returned `rudi193` is assigned, not "unreachable login"."""
+    from willow_bot import pr_assign
+
+    monkeypatch.setattr(pr_assign.github_app, "_auth_headers", lambda repo: {})
+    monkeypatch.setattr(pr_assign, "_add_assignee", lambda repo, n, login, h: ["rudi193"])
+    monkeypatch.setattr(pr_assign, "_request_reviewer", lambda repo, n, login, h: True)
+    receipt = pr_assign.assign_to_operator("o/r", 1, login="Rudi193")
+    assert receipt["assigned"] is True

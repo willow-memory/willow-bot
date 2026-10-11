@@ -117,3 +117,13 @@ def test_atomic_write_never_leaves_truncated_state(home: Path) -> None:
     # The final file is a valid JSON list.
     ids = json.loads(path.read_text())
     assert ids == ["d-1", "d-2"]
+
+
+def test_a_forgotten_delivery_runs_again(tmp_path, monkeypatch):
+    from willow_bot import delivery_dedup
+
+    monkeypatch.setenv("WILLOW_BOT_DELIVERY_STATE", str(tmp_path / "seen.json"))
+    assert delivery_dedup.mark_seen("d-1") is True
+    assert delivery_dedup.mark_seen("d-1") is False
+    delivery_dedup.forget("d-1")
+    assert delivery_dedup.mark_seen("d-1") is True

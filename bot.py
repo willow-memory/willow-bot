@@ -100,7 +100,13 @@ async def webhook(
     log.info("event: %s action: %s delivery: %s",
              x_github_event, payload.get("action", "—"), x_github_delivery or "—")
 
-    router.route(x_github_event, payload, github_app.post_comment)
+    try:
+        router.route(x_github_event, payload, github_app.post_comment)
+    except Exception:
+        # The id was marked before dispatch; a failed dispatch is not handled,
+        # so a redelivery of it must run (delivery_dedup.forget).
+        delivery_dedup.forget(x_github_delivery)
+        raise
 
     return {"ok": True, "delivery": x_github_delivery or None}
 
