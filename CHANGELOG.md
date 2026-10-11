@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.2](https://github.com/willow-memory/willow-bot/compare/v1.2.1...v1.2.2) (2026-10-11)
+
+
+### Fixed
+
+* **one-script:** a scope seal is in no pile, so sealing never moves the subject ([826064d](https://github.com/willow-memory/willow-bot/commit/826064d447af600be722d71ea1e97eead5a13c1e))
+* **one-script:** a scope seal is in no pile, so sealing never moves the subject ([54f4ed7](https://github.com/willow-memory/willow-bot/commit/54f4ed706f68a934a7a385cb24758b72805db8f6))
+
 ## [1.2.1](https://github.com/willow-memory/willow-bot/compare/v1.2.0...v1.2.1) (2026-10-11)
 
 
