@@ -66,17 +66,30 @@ def _notifications_since(last_poll: str | None) -> str | None:
         return last_poll
 
 
+_NOTIFICATIONS_PER_PAGE = 50
+_NOTIFICATIONS_MAX_PAGES = 10
+
+
 def fetch_notifications(since: str | None) -> tuple[list[dict], str | None]:
-    """Return (raw notification dicts, gh_error or None)."""
-    url = "/notifications?all=true&per_page=50"
+    """Return (raw notification dicts, gh_error or None). Pages until a
+    short page (up to ``_NOTIFICATIONS_MAX_PAGES``): one page of 50 lost
+    everything past it in a busy window. An error on any page is returned,
+    and the caller then does not move its cursor."""
+    base = f"/notifications?all=true&per_page={_NOTIFICATIONS_PER_PAGE}"
     since_param = _notifications_since(since)
     if since_param:
-        url += f"&since={since_param}"
-    try:
-        data = gh_api(url)
-        return (data if isinstance(data, list) else []), None
-    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
-        return [], str(exc)[:300]
+        base += f"&since={since_param}"
+    out: list[dict] = []
+    for page in range(1, _NOTIFICATIONS_MAX_PAGES + 1):
+        try:
+            data = gh_api(f"{base}&page={page}")
+        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
+            return out, str(exc)[:300]
+        batch = data if isinstance(data, list) else []
+        out.extend(batch)
+        if len(batch) < _NOTIFICATIONS_PER_PAGE:
+            break
+    return out, None
 
 
 def _to_notification(raw: dict) -> triage.Notification:
@@ -225,6 +238,19 @@ def _search_open_prs(author: str) -> tuple[list[dict], str | None]:
 
 def _refresh_tracker(author: str, watch: list[str]) -> dict[str, Any]:
     open_prs, err = _search_open_prs(author)
+    path = _desk_json_path()
+    if err:
+        # Keep the last ledger readable: a failed search is not "no open
+        # PRs". The previous body stays, marked with the error and when.
+        try:
+            prev = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        except (OSError, json.JSONDecodeError):
+            prev = {}
+        if isinstance(prev, dict) and prev.get("open") is not None:
+            body = {**prev, "tracker_error": err,
+                    "tracker_error_at": datetime.now(timezone.utc).isoformat()}
+            path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+            return body
     open_enriched, summary = _enrich_open_prs(open_prs, watch, author)
     body: dict[str, Any] = {
         "at": datetime.now(timezone.utc).isoformat(),
@@ -235,7 +261,6 @@ def _refresh_tracker(author: str, watch: list[str]) -> dict[str, Any]:
     }
     if err:
         body["tracker_error"] = err
-    path = _desk_json_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
     return body
@@ -299,7 +324,11 @@ def run_upstream_desk(*, enable_mcp: bool | None = None) -> dict[str, Any]:
         seen_ids.append(dedup_key)
 
     cursor["seen_ids"] = seen_ids[-500:]
-    cursor["last_poll"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Only a poll that succeeded moves the cursor: moving it past a window
+    # the fetch never read lost those notifications for good. seen_ids keeps
+    # the re-read from counting what this tick did get twice.
+    if gh_err is None:
+        cursor["last_poll"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tracker_ran = False
     tracker_summary: dict[str, Any] | None = None
@@ -317,8 +346,14 @@ def run_upstream_desk(*, enable_mcp: bool | None = None) -> dict[str, Any]:
 
         app = os.environ.get("WILLOW_BOT_MCP_APP_ID", "willow").strip() or "willow"
         filed_ids = set(upstream_state.get("filed_urgent") or [])
-        for item in new_items:
-            if item["lane"] != "urgent" or item["work_id"] in filed_ids:
+        # An urgent item whose filing failed stays owed and is tried again
+        # next tick; its notification is already in seen_ids, so it is never
+        # a new item again and was dropped for good before.
+        owed = [i for i in upstream_state.get("urgent_owed") or [] if isinstance(i, dict)]
+        candidates = owed + [i for i in new_items if i["lane"] == "urgent"]
+        still_owed: list[dict] = []
+        for item in candidates:
+            if item.get("lane") != "urgent" or item["work_id"] in filed_ids:
                 continue
             try:
                 result = mcp_client.call(
@@ -334,6 +369,7 @@ def run_upstream_desk(*, enable_mcp: bool | None = None) -> dict[str, Any]:
                 )
             except Exception as exc:  # noqa: BLE001
                 receipt.setdefault("file_errors", []).append({"work_id": item["work_id"], "error": str(exc)[:200]})
+                still_owed.append(item)
                 continue
             err = (
                 str(result["error"])[:300]
@@ -342,10 +378,12 @@ def run_upstream_desk(*, enable_mcp: bool | None = None) -> dict[str, Any]:
             )
             if err:
                 receipt.setdefault("file_errors", []).append({"work_id": item["work_id"], "error": err})
+                still_owed.append(item)
                 continue
             filed_ids.add(item["work_id"])
             filed.append(item)
         upstream_state["filed_urgent"] = sorted(filed_ids)[-200:]
+        upstream_state["urgent_owed"] = still_owed[-200:]
 
     upstream_state.update(
         {
@@ -359,7 +397,7 @@ def run_upstream_desk(*, enable_mcp: bool | None = None) -> dict[str, Any]:
     _save_upstream_slice(state, upstream_state)
 
     receipt.update(
-        status="ok" if gh_err is None else "degraded",
+        status="ok" if gh_err is None and not (tracker_summary or {}).get("tracker_error") else "degraded",
         author=author,
         watch_repos=len(watch),
         notifications=len(raw_notes),

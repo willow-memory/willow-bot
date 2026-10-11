@@ -45,7 +45,10 @@ never switches branches, never creates a venv. If a venv is present at
 ``.venv/`` we use its ``pip``; otherwise we ask the broker
 ``pip_sync_execute`` (ideas A.2) to install into the vault venv named by
 the allowlist for this remote. If MCP is off or the remote is not on the
-allowlist, the receipt reports ``install_skipped``.
+allowlist, nothing is installed: the receipt reads ``state="ok"`` with
+``install="skipped"`` and says why in ``detail`` (the checkout is current;
+only the install step was skipped), so a reader checks ``install`` before
+taking ``ok`` to mean a fresh ``pip install -e .``.
 """
 from __future__ import annotations
 

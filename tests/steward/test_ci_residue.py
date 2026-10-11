@@ -157,7 +157,11 @@ def test_prless_cancelled_head_is_superseded_by_the_next_head_on_its_branch(home
     # The branch group is pruned like a PR's: once the leg is decided only
     # the newest head on master is kept.
     assert list(state["ci_heads"][tick._ci_branch_key(MCP, "master")]) == [REL2]
-    assert r2["pruned"] == {"heads": 1, "items": 0}
+    # REL from the branch group, plus each PR-less head's own `repo@sha12`
+    # group: nothing can ever follow a head in its own group, so once no item
+    # or pending leg needs it, it goes (before, each stayed forever).
+    assert r2["pruned"] == {"heads": 3, "items": 0}
+    assert not [k for k in state["ci_heads"] if "@" in k and "#" not in k]
 
 
 def test_prless_cancelled_head_on_another_branch_is_not_a_successor(home, monkeypatch):
@@ -991,3 +995,12 @@ def test_backfill_runs_after_a_fresh_legacy_pass_too(home, monkeypatch):
     assert [x["item_id"] for x in r["backfill"]["resolved"]] == ["ac816f29"]
     saved = json.loads(state_path().read_text())
     assert "ci_legacy_cleared" in saved and "ci_stuck_backfilled" in saved
+
+
+def test_a_closed_prs_heads_are_not_kept_forever():
+    """`_prune_ci_state` kept every group's newest head; a closed PR never
+    gets another, so with no item left it now goes."""
+    heads = {"o/r#1": {"aaa": "2026-10-01T00:00:00Z"}, "o/r#2": {"bbb": "2026-10-01T00:00:00Z"}}
+    legs = {"o/r#1@aaa": {"t": "success"}, "o/r#2@bbb": {"t": "success"}}
+    out = tick._prune_ci_state({}, heads, legs, {}, closed_prs={"o/r#2"})
+    assert list(heads) == ["o/r#1"] and list(legs) == ["o/r#1@aaa"] and out["heads"] == 1
