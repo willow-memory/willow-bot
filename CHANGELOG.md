@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.4](https://github.com/willow-memory/willow-bot/compare/v1.2.3...v1.2.4) (2026-10-11)
+
+
+### Fixed
+
+* a check run's PR is only one whose base is the check's repo ([9aa1e48](https://github.com/willow-memory/willow-bot/commit/9aa1e48666b7631ba29900774a57a8cafe0ab80b))
+* a check run's PR is only one whose base is the check's repo (stalled [#1702](https://github.com/willow-memory/willow-bot/issues/1702)) ([36c52a9](https://github.com/willow-memory/willow-bot/commit/36c52a9f1cc1d7516e4a5e69ec771fed05cfd589))
+
 ## [1.2.3](https://github.com/willow-memory/willow-bot/compare/v1.2.2...v1.2.3) (2026-10-11)
 
 
