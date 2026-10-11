@@ -1,7 +1,7 @@
 # willow-bot
 
 GitHub App webhook receiver + orchestrator-feeding **steward** for the Willow
-fleet. Propose-only: `willows-bot` may comment and deposit draft CI outcomes; it
+fleet. Propose-only: the App may comment and deposit draft CI outcomes; it
 cannot commit.
 
 Install: `pip install willow-bot`  
@@ -19,4 +19,8 @@ willow-bot-deterministic client --fixtures /path/to/S-growth-*.json dir
 ```
 
 Home: [willow-memory/willow-bot](https://github.com/willow-memory/willow-bot)  
-App: `willows-bot` (id 4001890) — match actors by `user.type == Bot`, never login.
+Anyone can run it as their own GitHub App. Who you are, which orgs and repos it
+looks after, and where the voice speaks live in your install's operator profile
+(`$WILLOW_HOME/willow-bot/operator.json`; see `deploy/operator.example.json`), never
+in code. With no profile it discovers what it can and otherwise does nothing.
+Match actors by `user.type == Bot`, never login.

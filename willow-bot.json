@@ -221,10 +221,8 @@
     }
   },
   "troll_scope": {
-    "_doc": "Where and to whom the troll speaks (troll.allowed / troll.claim). orgs: the only orgs it speaks in. associations: GitHub author_association values it speaks to; outside contributors are never trolled. daily_cap: lines per repo per UTC day.",
-    "orgs": [
-      "willow-memory"
-    ],
+    "_doc": "Where and to whom the troll speaks (troll.allowed / troll.claim). orgs: the only orgs it speaks in; empty as shipped, so a new install is silent until its operator profile names voice.orgs (which wins over this list). associations: GitHub author_association values it speaks to; outside contributors are never trolled. daily_cap: lines per repo per UTC day.",
+    "orgs": [],
     "associations": [
       "OWNER",
       "MEMBER",

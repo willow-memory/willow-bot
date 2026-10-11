@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List open PRs across fleet orgs (+ rudi193-cmd user repos). One line each:
+"""List open PRs across fleet orgs (+ the operator's own repos). One line each:
 owner/repo#num|title|url
 """
 from __future__ import annotations

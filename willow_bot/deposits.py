@@ -40,6 +40,13 @@ GENESIS_HASH = "0" * 64
 _CHAIN_KEYS = frozenset({"prev_hash", "row_hash"})
 
 
+
+def _bot_name() -> str:
+    """The App's display name for this install (a label, never matched on)."""
+    from willow_bot import operator_profile
+
+    return operator_profile.bot_name()
+
 def deposits_dir() -> Path:
     return _paths_deposits_dir()
 
@@ -78,7 +85,7 @@ def ci_outcome_record(
     return {
         "kind": "ci_outcome",
         "lane": "draft",
-        "deposited_by": "willows-bot",
+        "deposited_by": _bot_name(),
         "actor_type": sender_type or "unknown",
         "repo": repo,
         "head_sha": head_sha or "",
@@ -345,7 +352,7 @@ def annul_record(*, voids: list[str], reason: str, authorization: str,
     return {
         "kind": KIND_ANNUL,
         "lane": "draft",
-        "deposited_by": "willows-bot",
+        "deposited_by": _bot_name(),
         "voids": sorted(set(v for v in voids if isinstance(v, str) and v)),
         "voids_legacy": sorted(set(v for v in (voids_legacy or []) if isinstance(v, str) and v)),
         "reason": reason or "",

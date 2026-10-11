@@ -35,9 +35,9 @@ if [[ "$VAULT_BOX" != /* || ! -d "$VAULT_BOX" ]]; then
     exit 2
 fi
 VENV_BIN="${WILLOW_BOT_VENV_BIN:-$VAULT_BOX/venvs/willow-bot/bin}"
-WORKDIR="${WILLOW_BOT_WORKDIR:-$HOME/github/willow-memory/willow-bot}"
-
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Default: the checkout this script runs from, wherever the operator cloned it.
+WORKDIR="${WILLOW_BOT_WORKDIR:-$REPO_ROOT}"
 
 PRINT=0
 if [[ "${1:-}" == "--print" ]]; then

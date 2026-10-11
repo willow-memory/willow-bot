@@ -111,25 +111,25 @@ def test_has_manifest_and_app_id(tmp_path):
 def test_check_mistletoe_silent_on_dir_id_mismatch(catalog, tmp_path):
     # A spec inside safe-app-grove must NOT fire — grove is cataloged.
     acc = Accumulator(state_path=tmp_path / "state.json")
-    spec = "/home/sean-campbell/github/safe-app-grove/docs/spec.md"
-    sig = acc.check_mistletoe(spec, catalog, manifest_app_id="grove")
+    spec = "/home/op/github/safe-app-grove/docs/spec.md"
+    sig = acc.check_mistletoe(spec, catalog, manifest_app_id="grove", github_root="/home/op/github")
     assert sig is None
 
 
 def test_check_mistletoe_fires_on_truly_uncataloged(catalog, tmp_path):
     acc = Accumulator(state_path=tmp_path / "state.json")
-    spec = "/home/sean-campbell/github/safe-app-newthing/spec.md"
-    sig = acc.check_mistletoe(spec, catalog, manifest_app_id="newthing")
+    spec = "/home/op/github/safe-app-newthing/spec.md"
+    sig = acc.check_mistletoe(spec, catalog, manifest_app_id="newthing", github_root="/home/op/github")
     assert isinstance(sig, Signal)
     assert sig.trigger == "Mistletoe"
     assert sig.evidence["repo"] == "safe-app-newthing"
     # dedup: same spec never fires twice
-    assert acc.check_mistletoe(spec, catalog, manifest_app_id="newthing") is None
+    assert acc.check_mistletoe(spec, catalog, manifest_app_id="newthing", github_root="/home/op/github") is None
 
 
 def test_check_hermes_silent_on_cataloged_via_crosswalk(catalog, tmp_path):
     acc = Accumulator(state_path=tmp_path / "state.json")
-    repo = "/home/sean-campbell/github/safe-app-willow-grove"
+    repo = "/home/op/github/safe-app-willow-grove"
     sig = acc.check_hermes(repo, catalog, last_commit_ts=1.0, manifest_app_id="willow-grove")
     assert sig is None
 

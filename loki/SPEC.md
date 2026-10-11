@@ -15,7 +15,7 @@ Not a full Claude session. Not a SAFE app. A bot. One job.
 - A promise made and not followed up (agent says "next session" more than twice on the same item)
 - `@loki` mention — immediate activation
 
-**Disk** — Periodic scan of `/home/sean-campbell/github/` every 15 minutes. Compares against known catalog. Watches for:
+**Disk** — Periodic scan of the operator's github root (`~/github/` by default) every 15 minutes. Compares against known catalog. Watches for:
 - New directory not in `safe-app-store/catalog.json`
 - New `*spec*.md` file anywhere in the fleet
 

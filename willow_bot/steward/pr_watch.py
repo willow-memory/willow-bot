@@ -4,7 +4,7 @@
 willow-mcp's ``pr_open_execute`` writes one row per PR it opens, keyed
 ``repo#pr``::
 
-    {"willow-memory/ratatosk#48": {"app_id": "willow", "session_id": "…",
+    {"owner/repo#48": {"app_id": "willow", "session_id": "…",
                                    "channel": "#willow", "opened_at": "…",
                                    "head": "feat/provider-ladder"}}
 

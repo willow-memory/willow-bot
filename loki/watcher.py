@@ -19,6 +19,7 @@ from loki import cerebras, context, poster
 from loki import catalog as catalog_mod
 from loki.accumulator import Accumulator, Signal
 from loki.semantic import ExistenceIndex, spec_summary
+from willow_bot import operator_profile
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +27,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("loki.watcher")
 
-_GITHUB_ROOT = Path("/home/sean-campbell/github")
+_GITHUB_ROOT = operator_profile.github_root()
 _CATALOG_PATH = _GITHUB_ROOT / "safe-app-store" / "catalog.json"
 _DISK_SCAN_INTERVAL = 15 * 60   # 15 minutes
 _GIT_SCAN_INTERVAL = 30 * 60    # 30 minutes

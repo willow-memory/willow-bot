@@ -72,14 +72,12 @@ _BROKER_PIP_TIMEOUT_S = 600
 #: the reader's one-release fallback name the exact same file.
 _LEGACY_MARKER_NAME = ".willow-bot-installed.commit"
 
-#: Thin fallback when the broker allowlist file is absent (same seeds as
-#: willow-mcp's bundled ``pip_sync_allowlist.json``).
-_DEFAULT_BROKER_PAIRS: dict[str, dict[str, Any]] = {
-    "hornbook-knowledge/Jeles": {"venv": "willow-mcp", "extras": ["connectors"]},
-    "willow-memory/willow-bot": {"venv": "willow-bot", "extras": []},
-    "willow-memory/willow-mcp": {"venv": "willow-mcp", "extras": []},
-    "willow-memory/willow-gate": {"venv": "willow-mcp", "extras": []},
-}
+#: Thin fallback when the broker allowlist file is absent: the operator
+#: profile's ``broker_pairs`` (``willow_bot.operator_profile``), else none.
+def _default_broker_pairs() -> dict[str, dict[str, Any]]:
+    from willow_bot import operator_profile
+
+    return operator_profile.broker_pairs()
 
 
 def _git(root: Path, *args: str, timeout: int = _GIT_TIMEOUT_S) -> subprocess.CompletedProcess:
@@ -186,7 +184,7 @@ def _broker_pair_for(root: Path) -> dict[str, Any] | None:
     slug = _origin_slug(root)
     if not slug:
         return None
-    pairs: dict[str, Any] = dict(_DEFAULT_BROKER_PAIRS)
+    pairs: dict[str, Any] = dict(_default_broker_pairs())
     allow = willow_home() / "constitutional" / "pip_sync_allowlist.json"
     if allow.is_file():
         try:

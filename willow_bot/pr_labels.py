@@ -24,7 +24,7 @@ The vocabulary this ships with:
 - ``willow-bot/ci-red`` — one or more terminal checks concluded red
 - ``willow-bot/needs-ratification`` — human review before merge
 - ``willow-bot/audit-dispatched`` — audit packet sent to Loki
-- ``willow-bot/bot-opened`` — the PR was opened by willows-bot
+- ``willow-bot/bot-opened`` — the PR was opened by this install's App bot
 
 Every string in ``desired`` must start with ``owned_prefix``; a caller
 passing a label outside the namespace gets a receipt line, no HTTP call,

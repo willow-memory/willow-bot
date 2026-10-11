@@ -270,7 +270,7 @@ def _flag_summary(verdict: dict, hook_url: str) -> str:
     ls = verdict.get("last_success") or {}
     port = os.environ.get("BOT_PORT", "").strip() or "9000"
     return "\n".join([
-        f"GitHub's delivery record for the willows-bot App webhook: the newest "
+        f"GitHub's delivery record for this install's App webhook: the newest "
         f"{verdict.get('failing_streak')} of {verdict.get('window')} deliveries were not answered 2xx "
         f"(by status code: {verdict.get('by_status_code')}; 0 = no HTTP answer).",
         f"GitHub posts to: {hook_url or '(hook URL could not be read)'}",

@@ -17,20 +17,13 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 
-# Repos the fleet actually uses (not every ~/github clone).
-# Orgs as of BOT-INVENTORY 2026-08-29; refresh when installs change.
-FLEET_CORE = [
-    "willow-memory/willow-mcp",
-    "willow-memory/kartikeya",
-    "willow-memory/willows-grove",
-    "willow-memory/willow-gate",
-    "willow-memory/ratatosk",
-    "willow-memory/corpus-lens",
-    "Die-Namic-Systems/Nestor",
-    "hornbook-knowledge/Jeles",
-    "forge-play/Forge",
-    "rudi193-cmd/willow-bot",
-]
+# Repos the fleet must have the App on, and other people's repos the
+# operator contributes to: both come from the install's operator profile
+# (willow_bot.operator_profile: ``core_repos`` / ``upstream_watch``).
+sys.path.insert(0, str(_ROOT))
+from willow_bot import operator_profile  # noqa: E402
+
+FLEET_CORE = operator_profile.core_repos()
 
 
 def _installed_lower(installed: set[str]) -> set[str]:
@@ -40,21 +33,9 @@ def _installed_lower(installed: set[str]) -> set[str]:
 def _has_repo(installed: set[str], full_name: str) -> bool:
     return full_name.lower() in _installed_lower(installed)
 
-UPSTREAM_ACTIVE = [
-  # upstream_watcher defaults + OPEN_WORK warm lanes (2026-07-22)
-    "NousResearch/hermes-agent",
-    "moazbuilds/claudeclaw",
-    "alash3al/stash",
-    "basicmachines-co/basic-memory",
-    "Redential/redential-cli",
-    "DeusData/codebase-memory-mcp",
-    "Filippo-Venturini/ctxvault",
-    "zeroc00I/DontFeedTheAI",
-    "liatrio-labs/claude-deep-review",
-    "doobidoo/mcp-memory-service",
-]
+UPSTREAM_ACTIVE = operator_profile.upstream_watch_repos()
 
-# Your forks count — app on rudi193-cmd covers fork webhooks, not upstream org events.
+# Forks count — the App on the operator's account covers fork webhooks, not upstream org events.
 UPSTREAM_FORK_OK = True  # document-only
 
 REQUIRED_PERMISSIONS = {
@@ -226,7 +207,7 @@ def main() -> int:
         else:
             _warn(
                 f"{repo} — not on app. "
-                "OK if you only watch via fork under rudi193-cmd/* or upstream_watcher poll."
+                f"OK if you only watch via a fork under {operator_profile.login() or 'your account'}/* or upstream_watcher poll."
             )
 
     print("\n-- Scope sanity --")

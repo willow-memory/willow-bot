@@ -21,7 +21,7 @@ from typing import Any
 
 from willow_bot.steward import upstream_triage as triage
 from willow_bot.steward.config import state_path, willow_home
-from willow_bot.steward.fleet import DEFAULT_USER, gh_api
+from willow_bot.steward.fleet import fleet_user, gh_api
 from willow_bot.steward.upstream_config import watch_repos as configured_watch_repos
 
 _SEARCH_QUERY = """
@@ -48,7 +48,9 @@ def desk_enabled() -> bool:
 
 
 def _author() -> str:
-    return os.environ.get("WILLOW_BOT_UPSTREAM_AUTHOR", DEFAULT_USER).strip() or DEFAULT_USER
+    """Whose PRs the desk tracks: ``WILLOW_BOT_UPSTREAM_AUTHOR``, else the
+    operator (``fleet.fleet_user``), else "" (the desk then has no one to track)."""
+    return os.environ.get("WILLOW_BOT_UPSTREAM_AUTHOR", "").strip() or fleet_user()
 
 
 def _tracker_every_ticks() -> int:
@@ -314,6 +316,10 @@ def run_upstream_desk(*, enable_mcp: bool | None = None) -> dict[str, Any]:
         return receipt
 
     author = _author()
+    if not author:
+        receipt.update(status="absent",
+                       detail="no operator login: set login in the operator profile or WILLOW_BOT_UPSTREAM_AUTHOR")
+        return receipt
     watch = configured_watch_repos()
     state = _load_steward_state()
     upstream_state = dict(state.get("upstream_desk") or {})
