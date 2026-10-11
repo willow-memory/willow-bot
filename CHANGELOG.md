@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.0](https://github.com/willow-memory/willow-bot/compare/v1.1.0...v1.2.0) (2026-10-11)
+
+
+### Added
+
+* status --brief, App-grant flag, ledger backfill, first-timer welcome, one PR search ([5506d44](https://github.com/willow-memory/willow-bot/commit/5506d44e3de8539ab64fe29e98e0a194f92be733))
+
 ## [1.1.0](https://github.com/willow-memory/willow-bot/compare/v1.0.0...v1.1.0) (2026-10-11)
 
 
