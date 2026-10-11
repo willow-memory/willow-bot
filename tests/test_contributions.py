@@ -360,3 +360,29 @@ def test_a_custom_message_and_a_broken_one(posts, welcoming):
     welcoming.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"], "message": "Hi {nope}"}}))
     operator_profile.reset()
     assert "first contribution" in welcome.line_for(REPO, {"login": "cy", "type": "User"}, "FIRST_TIMER")
+
+
+# ── the gap_filed quip passes the voice's gate ────────────────────────────
+
+
+def _issue_opened(assoc, typ="User", repo=REPO, number=4):
+    return {"action": "opened", "repository": {"full_name": repo},
+            "issue": {"number": number, "author_association": assoc, "user": {"login": "x", "type": typ}}}
+
+
+def test_gap_filed_speaks_to_an_insider_once_in_scope(posts):
+    out, post = posts
+    router.route("issues", _issue_opened("OWNER"), post)
+    router.route("issues", _issue_opened("OWNER"), post)  # the same issue again
+    assert len(out) == 1
+
+
+@pytest.mark.parametrize("assoc,repo", [
+    ("NONE", REPO),                       # an outside contributor is never quipped at
+    ("CONTRIBUTOR", REPO),
+    ("OWNER", "someone-else/their-repo"),  # outside the voice's orgs
+])
+def test_gap_filed_is_silent_out_of_scope(posts, assoc, repo):
+    out, post = posts
+    router.route("issues", _issue_opened(assoc, repo=repo), post)
+    assert out == []

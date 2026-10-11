@@ -106,6 +106,13 @@ def _work_id(repo: str, kind: str, number: int | str) -> str:
     return f"wh-{safe_repo}-{kind}-{number}-{digest}"
 
 
+def _event_key(number: object, *parts: object) -> str:
+    """`<number>-<digest of parts>`: the same for a redelivery of one webhook,
+    different for the next event on the same PR, issue or installation."""
+    digest = hashlib.sha256("|".join(str(p or "") for p in parts).encode()).hexdigest()[:10]
+    return f"{number}-{digest}"
+
+
 def _append_log(record: dict) -> None:
     event_log = _event_log()
     event_log.parent.mkdir(parents=True, exist_ok=True)
@@ -251,7 +258,13 @@ def handle(event: str, payload: dict) -> None:
             _queue_upstream(
                 {
                     **base,
-                    "work_id": _work_id(repo, "pr", number),
+                    # One item per event, not per PR: the action, the head and
+                    # GitHub's updated_at name it, so a redelivery of the same
+                    # webhook is the same item and a later synchronize, close
+                    # or reopen is a new one. Keyed on the number alone, the
+                    # file of the first event made every later one skip.
+                    "work_id": _work_id(repo, "pr", _event_key(
+                        number, action, (pr.get("head") or {}).get("sha"), pr.get("updated_at"))),
                     "kind": "pull_request",
                     "number": number,
                     "title": pr.get("title", ""),
@@ -278,7 +291,8 @@ def handle(event: str, payload: dict) -> None:
             _queue_upstream(
                 {
                     **base,
-                    "work_id": _work_id(repo, "issue", number),
+                    "work_id": _work_id(repo, "issue", _event_key(
+                        number, action, (payload.get("label") or {}).get("name"), issue.get("updated_at"))),
                     "kind": "issue",
                     "number": number,
                     "title": issue.get("title", ""),
@@ -363,7 +377,12 @@ def handle(event: str, payload: dict) -> None:
         _queue_upstream(
             {
                 **base,
-                "work_id": _work_id("app", event, payload.get("action", "change")),
+                "work_id": _work_id("app", event, _event_key(
+                    payload.get("action", "change"),
+                    (payload.get("installation") or {}).get("id"),
+                    ",".join(sorted(str(r.get("full_name")) for r in (payload.get("repositories_added") or []))),
+                    ",".join(sorted(str(r.get("full_name")) for r in (payload.get("repositories_removed") or []))),
+                )),
                 "kind": event,
                 "repositories_added": [
                     r.get("full_name") for r in (payload.get("repositories_added") or [])

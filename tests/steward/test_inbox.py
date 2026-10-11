@@ -282,12 +282,13 @@ def test_ingest_check_run_and_pull_request_share_state(
     assert check_signals[0]["conclusion"] == "failure"
 
 
-def test_ingest_unknown_kind_stays_in_inbox(
+def test_ingest_unknown_kind_is_archived_unemitted(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     """An installation / issue_comment / other-kind row is not consumed
-    here — this step names only the kinds it knows how to emit for. The
-    row stays for a later step and its work_id stays out of consumed."""
+    here — this step names only the kinds it knows how to emit for. No
+    step reads those kinds, so the row moves to unhandled/<YYYY-MM>/
+    (kept, not emitted) and its work_id stays out of consumed."""
     home = tmp_path / "willow"
     inbox = home / "upstream_steward" / "webhook_inbox"
     inbox.mkdir(parents=True)
@@ -312,3 +313,123 @@ def test_ingest_unknown_kind_stays_in_inbox(
     assert capsys.readouterr().out.strip() == ""
     saved = json.loads(state.read_text())
     assert item["work_id"] not in saved.get("inbox_consumed", [])
+    assert not (inbox / f"{item['work_id']}.json").exists()
+    assert [p.name for p in (inbox / "unhandled").glob("*/*.json")] == [f"{item['work_id']}.json"]
+
+
+# ── consumed items leave the inbox ────────────────────────────────────────
+
+
+def _box(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    home = tmp_path / "willow"
+    inbox = home / "upstream_steward" / "webhook_inbox"
+    inbox.mkdir(parents=True)
+    monkeypatch.setenv("WILLOW_HOME", str(home))
+    monkeypatch.delenv("LOKI_PR_WATCH_CALL_WATCHER", raising=False)
+    monkeypatch.delenv("WILLOW_BOT_STEWARD_CALL_WATCHER", raising=False)
+    return inbox, tmp_path / "state.json"
+
+
+def _pr(n: int) -> dict:
+    return {"kind": "pull_request", "work_id": f"wh-o-r-pr-{n}-x", "repo": "o/r", "number": n,
+            "action": "opened", "received_at": "2026-10-11T00:00:00+00:00"}
+
+
+def _check(cid: int) -> dict:
+    return {"kind": "check_run", "work_id": f"wh-o-r-check-{cid}-x", "repo": "o/r", "check_id": cid,
+            "conclusion": "success", "status": "completed", "head_sha": "abc"}
+
+
+def _put(inbox: Path, item: dict) -> Path:
+    p = inbox / f"{item['work_id']}.json"
+    p.write_text(json.dumps(item), encoding="utf-8")
+    return p
+
+
+def _emitted(capsys) -> list[dict]:
+    return [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+
+
+def test_consumed_items_move_to_the_month_archive(tmp_path, monkeypatch, capsys):
+    import time
+
+    inbox, state = _box(tmp_path, monkeypatch)
+    _put(inbox, _pr(1))
+    _put(inbox, _check(7))
+    other = _put(inbox, {"kind": "issue_comment", "work_id": "wh-o-r-comment-1-x"})
+    assert ingest(state) == 0
+    assert len(_emitted(capsys)) == 2
+    stamp = time.strftime("%Y-%m", time.gmtime())
+    month = inbox / "consumed" / stamp
+    assert sorted(p.name for p in month.iterdir()) == ["wh-o-r-check-7-x.json", "wh-o-r-pr-1-x.json"]
+    assert list(inbox.glob("*.json")) == []  # the inbox holds only what waits
+    assert [p.name for p in (inbox / "unhandled" / stamp).iterdir()] == [other.name]
+
+
+def test_a_later_webhook_for_a_consumed_work_id_is_archived_not_re_emitted(tmp_path, monkeypatch, capsys):
+    """fleet_bridge keys a PR by its number. Once the first item leaves the
+    inbox, a later action for the same PR writes the file again; emitting once
+    per work_id is unchanged, and the file still leaves the inbox."""
+    inbox, state = _box(tmp_path, monkeypatch)
+    _put(inbox, _pr(1))
+    ingest(state)
+    capsys.readouterr()
+    again = _put(inbox, {**_pr(1), "action": "closed"})
+    ingest(state)
+    assert _emitted(capsys) == []
+    assert not again.exists()
+
+
+def test_the_cap_keeps_the_most_recent_ids_and_nothing_replays(tmp_path, monkeypatch, capsys):
+    """The old cap kept the alphabetically last ids and left files in place,
+    so every evicted item was emitted again on the next tick."""
+    import willow_bot.steward.inbox as inbox_mod
+
+    monkeypatch.setattr(inbox_mod, "_MAX_CONSUMED", 3)
+    inbox, state = _box(tmp_path, monkeypatch)
+    for n in (5, 4, 3, 2, 1):  # names sort opposite to the order they arrive in
+        _put(inbox, _pr(n))
+        ingest(state)
+    assert len(_emitted(capsys)) == 5
+    saved = json.loads(state.read_text())["inbox_consumed"]
+    assert saved == ["wh-o-r-pr-3-x", "wh-o-r-pr-2-x", "wh-o-r-pr-1-x"]  # newest three, in order
+    for _ in range(3):
+        ingest(state)
+    assert _emitted(capsys) == []  # nothing left in the inbox to replay
+
+
+def test_a_failed_move_is_not_emitted_twice(tmp_path, monkeypatch, capsys):
+    import willow_bot.steward.inbox as inbox_mod
+
+    inbox, state = _box(tmp_path, monkeypatch)
+    stuck = _put(inbox, _pr(1))
+    monkeypatch.setattr(inbox_mod, "_archive", lambda *a, **k: False)
+    ingest(state)
+    ingest(state)
+    assert len(_emitted(capsys)) == 1 and stuck.exists()
+
+
+def test_a_legacy_sorted_consumed_list_is_kept_and_ages_out_first(tmp_path, monkeypatch, capsys):
+    """A box upgraded from the old cap: its sorted list is read as-is, those
+    items are archived without being emitted, and new ids go after them."""
+    inbox, state = _box(tmp_path, monkeypatch)
+    old = _put(inbox, _pr(9))
+    state.write_text(json.dumps({"inbox_consumed": ["wh-o-r-pr-9-x"]}))
+    _put(inbox, _pr(1))
+    ingest(state)
+    assert [e["repo_pr"] for e in _emitted(capsys)] == ["o/r#1"]
+    assert not old.exists()
+    assert json.loads(state.read_text())["inbox_consumed"] == ["wh-o-r-pr-9-x", "wh-o-r-pr-1-x"]
+
+
+def test_status_pending_counts_only_what_is_left(tmp_path, monkeypatch, capsys):
+    from willow_bot import status
+
+    inbox, _ = _box(tmp_path, monkeypatch)
+    from willow_bot.steward.config import state_path
+
+    _put(inbox, _pr(1))
+    _put(inbox, {"kind": "issue", "work_id": "wh-o-r-issue-1-x"})
+    ingest(state_path())
+    r = status.report()["inbox"]
+    assert r["total"] == 0 and r["pending"] == 0  # consumed and unhandled both left

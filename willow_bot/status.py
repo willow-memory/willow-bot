@@ -246,9 +246,11 @@ def _read_inbox_depth() -> dict[str, Any]:
     ``depth_by_kind``), and how many of them the inbox step has not yet
     consumed (``pending``, ``pending_by_kind``).
 
-    The inbox step never deletes a file: it records each consumed
-    ``work_id`` in the steward state's ``inbox_consumed``. So ``total`` is
-    what sits on disk, and ``pending`` is what is actually waiting. When
+    The inbox step moves each item it consumes into ``consumed/<YYYY-MM>/``
+    (out of this glob) and records its ``work_id`` in the steward state's
+    ``inbox_consumed``. So ``total`` is what sits in the inbox, and
+    ``pending`` is what is actually waiting (a failed move stays in
+    ``total`` but not in ``pending``). When
     the state cannot be read, ``pending`` is ``None`` (unknown), never a
     guess."""
     consumed = _read_inbox_consumed()

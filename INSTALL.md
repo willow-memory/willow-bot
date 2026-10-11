@@ -174,7 +174,7 @@ Verified webhooks fan out into local queues under `$WILLOW_HOME`:
 
 | Event | Local action |
 |-------|----------------|
-| `pull_request`, `issues`, `issue_comment`, `check_run` | `upstream_steward/webhook_inbox/*.json` |
+| `pull_request`, `issues`, `issue_comment`, `check_run` | `upstream_steward/webhook_inbox/*.json`, one item per event; the steward's inbox step moves consumed items to `webhook_inbox/consumed/<YYYY-MM>/` and kinds no step reads (`issue`, `issue_comment`, `installation*`) to `webhook_inbox/unhandled/<YYYY-MM>/` |
 | `push` to `main`/`master` (local clone exists) | `gitsync/trigger-<owner>-<repo>.flag` |
 | all events | `willow-bot/event-log.jsonl` audit trail |
 | PRs, issues, comments, reviews, forks, stars, releases, discussions | `willow-bot/contributions.jsonl` ledger (`willow-bot-steward contributions`) |
