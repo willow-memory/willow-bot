@@ -4,8 +4,9 @@ they are working on.
 ``willow-bot-contribute [--user LOGIN] [--days N] [--json]``
 
 Whoever runs it is the subject: the login comes from ``--user``, else from
-the token's own ``/user``. The token is that person's own (``GITHUB_TOKEN``
-or ``GH_TOKEN``), or none at all for public data at a lower rate limit.
+the token's own ``/user``. The token is that person's own (``GITHUB_TOKEN``,
+``GH_TOKEN``, or their ``gh`` login), or none at all for public data at a
+lower rate limit.
 This module never reads the App's credentials or the vault: it acts as the
 person running it, not as ``willows-bot``.
 
@@ -26,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -42,7 +44,18 @@ class ContributeError(RuntimeError):
 
 
 def _token() -> str:
-    return (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    """The runner's own token: ``GITHUB_TOKEN``, ``GH_TOKEN``, else whatever
+    the runner's ``gh`` is signed in as (``gh auth token``), else ""."""
+    env = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    return env or _gh_token()
+
+
+def _gh_token() -> str:
+    try:
+        out = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def _headers(token: str) -> dict:
@@ -68,17 +81,36 @@ def whoami(token: str) -> str:
     return valid_login(r.json().get("login"))
 
 
-def search(query: str, token: str, *, per_page: int = 50) -> list[dict]:
-    """One page of ``/search/issues``. Raises on an HTTP error (rate limit
-    included) so the caller can record it per section."""
-    r = requests.get(f"{API}/search/issues", headers=_headers(token),
-                     params={"q": query, "per_page": per_page, "sort": "updated", "order": "desc"},
-                     timeout=15)
-    r.raise_for_status()
-    items = r.json().get("items")
-    if not isinstance(items, list):
-        raise ContributeError(f"unexpected search answer for {query!r}")
-    return [i for i in items if isinstance(i, dict)]
+def search(query: str, token: str, *, per_page: int = 50, max_pages: int = 1) -> list[dict]:
+    """``/search/issues``, newest-updated first, up to ``max_pages`` pages.
+    Raises on an HTTP error (rate limit included) so the caller can record
+    it per section."""
+    out: list[dict] = []
+    for page in range(1, max_pages + 1):
+        r = requests.get(f"{API}/search/issues", headers=_headers(token),
+                         params={"q": query, "per_page": per_page, "page": page,
+                                 "sort": "updated", "order": "desc"},
+                         timeout=15)
+        r.raise_for_status()
+        items = r.json().get("items")
+        if not isinstance(items, list):
+            raise ContributeError(f"unexpected search answer for {query!r}")
+        out.extend(i for i in items if isinstance(i, dict))
+        if len(items) < per_page:
+            break
+    return out
+
+
+def open_prs(login: str, token: str, *, max_pages: int = 10) -> list[dict]:
+    """Every open PR ``login`` authored, anywhere on GitHub: ``repo``,
+    ``number``, ``title``, ``url``, ``created_at``, ``updated_at``,
+    ``is_draft``. The one search both this CLI and the steward's upstream
+    desk use."""
+    login = valid_login(login)
+    items = search(f"is:pr is:open archived:false author:{login}", token, per_page=100, max_pages=max_pages)
+    return [{"repo": _repo_of(i), "number": i.get("number"), "title": i.get("title", ""),
+             "url": i.get("html_url", ""), "created_at": i.get("created_at"),
+             "updated_at": i.get("updated_at"), "is_draft": bool(i.get("draft"))} for i in items]
 
 
 def _repo_of(item: dict) -> str:

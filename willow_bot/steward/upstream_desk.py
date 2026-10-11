@@ -3,8 +3,9 @@
 On each tick (default 5 min): poll ``/notifications`` with a cursor, classify into
 lanes, write ``$WILLOW_HOME/upstream_steward/pending/*.json`` for human-facing work.
 
-Every ``WILLOW_BOT_UPSTREAM_TRACKER_EVERY`` ticks: GraphQL search for the author's
-open PRs and refresh ``$WILLOW_HOME/willow-bot/upstream_desk.json``.
+Every ``WILLOW_BOT_UPSTREAM_TRACKER_EVERY`` ticks: search for the author's open
+PRs (the same search ``willow-bot-contribute`` runs, ``contribute.open_prs``)
+and refresh ``$WILLOW_HOME/willow-bot/upstream_desk.json``.
 
 Opt-in: ``WILLOW_BOT_UPSTREAM_DESK=1``. Uses ``gh api`` (user token), not the App
 installation — same credential posture as ``fleet.iter_open_pulls``.
@@ -24,24 +25,6 @@ from willow_bot.steward.config import state_path, willow_home
 from willow_bot.steward.fleet import fleet_user, gh_api
 from willow_bot.steward.upstream_config import watch_repos as configured_watch_repos
 
-_SEARCH_QUERY = """
-query($q: String!, $cursor: String) {
-  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
-    pageInfo { hasNextPage endCursor }
-    nodes {
-      ... on PullRequest {
-        number
-        title
-        url
-        createdAt
-        updatedAt
-        isDraft
-        repository { nameWithOwner }
-      }
-    }
-  }
-}
-"""
 
 def desk_enabled() -> bool:
     return os.environ.get("WILLOW_BOT_UPSTREAM_DESK", "").strip().lower() in ("1", "true", "yes")
@@ -227,52 +210,21 @@ def _brief_pr(p: dict) -> dict:
     }
 
 
-def _graphql_search_open_prs(author: str) -> tuple[list[dict], str | None]:
-    q = f"author:{author} type:pr state:open"
-    prs: list[dict] = []
-    cursor: str | None = None
-    while True:
-        payload = json.dumps({"query": _SEARCH_QUERY, "variables": {"q": q, "cursor": cursor}})
-        try:
-            proc = subprocess.run(
-                ["gh", "api", "graphql", "--input", "-"],
-                input=payload,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=60,
-            )
-            data = json.loads(proc.stdout)
-        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
-            err = getattr(exc, "stderr", None) or str(exc)
-            return prs, str(err)[:300]
-        if data.get("errors"):
-            return prs, str(data["errors"])[:300]
-        search = data["data"]["search"]
-        for node in search.get("nodes") or []:
-            if not node:
-                continue
-            repo = node.get("repository", {}).get("nameWithOwner", "")
-            prs.append(
-                {
-                    "repo": repo,
-                    "number": node.get("number"),
-                    "title": node.get("title", ""),
-                    "url": node.get("url", ""),
-                    "createdAt": node.get("createdAt"),
-                    "updatedAt": node.get("updatedAt"),
-                    "isDraft": node.get("isDraft"),
-                }
-            )
-        page = search.get("pageInfo") or {}
-        if not page.get("hasNextPage"):
-            break
-        cursor = page.get("endCursor")
-    return prs, None
+def _search_open_prs(author: str) -> tuple[list[dict], str | None]:
+    """The author's open PRs, through the same search ``willow-bot-contribute``
+    uses (``willow_bot.contribute.open_prs``), under the operator's own
+    credential (``gh``'s token, as before). Returns what it got and the
+    error, if any."""
+    from willow_bot import contribute
+
+    try:
+        return contribute.open_prs(author, contribute._token()), None
+    except Exception as exc:  # noqa: BLE001 — the tracker records it and keeps the last ledger readable
+        return [], f"{type(exc).__name__}: {exc}"[:300]
 
 
 def _refresh_tracker(author: str, watch: list[str]) -> dict[str, Any]:
-    open_prs, err = _graphql_search_open_prs(author)
+    open_prs, err = _search_open_prs(author)
     open_enriched, summary = _enrich_open_prs(open_prs, watch, author)
     body: dict[str, Any] = {
         "at": datetime.now(timezone.utc).isoformat(),

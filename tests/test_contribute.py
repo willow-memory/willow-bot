@@ -116,3 +116,57 @@ def test_cli_text_and_json(github, capsys):
     assert contribute.main(["--user", "ada", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["user"] == "ada"
     assert contribute.main(["--user", "not a login"]) == 2
+
+
+# ── shared with the upstream desk ─────────────────────────────────────────
+
+
+def test_open_prs_pages_and_maps_to_the_desk_shape(github, monkeypatch):
+    answers, seen = github
+    page1 = [_item("big/project", n, f"pr {n}", draft=(n == 0), created_at="c", updated_at="u") for n in range(100)]
+    calls = {"n": 0}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        calls["n"] += 1
+        return _Resp({"items": page1 if params["page"] == 1 else [_item("ada/tool", 500)]})
+
+    monkeypatch.setattr(contribute.requests, "get", fake_get)
+    rows = contribute.open_prs("ada", "")
+    assert calls["n"] == 2 and len(rows) == 101
+    assert rows[0] == {"repo": "big/project", "number": 0, "title": "pr 0",
+                       "url": "https://github.com/big/project/issues/0", "created_at": "c",
+                       "updated_at": "u", "is_draft": True}
+
+
+def test_the_token_falls_back_to_gh(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(contribute, "_gh_token", lambda: "gh-tok")
+    assert contribute._token() == "gh-tok"
+    monkeypatch.setenv("GH_TOKEN", "env-tok")
+    assert contribute._token() == "env-tok"
+
+
+def test_the_desk_tracks_through_the_same_search(monkeypatch, github):
+    from willow_bot.steward import upstream_desk
+
+    monkeypatch.setattr(contribute, "open_prs", lambda login, token: [
+        {"repo": "basicmachines-co/basic-memory", "number": 7, "title": "fix", "url": "u",
+         "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-01T00:00:00Z", "is_draft": False},
+        {"repo": "ada/tool", "number": 2, "title": "wip", "url": "u2",
+         "created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-10T00:00:00Z", "is_draft": True}])
+    body = upstream_desk._refresh_tracker("ada", ["basicmachines-co/basic-memory"])
+    assert body["open_count"] == 2 and "tracker_error" not in body
+    lanes = {p["number"]: p["lane"] for p in body["open"]}
+    assert lanes == {7: "tier_a", 2: "hold"}
+
+
+def test_a_failed_desk_search_is_recorded(monkeypatch):
+    from willow_bot.steward import upstream_desk
+
+    def boom(login, token):
+        raise contribute.requests.HTTPError("403")
+
+    monkeypatch.setattr(contribute, "open_prs", boom)
+    body = upstream_desk._refresh_tracker("ada", [])
+    assert body["open_count"] == 0 and "403" in body["tracker_error"]
