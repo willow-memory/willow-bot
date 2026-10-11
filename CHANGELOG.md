@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [1.6.0](https://github.com/willow-memory/willow-bot/compare/v1.5.0...v1.6.0) (2026-10-11)
+
+
+### Added
+
+* **one-script:** api.resume recovers the last sealed scope's spec ([#126](https://github.com/willow-memory/willow-bot/issues/126)) ([c15aba4](https://github.com/willow-memory/willow-bot/commit/c15aba445949a1f5c2ac3e302411838544d0bd7f))
+
+
+### Fixed
+
+* **deps:** seat extra pulls the Nestor engine via willow-mcp[nestor] ([#125](https://github.com/willow-memory/willow-bot/issues/125)) ([68435b0](https://github.com/willow-memory/willow-bot/commit/68435b022391bca7b84765e40ce1a07f4c0a5172))
+
 ## [1.5.0](https://github.com/willow-memory/willow-bot/compare/v1.4.0...v1.5.0) (2026-10-11)
 
 
