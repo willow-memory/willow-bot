@@ -12,6 +12,7 @@ willow-bot              # webhook (uvicorn)
 willow-bot-steward tick    # PR watch one-shot
 willow-bot-steward status  # read-only surface: version, tick, inbox depth, cursors
 willow-bot-steward contributions --days 30  # who contributed: outsiders, first-timers, per repo
+willow-bot-contribute [--user LOGIN]   # anyone: your projects, what waits on you, openings (uses your GITHUB_TOKEN, never the App's)
 willow-bot-steward heartbeat  # curated willow-mcp tools when WILLOW_BOT_MCP=1
 willow-bot-deterministic serve   # host loopback runner (Unix socket for Kart)
 willow-bot-deterministic client --fixtures /path/to/S-growth-*.json dir
