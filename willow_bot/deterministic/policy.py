@@ -27,13 +27,15 @@ class Policy:
     chat_max_request_bytes: int = 262144
     chat_timeout_s: float = 600.0
     # Socket ``chat`` op call log: one metadata-only JSONL row per call (never
-    # prompt or reply text), beside the socket. ``"chat_call_log": false`` in
-    # the policy file turns it off.
+    # prompt or reply text), in ``bot_dir()`` (never beside the socket: a socket
+    # in /tmp must not drag the log somewhere world-readable). Owner-only, 0600.
+    # ``"chat_call_log": false`` in the policy file turns it off; the path has
+    # no knob.
     chat_call_log: bool = True
 
     @property
     def chat_call_log_path(self) -> Path:
-        return self.socket_path.parent / "chat-calls.jsonl"
+        return bot_dir() / "chat-calls.jsonl"
 
     @property
     def chat_models(self) -> tuple[str, ...]:

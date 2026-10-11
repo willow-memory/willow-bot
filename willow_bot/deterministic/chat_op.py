@@ -6,8 +6,11 @@ one in memory at a time. The model must be in the policy's allow-list. No cloud
 route, no escalation, no retry: one request, one answer or one refusal.
 
 Every call, refused or answered, leaves one metadata-only row in
-``chat-calls.jsonl`` beside the socket (``Policy.chat_call_log``): model, outcome
-code, tokens, latency, sizes. No prompt or reply text, ever.
+``chat-calls.jsonl`` in ``bot_dir()`` (``Policy.chat_call_log``; owner-only 0600,
+wherever the socket lives): model, outcome code, tokens, latency, sizes. No
+prompt or reply text, ever. A write failure never fails the call, but it is
+kept (``chat_log_state``) and the socket ``status`` op and ``bot status`` report
+it: populated / empty / unreachable, or ``off``.
 
 Errors are ``{"ok": False, "error": "<CODE>: <detail>"}`` with codes
 ``EBADREQ``, ``ESIZE``, ``EMODEL``, ``ELOOPBACK``, ``ECHAT``.
@@ -17,10 +20,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlparse
 
 from willow_bot.deterministic.policy import Policy
@@ -83,14 +88,52 @@ def _post(policy: Policy, path: str, payload: dict) -> dict:
 # steward/heartbeat.py uses for its receipts file.
 CALL_LOG_MAX_BYTES = 5 * 1024 * 1024
 _MODEL_LOG_CAP = 128
+_TAIL_BYTES = 64 * 1024
+
+# The last write outcome, in this process (the one that writes the log): None
+# after a good write, else (iso time, error text). ``status`` reports it so a
+# failing log is never silent.
+_last_write_error: tuple[str, str] | None = None
+
+
+def _open_private(path: Path) -> int:
+    """Open the log for append, owner-only. Created 0600; a file already wider
+    is tightened (best effort); a symlink at the path is refused (O_NOFOLLOW)."""
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        if os.fstat(fd).st_mode & 0o077:
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError:
+                pass
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _append_row(path: Path, line: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = _open_private(path)
+    try:
+        if os.fstat(fd).st_size >= CALL_LOG_MAX_BYTES:
+            # The inode we hold is already 0600, so the backup is too.
+            os.replace(path, path.with_name(path.name + ".1"))
+            os.close(fd)
+            fd = _open_private(path)
+        os.write(fd, line)
+    finally:
+        os.close(fd)
 
 
 def _log_call(policy: Policy, req: dict, out: dict, started: str) -> None:
     """Append one row to ``policy.chat_call_log_path``: when, model, outcome
     (``ok`` or the error code), ``done_reason``, tokens, ``latency_ms`` and the
     request/reply sizes in bytes. Never the system prompt, the user prompt or the
-    reply, nor anything derived from their text. Best effort: a log that cannot
-    be written never fails the call."""
+    reply, nor anything derived from their text. A log that cannot be written
+    never fails the call, but the failure is kept for ``chat_log_state``."""
+    global _last_write_error
     if not policy.chat_call_log:
         return
     model = req.get("model")
@@ -114,15 +157,60 @@ def _log_call(policy: Policy, req: dict, out: dict, started: str) -> None:
         "bytes_in": bytes_in,
         "bytes_out": len(text.encode("utf-8")) if isinstance(text, str) else None,
     }
-    path = policy.chat_call_log_path
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.stat().st_size >= CALL_LOG_MAX_BYTES:
-            os.replace(path, path.with_name(path.name + ".1"))
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
-    except OSError:
-        pass
+        _append_row(policy.chat_call_log_path, (json.dumps(row, separators=(",", ":")) + "\n").encode("utf-8"))
+        _last_write_error = None
+    except OSError as exc:
+        _last_write_error = (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), str(exc)[:200])
+
+
+def _last_row_at(path: Path) -> str | None:
+    with path.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - _TAIL_BYTES))
+        tail = fh.read()
+    for raw in reversed(tail.split(b"\n")):
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and isinstance(rec.get("at"), str):
+            return rec["at"]
+    return None
+
+
+def chat_log_state(policy: Policy) -> dict:
+    """The call log's state, three ways and never collapsed: ``populated``
+    (rows exist: ``size``, ``last_at``), ``empty`` (log on, file absent or no
+    rows), ``unreachable`` (the file cannot be stat'd or read, or the last write
+    failed: ``detail`` names the error). ``off`` when ``chat_call_log`` is false.
+    The write failure is this process's; a reader in another process sees the
+    file only."""
+    path = policy.chat_call_log_path
+    if not policy.chat_call_log:
+        return {"status": "off", "detail": "chat_call_log is false in the policy", "path": str(path)}
+    out: dict = {"path": str(path)}
+    try:
+        st = path.stat()
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"{path} is not a regular file")
+        if st.st_size == 0:
+            out.update(status="empty", size=0, last_at=None, detail="no calls logged yet")
+        else:
+            last_at = _last_row_at(path)
+            if last_at is None:
+                raise OSError(f"{st.st_size} bytes but no readable row in the tail")
+            out.update(status="populated", size=st.st_size, last_at=last_at)
+    except FileNotFoundError:
+        out.update(status="empty", size=0, last_at=None, detail="no calls logged yet")
+    except OSError as exc:
+        out.update(status="unreachable", detail=str(exc)[:200])
+    err = _last_write_error
+    if err is not None:
+        out["status"] = "unreachable"
+        out["detail"] = f"last write failed at {err[0]}: {err[1]}"
+    return out
 
 
 def run_chat(policy: Policy, req: dict) -> dict:

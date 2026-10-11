@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -59,6 +61,15 @@ def fake_ollama():
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.fixture(autouse=True)
+def _clean_log_state():
+    from willow_bot.deterministic import chat_op
+
+    chat_op._last_write_error = None
+    yield
+    chat_op._last_write_error = None
 
 
 def _policy(tmp_path, base: str, **kw) -> Policy:
@@ -268,8 +279,13 @@ def test_existing_ops_unchanged(tmp_path, fake_ollama):
 # ── call log, content off (IDEAS 66) ──────────────────────────────────────
 
 
+def _log(tmp_path):
+    """Where the log lives: bot_dir (WILLOW_HOME is tmp_path), not beside the socket."""
+    return tmp_path / "willow-bot" / "chat-calls.jsonl"
+
+
 def _rows(tmp_path) -> list[dict]:
-    path = tmp_path / "chat-calls.jsonl"
+    path = _log(tmp_path)
     return [json.loads(ln) for ln in path.read_text().splitlines()] if path.exists() else []
 
 
@@ -284,7 +300,7 @@ def test_call_log_records_metadata_and_never_content(tmp_path, fake_ollama):
     assert row["bytes_in"] == len(secret_prompt) + len(secret_system)
     assert row["bytes_out"] == len(out["text"])
     assert row["at"].endswith("Z")
-    raw = (tmp_path / "chat-calls.jsonl").read_text()
+    raw = _log(tmp_path).read_text()
     assert "TOP-SECRET" not in raw and out["text"] not in raw
     assert set(row) == {
         "at", "op", "model", "ok", "outcome", "done_reason", "tokens_in",
@@ -322,7 +338,7 @@ def test_call_log_appends_one_row_per_call(tmp_path, fake_ollama):
 def test_call_log_can_be_turned_off(tmp_path, fake_ollama):
     out = _dispatch(_req(), _policy(tmp_path, fake_ollama, chat_call_log=False))
     assert out["ok"] is True
-    assert not (tmp_path / "chat-calls.jsonl").exists()
+    assert not _log(tmp_path).exists()
 
 
 def test_call_log_is_bounded_with_one_rotated_backup(tmp_path, fake_ollama, monkeypatch):
@@ -332,13 +348,14 @@ def test_call_log_is_bounded_with_one_rotated_backup(tmp_path, fake_ollama, monk
     pol = _policy(tmp_path, fake_ollama)
     for _ in range(12):
         _dispatch(_req(), pol)
-    live, backup = tmp_path / "chat-calls.jsonl", tmp_path / "chat-calls.jsonl.1"
+    live = _log(tmp_path)
+    backup = live.with_name("chat-calls.jsonl.1")
     assert backup.exists() and live.stat().st_size < 600
-    assert not (tmp_path / "chat-calls.jsonl.2").exists()
+    assert not live.with_name("chat-calls.jsonl.2").exists()
 
 
 def test_a_log_that_cannot_be_written_never_fails_the_call(tmp_path, fake_ollama):
-    (tmp_path / "chat-calls.jsonl").mkdir()  # a directory where the file goes
+    _log(tmp_path).mkdir(parents=True)  # a directory where the file goes
     out = _dispatch(_req(), _policy(tmp_path, fake_ollama))
     assert out["ok"] is True and out["text"] == '{"a": 1}'
 
@@ -353,3 +370,163 @@ def test_policy_file_can_turn_the_log_off(tmp_path):
     assert load_policy().chat_call_log is False
     (paths.bot_dir() / "deterministic-policy.json").write_text('{"chat_call_log": "no"}')
     assert load_policy().chat_call_log is True  # not a bool: the default stands
+
+
+# ── call log: 0600, pinned to bot_dir, three-state status (IDEAS 66) ─────────
+
+
+def _mode(path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def test_call_log_is_created_owner_only(tmp_path, fake_ollama):
+    os.umask(0o022)  # the umask that would hand a plain open() 0644
+    _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    assert _mode(_log(tmp_path)) == 0o600
+
+
+def test_rotated_backup_is_owner_only_too(tmp_path, fake_ollama, monkeypatch):
+    from willow_bot.deterministic import chat_op
+
+    monkeypatch.setattr(chat_op, "CALL_LOG_MAX_BYTES", 200)
+    os.umask(0o022)
+    pol = _policy(tmp_path, fake_ollama)
+    for _ in range(6):
+        _dispatch(_req(), pol)
+    live = _log(tmp_path)
+    backup = live.with_name("chat-calls.jsonl.1")
+    assert backup.exists()
+    assert _mode(live) == 0o600 and _mode(backup) == 0o600
+
+
+def test_a_wider_existing_log_is_tightened_before_it_rotates(tmp_path, fake_ollama, monkeypatch):
+    from willow_bot.deterministic import chat_op
+
+    live = _log(tmp_path)
+    live.parent.mkdir(parents=True)
+    live.write_text("x" * 300 + "\n")
+    live.chmod(0o666)
+    monkeypatch.setattr(chat_op, "CALL_LOG_MAX_BYTES", 200)
+    _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    assert _mode(live) == 0o600
+    assert _mode(live.with_name("chat-calls.jsonl.1")) == 0o600  # the wide inode, now tight
+
+
+def test_a_wider_existing_log_is_tightened_in_place(tmp_path, fake_ollama):
+    live = _log(tmp_path)
+    live.parent.mkdir(parents=True)
+    live.write_text("")
+    live.chmod(0o664)
+    _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    assert _mode(live) == 0o600 and len(_rows(tmp_path)) == 1
+
+
+def test_a_symlink_at_the_log_path_is_refused(tmp_path, fake_ollama):
+    from willow_bot.deterministic import chat_op
+
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("keep")
+    live = _log(tmp_path)
+    live.parent.mkdir(parents=True)
+    live.symlink_to(target)
+    pol = _policy(tmp_path, fake_ollama)
+    out = _dispatch(_req(), pol)
+    assert out["ok"] is True
+    assert target.read_text() == "keep"
+    assert chat_op.chat_log_state(pol)["status"] == "unreachable"
+
+
+def test_a_custom_socket_path_does_not_move_the_log(tmp_path, fake_ollama):
+    elsewhere = tmp_path / "pub"
+    elsewhere.mkdir()
+    pol = Policy(
+        socket_path=elsewhere / "s.sock",
+        ollama_base=fake_ollama,
+        runs_dir=tmp_path / "runs",
+        default_model="llama3.2:3b",
+        chain_tiers=("llama3.2:3b",),
+    )
+    from willow_bot import paths
+
+    assert pol.chat_call_log_path == paths.bot_dir() / "chat-calls.jsonl"
+    _dispatch(_req(), pol)
+    assert len(_rows(tmp_path)) == 1
+    assert not list(elsewhere.iterdir())
+
+
+def _state(tmp_path, base="http://127.0.0.1:1", **kw):
+    from willow_bot.deterministic.chat_op import chat_log_state
+
+    return chat_log_state(_policy(tmp_path, base, **kw))
+
+
+def test_status_empty_when_log_absent_or_zero_rows(tmp_path):
+    assert _state(tmp_path)["status"] == "empty"
+    _log(tmp_path).parent.mkdir(parents=True)
+    _log(tmp_path).write_text("")
+    assert _state(tmp_path)["status"] == "empty"
+
+
+def test_status_populated_names_size_and_last_row_time(tmp_path, fake_ollama):
+    _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    st = _state(tmp_path)
+    assert st["status"] == "populated"
+    assert st["size"] == _log(tmp_path).stat().st_size > 0
+    assert st["last_at"] == _rows(tmp_path)[-1]["at"]
+
+
+def test_status_unreachable_when_the_file_cannot_be_read(tmp_path):
+    _log(tmp_path).mkdir(parents=True)  # a directory where the file goes
+    st = _state(tmp_path)
+    assert st["status"] == "unreachable" and "not a regular file" in st["detail"]
+    _log(tmp_path).rmdir()
+    _log(tmp_path).write_text("not json at all\n")  # bytes, but no row
+    assert _state(tmp_path)["status"] == "unreachable"
+
+
+def test_status_off_when_the_log_is_off(tmp_path):
+    assert _state(tmp_path, chat_call_log=False)["status"] == "off"
+
+
+def test_a_write_failure_does_not_fail_the_call_and_shows_in_status(tmp_path, fake_ollama):
+    pol = _policy(tmp_path, fake_ollama)
+    _dispatch(_req(), pol)
+    assert _state(tmp_path)["status"] == "populated"
+    _log(tmp_path).chmod(0o400)
+    _log(tmp_path).unlink()
+    _log(tmp_path).mkdir()  # the write now fails
+    out = _dispatch(_req(), pol)
+    assert out["ok"] is True and out["text"] == '{"a": 1}'
+    st = _state(tmp_path)
+    assert st["status"] == "unreachable" and "last write failed" in st["detail"]
+    sock = _dispatch({"op": "status"}, pol)
+    assert sock["chat_log"]["status"] == "unreachable"
+    assert "last write failed" in sock["chat_log"]["detail"]
+    # A later good write clears it.
+    _log(tmp_path).rmdir()
+    _dispatch(_req(), pol)
+    assert _state(tmp_path)["status"] == "populated"
+
+
+def test_a_write_failure_is_not_reported_as_empty(tmp_path, fake_ollama):
+    pol = _policy(tmp_path, fake_ollama)
+    _log(tmp_path).mkdir(parents=True)
+    _dispatch(_req(), pol)
+    assert _state(tmp_path)["status"] != "empty"
+
+
+def test_bot_status_reports_the_chat_log(tmp_path, fake_ollama):
+    from willow_bot import status
+
+    assert status.report()["chat_log"]["status"] == "empty"
+    assert any(ln.startswith("  chat_log") for ln in status.brief().splitlines())
+    _dispatch(_req(), _policy(tmp_path, fake_ollama))
+    rep = status.report()["chat_log"]
+    assert rep["status"] == "populated"
+    assert "bytes, last call" in status.brief()
+    (tmp_path / "willow-bot" / "deterministic-policy.json").write_text('{"chat_call_log": false}')
+    assert status.report()["chat_log"]["status"] == "off"
+    _log(tmp_path).unlink()
+    (tmp_path / "willow-bot" / "deterministic-policy.json").write_text("{}")
+    _log(tmp_path).mkdir()
+    assert status.report()["chat_log"]["status"] == "unreachable"

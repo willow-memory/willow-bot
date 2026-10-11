@@ -31,6 +31,7 @@ One operation: ``report()`` returns a dict of the form:
       "app": {"status": ..., "verdict": "ok"|"partial"|"failing"|..., "last": {...}},
       "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
       "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
+      "chat_log": {"status": ..., "path": ..., "size": N, "last_at": <ISO8601>|None}  # or "off"
       "venvs": {"status": ..., "inside": N, "outside": N, "venvs": [{"path", "inside", "python",
                 "installed": {"status", "count", "hash", "modified"}, "lock": {"status", "drift", ...}}],
                 "drifted": [...], "unlocked": [...]},
@@ -746,6 +747,23 @@ def _read_venvs() -> dict[str, Any]:
     }
 
 
+# ── chat call log ────────────────────────────────────────────────────────
+
+
+def _read_chat_log() -> dict[str, Any]:
+    """The socket ``chat`` op's call log (``bot_dir()/chat-calls.jsonl``):
+    populated / empty / unreachable, or ``off`` when the policy turns it off.
+    A last-write failure is held by the socket process and shows on its
+    ``status`` op; here the file is what is read."""
+    from willow_bot.deterministic.chat_op import chat_log_state
+    from willow_bot.deterministic.policy import load_policy
+
+    try:
+        return chat_log_state(load_policy())
+    except Exception as exc:  # noqa: BLE001 — a status read never raises
+        return {"status": "unreachable", "detail": f"chat log: {exc}"[:200]}
+
+
 # ── the surface ──────────────────────────────────────────────────────────
 
 
@@ -779,6 +797,7 @@ def report() -> dict[str, Any]:
         "operator": _read_operator(),
         "contributions": _read_contributions(),
         "venvs": _read_venvs(),
+        "chat_log": _read_chat_log(),
     }
 
 
@@ -828,6 +847,8 @@ def _brief_detail(name: str, sec: dict[str, Any]) -> str:
         return f"{sec.get('login') or '(no login)'} via {sec.get('path')}"
     if name == "contributions":
         return f"{sec.get('rows', 0)} in {sec.get('days')}d, {len(sec.get('outside_contributors') or [])} outside"
+    if name == "chat_log":
+        return f"{sec.get('size', 0)} bytes, last call {sec.get('last_at')}"
     if name == "venvs":
         line = f"{sec.get('inside', 0)} inside the bot, {sec.get('outside', 0)} outside"
         if sec.get("outside"):

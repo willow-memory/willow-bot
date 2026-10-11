@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 from willow_bot.deterministic.chain import d0_wrong, run_chain
-from willow_bot.deterministic.chat_op import run_chat, run_unload
+from willow_bot.deterministic.chat_op import chat_log_state, run_chat, run_unload
 from willow_bot.deterministic.host_probe import (
     health,
     ollama_ps,
@@ -66,6 +66,7 @@ def _dispatch(req: dict, policy: Policy) -> dict:
             "ok": True,
             "health": health(policy.ollama_base, policy=policy),
             "runs": runs_summary(policy.runs_dir),
+            "chat_log": chat_log_state(policy),
             "runner": {
                 "ollama_chat_timeout_s": policy.ollama_chat_timeout_s,
                 "ollama_module": str(getattr(ollama_mod, "__file__", "")),
