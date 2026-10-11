@@ -121,13 +121,27 @@ def view(row: dict) -> dict:
     return _scrub(out)
 
 
+def scope_seal(row: dict) -> bool:
+    """A human seal over a scope subject (`serve:<hash>`). It is about a scope,
+    so it is in none: as a `who == "human"` row it would otherwise land in the
+    human's pile (and the seal kind's, and the day's), change that pile's id,
+    and move the very subject it seals; sealing the new subject would move it
+    again, forever. Tip and wager seals are the human's own acts and stay."""
+    return row.get("kind") == "seal" and str(row.get("subject") or "").startswith(
+        "serve:"
+    )
+
+
 def piles(rows: list[dict], *ws: str) -> list[dict]:
     """Group the record by the given W's: a GROUP BY, exact, nothing judged.
-    A row missing any of them isn't in a pile; code doesn't guess it."""
+    A row missing any of them isn't in a pile; code doesn't guess it. A scope
+    seal is in no pile (`scope_seal`): sealing a scope never adds or moves one."""
     if not ws or any(w not in WS for w in ws):
         raise ValueError(f"group by one or more of {WS}, got {ws}")
     groups: dict[tuple, list[dict]] = {}
     for r in rows:
+        if scope_seal(r):
+            continue
         key = tuple(w_of(r, w) for w in ws)
         if None not in key:
             groups.setdefault(key, []).append(r)
@@ -194,20 +208,27 @@ def propose(stack: list[dict], **match: str) -> dict:
     }
 
 
+def _binds(row: dict) -> bool:
+    """Whether a scope's seal binds this row: not the run's own bookkeeping,
+    and not a scope seal (`scope_seal`)."""
+    return row.get("who") != SYSTEM and not scope_seal(row)
+
+
 def authored(rows: list[dict]) -> list[dict]:
     """The rows a scope can bind: everything but the run's own bookkeeping
-    (`who == "run"`: invocation, boot, serve, ...). Every launch appends that, so
-    a table id over it would move on each launch, the scope subject with it, and
-    a scope the human sealed once would never match again. The seal binds the
-    authored rows and the pile's group; the run's rows in a sealed pile are
-    checked against the chain by `_receipt` but never served, since the seal
-    does not bind them (served content is exactly the sealed content)."""
-    return [r for r in rows if r.get("who") != SYSTEM]
+    (`who == "run"`: invocation, boot, serve, ...) and scope seals. Every launch
+    appends the first and every seal the second, so a table id over either would
+    move, the scope subject with it, and a scope the human sealed once would
+    never match again. The seal binds the authored rows and the pile's group;
+    the run's rows in a sealed pile are checked against the chain by `_receipt`
+    but never served, since the seal does not bind them (served content is
+    exactly the sealed content)."""
+    return [r for r in rows if _binds(r)]
 
 
 def table_id(table: dict) -> str:
     """A table's content hash: its authored rows and its source receipt,
-    canonically. The run's own rows are in no id, under any W."""
+    canonically. The run's own rows and scope seals are in no id, under any W."""
     rows, src = table["rows"], table["source"]
     if isinstance(src, dict) and "rows" in src:
         if len(src["rows"]) != len(rows):
@@ -217,7 +238,7 @@ def table_id(table: dict) -> str:
             )
         src = {
             **src,
-            "rows": [s for s, r in zip(src["rows"], rows) if r.get("who") != SYSTEM],
+            "rows": [s for s, r in zip(src["rows"], rows) if _binds(r)],
         }
     return h256(canon({"rows": authored(rows), "source": src}))
 
