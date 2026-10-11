@@ -270,6 +270,13 @@ def _handle_issues(payload: dict, post: Callable) -> None:
         # A first-timer gets the welcome instead of a quip: one comment, not two.
         if _welcome(repo, issue.get("number"), issue.get("user"), issue.get("author_association"), post):
             return
+        # The same gate every other line passes: the voice's orgs, never an
+        # outside contributor, once per issue, under the daily cap. This line
+        # used to post on every issue in every repo the App can see.
+        user = issue.get("user") or {}
+        if not _may(repo, issue.get("number"), "gap_filed", issue.get("author_association"),
+                    bot=user.get("type") == "Bot"):
+            return
         msg = quips.pick("gap_filed")
         if msg:
             post(repo, issue.get("number"), msg)
