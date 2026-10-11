@@ -27,6 +27,7 @@ One operation: ``report()`` returns a dict of the form:
         "pending": {"status": ..., "total": N, "by_lane": {...}},
         "last_tick": {"status": ..., "last": <receipt>, "at": ...},
       },
+      "open_prs": {"status": ..., "count": N, "by_ci": {"red": N, ...}, "prs": [{"pr", "head_sha", "ci", "legs"}]},
       "app": {"status": ..., "verdict": "ok"|"partial"|"failing"|..., "last": {...}},
       "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
       "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
@@ -509,6 +510,83 @@ def _read_ingress() -> dict[str, Any]:
             "last": last, "flag": data.get("flag")}
 
 
+# ── open PRs and their CI ────────────────────────────────────────────────
+
+_OPEN_PRS_CAP = 50
+
+
+def _read_open_prs() -> dict[str, Any]:
+    """Each PR the last scan saw open, with the CI state of its newest head
+    as the ci step recorded it — read from the steward's state file, no
+    GitHub call. ``ci`` per PR:
+
+    - ``red`` — an unresolved CI item is filed against that head
+    - ``green`` — every recorded leg passed (success / skipped / neutral)
+    - ``cancelled`` — a leg was cancelled and nothing went red
+    - ``running`` — legs recorded, none red, not all green yet
+    - ``unknown`` — no CI deposit seen for this PR's head
+    """
+    from willow_bot.steward.config import state_path
+    from willow_bot.steward.tick import _CI_CANCELLED, _CI_GREEN, _CI_RED
+
+    p = state_path()
+    if not p.is_file():
+        return {"status": "empty", "detail": f"no file at {p}", "count": 0, "by_ci": {}, "prs": []}
+    try:
+        state = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200], "count": 0, "by_ci": {}, "prs": []}
+    if not isinstance(state, dict):
+        return {"status": "unreachable", "detail": "state is not a JSON object", "count": 0, "by_ci": {}, "prs": []}
+
+    def _map(name: str) -> dict:
+        v = state.get(name)
+        return v if isinstance(v, dict) else {}
+
+    open_keys = [k for k in (state.get("open") or []) if isinstance(k, str)]
+    heads, head_legs, items = _map("ci_heads"), _map("ci_head_legs"), _map("ci_items")
+    prs: list[dict[str, Any]] = []
+    by_ci: dict[str, int] = {}
+    for key in open_keys:
+        seen = heads.get(key) if isinstance(heads.get(key), dict) else {}
+        dated = [s for s, at in seen.items() if at]
+        sha = max(dated, key=lambda s: str(seen[s])) if dated else next(iter(seen), None)
+        row: dict[str, Any] = {"pr": key, "head_sha": (sha or "")[:12] or None}
+        if sha is None:
+            ci = "unknown"
+        else:
+            head_key = f"{key}@{sha}"
+            legs = head_legs.get(head_key) if isinstance(head_legs.get(head_key), dict) else {}
+            item = items.get(head_key) if isinstance(items.get(head_key), dict) else None
+            if item and not item.get("resolved"):
+                ci = "red"
+                row["url"] = item.get("url")
+            elif legs and all(c in _CI_GREEN for c in legs.values()):
+                ci = "green"
+            elif any(c == _CI_CANCELLED for c in legs.values()) and not any(c in _CI_RED for c in legs.values()):
+                ci = "cancelled"
+            elif legs:
+                ci = "red" if any(c in _CI_RED for c in legs.values()) else "running"
+            else:
+                ci = "unknown"
+            row["legs"] = dict(sorted(legs.items()))
+            row["seen_at"] = seen.get(sha)
+        row["ci"] = ci
+        by_ci[ci] = by_ci.get(ci, 0) + 1
+        prs.append(row)
+    order = {"red": 0, "cancelled": 1, "running": 2, "unknown": 3, "green": 4}
+    prs.sort(key=lambda r: (order.get(r["ci"], 9), r["pr"]))
+    out: dict[str, Any] = {
+        "status": "populated" if prs else "empty",
+        "count": len(prs),
+        "by_ci": dict(sorted(by_ci.items())),
+        "prs": prs[:_OPEN_PRS_CAP],
+    }
+    if len(prs) > _OPEN_PRS_CAP:
+        out["truncated"] = len(prs) - _OPEN_PRS_CAP
+    return out
+
+
 # ── App grant ────────────────────────────────────────────────────────────
 
 
@@ -621,6 +699,7 @@ def report() -> dict[str, Any]:
         "notifier": _read_notifier(),
         "ingress": _read_ingress(),
         "upstream": _read_upstream(),
+        "open_prs": _read_open_prs(),
         "app": _read_app_grant(),
         "operator": _read_operator(),
         "contributions": _read_contributions(),
