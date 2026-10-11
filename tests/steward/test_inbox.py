@@ -282,12 +282,13 @@ def test_ingest_check_run_and_pull_request_share_state(
     assert check_signals[0]["conclusion"] == "failure"
 
 
-def test_ingest_unknown_kind_stays_in_inbox(
+def test_ingest_unknown_kind_is_archived_unemitted(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     """An installation / issue_comment / other-kind row is not consumed
-    here — this step names only the kinds it knows how to emit for. The
-    row stays for a later step and its work_id stays out of consumed."""
+    here — this step names only the kinds it knows how to emit for. No
+    step reads those kinds, so the row moves to unhandled/<YYYY-MM>/
+    (kept, not emitted) and its work_id stays out of consumed."""
     home = tmp_path / "willow"
     inbox = home / "upstream_steward" / "webhook_inbox"
     inbox.mkdir(parents=True)
@@ -312,6 +313,8 @@ def test_ingest_unknown_kind_stays_in_inbox(
     assert capsys.readouterr().out.strip() == ""
     saved = json.loads(state.read_text())
     assert item["work_id"] not in saved.get("inbox_consumed", [])
+    assert not (inbox / f"{item['work_id']}.json").exists()
+    assert [p.name for p in (inbox / "unhandled").glob("*/*.json")] == [f"{item['work_id']}.json"]
 
 
 # ── consumed items leave the inbox ────────────────────────────────────────
@@ -356,9 +359,11 @@ def test_consumed_items_move_to_the_month_archive(tmp_path, monkeypatch, capsys)
     other = _put(inbox, {"kind": "issue_comment", "work_id": "wh-o-r-comment-1-x"})
     assert ingest(state) == 0
     assert len(_emitted(capsys)) == 2
-    month = inbox / "consumed" / time.strftime("%Y-%m", time.gmtime())
+    stamp = time.strftime("%Y-%m", time.gmtime())
+    month = inbox / "consumed" / stamp
     assert sorted(p.name for p in month.iterdir()) == ["wh-o-r-check-7-x.json", "wh-o-r-pr-1-x.json"]
-    assert [p.name for p in inbox.glob("*.json")] == [other.name]  # what no step consumes stays
+    assert list(inbox.glob("*.json")) == []  # the inbox holds only what waits
+    assert [p.name for p in (inbox / "unhandled" / stamp).iterdir()] == [other.name]
 
 
 def test_a_later_webhook_for_a_consumed_work_id_is_archived_not_re_emitted(tmp_path, monkeypatch, capsys):
@@ -427,4 +432,4 @@ def test_status_pending_counts_only_what_is_left(tmp_path, monkeypatch, capsys):
     _put(inbox, {"kind": "issue", "work_id": "wh-o-r-issue-1-x"})
     ingest(state_path())
     r = status.report()["inbox"]
-    assert r["total"] == 1 and r["pending"] == 1 and r["pending_by_kind"] == {"issue": 1}
+    assert r["total"] == 0 and r["pending"] == 0  # consumed and unhandled both left

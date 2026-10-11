@@ -39,6 +39,9 @@ _MAX_CONSUMED = 5000
 #: Where a consumed item goes: out of the inbox, into a month folder under it,
 #: never deleted. `glob("*.json")` on the inbox does not reach it.
 CONSUMED_DIR = "consumed"
+#: Where an item of a kind no step reads goes (issue, issue_comment,
+#: installation*): kept, never emitted, never in inbox_consumed.
+UNHANDLED_DIR = "unhandled"
 _MAX_SIGNALS = 100
 _MAX_CLOSED = 500
 
@@ -61,11 +64,11 @@ def _repo_pr(item: dict) -> str:
     return ""
 
 
-def _archive(inbox: Path, path: Path, month: str) -> bool:
-    """Move a consumed item out of the inbox into ``consumed/<YYYY-MM>/``.
+def _archive(inbox: Path, path: Path, month: str, folder: str = CONSUMED_DIR) -> bool:
+    """Move an item out of the inbox into ``<folder>/<YYYY-MM>/``.
     True when it moved. A failed move leaves the file where it is; its
     work_id is still in ``inbox_consumed``, so it is not emitted again."""
-    dest_dir = inbox / CONSUMED_DIR / month
+    dest_dir = inbox / folder / month
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
         path.replace(dest_dir / path.name)
@@ -193,10 +196,13 @@ def ingest(state_path: Path) -> int:
             signals.append({"kind": "check_run",
                             **{k: v for k, v in ev.items() if k != "event"}})
         else:
-            # Anything else (installation, installation_repositories, an
-            # issue_comment landing in the inbox with a shape this step does
-            # not name yet) stays in the inbox for a later step to consume;
-            # not dropped, not double-emitted.
+            # Anything else (issue, issue_comment, installation,
+            # installation_repositories) has no step that reads it, so left
+            # here it only piled up. It moves, unemitted and out of
+            # inbox_consumed, to unhandled/<YYYY-MM>/: kept for a step that
+            # wants it, and the same events are in event-log.jsonl and the
+            # contributions ledger.
+            _archive(inbox, path, month, folder=UNHANDLED_DIR)
             continue
 
     # Keep the most recently consumed ids, never the alphabetically last: the

@@ -262,3 +262,57 @@ def test_vault_only_env_files_where_the_steward_reads(monkeypatch, tmp_path):
     fleet_bridge.handle("pull_request", _PR)
     assert webhook_inbox_dir() == box / "upstream_steward" / "webhook_inbox"
     assert list(webhook_inbox_dir().glob("*.json"))
+
+
+# ── one inbox item per event, not per PR / issue / installation ─────────────
+
+
+def _pr_event(action: str, sha: str, updated: str, number: int = 4) -> dict:
+    return {"action": action, "repository": {"full_name": REPO},
+            "pull_request": {"number": number, "state": "open", "head": {"sha": sha}, "updated_at": updated}}
+
+
+def test_every_pr_event_reaches_the_inbox_not_only_the_first(home):
+    """Keyed on the PR number, the first event's file made every later one
+    skip: a synchronize's new head and the close never arrived."""
+    fleet_bridge.handle("pull_request", _pr_event("opened", "a" * 40, "2026-10-11T00:00:00Z"))
+    fleet_bridge.handle("pull_request", _pr_event("synchronize", "b" * 40, "2026-10-11T01:00:00Z"))
+    fleet_bridge.handle("pull_request", _pr_event("closed", "b" * 40, "2026-10-11T02:00:00Z"))
+    items = _inbox(home)
+    assert sorted(i["action"] for i in items) == ["closed", "opened", "synchronize"]
+    assert {i["head_sha"] for i in items} == {"a" * 40, "b" * 40}
+    assert len({i["work_id"] for i in items}) == 3
+
+
+def test_a_redelivered_pr_webhook_is_still_one_item(home):
+    ev = _pr_event("opened", "a" * 40, "2026-10-11T00:00:00Z")
+    fleet_bridge.handle("pull_request", ev)
+    fleet_bridge.handle("pull_request", ev)
+    assert len(_inbox(home)) == 1
+
+
+def test_each_issue_event_and_each_label_is_its_own_item(home):
+    def issue(action, updated, label=None):
+        p = {"action": action, "repository": {"full_name": REPO},
+             "issue": {"number": 9, "updated_at": updated}}
+        if label:
+            p["label"] = {"name": label}
+        return p
+
+    fleet_bridge.handle("issues", issue("opened", "t0"))
+    fleet_bridge.handle("issues", issue("labeled", "t1", "bug"))
+    fleet_bridge.handle("issues", issue("labeled", "t2", "help wanted"))
+    fleet_bridge.handle("issues", issue("labeled", "t2", "help wanted"))  # redelivery
+    assert len(_inbox(home)) == 3
+
+
+def test_each_installation_change_is_its_own_item(home):
+    def change(*names):
+        return {"action": "added", "installation": {"id": 7},
+                "repositories_added": [{"full_name": n} for n in names]}
+
+    fleet_bridge.handle("installation_repositories", change("o/a"))
+    fleet_bridge.handle("installation_repositories", change("o/b"))
+    fleet_bridge.handle("installation_repositories", change("o/b"))  # redelivery
+    assert [i["repositories_added"] for i in _inbox(home)] in (
+        [["o/a"], ["o/b"]], [["o/b"], ["o/a"]])
