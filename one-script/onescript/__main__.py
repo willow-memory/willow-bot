@@ -127,6 +127,16 @@ def _print_json(obj) -> None:
     print(json.dumps(obj, indent=1, sort_keys=True, default=str))
 
 
+def _bot_venv() -> Path:
+    """The bot's venv: ``$WILLOW_HOME/willow-bot/venvs/willow-bot`` (D2: the
+    venvs live in the bot), or the old ``$WILLOW_HOME/venvs/willow-bot`` while
+    only that one exists."""
+    box = Path(os.environ.get("WILLOW_HOME", "~")).expanduser()
+    new = box / "willow-bot" / "venvs" / "willow-bot"
+    old = box / "venvs" / "willow-bot"
+    return old if not new.is_dir() and old.is_dir() else new
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="onescript")
     p.add_argument("--box", type=Path, default=ROOT / ".flow" / "onescript")
@@ -136,9 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--venv",
         type=Path,
-        default=Path(os.environ.get("WILLOW_HOME", "~")).expanduser()
-        / "venvs"
-        / "willow-bot",
+        default=_bot_venv(),
         help="the venv whose tools the toolchain gate checks (the bot's)",
     )
     p.add_argument("--now", help="fixed clock, for replays and tests")

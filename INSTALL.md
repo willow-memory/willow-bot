@@ -12,7 +12,7 @@ cd ~/github/willow-memory/willow-bot
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 # Dogfood (preferred for systemd):
-#   $WILLOW_HOME/venvs/willow-bot/bin/pip install -e '.[dev]'
+#   $WILLOW_HOME/willow-bot/venvs/willow-bot/bin/pip install -e '.[dev]'
 # optional Grove Loki semantic path (Nestor — not on PyPI as a URL dep):
 #   .venv/bin/pip install "nestor @ git+https://github.com/Die-Namic-Systems/Nestor@master"
 ```
@@ -26,9 +26,29 @@ Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` |
 
 `ingress` asks GitHub for the **App webhook**'s recent deliveries (`/app/hook/deliveries`, App JWT) on every tick. A repository or organization hook is not read. Verdicts: `ok` (newest delivery 2xx, within `WILLOW_BOT_INGRESS_QUIET_DAYS`, default 7), `quiet` (newest 2xx but older than that), `degraded` (newest not 2xx, fewer than 3 in a row), `failing` (newest 3 not 2xx, at least one HTTP answer), `unanswered` (newest 3 got no HTTP answer), `empty`, `malformed` or `unreachable`. Only 2xx counts, because GitHub does not follow redirects. `failing` and `unanswered` file one `human_required` item and resolve it when the newest delivery is 2xx again. The hook URL is reduced to `scheme://host[:port]/path`, with any path segment that is not a plain lowercase word (or that starts with a GitHub token prefix) shown as `…`, before it is written anywhere. `status` shows the last verdict under `ingress`, with `latest_age_s`.
 
-Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
+Dogfood venv (preferred for systemd): `$WILLOW_HOME/willow-bot/venvs/willow-bot` — keep separate from willow-mcp's `$WILLOW_HOME/venvs/willow-mcp`.
 
-Seat provisioning: the grove CLI seat runs from this venv and needs `ratatosk` on its bin and `willow_mcp` importable (Python >=3.11). The Nestor engine (`nestor-meaning`, import `nestor`, via `willow-mcp[nestor]`) comes with `[seat]`, so the close-out deposit's draft lands instead of `nestor_unavailable`. Install the `seat` extra: `$WILLOW_HOME/venvs/willow-bot/bin/pip install -e '.[dev,seat]'`. Re-provision the existing venv with that command after this lands.
+### The venv lives in the bot (D2)
+
+Seal D2: "all the .venv live in the bot". The bot's venvs live under
+`$WILLOW_HOME/willow-bot/venvs/<name>`; the old home `$WILLOW_HOME/venvs/` sits
+beside the bot, not in it. `willow-bot-steward venvs` lists every venv under the
+box and the clone root as inside or OUTSIDE (`status` carries the same counts).
+`willow-bot-steward venvs --plan` prints, for each one outside, the commands that
+recreate it inside. It runs nothing.
+
+Recreate, never `mv`: every script in a venv's `bin/` names the old interpreter
+path in its shebang. The plan freezes the old venv's packages, builds a new venv,
+re-installs the editable checkouts (add back their extras, e.g. `[dev,seat]`),
+and runs `pip check`. Then re-render the units onto it
+(`scripts/install-service.sh --all` picks the new venv once it exists),
+restart them, and remove the old venv by hand.
+
+Until the new venv exists, `scripts/install-service.sh` and the one script's
+`--venv` default fall back to `$WILLOW_HOME/venvs/willow-bot`, and the install
+script says so.
+
+Seat provisioning: the grove CLI seat runs from this venv and needs `ratatosk` on its bin and `willow_mcp` importable (Python >=3.11). The Nestor engine (`nestor-meaning`, import `nestor`, via `willow-mcp[nestor]`) comes with `[seat]`, so the close-out deposit's draft lands instead of `nestor_unavailable`. Install the `seat` extra: `$WILLOW_HOME/willow-bot/venvs/willow-bot/bin/pip install -e '.[dev,seat]'`. Re-provision the existing venv with that command after this lands.
 
 ## Local service / secrets
 
@@ -252,7 +272,7 @@ to do").
 
 The webhook unit uses:
 - `WorkingDirectory` / `EnvironmentFile` under `~/github/willow-memory/willow-bot`
-- `ExecStart` from `$WILLOW_HOME/venvs/willow-bot/bin/willow-bot` (dogfood venv)
+- `ExecStart` from `$WILLOW_HOME/willow-bot/venvs/willow-bot/bin/willow-bot` (dogfood venv)
 - `bot:app` resolved from the checkout root (not shipped in the PyPI wheel)
 
 The unit sets `WILLOW_VAULT_BOX` and loads `secrets/willow-bot.env` from the vault.
@@ -274,8 +294,8 @@ Bootstrap one-liners (operator terminal, canonical checkout):
 
 ```bash
 source ~/.willow/fleet.env
-test -x "$WILLOW_HOME/venvs/willow-bot/bin/python" || python3 -m venv "$WILLOW_HOME/venvs/willow-bot"
-"$WILLOW_HOME/venvs/willow-bot/bin/pip" install -e '/home/sean-campbell/github/willow-memory/willow-bot[dev,seat]'
+test -x "$WILLOW_HOME/willow-bot/venvs/willow-bot/bin/python" || python3 -m venv "$WILLOW_HOME/willow-bot/venvs/willow-bot"
+"$WILLOW_HOME/willow-bot/venvs/willow-bot/bin/pip" install -e '/home/sean-campbell/github/willow-memory/willow-bot[dev,seat]'
 mkdir -p "$WILLOW_HOME/willow-bot/runs"
 cp /home/sean-campbell/github/willow-memory/willow-bot/deploy/deterministic-policy.template.json "$WILLOW_HOME/willow-bot/deterministic-policy.json"
 # Stop any nohup serve; run through systemd (same pattern as webhook + steward):
@@ -285,7 +305,7 @@ scripts/install-service.sh willow-bot-deterministic
 systemctl --user enable --now willow-bot-deterministic.service
 systemctl --user status willow-bot-deterministic.service --no-pager
 test -S "$WILLOW_HOME/willow-bot/deterministic.sock" && echo socket ok
-"$WILLOW_HOME/venvs/willow-bot/bin/willow-bot-deterministic" client --fixtures /home/sean-campbell/github/willow-memory/willows-grove/seat/willow/experiments/flowering-2026-09 --model llama3.2:3b --limit 1
+"$WILLOW_HOME/willow-bot/venvs/willow-bot/bin/willow-bot-deterministic" client --fixtures /home/sean-campbell/github/willow-memory/willows-grove/seat/willow/experiments/flowering-2026-09 --model llama3.2:3b --limit 1
 ```
 
 Kart smoke (desk `task_submit`, same client):
@@ -294,7 +314,7 @@ Kart smoke (desk `task_submit`, same client):
 willow-bot-deterministic client --fixtures /home/sean-campbell/github/willow-memory/willows-grove/seat/willow/experiments/flowering-2026-09 --model llama3.2:3b --limit 1
 ```
 
-(run from a Kart task with `WILLOW_HOME` set and `$WILLOW_HOME/venvs/willow-bot/bin` on `PATH`, or use the full path to `client` in the task string.)
+(run from a Kart task with `WILLOW_HOME` set and `$WILLOW_HOME/willow-bot/venvs/willow-bot/bin` on `PATH`, or use the full path to `client` in the task string.)
 
 ### The chain: D0, then local, then flowering
 

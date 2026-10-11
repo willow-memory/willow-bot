@@ -3666,8 +3666,12 @@ def main(argv: list[str] | None = None) -> int:
         from willow_bot import contributions
 
         return contributions.main(args[1:])
+    if args[0] == "venvs":
+        from willow_bot import venvs
+
+        return venvs.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|venvs [--plan] [--json]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2

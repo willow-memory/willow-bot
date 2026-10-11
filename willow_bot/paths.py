@@ -14,6 +14,7 @@ so a rename of the env or a change to the default lands in one place.
   fallback (`~/sean-data-vault/willow-operator-box`, one operator's layout
   hardcoded) and `credentials.py`'s `~/{user}-data-vault/...` disagreed with
   each other, and anything run without the env silently wrote to a guess.
+- `venvs_dir()` — `$WILLOW_HOME/willow-bot/venvs/`, the bot's venvs (D2).
 - `bot_dir()`, `deposits_dir()`, `webhook_inbox_dir()` — the three
   well-known subdirectories every steward step writes under; each is
   one line and could live at the call site, but centralizing them keeps
@@ -92,6 +93,19 @@ def persona_dir() -> Path:
     """`$WILLOW_HOME/willow-bot/persona/` — the voice's SQLite counters
     (contributors, CI sigh streaks, rebase shame)."""
     return bot_dir() / "persona"
+
+
+def venvs_dir() -> Path:
+    """`$WILLOW_HOME/willow-bot/venvs/` — where the bot's venvs live (seal D2:
+    "all the .venv live in the bot"). One directory per venv, named for what
+    it runs (`willow-bot`, ...). `$WILLOW_HOME/venvs/` is the old home: it sits
+    beside the bot, not in it (`willow_bot.venvs` reports what is still there)."""
+    return bot_dir() / "venvs"
+
+
+def legacy_venvs_dir() -> Path:
+    """`$WILLOW_HOME/venvs/` — the venvs' home before D2 was carried out."""
+    return willow_home() / "venvs"
 
 
 def webhook_inbox_dir() -> Path:

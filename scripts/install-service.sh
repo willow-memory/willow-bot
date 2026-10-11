@@ -10,7 +10,9 @@
 #
 # Env inputs (with defaults):
 #   WILLOW_BOT_VENV_BIN   — dir holding the willow-bot entry-point scripts
-#                           (default: $VAULT_BOX/venvs/willow-bot/bin)
+#                           (default: $VAULT_BOX/willow-bot/venvs/willow-bot/bin, the
+#                           bot's own venv under seal D2; while only the old
+#                           $VAULT_BOX/venvs/willow-bot exists, that one, with a warning)
 #   WILLOW_BOT_VAULT_BOX  — WILLOW_HOME / vault box root (REQUIRED; no default —
 #                           the box willow-data-vault's bootstrap/provision.sh made.
 #                           Falls back to an exported WILLOW_HOME, never a guess)
@@ -34,7 +36,19 @@ if [[ "$VAULT_BOX" != /* || ! -d "$VAULT_BOX" ]]; then
     echo "  (willow-data-vault: bootstrap/provision.sh <box> creates it; this script never does)." >&2
     exit 2
 fi
-VENV_BIN="${WILLOW_BOT_VENV_BIN:-$VAULT_BOX/venvs/willow-bot/bin}"
+# D2: the venvs live in the bot. The old home ($VAULT_BOX/venvs/) is used only
+# until the venv has been recreated inside (willow-bot-steward venvs --plan).
+NEW_VENV_BIN="$VAULT_BOX/willow-bot/venvs/willow-bot/bin"
+OLD_VENV_BIN="$VAULT_BOX/venvs/willow-bot/bin"
+if [[ -n "${WILLOW_BOT_VENV_BIN:-}" ]]; then
+    VENV_BIN="$WILLOW_BOT_VENV_BIN"
+elif [[ ! -x "$NEW_VENV_BIN/python" && -x "$OLD_VENV_BIN/python" ]]; then
+    VENV_BIN="$OLD_VENV_BIN"
+    echo "install-service.sh: warning: using the old venv $OLD_VENV_BIN, outside the bot (D2)." >&2
+    echo "  willow-bot-steward venvs --plan prints how to recreate it at $NEW_VENV_BIN." >&2
+else
+    VENV_BIN="$NEW_VENV_BIN"
+fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Default: the checkout this script runs from, wherever the operator cloned it.
 WORKDIR="${WILLOW_BOT_WORKDIR:-$REPO_ROOT}"
