@@ -628,6 +628,46 @@ def pooled(cfg: Config, argv: Iterable[str] = ("pooled",)) -> dict:
     return {"pooled": items, "count": len(items), "code": 0}
 
 
+def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
+    """The most recent human-sealed scope, as the record holds it: the `spec`
+    (with the `upto` it was proposed at) and the `subject` the human sealed.
+    Serving that spec again stays `populated` however many rows were added
+    since, where a fresh scope at `upto=latest` would move the subject out from
+    under the seal. Read-only, like `pooled`: it writes an `invocation` row and
+    nothing else, needs no open box, and never seals, serves or mints. With no
+    human seal over a scope, or no scope row behind it, the answer is
+    {"resume": None}."""
+    run, info = _open(cfg, "resume", argv)
+    if run is None:
+        return info
+    rows = run.rec.rows()
+    seal = next(
+        (
+            r
+            for r in reversed(rows)
+            if r["kind"] == "seal"
+            and r.get("who") == gate.HUMAN
+            and str(r.get("subject", "")).startswith("serve:")
+        ),
+        None,
+    )
+    if seal is None:
+        return {"resume": None, "code": 0}
+    scoped = next(
+        (
+            r
+            for r in reversed(rows)
+            if r["kind"] == "scope"
+            and r["n"] < seal["n"]
+            and r.get("where") == seal["subject"]
+        ),
+        None,
+    )
+    if scoped is None or not isinstance(scoped.get("spec"), dict):
+        return {"resume": None, "code": 0}
+    return {"spec": scoped["spec"], "subject": seal["subject"], "code": 0}
+
+
 def escalate(
     cfg: Config,
     task: str,
