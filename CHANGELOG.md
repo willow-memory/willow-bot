@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [1.2.3](https://github.com/willow-memory/willow-bot/compare/v1.2.2...v1.2.3) (2026-10-11)
+
+
+### Fixed
+
+* **bridge:** one inbox item per event; archive kinds no step reads ([54cb180](https://github.com/willow-memory/willow-bot/commit/54cb180705edff027aa186243bae59d17d54fde2))
+* inbox replay, one item per event, unhandled-kind pile, ungated gap_filed quip ([47945e8](https://github.com/willow-memory/willow-bot/commit/47945e877cd912f88faa32441906b2695f422fa7))
+* **router:** the gap_filed quip passes the voice's gate ([c15934c](https://github.com/willow-memory/willow-bot/commit/c15934ccd416dc21e4c58e95b30938ca237bb7ca))
+
 ## [1.2.2](https://github.com/willow-memory/willow-bot/compare/v1.2.1...v1.2.2) (2026-10-11)
 
 
