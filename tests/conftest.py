@@ -63,6 +63,20 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_config, "state_path", _guarded_state)
 
+    # The operator profile. The suite's fixtures speak willow-memory repos, so
+    # it runs under that fleet's profile (deploy/operator.willow-memory.json),
+    # loaded fresh per test; a test of the blank install points the env at
+    # nothing. Discovery never reaches `gh`.
+    from willow_bot import operator_profile as _operator
+
+    monkeypatch.setenv(_operator.PROFILE_ENV,
+                       str(Path(__file__).resolve().parents[1] / "deploy" / "operator.willow-memory.json"))
+    monkeypatch.delenv("WILLOW_BOT_NAME", raising=False)
+    monkeypatch.delenv("WILLOW_BOT_UPSTREAM_WATCH_REPOS", raising=False)
+    monkeypatch.delenv("LOKI_PR_WATCH_USER", raising=False)
+    _operator.reset()
+    monkeypatch.setattr(_operator, "_discovered_login", lambda: "")
+
     # The steward re-reads a PR live before any CI red goes out. No test
     # reaches GitHub for that: unreadable is "unknown", which alerts as
     # before. A test of the gate itself patches `_ci_fetch_pull` back in.

@@ -176,7 +176,7 @@ def _local_clone_path_with_layout(repo_full_name: str) -> tuple[Path | None, str
         if (candidate / ".git").is_dir() and _matches_origin(candidate):
             return candidate, layout
 
-    # Slow path: local folder name differs from remote (e.g. willow → rudi193-cmd/Willow).
+    # Slow path: local folder name differs from remote (e.g. willow → some-user/Willow).
     if not _GITHUB_ROOT.is_dir():
         return None, None
     for child in _GITHUB_ROOT.iterdir():

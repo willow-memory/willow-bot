@@ -77,7 +77,7 @@ class Accumulator:
 
     def check_mistletoe(self, new_spec_path: str, catalog,
                         manifest_app_id: Optional[str] = None,
-                        github_root: str = "/home/sean-campbell/github") -> Optional[Signal]:
+                        github_root: str | None = None) -> Optional[Signal]:
         """Fire only on spec files not seen before in uncataloged app repos.
 
         ``catalog`` is a :class:`loki.catalog.CatalogIndex`; the repo is
@@ -88,6 +88,10 @@ class Accumulator:
         """
         if new_spec_path in self._state["seen_specs"]:
             return None
+        if github_root is None:
+            from willow_bot import operator_profile
+
+            github_root = str(operator_profile.github_root())
 
         path = Path(new_spec_path)
         # Repo name is the top-level dir under the github root.
@@ -126,6 +130,10 @@ class Accumulator:
         """
         if new_spec_path in self._state["seen_specs"]:
             return None
+        if github_root is None:
+            from willow_bot import operator_profile
+
+            github_root = str(operator_profile.github_root())
 
         # Mark as seen regardless — a spec is raised at most once.
         self._state["seen_specs"].append(new_spec_path)
@@ -236,14 +244,23 @@ class Accumulator:
     # ── Surfacing — thread drift ───────────────────────────────────────────────
 
     def check_surfacing(self, channel: str, message: dict) -> Optional[Signal]:
-        """Fire if 10+ messages in channel with no sean-campbell response."""
+        """Fire if 10+ messages in channel with no response from the operator
+        (the profile's ``grove.operator_sender``). With no operator named
+        there is no one to wait on: never fires."""
+        from willow_bot import operator_profile
+
+        operator = operator_profile.grove_operator_sender()
+        if not operator:
+            return None
         cursors = self._state["thread_cursors"]
         if channel not in cursors:
-            cursors[channel] = {"last_sean_id": 0, "count_since": 0}
+            cursors[channel] = {"last_operator_id": 0, "count_since": 0}
 
         entry = cursors[channel]
-        if message.get("sender") == "sean-campbell":
-            entry["last_sean_id"] = message["id"]
+        if "last_operator_id" not in entry:  # state written before the rename
+            entry["last_operator_id"] = entry.pop("last_sean_id", 0)
+        if message.get("sender") == operator:
+            entry["last_operator_id"] = message["id"]
             entry["count_since"] = 0
         else:
             entry["count_since"] = entry.get("count_since", 0) + 1
@@ -256,6 +273,6 @@ class Accumulator:
             return Signal(
                 trigger="Surfacing",
                 description=f"#{channel}: {entry['count_since'] + 10} messages without USER response — surfacing",
-                evidence={"channel": channel, "last_sean_id": entry["last_sean_id"]},
+                evidence={"channel": channel, "last_operator_id": entry["last_operator_id"]},
             )
         return None

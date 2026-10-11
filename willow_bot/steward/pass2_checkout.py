@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Fetch PR heads and run pytest -q in each repo (operator credentials)."""
+"""Fetch PR heads and run pytest -q in each repo (operator credentials).
+
+    python -m willow_bot.steward.pass2_checkout owner/repo#123 [owner/repo#456 ...]
+"""
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-GITHUB = Path.home() / "github"
-PRS = [
-    ("Die-Namic-Systems", "nestor", 294),
-    ("hornbook-knowledge", "Jeles", 82),
-    ("willow-memory", "corpus-lens", 42),
-    ("willow-memory", "kartikeya", 56),
-    ("willow-memory", "willow-mcp", 504),
-]
+from willow_bot import operator_profile
+
+GITHUB = operator_profile.github_root()
+
+
+def parse_prs(argv: list[str]) -> list[tuple[str, str, int]]:
+    """``owner/repo#num`` arguments → ``(owner, repo, num)``."""
+    out = []
+    for arg in argv:
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_.-]+)#(\d+)", arg.strip())
+        if not m:
+            raise SystemExit(f"pass2_checkout: expected owner/repo#number, got {arg!r}")
+        out.append((m.group(1), m.group(2), int(m.group(3))))
+    return out
 
 
 def gh(path: str):
@@ -34,8 +44,12 @@ def run(cmd: list[str], cwd: Path) -> tuple[int, str]:
     return p.returncode, out[-4000:]
 
 
-def main() -> int:
-    for org, repo, num in PRS:
+def main(argv: list[str] | None = None) -> int:
+    prs = parse_prs(sys.argv[1:] if argv is None else argv)
+    if not prs:
+        print(__doc__, file=sys.stderr)
+        return 2
+    for org, repo, num in prs:
         full = f"{org}/{repo}" if "/" in f"{org}/{repo}" else f"{org}/{repo}"
         # normalize repo folder name
         folder = repo

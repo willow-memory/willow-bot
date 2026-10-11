@@ -26,7 +26,10 @@ display name does.
 
 ## Identity
 
-The App this tree acts as: **`willows-bot`** (id `4001890`, per `README.md`).
+The App this tree acts as is whichever App the install's credentials name;
+its display name is a label from the operator profile (`bot_name`, default
+`willow-bot`) and nothing matches on it. The willow-memory fleet's install is
+**`willows-bot`** (id `4001890`; `deploy/operator.willow-memory.json`).
 Propose-only — see "What it never does" below.
 
 Credentials resolve through `credentials.py` (`credentials.resolve`), in

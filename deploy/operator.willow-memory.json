@@ -1,0 +1,26 @@
+{
+  "_doc": "The willow-memory fleet's operator profile: the values that used to be hardcoded in willow-bot. Install with: cp deploy/operator.willow-memory.json \"$WILLOW_HOME/willow-bot/operator.json\"",
+  "login": "rudi193-cmd",
+  "bot_name": "willows-bot",
+  "orgs": ["almanac-data", "Die-Namic-Systems", "forge-play", "homestead-affairs", "hornbook-knowledge", "terpsi-programs", "willow-memory"],
+  "core_repos": [
+    "willow-memory/willow-mcp", "willow-memory/kartikeya", "willow-memory/willows-grove", "willow-memory/willow-gate",
+    "willow-memory/ratatosk", "willow-memory/corpus-lens", "Die-Namic-Systems/Nestor", "hornbook-knowledge/Jeles",
+    "forge-play/Forge", "rudi193-cmd/willow-bot"
+  ],
+  "upstream_watch": [
+    "basicmachines-co/basic-memory", "Redential/redential-cli", "DeusData/codebase-memory-mcp",
+    "NousResearch/hermes-agent", "willow-memory/willow-bot", "willow-memory/willow-mcp"
+  ],
+  "github_root": "~/github",
+  "checkouts": {"Die-Namic-Systems/Nestor": "Die-Namic-Systems/nestor"},
+  "clone_orgs": ["willow-memory"],
+  "broker_pairs": {
+    "hornbook-knowledge/Jeles": {"venv": "willow-mcp", "extras": ["connectors"]},
+    "willow-memory/willow-bot": {"venv": "willow-bot", "extras": []},
+    "willow-memory/willow-mcp": {"venv": "willow-mcp", "extras": []},
+    "willow-memory/willow-gate": {"venv": "willow-mcp", "extras": []}
+  },
+  "voice": {"orgs": ["willow-memory"]},
+  "grove": {"ci_red_orgs": ["willow-memory"], "operator_sender": "sean-campbell"}
+}

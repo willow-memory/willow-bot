@@ -1,4 +1,7 @@
-"""Fleet scope for Loki PR watch — all operator GitHub orgs (+ optional user account)."""
+"""Fleet scope for Loki PR watch — the operator's GitHub orgs (+ their user account).
+
+Who the operator is comes from the install's operator profile
+(``willow_bot.operator_profile``), never from code."""
 from __future__ import annotations
 
 import json
@@ -7,18 +10,8 @@ import subprocess
 from functools import lru_cache
 from typing import Iterator
 
-# Used only when ``gh api /user/memberships/orgs`` is unavailable.
-_DEFAULT_ORGS = (
-    "almanac-data",
-    "Die-Namic-Systems",
-    "forge-play",
-    "homestead-affairs",
-    "hornbook-knowledge",
-    "terpsi-programs",
-    "willow-memory",
-)
+from willow_bot import operator_profile
 
-DEFAULT_USER = "rudi193-cmd"
 
 
 def gh_api(path: str):
@@ -46,10 +39,15 @@ def _note_error(kind: str, name: str) -> None:
 
 @lru_cache(maxsize=1)
 def fleet_orgs() -> tuple[str, ...]:
-    """Org logins to scan. Override with LOKI_PR_WATCH_ORGS (comma-separated)."""
+    """Org logins to scan: LOKI_PR_WATCH_ORGS (comma-separated), else the
+    operator profile's ``orgs``, else the orgs ``gh`` says the operator is a
+    member of, else none."""
     raw = os.environ.get("LOKI_PR_WATCH_ORGS", "").strip()
     if raw:
         return tuple(o.strip() for o in raw.split(",") if o.strip())
+    named = operator_profile.orgs()
+    if named is not None:
+        return tuple(named)
     try:
         members = gh_api("/user/memberships/orgs?per_page=100")
         logins = [m["organization"]["login"] for m in members if m.get("organization")]
@@ -57,11 +55,13 @@ def fleet_orgs() -> tuple[str, ...]:
             return tuple(sorted(logins))
     except (subprocess.CalledProcessError, KeyError, TypeError, json.JSONDecodeError):
         pass
-    return _DEFAULT_ORGS
+    return ()
 
 
 def fleet_user() -> str:
-    return os.environ.get("LOKI_PR_WATCH_USER", DEFAULT_USER).strip() or DEFAULT_USER
+    """The operator's login, or "" when it cannot be known (then no user
+    repos are scanned)."""
+    return operator_profile.login()
 
 
 def repos_for_org(org: str) -> list[str]:
@@ -106,8 +106,9 @@ def fleet_repos() -> list[str]:
     names: set[str] = set()
     for org in fleet_orgs():
         names.update(repos_for_org(org))
-    if os.environ.get("LOKI_PR_WATCH_SKIP_USER", "").strip() not in ("1", "true", "yes"):
-        names.update(repos_for_user(fleet_user()))
+    user = fleet_user()
+    if user and os.environ.get("LOKI_PR_WATCH_SKIP_USER", "").strip() not in ("1", "true", "yes"):
+        names.update(repos_for_user(user))
     return sorted(names)
 
 

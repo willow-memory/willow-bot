@@ -24,28 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-GITHUB_ROOT = Path.home() / "github"
-
-
-def _default_local_checkout() -> dict[str, str]:
-    gh = GITHUB_ROOT
-    return {
-        "willow-memory/corpus-lens": str(gh / "willow-memory/corpus-lens"),
-        "willow-memory/kartikeya": str(gh / "willow-memory/kartikeya"),
-        "willow-memory/willow-reconciler": str(gh / "willow-memory/willow-reconciler"),
-        "willow-memory/willow-mcp": str(gh / "willow-memory/willow-mcp"),
-        "willow-memory/willow-gate": str(gh / "willow-memory/willow-gate"),
-        "willow-memory/willows-grove": str(gh / "willow-memory/willows-grove"),
-        "willow-memory/ratatosk": str(gh / "willow-memory/ratatosk"),
-        "Die-Namic-Systems/Nestor": str(gh / "Die-Namic-Systems/nestor"),
-        "hornbook-knowledge/Jeles": str(gh / "hornbook-knowledge/Jeles"),
-        "hornbook-knowledge/oakenscrolls-office": str(
-            gh / "hornbook-knowledge/oakenscrolls-office"
-        ),
-    }
-
-
-LOCAL_CHECKOUT: dict[str, str] = _default_local_checkout()
+from willow_bot import operator_profile
 
 
 def gh_api(path: str):
@@ -57,15 +36,15 @@ def emit(obj: dict) -> None:
 
 
 def resolve_local(repo: str) -> Path | None:
-    if repo in LOCAL_CHECKOUT:
-        p = Path(LOCAL_CHECKOUT[repo])
-        if p.is_dir():
-            return p
+    p = operator_profile.checkouts().get(repo)
+    if p is not None and p.is_dir():
+        return p
+    root = operator_profile.github_root()
     org, name = repo.split("/", 1)
     for candidate in (
-        GITHUB_ROOT / org / name,
-        GITHUB_ROOT / org / name.lower(),
-        GITHUB_ROOT / "willow-memory" / name,
+        root / org / name,
+        root / org / name.lower(),
+        *(root / o / name for o in operator_profile.clone_orgs()),
     ):
         if (candidate / ".git").exists() or (candidate / ".git").is_file():
             return candidate

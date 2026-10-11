@@ -118,6 +118,28 @@ ${WEBHOOK_PUBLIC_URL}/webhook
 
 Use the same `GITHUB_WEBHOOK_SECRET` in the GitHub App and `$WILLOW_VAULT_BOX/secrets/willow-bot.env`.
 
+## Operator profile
+
+Each install says who runs it in one file, `$WILLOW_HOME/willow-bot/operator.json`
+(or `WILLOW_BOT_OPERATOR_PROFILE=/path`). Start from
+[`deploy/operator.example.json`](deploy/operator.example.json); every key is optional.
+
+| Key | Used for | When absent |
+|---|---|---|
+| `login` | your PRs, your user repos, the upstream desk | `gh api /user` |
+| `orgs` | orgs whose open PRs the steward watches | your org memberships via `gh` |
+| `upstream_watch` | other people's repos you contribute to | none |
+| `core_repos` | repos `scripts/audit_app_config.py` requires the App on | none |
+| `github_root`, `checkouts`, `clone_orgs` | where your clones live | `~/github/<owner>/<name>` |
+| `bot_name` | label on deposits | `willow-bot` |
+| `voice.orgs` | where the PR voice may speak | `willow-bot.json` `troll_scope.orgs` (empty) |
+| `grove.ci_red_orgs`, `grove.operator_sender` | Grove CI-red lines; Loki's thread-drift check | off |
+| `broker_pairs` | venv fallback when the broker allowlist is missing | none |
+
+Older env overrides still win (`LOKI_PR_WATCH_ORGS`, `LOKI_PR_WATCH_USER`,
+`WILLOW_BOT_UPSTREAM_WATCH_REPOS`, `GITHUB_ROOT`, `WILLOW_BOT_NAME`). The
+willow-memory fleet's own profile is `deploy/operator.willow-memory.json`.
+
 ## GitHub App permissions
 
 Minimum planned permissions:
@@ -137,6 +159,13 @@ Webhook events:
 - `issues`
 - `issue_comment` (upstream desk inbox)
 - `installation` / `installation_repositories` (catalog refresh when repos change)
+- `pull_request_review`, `pull_request_review_comment` (reviews and line comments)
+- `fork`, `watch`, `release`, `discussion` (contributions ledger; logged, never posted)
+- `workflow_run` (a red workflow on the default branch is logged)
+
+Optional for `discussion`: Discussions: read. Nothing else needs a wider grant;
+the new App helpers (`list_check_runs`, `list_pull_reviews`, `list_issue_comments`,
+`list_contributors`, …) are all reads under the grants above.
 
 ## Fleet bridge (local integration)
 
@@ -147,6 +176,7 @@ Verified webhooks fan out into local queues under `$WILLOW_HOME`:
 | `pull_request`, `issues`, `issue_comment`, `check_run` | `upstream_steward/webhook_inbox/*.json` |
 | `push` to `main`/`master` (local clone exists) | `gitsync/trigger-<owner>-<repo>.flag` |
 | all events | `willow-bot/event-log.jsonl` audit trail |
+| PRs, issues, comments, reviews, forks, stars, releases, discussions | `willow-bot/contributions.jsonl` ledger (`willow-bot-steward contributions`) |
 
 Map App installations to local clones:
 

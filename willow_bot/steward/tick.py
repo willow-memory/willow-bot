@@ -1148,7 +1148,15 @@ def _grove_sender_mismatch() -> str | None:
 # this head has ever shown a log for stays in that table, so the body is
 # always rebuilt from the FULL set, not just this tick's delta.
 
-_GROVE_CI_RED_REPO_PREFIX = "willow-memory/"
+def _grove_ci_red(repo: object) -> bool:
+    """Whether a CI red on ``repo`` also goes to the operator's Grove
+    channel: its owner is one of the operator profile's
+    ``grove.ci_red_orgs``. None by default."""
+    from willow_bot import operator_profile
+
+    return operator_profile.repo_owner_in(str(repo or ""), operator_profile.grove_ci_red_orgs())
+
+
 BODY_CHAR_CAP = 60_000
 # A Grove `#willow` line, not another 60k-char PR comment — capped by
 # CHARACTERS (Loki's re-audit: a 60-line head/tail cut on a real body of
@@ -1808,7 +1816,7 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
             repo, pr, head_sha, where = entry["repo"], entry["pr"], entry["head_sha"], entry["where"]
             cs = entry.get("comment") or {}
             red_comment_due = (entry.get("pending_kind") != "green" and ci_comments.due(cs, tick=tick))
-            grove_owed = (enable_mcp and call is not None and repo.startswith(_GROVE_CI_RED_REPO_PREFIX)
+            grove_owed = (enable_mcp and call is not None and _grove_ci_red(repo)
                           and (entry.get("spoke") or {}).get("status") in ("pending", "stalled", "blocked"))
             note = None
             if red_comment_due or grove_owed:
@@ -1864,7 +1872,7 @@ def _ci_owed_drain(owed: dict, *, tick: int, app: str, grove_pace: "_Pacer", cal
 
             sp = entry.get("spoke") or {}
             if (sp.get("status") not in ("pending", "stalled", "blocked")
-                    or not repo.startswith(_GROVE_CI_RED_REPO_PREFIX)):
+                    or not _grove_ci_red(repo)):
                 continue
             if not enable_mcp or call is None:
                 spoke.append({"channel": "willow", "state": "unreachable"})
@@ -2066,7 +2074,7 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
                 # "confirmed live" (Loki 258F1365 follow-up).
                 line = f"{line} — {note}"
         if (kind == "filed" and not item.get("stuck")
-                and str(item.get("repo") or "").startswith(_GROVE_CI_RED_REPO_PREFIX)
+                and _grove_ci_red(item.get("repo"))
                 and channel.lstrip("#") == "willow"):
             entry.update(state="skipped", reason="ci-red block covers this channel")
             entry["comment"] = _comment_on_pr(item, state_view, at=receipt["at"])
@@ -3573,8 +3581,12 @@ def main(argv: list[str] | None = None) -> int:
         return scan_mod.main()
     if args[0] == "annul":
         return run_annul(args[1:])
+    if args[0] == "contributions":
+        from willow_bot import contributions
+
+        return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|voice|status|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2

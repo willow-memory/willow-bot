@@ -45,6 +45,7 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff==0.16.7"]
 [project.scripts]
 willow-bot = "willow_bot.cli:webhook_main"
 willow-bot-steward = "willow_bot.cli:steward_main"
+willow-bot-contribute = "willow_bot.contribute:main"
 willow-bot-deterministic = "willow_bot.deterministic.cli:main"
 
 [project.urls]

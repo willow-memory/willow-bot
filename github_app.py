@@ -247,6 +247,98 @@ def list_open_pulls(repo_full_name: str, *, per_page: int = 100, max_pages: int 
     return out
 
 
+def _repo_get_pages(repo_full_name: str, path: str, *, params: dict | None = None,
+                    per_page: int = 100, max_pages: int = 3, key: str | None = None) -> list[dict]:
+    """GET ``/repos/{repo}{path}`` under the App's install token and page
+    through it. ``key`` names the list inside an object answer (the checks
+    API wraps its list in ``{"check_runs": [...]}``). Raises on an
+    unconfigured App, an HTTP error, or an answer of the wrong shape."""
+    if not _configured():
+        raise RuntimeError(f"GitHub App not configured — cannot read {path}")
+    headers = _auth_headers(repo_full_name)
+    out: list[dict] = []
+    for page in range(1, max_pages + 1):
+        r = requests.get(
+            f"https://api.github.com/repos/{repo_full_name}{path}",
+            headers=headers,
+            params={**(params or {}), "per_page": per_page, "page": page},
+            timeout=15,
+        )
+        r.raise_for_status()
+        data = r.json()
+        batch = data.get(key) if key and isinstance(data, dict) else data
+        if not isinstance(batch, list):
+            raise RuntimeError(f"unexpected {path} answer for {repo_full_name}")
+        out.extend(b for b in batch if isinstance(b, dict))
+        if len(batch) < per_page:
+            break
+    return out
+
+
+def list_issue_comments(repo_full_name: str, number: int, *, max_pages: int = 3) -> list[dict]:
+    """Conversation comments on an issue or PR, oldest first."""
+    return _repo_get_pages(repo_full_name, f"/issues/{int(number)}/comments", max_pages=max_pages)
+
+
+def list_pull_reviews(repo_full_name: str, number: int, *, max_pages: int = 3) -> list[dict]:
+    """Reviews on a PR, oldest first: each with ``state``, ``user`` and
+    ``commit_id``."""
+    return _repo_get_pages(repo_full_name, f"/pulls/{int(number)}/reviews", max_pages=max_pages)
+
+
+def list_pull_review_comments(repo_full_name: str, number: int, *, max_pages: int = 3) -> list[dict]:
+    """Line comments on a PR's diff, oldest first."""
+    return _repo_get_pages(repo_full_name, f"/pulls/{int(number)}/comments", max_pages=max_pages)
+
+
+def list_check_runs(repo_full_name: str, ref: str, *, max_pages: int = 3) -> list[dict]:
+    """Every check run on ``ref`` (a sha, branch or tag), latest attempt
+    per check name. Needs the ``checks: read`` grant."""
+    return _repo_get_pages(repo_full_name, f"/commits/{ref}/check-runs",
+                           params={"filter": "latest"}, max_pages=max_pages, key="check_runs")
+
+
+def get_combined_status(repo_full_name: str, ref: str) -> dict:
+    """The legacy commit-status rollup for ``ref``: ``state`` is one of
+    success / failure / pending, ``statuses`` lists each context."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — cannot get_combined_status")
+    r = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/commits/{ref}/status",
+        headers=_auth_headers(repo_full_name),
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"unexpected status answer for {repo_full_name}@{ref}")
+    return data
+
+
+def list_recent_pulls(repo_full_name: str, *, state: str = "all", max_pages: int = 1) -> list[dict]:
+    """PRs in any state, most recently updated first."""
+    return _repo_get_pages(repo_full_name, "/pulls",
+                           params={"state": state, "sort": "updated", "direction": "desc"},
+                           max_pages=max_pages)
+
+
+def list_recent_issues(repo_full_name: str, *, state: str = "all", since: str | None = None,
+                       max_pages: int = 1) -> list[dict]:
+    """Issues in any state, most recently updated first. GitHub returns PRs
+    here too; those carry a ``pull_request`` key and are dropped."""
+    params = {"state": state, "sort": "updated", "direction": "desc"}
+    if since:
+        params["since"] = since
+    rows = _repo_get_pages(repo_full_name, "/issues", params=params, max_pages=max_pages)
+    return [i for i in rows if "pull_request" not in i]
+
+
+def list_contributors(repo_full_name: str, *, max_pages: int = 2) -> list[dict]:
+    """Commit authors on the default branch, most commits first: each with
+    ``login``, ``type`` and ``contributions`` (the commit count)."""
+    return _repo_get_pages(repo_full_name, "/contributors", max_pages=max_pages)
+
+
 def post_comment(repo_full_name: str, issue_or_pr_number: int, body: str) -> bool:
     """Post a comment on an issue or PR. Returns True on success."""
     if not _configured():

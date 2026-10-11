@@ -1,28 +1,14 @@
-"""Tier A upstream watch list — repos with live contribution lanes (not the 59-fork pile).
+"""Upstream watch list — other people's repos the operator contributes to.
 
-Override with ``WILLOW_BOT_UPSTREAM_WATCH_REPOS`` (comma-separated). Defaults
-reflect the 2026-09 portfolio: Redential + stack maintenance + basic-memory focus;
-doobidoo/mcp-memory-service dropped from watch (no active lane).
+``WILLOW_BOT_UPSTREAM_WATCH_REPOS`` (comma-separated), else the operator
+profile's ``upstream_watch`` (``willow_bot.operator_profile``), in attention
+order. Empty when neither says: an install watches no one's repos until its
+operator names them.
 """
 from __future__ import annotations
 
-import os
-
-# Tier A: notification triage + author PR ledger. Order = attention priority.
-TIER_A_WATCH_REPOS: tuple[str, ...] = (
-    "basicmachines-co/basic-memory",
-    "Redential/redential-cli",
-    "DeusData/codebase-memory-mcp",
-    # Stretch / maintenance (open PR or queue).
-    "NousResearch/hermes-agent",
-    # Fleet substrate (your merges still surface in notifications).
-    "willow-memory/willow-bot",
-    "willow-memory/willow-mcp",
-)
+from willow_bot import operator_profile
 
 
 def watch_repos() -> list[str]:
-    raw = os.environ.get("WILLOW_BOT_UPSTREAM_WATCH_REPOS", "").strip()
-    if raw:
-        return [r.strip() for r in raw.split(",") if r.strip()]
-    return list(TIER_A_WATCH_REPOS)
+    return operator_profile.upstream_watch_repos()

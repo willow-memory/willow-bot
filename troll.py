@@ -177,13 +177,17 @@ _INSIDERS = ("OWNER", "MEMBER", "COLLABORATOR")
 def allowed(repo: str, association: object, *, bot: bool = False) -> bool:
     """Whether the troll may speak here, to this person.
 
-    ``troll_scope.orgs`` (willow-bot.json) lists the orgs it may speak in —
+    The operator profile's ``voice.orgs``, else ``troll_scope.orgs``
+    (willow-bot.json, empty as shipped), lists the orgs it may speak in —
     anything else, including an install the App has beyond them, is
     silent. ``troll_scope.associations`` lists who it may speak to
     (default: owners, members, collaborators): an outside contributor is
     never trolled. Bot authors are allowed only where the repo is."""
     scope = _cfg().get("troll_scope") or {}
-    orgs = [str(o).lower() for o in scope.get("orgs") or []]
+    from willow_bot import operator_profile
+
+    named = operator_profile.voice_orgs()
+    orgs = [str(o).lower() for o in (named if named is not None else scope.get("orgs") or [])]
     if str(repo).split("/", 1)[0].lower() not in orgs:
         return False
     if bot:
