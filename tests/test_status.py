@@ -389,3 +389,47 @@ def test_partial_failure_still_reports_populated_fields(home: Path):
     assert r["tick"]["status"] == "populated"
     # inbox_dir.is_dir() is False when the path is a file → status = "empty"
     assert r["inbox"]["status"] == "empty"
+
+
+# ── operator profile ───────────────────────────────────────────────────────
+
+
+def test_operator_blank_install_is_empty(home: Path, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_OPERATOR_PROFILE", raising=False)
+    op = status.report()["operator"]
+    assert op["status"] == "empty" and "blank install" in op["detail"]
+    assert op["path"] == str(home / "willow-bot" / "operator.json")
+
+
+def test_operator_profile_in_the_box_is_populated(home: Path, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_OPERATOR_PROFILE", raising=False)
+    _write(home / "willow-bot" / "operator.json",
+           json.dumps({"login": "ada", "upstream_watch": ["a/b"], "voice": {"orgs": ["x"]}}))
+    op = status.report()["operator"]
+    assert op["status"] == "populated" and op["login"] == "ada"
+    assert op["orgs"] == "discovered" and op["upstream_watch"] == 1 and op["voice_orgs"] == ["x"]
+
+
+def test_operator_broken_profile_is_unreachable(home: Path, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_OPERATOR_PROFILE", raising=False)
+    _write(home / "willow-bot" / "operator.json", "{nope")
+    assert status.report()["operator"]["status"] == "unreachable"
+
+
+# ── contributions ─────────────────────────────────────────────────────────
+
+
+def test_contributions_absent_ledger_is_empty(home: Path):
+    assert status.report()["contributions"]["status"] == "empty"
+
+
+def test_contributions_summarised(home: Path):
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [{"at": now, "repo": "o/r", "kind": "pr_opened", "login": "ada", "outsider": True},
+            {"at": now, "repo": "o/r", "kind": "star", "login": "bo", "outsider": True}]
+    _write(home / "willow-bot" / "contributions.jsonl", "\n".join(json.dumps(r) for r in rows) + "\n")
+    c = status.report()["contributions"]
+    assert c["status"] == "populated" and c["rows"] == 2
+    assert c["outside_contributors"] == ["ada"]

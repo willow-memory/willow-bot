@@ -27,6 +27,8 @@ One operation: ``report()`` returns a dict of the form:
         "pending": {"status": ..., "total": N, "by_lane": {...}},
         "last_tick": {"status": ..., "last": <receipt>, "at": ...},
       },
+      "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
+      "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
     }
 
 Three states per source, chosen deliberately:
@@ -506,6 +508,66 @@ def _read_ingress() -> dict[str, Any]:
             "last": last, "flag": data.get("flag")}
 
 
+# ── operator profile ─────────────────────────────────────────────────────
+
+
+def _read_operator() -> dict[str, Any]:
+    """Which operator profile this install runs under. ``empty`` is a blank
+    install (no profile: no orgs named, no upstream watch, a silent voice) —
+    the state an existing fleet is in if its profile was never copied into
+    the box. ``unreachable`` when the file is there but does not read as a
+    JSON object (the bot then also runs blank). Reads the file itself, so
+    discovery (``gh api /user``) never runs from here."""
+    from willow_bot import operator_profile
+
+    path = operator_profile.profile_path()
+    if path is None:
+        return {"status": "empty", "path": None, "detail": "no box, so no profile"}
+    if not path.is_file():
+        return {"status": "empty", "path": str(path),
+                "detail": "no operator profile: blank install (see deploy/operator.example.json)"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "path": str(path), "detail": str(exc)[:200]}
+    if not isinstance(data, dict):
+        return {"status": "unreachable", "path": str(path), "detail": "profile is not a JSON object"}
+    voice = data.get("voice") if isinstance(data.get("voice"), dict) else {}
+    grove = data.get("grove") if isinstance(data.get("grove"), dict) else {}
+    return {
+        "status": "populated",
+        "path": str(path),
+        "login": data.get("login") or None,
+        "bot_name": operator_profile.bot_name(),
+        "orgs": data["orgs"] if "orgs" in data else "discovered",
+        "upstream_watch": len(operator_profile.upstream_watch_repos()),
+        "core_repos": len(operator_profile.core_repos()),
+        "voice_orgs": voice.get("orgs", "willow-bot.json"),
+        "grove_ci_red_orgs": grove.get("ci_red_orgs", []),
+    }
+
+
+def _read_contributions() -> dict[str, Any]:
+    """The last 30 days of the contributions ledger, as counts."""
+    from willow_bot import contributions
+
+    path = contributions.ledger_path()
+    if not path.is_file():
+        return {"status": "empty", "detail": f"no file at {path}"}
+    try:
+        summ = contributions.summary(days=30, path=path)
+    except OSError as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    return {
+        "status": "populated" if summ["rows"] else "empty",
+        "days": 30,
+        "rows": summ["rows"],
+        "by_kind": summ["by_kind"],
+        "outside_contributors": [p["login"] for p in summ["outside_contributors"]][:10],
+        "first_timers": len(summ["first_timers"]),
+    }
+
+
 # ── the surface ──────────────────────────────────────────────────────────
 
 
@@ -534,4 +596,6 @@ def report() -> dict[str, Any]:
         "notifier": _read_notifier(),
         "ingress": _read_ingress(),
         "upstream": _read_upstream(),
+        "operator": _read_operator(),
+        "contributions": _read_contributions(),
     }
