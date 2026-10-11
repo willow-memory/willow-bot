@@ -530,7 +530,9 @@ def measure_ledger() -> tuple[list[dict], list[dict], list[dict]]:
         return [], [row("Nestor ledger", "unreachable", "WILLOW_HOME unset")], []
     path = BOX / "nestor.db.ledger.jsonl"
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        # "\n" only: splitlines() also cuts at U+2028/U+2029/U+0085 inside a row.
+        lines = path.read_text(encoding="utf-8").removesuffix("\n").split("\n")
+        lines = [] if lines == [""] else lines
     except OSError as e:
         return [], [row("Nestor ledger", "unreachable", str(e))], []
     if not lines:
@@ -611,7 +613,8 @@ def measure_pairs() -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     ledger_path = BOX / "nestor.db.ledger.jsonl"
     ledger_got: dict[str, str] = {}  # pair_id -> sealed|rejected
     try:
-        for ln in ledger_path.read_text(encoding="utf-8").splitlines():
+        # "\n" only: splitlines() also cuts at U+2028/U+2029/U+0085 inside a row.
+        for ln in ledger_path.read_text(encoding="utf-8").split("\n"):
             try:
                 r = json.loads(ln)
             except ValueError:
