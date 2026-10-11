@@ -44,6 +44,8 @@ CONSUMED_DIR = "consumed"
 UNHANDLED_DIR = "unhandled"
 _MAX_SIGNALS = 100
 _MAX_CLOSED = 500
+#: PRs whose head the inbox step remembers (`pr_heads`), newest kept.
+_MAX_PR_HEADS = 2000
 
 
 def _load_state(path: Path) -> dict:
@@ -104,6 +106,11 @@ def ingest(state_path: Path) -> int:
     month = time.strftime("%Y-%m", time.gmtime())
     signals: list[dict] = list(state.get("webhook_signals") or [])
     closed: dict[str, dict] = dict(state.get("pr_closed") or {})
+    # Each PR's latest head, durably: the voice step reads it here. The
+    # signals window holds check-run signals too and rolls at _MAX_SIGNALS,
+    # so a quiet PR's opened/synchronize fell out of it within ~10 pushes
+    # anywhere in the fleet, and the PR lost its status comment and check.
+    pr_heads: dict[str, dict] = dict(state.get("pr_heads") or {})
 
     if not inbox.is_dir():
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,6 +162,8 @@ def ingest(state_path: Path) -> int:
             _emit(ev)
             _archive(inbox, path, month)
             signals.append({k: v for k, v in ev.items() if k != "event"})
+            if ev["head_sha"]:
+                pr_heads[key] = {"head_sha": ev["head_sha"], "at": ev["received_at"]}
             # A closed PR is remembered durably (gap 52928edb3fc7): the
             # signals window above rolls at _MAX_SIGNALS, so the ci step
             # could not rely on it to know a PR had closed by the time a
@@ -219,9 +228,14 @@ def ingest(state_path: Path) -> int:
         keep = sorted(closed, key=lambda k: str(closed[k].get("at") or ""))[-_MAX_CLOSED:]
         closed = {k: closed[k] for k in keep}
 
+    if len(pr_heads) > _MAX_PR_HEADS:
+        keep = sorted(pr_heads, key=lambda k: str(pr_heads[k].get("at") or ""))[-_MAX_PR_HEADS:]
+        pr_heads = {k: pr_heads[k] for k in keep}
+
     state["inbox_consumed"] = consumed_order
     state["webhook_signals"] = signals[-_MAX_SIGNALS:]
     state["pr_closed"] = closed
+    state["pr_heads"] = pr_heads
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(state, indent=2) + "\n")
     return 0
