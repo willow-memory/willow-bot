@@ -3574,6 +3574,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "status":
         from willow_bot import status
 
+        if "--brief" in args[1:]:
+            print(status.brief())
+            return 0
         print(json.dumps(status.report(), separators=(",", ":"), default=str))
         return 0
     if args[0] == "loop":
@@ -3598,7 +3601,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2

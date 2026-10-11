@@ -490,3 +490,35 @@ def test_a_resolved_item_is_not_red(home: Path):
                   "ci_head_legs": {"o/a#1@s": {"Tests": "success"}},
                   "ci_items": {"o/a#1@s": {"id": "x", "resolved": {"by": "s"}}}})
     assert status.report()["open_prs"]["prs"][0]["ci"] == "green"
+
+
+# ── brief ─────────────────────────────────────────────────────────────────
+
+
+def test_brief_is_one_line_per_section(home: Path):
+    out = status.brief()
+    lines = out.splitlines()
+    assert lines[0].startswith("willow-bot status at ")
+    names = [ln.split()[0] for ln in lines[1:]]
+    for n in ("version", "tick", "ingress", "upstream", "open_prs", "app", "operator", "contributions"):
+        assert n in names
+    assert "cursors" not in names
+
+
+def test_brief_names_what_the_app_is_missing(home: Path):
+    rep = {"at": "t", "willow_home": "/b",
+           "app": {"status": "populated", "verdict": "partial",
+                   "last": {"unsubscribed": ["fork", "watch"], "missing_permissions": {}, "missing_events": []}}}
+    assert "partial; unsubscribed: fork,watch" in status.brief(rep)
+
+
+def test_brief_without_a_box_says_so():
+    out = status.brief({"at": "t", "willow_home": None, "status": "no-box", "detail": "set WILLOW_HOME"})
+    assert "no-box" in out and "set WILLOW_HOME" in out
+
+
+def test_cli_brief(home: Path, capsys):
+    from willow_bot.steward.tick import main
+
+    assert main(["status", "--brief"]) == 0
+    assert capsys.readouterr().out.startswith("willow-bot status at ")

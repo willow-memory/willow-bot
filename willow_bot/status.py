@@ -704,3 +704,62 @@ def report() -> dict[str, Any]:
         "operator": _read_operator(),
         "contributions": _read_contributions(),
     }
+
+
+# ── brief ────────────────────────────────────────────────────────────────
+
+
+def _brief_detail(name: str, sec: dict[str, Any]) -> str:
+    """The one fact worth reading on a section's line."""
+    if sec.get("status") not in ("populated",):
+        return str(sec.get("detail") or "")[:100]
+    if name == "version":
+        return str(sec.get("version") or "")
+    if name == "running_commit":
+        return str(sec.get("sha") or "")[:12]
+    if name in ("heartbeat", "tick", "sync"):
+        return str(sec.get("at") or "")
+    if name == "journal":
+        return f"{sec.get('count', 0)} recent rows"
+    if name == "inbox":
+        return f"{sec.get('total', 0)} queued " + json.dumps(sec.get("depth_by_kind") or {}, separators=(",", ":"))
+    if name == "notifier":
+        return f"{len(sec.get('blocked') or [])} blocked"
+    if name == "ingress":
+        return f"{sec.get('verdict')} at {sec.get('at')}" + (" — FLAG OPEN" if sec.get("flag") else "")
+    if name == "upstream":
+        ledger = sec.get("ledger") or {}
+        return f"watching {len(sec.get('watch_repos') or [])} repos, {ledger.get('open_count', 0)} open PRs"
+    if name == "open_prs":
+        return f"{sec.get('count', 0)} open " + json.dumps(sec.get("by_ci") or {}, separators=(",", ":"))
+    if name == "app":
+        last = sec.get("last") or {}
+        bits = [str(sec.get("verdict"))]
+        if last.get("missing_permissions"):
+            bits.append("missing perms: " + ",".join(sorted(last["missing_permissions"])))
+        if last.get("missing_events"):
+            bits.append("missing events: " + ",".join(last["missing_events"]))
+        if last.get("unsubscribed"):
+            bits.append("unsubscribed: " + ",".join(last["unsubscribed"]))
+        return "; ".join(bits)
+    if name == "operator":
+        return f"{sec.get('login') or '(no login)'} via {sec.get('path')}"
+    if name == "contributions":
+        return f"{sec.get('rows', 0)} in {sec.get('days')}d, {len(sec.get('outside_contributors') or [])} outside"
+    return ""
+
+
+def brief(rep: dict[str, Any] | None = None) -> str:
+    """``report()`` as one line per section: name, state, the fact that
+    matters. ``willow-bot-steward status --brief``."""
+    rep = report() if rep is None else rep
+    lines = [f"willow-bot status at {rep.get('at')}  box={rep.get('willow_home')}"]
+    if rep.get("status") == "no-box":
+        lines.append(f"  no-box        {rep.get('detail')}")
+        return "\n".join(lines)
+    for name, sec in rep.items():
+        if not isinstance(sec, dict) or name == "cursors":
+            continue
+        state = str(sec.get("status") or "?")
+        lines.append(f"  {name:<15}{state:<12}{_brief_detail(name, sec)}".rstrip())
+    return "\n".join(lines)
