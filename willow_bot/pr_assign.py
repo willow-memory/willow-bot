@@ -22,9 +22,11 @@ so a retry can hit only the miss.
 
 Idempotency: GitHub silently keeps a duplicate assignee POST idempotent
 (a login already assigned returns 200 with no change). For requested
-reviewers, GitHub returns 422 when a login is already a reviewer — this
-step treats that 422 as "already requested", which is the same shape as
-the 404-on-DELETE rule in pr_labels.
+reviewers, GitHub returns 422 when a login is already a reviewer, but also
+for other refusals (an author asked to review their own PR, an unknown
+login), and the code cannot tell them apart, so any 422 is reported as
+``review_requested=False`` with GitHub's raw error, never assumed to be
+"already requested".
 """
 from __future__ import annotations
 
@@ -121,7 +123,8 @@ def assign_to_operator(
     assign_detail: str | None = None
     try:
         current = _add_assignee(repo, pr_number, login, headers)
-        assigned = login in current
+        # GitHub logins are case-insensitive; the answer uses GitHub's case.
+        assigned = login.lower() in {c.lower() for c in current}
         if not assigned:
             # GitHub silently drops an assignee it does not recognise (a
             # mistyped login, a login without repo access). The API

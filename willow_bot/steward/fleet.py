@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from functools import lru_cache
 from typing import Iterator
 
 from willow_bot import operator_profile
@@ -15,7 +14,14 @@ from willow_bot import operator_profile
 
 
 def gh_api(path: str):
-    return json.loads(subprocess.check_output(["gh", "api", path], text=True))
+    """`gh api <path>`. A missing `gh` raises CalledProcessError like any other
+    failed call, so callers' per-repo/per-org handling applies; it used to
+    escape as FileNotFoundError and kill the whole tick."""
+    try:
+        out = subprocess.check_output(["gh", "api", path], text=True)
+    except FileNotFoundError as exc:
+        raise subprocess.CalledProcessError(127, ["gh", "api", path], output="", stderr=str(exc)) from exc
+    return json.loads(out)
 
 
 #: What the last scan could NOT list (gap 52928edb3fc7, Loki 25CBCB13). The
@@ -37,7 +43,9 @@ def _note_error(kind: str, name: str) -> None:
         last_scan_errors.append(key)
 
 
-@lru_cache(maxsize=1)
+_orgs_cache: tuple[str, ...] | None = None
+
+
 def fleet_orgs() -> tuple[str, ...]:
     """Org logins to scan: LOKI_PR_WATCH_ORGS (comma-separated), else the
     operator profile's ``orgs``, else the orgs ``gh`` says the operator is a
@@ -48,14 +56,28 @@ def fleet_orgs() -> tuple[str, ...]:
     named = operator_profile.orgs()
     if named is not None:
         return tuple(named)
+    # Discovered orgs are cached for the life of the process, but only an
+    # answer is cached: a failed lookup used to cache `()` (lru_cache) and
+    # the steward scanned no org again until it restarted, silently.
+    global _orgs_cache
+    if _orgs_cache is not None:
+        return _orgs_cache
     try:
         members = gh_api("/user/memberships/orgs?per_page=100")
         logins = [m["organization"]["login"] for m in members if m.get("organization")]
-        if logins:
-            return tuple(sorted(logins))
-    except (subprocess.CalledProcessError, KeyError, TypeError, json.JSONDecodeError):
-        pass
-    return ()
+    except (subprocess.CalledProcessError, OSError, KeyError, TypeError, json.JSONDecodeError):
+        _note_error("orgs", "memberships")
+        return ()
+    _orgs_cache = tuple(sorted(logins))
+    return _orgs_cache
+
+
+def _cache_clear() -> None:
+    global _orgs_cache
+    _orgs_cache = None
+
+
+fleet_orgs.cache_clear = _cache_clear  # type: ignore[attr-defined]  # callers and tests used lru_cache's
 
 
 def fleet_user() -> str:
@@ -119,8 +141,15 @@ def iter_open_pulls() -> Iterator[tuple[str, int, str, str]]:
     — the scan goes on, but it must not read as complete for that repo."""
     last_scan_errors.clear()
     for repo in fleet_repos():
+        pulls: list[dict] = []
         try:
-            pulls = gh_api(f"repos/{repo}/pulls?state=open&per_page=50")
+            page = 1
+            while True:  # every open PR, not the first 50
+                batch = gh_api(f"repos/{repo}/pulls?state=open&per_page=100&page={page}")
+                pulls.extend(batch if isinstance(batch, list) else [])
+                if not isinstance(batch, list) or len(batch) < 100:
+                    break
+                page += 1
         except subprocess.CalledProcessError:
             _note_error("repo", repo)
             continue

@@ -91,14 +91,17 @@ def _desired_labels_by_pr(state: dict) -> dict[str, set[str]]:
     # so a PR gets `ci-red` exactly when a `ci_filed` key carries its
     # latest head_sha's prefix.
     for key, head_sha in _latest_head_sha_by_pr(state).items():
-        if _ci_red_legs_for_sha(state, head_sha):
+        if _head_is_red(state, key, head_sha):
             desired.setdefault(key, set()).add(pr_labels.LABEL_CI_RED)
 
     return desired
 
 
 def _latest_head_sha_by_pr(state: dict) -> dict[str, str]:
-    """`{repo#pr: head_sha}` from the tick's `webhook_signals`.
+    """`{repo#pr: head_sha}`: the inbox step's durable `pr_heads` map, over
+    the tick's `webhook_signals` for anything it does not name yet (a state
+    written before `pr_heads` existed). The signals window alone loses a
+    quiet PR's head once ~100 check-run signals roll it out.
 
     Only `webhook_pr` signals carry both `repo_pr` and `head_sha`;
     `webhook_check_run` signals are skipped (they key by `kind`, not
@@ -119,7 +122,24 @@ def _latest_head_sha_by_pr(state: dict) -> dict[str, str]:
         sha = sig.get("head_sha")
         if key and sha:
             out[key] = sha
+    for key, rec in (state.get("pr_heads") or {}).items():
+        if isinstance(rec, dict) and rec.get("head_sha"):
+            out[key] = rec["head_sha"]
     return out
+
+
+def _head_is_red(state: dict, key: str, head_sha: str) -> bool:
+    """Whether this PR's head is red NOW. The ci step keeps each head's
+    latest conclusion per check in `ci_head_legs` (`repo#pr@sha`), so a
+    re-run that went green on the same commit clears it. `ci_filed` only
+    ever grows, so it is the answer only for a head the legs no longer
+    name (pruned, or a state from before them)."""
+    from willow_bot.steward.tick import _CI_RED
+
+    legs = (state.get("ci_head_legs") or {}).get(f"{key}@{head_sha}")
+    if isinstance(legs, dict) and legs:
+        return any(c in _CI_RED for c in legs.values())
+    return bool(_ci_red_legs_for_sha(state, head_sha))
 
 
 def _ci_red_legs_for_sha(state: dict, head_sha: str) -> list[str]:
@@ -158,7 +178,10 @@ def _status_comment_body(key: str, head_sha: str, state: dict, *, at: str) -> st
     exposition — a seat or operator reading the PR gets a few lines."""
     audit = "dispatched" if key in (state.get("audit_dispatched") or {}) else "not dispatched"
     red = _ci_red_legs_for_sha(state, head_sha)
-    ci = f"{len(red)} red leg(s) filed" if red else "none filed"
+    if red and not _head_is_red(state, key, head_sha):
+        ci = f"{len(red)} red leg(s) filed, green since (re-run)"
+    else:
+        ci = f"{len(red)} red leg(s) filed" if red else "none filed"
     detail = _ci_detail_line(_ci_item_for_sha(state, head_sha))
     return (
         f"willow-bot status for `{head_sha[:12]}`\n"
@@ -192,7 +215,7 @@ def _check_conclusion(key: str, head_sha: str, state: dict) -> str:
     - ``neutral`` — no red leg, but the audit is still pending — nothing
       is known yet.
     """
-    if _ci_red_legs_for_sha(state, head_sha):
+    if _head_is_red(state, key, head_sha):
         return "failure"
     if _audit_state_ok(key, state):
         return "success"

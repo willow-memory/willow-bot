@@ -403,3 +403,17 @@ def test_the_cli_knows_mirror_and_audit(home, monkeypatch):
     monkeypatch.delenv("WILLOW_BOT_MCP", raising=False)
     assert tick.main(["mirror"]) == 0
     assert tick.main(["audit"]) == 0
+
+
+def test_mirror_steps_over_a_malformed_complete_line(home, monkeypatch):
+    """A torn row that still ended in a newline raised before the offset was
+    written, so every later tick re-read it and raised again."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    deposits.append_local(_row("o/r", "d" * 40, 1))
+    with deposits.deposits_jsonl().open("a", encoding="utf-8") as fh:
+        fh.write('{"kind":"ci_outcome","repo":"o/r","head\n')  # torn, but newline-terminated
+    deposits.append_local(_row("o/r", "f" * 40, 2))
+    c = _Client()
+    _use(monkeypatch, c)
+    r = tick.run_mirror()
+    assert r["mirrored"] == 2 and r["malformed"] == 1 and r["behind"] == 0

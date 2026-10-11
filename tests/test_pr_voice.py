@@ -115,7 +115,7 @@ def test_upsert_creates_on_first_call(rec: _Recorder):
 def test_upsert_updates_when_marker_present(rec: _Recorder):
     """A prior call left a comment carrying the marker → PATCH updates it,
     no POST. The comment id from the existing row is what gets patched."""
-    existing = {"id": 999, "body": pr_voice.comment_marker(SHA) + "\n\nOld body",
+    existing = {"id": 999, "user": {"type": "Bot"}, "body": pr_voice.comment_marker(SHA) + "\n\nOld body",
                 "html_url": "https://github.com/…/999"}
     rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
         _FakeResp(_payload=[existing]),
@@ -137,7 +137,7 @@ def test_distinct_head_shas_write_distinct_comments(rec: _Recorder):
     row, not a rewrite of the old one. Marker uniqueness is what makes
     that safe: the head1 marker is not found on head2's call."""
     head1_marker = pr_voice.comment_marker("head1")
-    existing = {"id": 100, "body": head1_marker + "\n\nHead1 body"}
+    existing = {"id": 100, "user": {"type": "Bot"}, "body": head1_marker + "\n\nHead1 body"}
     rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
         _FakeResp(_payload=[existing]),
     ]
@@ -156,7 +156,7 @@ def test_upsert_walks_paginated_comments(rec: _Recorder):
     returned (fewer than 100 rows)."""
     page1 = [{"id": i, "body": f"noise {i}"} for i in range(1, 101)]
     marker = pr_voice.comment_marker(SHA)
-    page2 = [{"id": 200, "body": marker + "\n\nOn page 2"}]
+    page2 = [{"id": 200, "user": {"type": "Bot"}, "body": marker + "\n\nOn page 2"}]
     url = f"https://api.github.com/repos/{REPO}/issues/{PR}/comments"
     rec.responses[("GET", url)] = [_FakeResp(_payload=page1), _FakeResp(_payload=page2)]
     rec.responses[("PATCH", f"https://api.github.com/repos/{REPO}/issues/comments/200")] = [
@@ -285,7 +285,7 @@ def test_publish_check_missing_head_sha_is_a_line(rec: _Recorder):
 
 
 def test_publish_check_filters_by_name_on_the_server(rec: _Recorder):
-    """The GET uses `filter=app` and `check_name=NAME` so we only see this
+    """The GET uses `filter=latest` and `check_name=NAME` so we only see this
     App's runs by that name — two apps posting a check with the same name
     on the same sha do not confuse this call."""
     rec.responses[("GET", f"https://api.github.com/repos/{REPO}/commits/{SHA}/check-runs")] = [
@@ -297,7 +297,7 @@ def test_publish_check_filters_by_name_on_the_server(rec: _Recorder):
     pr_voice.publish_check(REPO, SHA, "willow-bot/steward",
                            status="completed", conclusion="success")
     got = next(c for c in rec.calls if c[0] == "GET")
-    assert got[2]["params"]["filter"] == "app"
+    assert got[2]["params"]["filter"] == "latest"
     assert got[2]["params"]["check_name"] == "willow-bot/steward"
 
 
@@ -355,7 +355,7 @@ def test_ci_red_comment_creates_on_first_call(rec: _Recorder):
 
 def test_ci_red_comment_edits_the_same_comment_on_a_second_call(rec: _Recorder):
     """A second red leg on the same head must edit, never duplicate."""
-    existing = {"id": 888, "body": pr_voice.ci_red_comment_marker(SHA) + "\n\nfirst failure"}
+    existing = {"id": 888, "user": {"type": "Bot"}, "body": pr_voice.ci_red_comment_marker(SHA) + "\n\nfirst failure"}
     rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
         _FakeResp(_payload=[existing]),
     ]
@@ -368,7 +368,7 @@ def test_ci_red_comment_edits_the_same_comment_on_a_second_call(rec: _Recorder):
 
 
 def test_ci_red_comment_edited_green_on_resolve(rec: _Recorder):
-    existing = {"id": 888, "body": pr_voice.ci_red_comment_marker(SHA) + "\n\nfirst failure"}
+    existing = {"id": 888, "user": {"type": "Bot"}, "body": pr_voice.ci_red_comment_marker(SHA) + "\n\nfirst failure"}
     rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
         _FakeResp(_payload=[existing]),
     ]
@@ -496,3 +496,38 @@ def test_publish_check_create_http_4xx_is_could_not_run(rec: _Recorder, code: in
     assert receipt["action"] == "skipped"
     assert receipt["detail"].startswith("create:") and str(code) in receipt["detail"]
     assert "missing_permission" not in receipt
+
+
+def test_a_person_quoting_the_marker_is_not_edited(rec: _Recorder):
+    """Only a Bot-authored comment can be ours; a human comment that quotes
+    the marker gets a fresh bot comment, never a PATCH of the human's."""
+    quoted = {"id": 77, "user": {"type": "User"}, "body": pr_voice.comment_marker(SHA) + " look at this"}
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[quoted]),
+    ]
+    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload={"id": 300, "html_url": ""}),
+    ]
+    receipt = pr_voice.upsert_status_comment(REPO, PR, SHA, "Body")
+    assert receipt["action"] == "created" and receipt["comment_id"] == 300
+
+
+def test_check_runs_are_scoped_to_this_app(monkeypatch):
+    """A same-named check from another app is never ours to PATCH."""
+    monkeypatch.setattr(pr_voice, "_own_app_id", lambda: 4001890)
+    seen = {}
+
+    class _R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"check_runs": [{"id": 1, "app": {"id": 4001890}}, {"id": 2, "app": {"id": 15368}}]}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        seen.update(params)
+        return _R()
+
+    monkeypatch.setattr(pr_voice.requests, "get", fake_get)
+    runs = pr_voice._list_check_runs(REPO, SHA, {}, check_name="willow-bot")
+    assert [r["id"] for r in runs] == [1] and seen["app_id"] == 4001890 and seen["filter"] == "latest"

@@ -8,6 +8,8 @@ before any HTTP.
 """
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -139,7 +141,7 @@ def test_moving_between_states_adds_new_and_removes_stale(rec: _Recorder):
     rec.responses[("POST", LABELS_URL)] = [
         _FakeResp(_payload=[]),
     ]
-    del_url = f"{LABELS_URL}/{pr_labels.LABEL_CI_RED}"
+    del_url = f"{LABELS_URL}/{quote(pr_labels.LABEL_CI_RED, safe='')}"
     rec.responses[("DELETE", del_url)] = [_FakeResp(_status=200)]
 
     receipt = pr_labels.reconcile_labels(
@@ -161,7 +163,7 @@ def test_labels_outside_prefix_are_reported_but_not_touched(rec: _Recorder):
         _FakeResp(_payload=[_label("bug"), _label("area/steward"),
                             _label(pr_labels.LABEL_CI_RED)]),
     ]
-    del_url = f"{LABELS_URL}/{pr_labels.LABEL_CI_RED}"
+    del_url = f"{LABELS_URL}/{quote(pr_labels.LABEL_CI_RED, safe='')}"
     rec.responses[("DELETE", del_url)] = [_FakeResp(_status=200)]
     receipt = pr_labels.reconcile_labels(REPO, PR, set())  # remove everything owned
     assert receipt["removed"] == [pr_labels.LABEL_CI_RED]
@@ -223,7 +225,7 @@ def test_add_failure_and_remove_success_both_appear_in_receipt(rec: _Recorder):
         _FakeResp(_payload=[_label(pr_labels.LABEL_CI_RED)]),
     ]
     rec.responses[("POST", LABELS_URL)] = [_FakeResp(_status=422)]
-    del_url = f"{LABELS_URL}/{pr_labels.LABEL_CI_RED}"
+    del_url = f"{LABELS_URL}/{quote(pr_labels.LABEL_CI_RED, safe='')}"
     rec.responses[("DELETE", del_url)] = [_FakeResp(_status=200)]
     receipt = pr_labels.reconcile_labels(
         REPO, PR,
@@ -242,7 +244,7 @@ def test_remove_404_is_treated_as_already_gone(rec: _Recorder):
     rec.responses[("GET", LABELS_URL)] = [
         _FakeResp(_payload=[_label(pr_labels.LABEL_CI_RED)]),
     ]
-    del_url = f"{LABELS_URL}/{pr_labels.LABEL_CI_RED}"
+    del_url = f"{LABELS_URL}/{quote(pr_labels.LABEL_CI_RED, safe='')}"
     rec.responses[("DELETE", del_url)] = [_FakeResp(_status=404)]
     receipt = pr_labels.reconcile_labels(REPO, PR, set())
     assert receipt["status"] == "ok"
@@ -265,3 +267,18 @@ def test_get_pagination_params_are_correct(rec: _Recorder):
     pr_labels.reconcile_labels(REPO, PR, set())
     got = next(c for c in rec.calls if c[0] == "GET")
     assert got[2]["params"] == {"per_page": 100, "page": 1}
+
+
+def test_the_owned_label_is_encoded_in_the_delete_url(monkeypatch):
+    """requests does not escape `/` in a path; every owned label has one."""
+    seen = []
+
+    class _R:
+        status_code = 204
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(pr_labels.requests, "delete", lambda url, **kw: seen.append(url) or _R())
+    pr_labels._remove_label("o/r", 1, "willow-bot/ci-red", {})
+    assert seen == ["https://api.github.com/repos/o/r/issues/1/labels/willow-bot%2Fci-red"]

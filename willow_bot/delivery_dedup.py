@@ -23,11 +23,17 @@ Gap ``acfd27ae3259`` (webhook idempotency sub-part).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import tempfile
 from pathlib import Path
+
+try:  # POSIX: serialise the read-modify-write across worker processes
+    import fcntl
+except ImportError:  # pragma: no cover — a platform without it runs unlocked
+    fcntl = None  # type: ignore[assignment]
 
 from willow_bot.paths import bot_dir
 
@@ -77,6 +83,39 @@ def _write_atomic(path: Path, ids: list[str]) -> None:
         raise
 
 
+@contextlib.contextmanager
+def _locked(path: Path):
+    """An exclusive lock on a sidecar file, so two workers handed the same
+    delivery cannot both read "new" before either writes."""
+    if fcntl is None:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def forget(delivery_id: str) -> None:
+    """Un-mark a delivery whose dispatch failed, so a redelivery of it runs.
+    Marking before dispatch keeps two concurrent copies from both running;
+    without this, a handler that raised would turn every later redelivery
+    of that id into a skip, and the event would be dropped."""
+    if not delivery_id:
+        return
+    path = state_path()
+    try:
+        with _locked(path):
+            ids = _load(path)
+            if delivery_id in ids:
+                _write_atomic(path, [i for i in ids if i != delivery_id])
+    except Exception as exc:  # noqa: BLE001 — never mask the dispatch error
+        log.warning("delivery-seen forget failed (%s): %s", path, exc)
+
+
 def mark_seen(delivery_id: str) -> bool:
     """Return True the first time this delivery id is presented, False on
     every re-presentation. An empty or missing id returns True and is not
@@ -93,17 +132,27 @@ def mark_seen(delivery_id: str) -> bool:
         return True
     path = state_path()
     try:
-        ids = _load(path)
-    except Exception as exc:  # noqa: BLE001 — a bad cache is not a reason to drop the event
-        log.warning("delivery-seen load failed (%s): %s", path, exc)
-        return True
-    if delivery_id in ids:
-        return False
-    ids.append(delivery_id)
-    if len(ids) > _MAX_IDS:
-        ids = ids[-_MAX_IDS:]
+        lock = _locked(path)
+        lock.__enter__()
+    except Exception as exc:  # noqa: BLE001 — a broken lock is not a reason to drop the event
+        log.warning("delivery-seen lock failed (%s): %s", path, exc)
+        lock = None
     try:
-        _write_atomic(path, ids)
-    except Exception as exc:  # noqa: BLE001 — same rule as read: log, do not drop
-        log.warning("delivery-seen write failed (%s): %s", path, exc)
-    return True
+        try:
+            ids = _load(path)
+        except Exception as exc:  # noqa: BLE001 — a bad cache is not a reason to drop the event
+            log.warning("delivery-seen load failed (%s): %s", path, exc)
+            return True
+        if delivery_id in ids:
+            return False
+        ids.append(delivery_id)
+        if len(ids) > _MAX_IDS:
+            ids = ids[-_MAX_IDS:]
+        try:
+            _write_atomic(path, ids)
+        except Exception as exc:  # noqa: BLE001 — same rule as read: log, do not drop
+            log.warning("delivery-seen write failed (%s): %s", path, exc)
+        return True
+    finally:
+        if lock is not None:
+            lock.__exit__(None, None, None)

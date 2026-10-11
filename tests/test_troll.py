@@ -50,7 +50,8 @@ def test_pr_facts_from_the_payload():
     ({"draft": True}, "pr_opened", "draft"),
     ({"title": "Revert \"feat: x\""}, "pr_opened", "revert"),
     ({"head": {"ref": "release-please--branches--main", "sha": "0"}}, "pr_merged", "release"),
-    ({"user": {"login": "dependabot[bot]", "type": "Bot"}}, "pr_merged", "dependabot"),
+    ({"user": {"login": "dependabot[bot]", "type": "Bot"}, "head": {"ref": "dependabot/pip/requests-2.33"}},
+     "pr_merged", "dependabot"),
     ({"created_at": "2026-09-29T11:30:00Z", "merged_at": "2026-09-29T12:00:00Z"}, "pr_merged", "speedrun"),
     ({"created_at": "2026-09-01T12:00:00Z", "merged_at": "2026-09-29T12:00:00Z"}, "pr_merged", "marathon"),
     ({}, "pr_opened", "default"),
@@ -198,10 +199,16 @@ def test_reviews_name_the_reviewer(posts, state, expect):
         assert "reviewer-x" in out[0][2]
 
 
-def test_green_after_three_reds_speaks_once(posts):
+def _pr_author(monkeypatch, assoc="OWNER", typ="User"):
+    monkeypatch.setattr(router.github_app, "get_pull",
+                        lambda repo, n: {"author_association": assoc, "user": {"type": typ}})
+
+
+def test_green_after_three_reds_speaks_once(posts, monkeypatch):
     out, post = posts
-    for _ in range(3):
-        sigh.bump_fail(REPO, 7)
+    _pr_author(monkeypatch)
+    for head in ("r1", "r2", "r3"):
+        sigh.fail(REPO, 7, head)
 
     def leg(conclusion):
         return {"action": "completed", "repository": {"full_name": REPO},
@@ -306,3 +313,97 @@ def test_red_count_is_called_red_checks_not_tries():
     """F5: the count is failing check runs, not attempts."""
     for line in troll._cfg()["troll"]["ci_recovered"]["default"]:
         assert "{reds} red checks" in line and "tries" not in line
+
+
+def _leg(conclusion, head, pr=7):
+    return {"action": "completed", "repository": {"full_name": REPO},
+            "check_run": {"conclusion": conclusion, "head_sha": head, "name": "t",
+                          "pull_requests": [{"number": pr}]}}
+
+
+def test_three_red_legs_of_one_push_are_one_red(posts, monkeypatch):
+    """A push whose three matrix jobs fail is one red commit, not three."""
+    out, post = posts
+    _pr_author(monkeypatch)
+    for _ in range(3):
+        router.route("check_run", _leg("failure", "aaa"), post)
+    router.route("check_run", _leg("success", "bbb"), post)
+    assert out == []
+
+
+def test_a_green_leg_beside_a_red_one_is_not_a_recovery(posts, monkeypatch):
+    out, post = posts
+    _pr_author(monkeypatch)
+    for head in ("r1", "r2", "r3"):
+        router.route("check_run", _leg("failure", head), post)
+    router.route("check_run", _leg("success", "r3"), post)  # lint green on the red commit
+    assert out == []
+    router.route("check_run", _leg("success", "g4"), post)  # the next commit is green
+    assert len(out) == 1
+
+
+def test_recovery_on_an_outside_contributors_pr_is_silent(posts, monkeypatch):
+    out, post = posts
+    _pr_author(monkeypatch, assoc="CONTRIBUTOR")
+    for head in ("r1", "r2", "r3"):
+        sigh.fail(REPO, 7, head)
+    router.route("check_run", _leg("success", "g4"), post)
+    assert out == []
+
+
+def test_recovery_with_an_unreadable_pr_is_silent(posts, monkeypatch):
+    out, post = posts
+
+    def boom(repo, n):
+        raise RuntimeError("no GitHub")
+
+    monkeypatch.setattr(router.github_app, "get_pull", boom)
+    for head in ("r1", "r2", "r3"):
+        sigh.fail(REPO, 7, head)
+    router.route("check_run", _leg("success", "g4"), post)
+    assert out == []
+
+
+# ── rebase shame belongs to one PR, on a branch of this repo ────────────────
+
+def _merged(number, ref, head_repo=REPO):
+    return {"action": "closed", "repository": {"full_name": REPO},
+            "pull_request": _pr(number=number, merged=True, merged_at="2026-09-29T12:00:00Z",
+                                head={"ref": ref, "sha": NO_GUEST_SHA, "repo": {"full_name": head_repo}})}
+
+
+def _shamed(out):
+    return [b for _, _, b in out if "[REBASE-COUNT" in b]
+
+
+def test_the_count_is_forgotten_when_its_pr_closes(posts):
+    import rebase_shame
+
+    out, post = posts
+    ref = "release-please--branches--main"
+    for _ in range(3):
+        rebase_shame.increment(REPO, ref)
+    router.route("pull_request", _merged(7, ref), post)
+    assert len(_shamed(out)) == 1
+    rebase_shame.increment(REPO, ref)  # the next release PR, rewritten once
+    router.route("pull_request", _merged(8, ref), post)
+    assert len(_shamed(out)) == 1  # it starts from 1, not 4
+    assert rebase_shame.get(REPO, ref) == 0
+
+
+def test_a_fork_branch_never_borrows_this_repos_count(posts):
+    import rebase_shame
+
+    out, post = posts
+    for _ in range(5):
+        rebase_shame.increment(REPO, "main")
+    router.route("pull_request", _merged(9, "main", head_repo="someone/fork"), post)
+    assert _shamed(out) == []
+    assert rebase_shame.get(REPO, "main") == 5  # upstream main's own count is untouched
+
+
+def test_dependabot_is_known_by_its_branch_not_its_login():
+    by_login_only = troll.pr_facts(_pr(user={"login": "dependabot[bot]", "type": "Bot"}))
+    by_branch = troll.pr_facts(_pr(user={"login": "renamed[bot]", "type": "Bot"},
+                                   head={"ref": "dependabot/pip/x", "sha": NO_GUEST_SHA}))
+    assert not by_login_only["dependabot"] and by_branch["dependabot"]

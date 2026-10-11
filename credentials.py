@@ -4,7 +4,12 @@ Precedence (same shape as willow-mcp integrations):
   1. Process env (explicit override / tests)
   2. ``<box>/secrets/willow-bot.env`` (non-PEM settings)
   3. Fernet vault keys under ``willow-bot/…`` (when vault.key is present)
-  4. Default PEM path: ``<box>/secrets/willow-bot.pem``
+
+The private key is resolved in its own order: the path named by
+``GITHUB_APP_PRIVATE_KEY_PATH`` (env, then the env file), else the default
+PEM path ``<box>/secrets/willow-bot.pem``, else the Fernet vault key
+``willow-bot/private_key``. A named path that does not exist falls through
+to the next source; the resolved ``source`` names which one was used.
 
 The box is ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX`` — the same rule the
 state uses. With neither set, or a path that does not exist, there is no box

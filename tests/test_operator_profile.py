@@ -43,7 +43,7 @@ def ada(monkeypatch, tmp_path):
 
 def test_a_blank_install_has_no_operator(blank):
     assert operator_profile.login() == ""
-    assert fleet.fleet_orgs.__wrapped__() == ()
+    assert (fleet.fleet_orgs.cache_clear(), fleet.fleet_orgs())[1] == ()
     assert fleet.fleet_user() == ""
     assert upstream_config.watch_repos() == []
     assert operator_profile.core_repos() == []
@@ -66,7 +66,7 @@ def test_the_upstream_desk_with_no_one_to_track_says_so(blank, monkeypatch):
 
 def test_another_operator_gets_their_own_setup(ada):
     assert operator_profile.login() == "ada"
-    assert fleet.fleet_orgs.__wrapped__() == ("analytical",)
+    assert (fleet.fleet_orgs.cache_clear(), fleet.fleet_orgs())[1] == ("analytical",)
     assert upstream_config.watch_repos() == ["babbage/engine"]
     assert troll.allowed("analytical/notes", "OWNER")
     assert not troll.allowed("willow-memory/willow-bot", "OWNER")

@@ -566,3 +566,60 @@ def test_audit_state_ok_true_when_never_queued():
 def test_audit_state_ok_false_when_pending_and_not_dispatched():
     state = {"pending_audit": [{"repo_pr": "o/r#1", "title": "t", "url": "u"}]}
     assert voice._audit_state_ok("o/r#1", state) is False
+
+
+# ── a PR's head and red state come from durable, current state ──────────────
+
+
+def _check_signal(i: int) -> dict:
+    return {"kind": "check_run", "repo": "o/busy", "check_run_id": i, "head_sha": f"c{i}"}
+
+
+def test_a_quiet_prs_head_survives_a_flood_of_check_signals(tmp_path, monkeypatch):
+    """The signals window holds check-run signals too and rolls at 100, so a
+    quiet PR's opened signal fell out of it; the inbox step's durable
+    `pr_heads` keeps it, and the voice step reads it."""
+    import json
+
+    from willow_bot.steward.inbox import ingest
+
+    home = tmp_path / "willow"
+    inbox = home / "upstream_steward" / "webhook_inbox"
+    inbox.mkdir(parents=True)
+    monkeypatch.setenv("WILLOW_HOME", str(home))
+    state = tmp_path / "state.json"
+    (inbox / "pr.json").write_text(json.dumps({
+        "kind": "pull_request", "work_id": "wh-quiet-pr", "repo": "o/quiet", "number": 3,
+        "action": "opened", "head_sha": "q" * 40, "received_at": "2026-10-11T00:00:00Z"}))
+    ingest(state)
+    for i in range(150):
+        (inbox / f"c{i}.json").write_text(json.dumps({
+            "kind": "check_run", "work_id": f"wh-check-{i}", "repo": "o/busy", "check_id": i,
+            "conclusion": "success", "head_sha": f"c{i}"}))
+    ingest(state)
+    saved = json.loads(state.read_text())
+    assert not any(s.get("repo_pr") == "o/quiet#3" for s in saved["webhook_signals"])  # rolled out
+    assert voice._latest_head_sha_by_pr(saved)["o/quiet#3"] == "q" * 40
+
+
+def test_a_green_rerun_on_the_same_head_clears_ci_red():
+    """`ci_filed` only grows, so the label and check stayed red after a
+    re-run went green on the same commit; the head's current legs decide."""
+    sha = "a" * 40
+    state = {
+        "pr_heads": {"o/r#1": {"head_sha": sha, "at": "t"}},
+        "ci_filed": {f"{sha}:11": "item-1"},
+        "ci_head_legs": {f"o/r#1@{sha}": {"Tests": "failure"}},
+    }
+    assert pr_labels.LABEL_CI_RED in voice._desired_labels_by_pr(state).get("o/r#1", set())
+    assert voice._check_conclusion("o/r#1", sha, state) == "failure"
+    state["ci_head_legs"][f"o/r#1@{sha}"]["Tests"] = "success"  # the re-run went green
+    assert pr_labels.LABEL_CI_RED not in voice._desired_labels_by_pr(state).get("o/r#1", set())
+    assert voice._check_conclusion("o/r#1", sha, state) != "failure"
+    assert "green since" in voice._status_comment_body("o/r#1", sha, state, at="t")
+
+
+def test_without_current_legs_the_filed_record_still_says_red():
+    sha = "b" * 40
+    state = {"pr_heads": {"o/r#2": {"head_sha": sha, "at": "t"}}, "ci_filed": {f"{sha}:12": "item"}}
+    assert pr_labels.LABEL_CI_RED in voice._desired_labels_by_pr(state)["o/r#2"]

@@ -313,6 +313,45 @@ def test_each_installation_change_is_its_own_item(home):
 
     fleet_bridge.handle("installation_repositories", change("o/a"))
     fleet_bridge.handle("installation_repositories", change("o/b"))
-    fleet_bridge.handle("installation_repositories", change("o/b"))  # redelivery
-    assert [i["repositories_added"] for i in _inbox(home)] in (
-        [["o/a"], ["o/b"]], [["o/b"], ["o/a"]])
+    # Adding o/b again later is a real, separate change with the same
+    # payload; a REDELIVERY is stopped earlier, by the delivery-id guard.
+    fleet_bridge.handle("installation_repositories", change("o/b"))
+    assert sorted(i["repositories_added"] for i in _inbox(home)) == [["o/a"], ["o/b"], ["o/b"]]
+
+
+def test_installation_created_names_its_repos(home):
+    fleet_bridge.handle("installation", {"action": "created", "installation": {"id": 7},
+                                         "repositories": [{"full_name": "o/a"}, {"full_name": "o/b"}]})
+    [item] = _inbox(home)
+    assert item["repositories_added"] == ["o/a", "o/b"]
+
+
+def test_push_triggers_gitsync_on_the_repos_own_default_branch(home, monkeypatch):
+    asked = []
+    monkeypatch.setattr(fleet_bridge, "_request_gitsync", lambda repo: asked.append(repo))
+
+    def push(ref, default):
+        return {"ref": ref, "repository": {"full_name": REPO, "default_branch": default}}
+
+    fleet_bridge.handle("push", push("refs/heads/develop", "develop"))
+    fleet_bridge.handle("push", push("refs/heads/master", "develop"))  # not the default here
+    fleet_bridge.handle("push", {"ref": "refs/heads/main", "repository": {"full_name": REPO}})
+    assert asked == [REPO, REPO]
+
+
+@pytest.mark.parametrize("origin,match", [
+    ("https://github.com/owner/willow.git", True),
+    ("git@github.com:owner/willow.git", True),
+    ("https://github.com/owner/willow-bot.git", False),
+    ("https://github.com/xowner/willow.git", False),
+])
+def test_origin_matches_the_whole_owner_and_name(tmp_path, monkeypatch, origin, match):
+    import subprocess as sp
+
+    clone = tmp_path / "gh" / "owner" / "willow"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(fleet_bridge, "_GITHUB_ROOT", tmp_path / "gh")
+    monkeypatch.setattr(fleet_bridge.subprocess, "run",
+                        lambda *a, **k: sp.CompletedProcess(a, 0, stdout=origin + "\n", stderr=""))
+    found, _ = fleet_bridge._local_clone_path_with_layout("owner/willow")
+    assert (found == clone) is match

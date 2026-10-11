@@ -511,6 +511,7 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     app = _resolve_app_id()
     mirrored, failed = 0, None
     annulled_skipped, annulled_mirrors = 0, 0
+    malformed = 0
     pace = _Pacer(_MIRROR_TIME_BUDGET_S, calls=_MIRROR_CALLS_PER_TICK)
     # Voided rows (gap 9) never reach the store — the void set is built over
     # the whole file first, so a row voided by an annul later in this same
@@ -533,7 +534,19 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
             if not text:
                 offset = fh.tell()
                 continue
-            rec = json.loads(text)
+            # A complete line that is not a JSON object (a torn write that
+            # still ended in a newline) is counted and stepped over. Raising
+            # here left the offset unwritten, so every later tick re-read the
+            # same line and raised again: the mirror stopped for good. run_ci
+            # and _mirrored_ids_by_hash already skip such a line.
+            try:
+                rec = json.loads(text)
+            except json.JSONDecodeError:
+                rec = None
+            if not isinstance(rec, dict):
+                malformed += 1
+                offset = fh.tell()
+                continue
             if is_annul(rec):
                 voids.take(rec)
                 # Only ids the mirror has landed (chained: by hash → id;
@@ -580,6 +593,8 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     status = "ok" if failed is None else ("paced" if pace.budget_spent else "could-not-run")
     receipt.update(status=status, mirrored=mirrored, new_offset=offset, behind=behind,
                    annulled=annulled_skipped, annulled_mirrors=annulled_mirrors, **pace.receipt())
+    if malformed:
+        receipt["malformed"] = malformed
     if failed is not None:
         receipt["detail"] = failed
     return _emit(receipt)
@@ -625,8 +640,11 @@ def _mirrored_ids_by_hash(src: Path, offset: int) -> dict[str, str]:
 # PRs. Each step now paces through its own budget (`_Pacer`), and the
 # mirror is additionally CAPPED in calls per tick so it cannot drain the
 # minute the later steps need: 30 of the 60 leaves ci + audit the other
-# half, and a 500-row backlog still lands in ~17 ticks. Mirror stays first
-# in the loop (ci reads what it mirrored); the cap is what makes it yield.
+# half. The cap counts every call, rate_limited retries included, and the
+# heartbeat, sweep and resolve calls before it spend the burst, so a tick
+# lands fewer rows than calls (live: 17 rows for 30 calls). `behind` in the
+# receipt is BYTES of the deposits file not yet mirrored, not rows. ci reads
+# the local deposits file at its own offset, not what the mirror landed.
 _MIRROR_TIME_BUDGET_S = 120.0
 _MIRROR_CALLS_PER_TICK = 30
 _MIRROR_MAX_WAIT_S = 10
@@ -918,7 +936,8 @@ def _resolved_lines_owed(items: dict, state: dict) -> set[str]:
 
 def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending: dict,
                     *, voided_heads: set[tuple[str, str]] | None = None,
-                    keep_items: set[str] | None = None) -> dict:
+                    keep_items: set[str] | None = None,
+                    closed_prs: set[str] | None = None) -> dict:
     """Keep the four maps bounded (Loki, dispatch 82A7DB13, finding 4).
 
     A head is kept when it is the newest the bot has seen for its PR, the
@@ -974,7 +993,13 @@ def _prune_ci_state(items: dict, heads: dict, head_legs: dict, cancelled_pending
         dated = [s for s, at in seen.items() if at is not None]
         newest = max(dated, key=lambda s: seen[s]) if dated else (next(iter(seen)) if seen else None)
         wanted = set(keep.get(pr_key, set()))
-        if newest:
+        # The newest head is kept for a group that can still get a later one:
+        # an open PR (`repo#pr`) or a branch (`repo~branch`). A PR-less head's
+        # own group (`repo@sha12`) never gets another head, and a closed PR's
+        # never will; kept "newest", each stayed forever. They stay only while
+        # an unresolved item or a pending cancelled leg needs them (`keep`).
+        transient = "@" in pr_key and "#" not in pr_key and "~" not in pr_key
+        if newest and not transient and pr_key not in (closed_prs or set()):
             wanted.add(newest)
         for sha in list(seen):
             if sha not in wanted:
@@ -2487,8 +2512,9 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         # was pruned at N+1 and never delivered); `ci_notified` is pruned
         # with the items so it does not grow for the life of the file.
         owed = _resolved_lines_owed(items, state)
+        closed_prs = {k for k, v in (state.get("pr_closed") or {}).items() if isinstance(v, dict)}
         pruned = _prune_ci_state(items, heads, head_legs, cancelled_pending,
-                                 voided_heads=voided_heads, keep_items=owed)
+                                 voided_heads=voided_heads, keep_items=owed, closed_prs=closed_prs)
         if pruned["heads"] or pruned["items"] or pruned.get("voided_heads"):
             receipt["pruned"] = pruned
         live_ids = {it.get("id") for it in items.values() if it.get("id")}
@@ -3400,7 +3426,9 @@ def run_resolve(sweep: dict | None = None, *, enable_mcp: bool | None = None) ->
     state["gaps_resolved"] = already
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, indent=2) + "\n")
-    receipt.update(status="ok", resolved=resolved, refused=refused, skipped=skipped)
+    # A refused gap_resolve is not "ok": that range is never seen again by
+    # this step, so the receipt has to say something was left undone.
+    receipt.update(status="partial" if refused else "ok", resolved=resolved, refused=refused, skipped=skipped)
     return _emit(receipt)
 
 

@@ -78,3 +78,13 @@ def header(count: int) -> str:
     else:
         line = "the branch is no longer what it was"
     return f"[REBASE-COUNT: {count} — {line}]"
+
+
+def reset(repo: str, ref: str, path: Path | None = None) -> None:
+    """Forget a branch's count once its PR is closed: the next PR on a branch
+    of the same name (release-please reuses one for every release) starts
+    from zero instead of inheriting every earlier rewrite."""
+    conn = _init_db(path)
+    conn.execute("DELETE FROM rebase_counts WHERE repo = ? AND ref = ?", (repo, ref))
+    conn.commit()
+    conn.close()

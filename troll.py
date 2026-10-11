@@ -76,7 +76,9 @@ def pr_facts(pr: dict, *, now: datetime | None = None) -> dict:
     facts: dict = {
         "login": login,
         "bot_author": user.get("type") == "Bot",
-        "dependabot": login.startswith("dependabot"),
+        # By the branch Dependabot opens, never the login (BOT-INVENTORY.md).
+        "dependabot": user.get("type") == "Bot"
+        and str((pr.get("head") or {}).get("ref") or "").startswith("dependabot/"),
         "release": str((pr.get("head") or {}).get("ref") or "").startswith("release-please"),
         "revert": str(pr.get("title") or "").lower().startswith("revert"),
         "draft": bool(pr.get("draft")),
