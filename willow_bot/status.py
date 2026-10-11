@@ -27,6 +27,10 @@ One operation: ``report()`` returns a dict of the form:
         "pending": {"status": ..., "total": N, "by_lane": {...}},
         "last_tick": {"status": ..., "last": <receipt>, "at": ...},
       },
+      "open_prs": {"status": ..., "count": N, "by_ci": {"red": N, ...}, "prs": [{"pr", "head_sha", "ci", "legs"}]},
+      "app": {"status": ..., "verdict": "ok"|"partial"|"failing"|..., "last": {...}},
+      "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
+      "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
     }
 
 Three states per source, chosen deliberately:
@@ -506,6 +510,167 @@ def _read_ingress() -> dict[str, Any]:
             "last": last, "flag": data.get("flag")}
 
 
+# ── open PRs and their CI ────────────────────────────────────────────────
+
+_OPEN_PRS_CAP = 50
+
+
+def _read_open_prs() -> dict[str, Any]:
+    """Each PR the last scan saw open, with the CI state of its newest head
+    as the ci step recorded it — read from the steward's state file, no
+    GitHub call. ``ci`` per PR:
+
+    - ``red`` — an unresolved CI item is filed against that head
+    - ``green`` — every recorded leg passed (success / skipped / neutral)
+    - ``cancelled`` — a leg was cancelled and nothing went red
+    - ``running`` — legs recorded, none red, not all green yet
+    - ``unknown`` — no CI deposit seen for this PR's head
+    """
+    from willow_bot.steward.config import state_path
+    from willow_bot.steward.tick import _CI_CANCELLED, _CI_GREEN, _CI_RED
+
+    p = state_path()
+    if not p.is_file():
+        return {"status": "empty", "detail": f"no file at {p}", "count": 0, "by_ci": {}, "prs": []}
+    try:
+        state = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200], "count": 0, "by_ci": {}, "prs": []}
+    if not isinstance(state, dict):
+        return {"status": "unreachable", "detail": "state is not a JSON object", "count": 0, "by_ci": {}, "prs": []}
+
+    def _map(name: str) -> dict:
+        v = state.get(name)
+        return v if isinstance(v, dict) else {}
+
+    open_keys = [k for k in (state.get("open") or []) if isinstance(k, str)]
+    heads, head_legs, items = _map("ci_heads"), _map("ci_head_legs"), _map("ci_items")
+    prs: list[dict[str, Any]] = []
+    by_ci: dict[str, int] = {}
+    for key in open_keys:
+        seen = heads.get(key) if isinstance(heads.get(key), dict) else {}
+        dated = [s for s, at in seen.items() if at]
+        sha = max(dated, key=lambda s: str(seen[s])) if dated else next(iter(seen), None)
+        row: dict[str, Any] = {"pr": key, "head_sha": (sha or "")[:12] or None}
+        if sha is None:
+            ci = "unknown"
+        else:
+            head_key = f"{key}@{sha}"
+            legs = head_legs.get(head_key) if isinstance(head_legs.get(head_key), dict) else {}
+            item = items.get(head_key) if isinstance(items.get(head_key), dict) else None
+            if item and not item.get("resolved"):
+                ci = "red"
+                row["url"] = item.get("url")
+            elif legs and all(c in _CI_GREEN for c in legs.values()):
+                ci = "green"
+            elif any(c == _CI_CANCELLED for c in legs.values()) and not any(c in _CI_RED for c in legs.values()):
+                ci = "cancelled"
+            elif legs:
+                ci = "red" if any(c in _CI_RED for c in legs.values()) else "running"
+            else:
+                ci = "unknown"
+            row["legs"] = dict(sorted(legs.items()))
+            row["seen_at"] = seen.get(sha)
+        row["ci"] = ci
+        by_ci[ci] = by_ci.get(ci, 0) + 1
+        prs.append(row)
+    order = {"red": 0, "cancelled": 1, "running": 2, "unknown": 3, "green": 4}
+    prs.sort(key=lambda r: (order.get(r["ci"], 9), r["pr"]))
+    out: dict[str, Any] = {
+        "status": "populated" if prs else "empty",
+        "count": len(prs),
+        "by_ci": dict(sorted(by_ci.items())),
+        "prs": prs[:_OPEN_PRS_CAP],
+    }
+    if len(prs) > _OPEN_PRS_CAP:
+        out["truncated"] = len(prs) - _OPEN_PRS_CAP
+    return out
+
+
+# ── App grant ────────────────────────────────────────────────────────────
+
+
+def _read_app_grant() -> dict[str, Any]:
+    """The steward's last ``steward_app_grant`` verdict: what the App may do
+    and which events it hears, against what the code needs. ``empty``
+    before the step has run; ``unreachable`` when the file is unreadable;
+    else ``populated`` with ``verdict`` (``ok``/``partial``/``failing``/
+    ``malformed``/``unreachable`` — see ``willow_bot.steward.app_grant``)."""
+    from willow_bot.steward import app_grant as _app_grant
+
+    p = _app_grant.path()
+    if not p.is_file():
+        return {"status": "empty", "detail": f"no file at {p}"}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    if not isinstance(data, dict) or not isinstance(data.get("last"), dict):
+        return {"status": "unreachable", "detail": "app_grant.json has no last verdict"}
+    last = data["last"]
+    return {"status": "populated", "verdict": last.get("status"), "at": last.get("at"), "last": last}
+
+
+# ── operator profile ─────────────────────────────────────────────────────
+
+
+def _read_operator() -> dict[str, Any]:
+    """Which operator profile this install runs under. ``empty`` is a blank
+    install (no profile: no orgs named, no upstream watch, a silent voice) —
+    the state an existing fleet is in if its profile was never copied into
+    the box. ``unreachable`` when the file is there but does not read as a
+    JSON object (the bot then also runs blank). Reads the file itself, so
+    discovery (``gh api /user``) never runs from here."""
+    from willow_bot import operator_profile
+
+    path = operator_profile.profile_path()
+    if path is None:
+        return {"status": "empty", "path": None, "detail": "no box, so no profile"}
+    if not path.is_file():
+        return {"status": "empty", "path": str(path),
+                "detail": "no operator profile: blank install (see deploy/operator.example.json)"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"status": "unreachable", "path": str(path), "detail": str(exc)[:200]}
+    if not isinstance(data, dict):
+        return {"status": "unreachable", "path": str(path), "detail": "profile is not a JSON object"}
+    voice = data.get("voice") if isinstance(data.get("voice"), dict) else {}
+    grove = data.get("grove") if isinstance(data.get("grove"), dict) else {}
+    return {
+        "status": "populated",
+        "path": str(path),
+        "login": data.get("login") or None,
+        "bot_name": operator_profile.bot_name(),
+        "orgs": data["orgs"] if "orgs" in data else "discovered",
+        "upstream_watch": len(operator_profile.upstream_watch_repos()),
+        "core_repos": len(operator_profile.core_repos()),
+        "voice_orgs": voice.get("orgs", "willow-bot.json"),
+        "grove_ci_red_orgs": grove.get("ci_red_orgs", []),
+    }
+
+
+def _read_contributions() -> dict[str, Any]:
+    """The last 30 days of the contributions ledger, as counts."""
+    from willow_bot import contributions
+
+    path = contributions.ledger_path()
+    if not path.is_file():
+        return {"status": "empty", "detail": f"no file at {path}"}
+    try:
+        summ = contributions.summary(days=30, path=path)
+    except OSError as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200]}
+    return {
+        "status": "populated" if summ["rows"] else "empty",
+        "days": 30,
+        "rows": summ["rows"],
+        "by_kind": summ["by_kind"],
+        "outside_contributors": [p["login"] for p in summ["outside_contributors"]][:10],
+        "first_timers": len(summ["first_timers"]),
+    }
+
+
 # ── the surface ──────────────────────────────────────────────────────────
 
 
@@ -534,4 +699,8 @@ def report() -> dict[str, Any]:
         "notifier": _read_notifier(),
         "ingress": _read_ingress(),
         "upstream": _read_upstream(),
+        "open_prs": _read_open_prs(),
+        "app": _read_app_grant(),
+        "operator": _read_operator(),
+        "contributions": _read_contributions(),
     }

@@ -389,3 +389,104 @@ def test_partial_failure_still_reports_populated_fields(home: Path):
     assert r["tick"]["status"] == "populated"
     # inbox_dir.is_dir() is False when the path is a file → status = "empty"
     assert r["inbox"]["status"] == "empty"
+
+
+# ── operator profile ───────────────────────────────────────────────────────
+
+
+def test_operator_blank_install_is_empty(home: Path, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_OPERATOR_PROFILE", raising=False)
+    op = status.report()["operator"]
+    assert op["status"] == "empty" and "blank install" in op["detail"]
+    assert op["path"] == str(home / "willow-bot" / "operator.json")
+
+
+def test_operator_profile_in_the_box_is_populated(home: Path, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_OPERATOR_PROFILE", raising=False)
+    _write(home / "willow-bot" / "operator.json",
+           json.dumps({"login": "ada", "upstream_watch": ["a/b"], "voice": {"orgs": ["x"]}}))
+    op = status.report()["operator"]
+    assert op["status"] == "populated" and op["login"] == "ada"
+    assert op["orgs"] == "discovered" and op["upstream_watch"] == 1 and op["voice_orgs"] == ["x"]
+
+
+def test_operator_broken_profile_is_unreachable(home: Path, monkeypatch):
+    monkeypatch.delenv("WILLOW_BOT_OPERATOR_PROFILE", raising=False)
+    _write(home / "willow-bot" / "operator.json", "{nope")
+    assert status.report()["operator"]["status"] == "unreachable"
+
+
+# ── contributions ─────────────────────────────────────────────────────────
+
+
+def test_contributions_absent_ledger_is_empty(home: Path):
+    assert status.report()["contributions"]["status"] == "empty"
+
+
+def test_contributions_summarised(home: Path):
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [{"at": now, "repo": "o/r", "kind": "pr_opened", "login": "ada", "outsider": True},
+            {"at": now, "repo": "o/r", "kind": "star", "login": "bo", "outsider": True}]
+    _write(home / "willow-bot" / "contributions.jsonl", "\n".join(json.dumps(r) for r in rows) + "\n")
+    c = status.report()["contributions"]
+    assert c["status"] == "populated" and c["rows"] == 2
+    assert c["outside_contributors"] == ["ada"]
+
+
+# ── open PRs and their CI ──────────────────────────────────────────────────
+
+
+def _state(home: Path, body: dict) -> None:
+    from willow_bot.steward.config import state_path
+
+    _write(state_path(), json.dumps(body))
+
+
+def test_open_prs_without_state_is_empty(home: Path):
+    r = status.report()["open_prs"]
+    assert r["status"] == "empty" and r["prs"] == []
+
+
+def test_open_prs_unreadable_state_is_unreachable(home: Path):
+    from willow_bot.steward.config import state_path
+
+    _write(state_path(), "{broken")
+    assert status.report()["open_prs"]["status"] == "unreachable"
+
+
+def test_open_prs_reads_the_newest_heads_ci(home: Path):
+    _state(home, {
+        "open": ["o/a#1", "o/b#2", "o/c#3", "o/d#4", "o/e#5"],
+        "ci_heads": {
+            "o/a#1": {"old1": "2026-10-01T00:00:00Z", "new1": "2026-10-02T00:00:00Z"},
+            "o/b#2": {"sha2": "2026-10-02T00:00:00Z"},
+            "o/c#3": {"sha3": "2026-10-02T00:00:00Z"},
+            "o/d#4": {"sha4": "2026-10-02T00:00:00Z"},
+        },
+        "ci_head_legs": {
+            "o/a#1@old1": {"Tests": "failure"},
+            "o/a#1@new1": {"Tests": "success", "CodeQL": "neutral"},
+            "o/b#2@sha2": {"Tests": "failure"},
+            "o/c#3@sha3": {"Tests": "cancelled"},
+            "o/d#4@sha4": {"Tests": "success", "Lint": "in_progress"},
+        },
+        "ci_items": {"o/b#2@sha2": {"id": "x", "url": "https://ci/2"}},
+    })
+    r = status.report()["open_prs"]
+    by_pr = {p["pr"]: p for p in r["prs"]}
+    assert by_pr["o/a#1"]["ci"] == "green" and by_pr["o/a#1"]["head_sha"] == "new1"
+    assert by_pr["o/b#2"]["ci"] == "red" and by_pr["o/b#2"]["url"] == "https://ci/2"
+    assert by_pr["o/c#3"]["ci"] == "cancelled"
+    assert by_pr["o/d#4"]["ci"] == "running"
+    assert by_pr["o/e#5"]["ci"] == "unknown"
+    assert r["by_ci"] == {"cancelled": 1, "green": 1, "red": 1, "running": 1, "unknown": 1}
+    assert r["prs"][0]["pr"] == "o/b#2"  # reds first
+
+
+def test_a_resolved_item_is_not_red(home: Path):
+    _state(home, {"open": ["o/a#1"], "ci_heads": {"o/a#1": {"s": "2026-10-02T00:00:00Z"}},
+                  "ci_head_legs": {"o/a#1@s": {"Tests": "success"}},
+                  "ci_items": {"o/a#1@s": {"id": "x", "resolved": {"by": "s"}}}})
+    assert status.report()["open_prs"]["prs"][0]["ci"] == "green"
