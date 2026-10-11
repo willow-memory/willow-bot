@@ -3447,6 +3447,28 @@ def run_ingress(*, enable_mcp: bool | None = None) -> dict:
     return _emit(ingress.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
+def run_redeliver() -> dict:
+    """Ask GitHub to resend the App-webhook deliveries the bot never got
+    (``willow_bot.steward.redeliver``) and receipt what it asked for."""
+    from willow_bot.steward import redeliver
+
+    return _emit(redeliver.run())
+
+
+def run_ci_backfill() -> dict:
+    """Fill in CI for open PRs whose head has none recorded, from GitHub's
+    own check runs (``willow_bot.steward.ci_backfill``)."""
+    from willow_bot.steward import ci_backfill
+
+    path = state_path()
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        return _emit({"event": "steward_ci_backfill", "status": "could-not-run",
+                      "detail": f"state unreadable: {exc}"[:300]})
+    return _emit(ci_backfill.run(state if isinstance(state, dict) else {}))
+
+
 def run_app_grant() -> dict:
     """Ask GitHub what the App may do and which events it is subscribed to
     (``willow_bot.steward.app_grant``) and receipt the answer."""
@@ -3535,12 +3557,14 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("resolve", lambda: run_resolve(sweep)),
             ("install", lambda: run_install_receipts(sweep)),
             ("mirror", run_mirror),
+            ("ci-backfill", run_ci_backfill),
             ("ci", run_ci),
             ("ci-legacy-clear", run_ci_legacy_clear),
             ("catchup", run_catchup),
             ("upstream-desk", _run_upstream_desk),
             ("audit", run_audit),
             ("ingress", run_ingress),
+            ("redeliver", run_redeliver),
             ("app-grant", run_app_grant),
             ("voice", run_voice),
         ):
@@ -3593,6 +3617,12 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "app-grant":
         run_app_grant()
         return 0
+    if args[0] == "redeliver":
+        run_redeliver()
+        return 0
+    if args[0] == "ci-backfill":
+        run_ci_backfill()
+        return 0
     if args[0] == "upstream-desk":
         _run_upstream_desk()
         return 0
@@ -3637,7 +3667,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|app-grant|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
