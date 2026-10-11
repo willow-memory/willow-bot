@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.4.0](https://github.com/willow-memory/willow-bot/compare/v1.3.0...v1.4.0) (2026-10-11)
+
+
+### Added
+
+* **steward:** redeliver lost webhooks; backfill CI for PRs that have none ([fbf7c33](https://github.com/willow-memory/willow-bot/commit/fbf7c334ec8b12576395cb195c23ac8baeab9794))
+* **steward:** redeliver lost webhooks; backfill CI for PRs that have none ([24da399](https://github.com/willow-memory/willow-bot/commit/24da399dd5f8b4a5d4e60d1dd4706029ee4d1cc9))
+
 ## [1.3.0](https://github.com/willow-memory/willow-bot/compare/v1.2.5...v1.3.0) (2026-10-11)
 
 
