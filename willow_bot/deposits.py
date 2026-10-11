@@ -547,8 +547,12 @@ def deposit_from_check_run_payload(payload: dict) -> dict[str, Any] | None:
     repo = (payload.get("repository") or {}).get("full_name") or ""
     if not repo:
         return None
-    prs = check.get("pull_requests") or []
-    pr_number = prs[0].get("number") if prs else None
+    from willow_bot.check_prs import pr_numbers
+
+    # Only a PR of THIS repo (`check_prs`): a fork's check also lists its PR
+    # into upstream, and filed under the fork that number named nothing.
+    prs = pr_numbers(check, repo)
+    pr_number = prs[0] if prs else None
     sender_type = str((payload.get("sender") or {}).get("type") or "")
     suite = check.get("check_suite") if isinstance(check.get("check_suite"), dict) else {}
     rec = ci_outcome_record(

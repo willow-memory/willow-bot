@@ -14,6 +14,7 @@ import sigh
 import troll
 from integrations import fleet_bridge
 from willow_bot import contributions, welcome
+from willow_bot.check_prs import pr_numbers
 
 log = logging.getLogger("willow-bot.router")
 
@@ -215,26 +216,28 @@ def _handle_check_run(payload: dict, post: Callable) -> None:
     conclusion = check.get("conclusion")
     repo = payload.get("repository", {}).get("full_name", "")
 
-    prs = check.get("pull_requests") or []
+    # Only PRs of this repo: a fork's check also lists its PR into upstream,
+    # whose number names nothing here (or an unrelated issue that shares it).
+    prs = pr_numbers(check, repo)
 
     if action == "completed":
         if conclusion == "success":
             msg = quips.pick("ci_pass")
             for pr in prs:
-                reds = sigh.get(repo, pr["number"])
-                sigh.reset(repo, pr["number"])
+                reds = sigh.get(repo, pr)
+                sigh.reset(repo, pr)
                 # Once per recovery: the first green leg resets the streak,
                 # so later legs of the same head see 0 and say nothing.
                 head = str(check.get("head_sha") or "")
                 if (reds >= troll.RECOVERY_REDS and not _mode_override()
-                        and _may(repo, pr["number"], f"recovered:{head}", None, bot=True)):
+                        and _may(repo, pr, f"recovered:{head}", None, bot=True)):
                     line = _troll_line("ci_recovered", repo, {"reds": reds}, head)
                     if line:
-                        post(repo, pr["number"], line)
+                        post(repo, pr, line)
         elif conclusion in ("failure", "timed_out", "startup_failure"):
             msg = quips.pick("ci_fail")
             for pr in prs:
-                streak = sigh.bump_fail(repo, pr["number"])
+                streak = sigh.bump_fail(repo, pr)
                 line = sigh.sigh_line(streak)
                 if line:
                     msg = line
