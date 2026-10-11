@@ -4,7 +4,9 @@
 Reads <box>/upstream_steward/webhook_inbox/*.json (the box: WILLOW_HOME, else
 WILLOW_VAULT_BOX; willow_bot.paths.webhook_inbox_dir), records
 consumed work_ids, emits one JSON line per newly seen pull_request or
-check_run event.
+check_run event, and moves each consumed item into
+``webhook_inbox/consumed/<YYYY-MM>/`` (never deleted), so the inbox holds
+only what is still waiting.
 
 Gap 1d737ffa2595 — `check_run` items were dropped on the floor here: every
 completed CI check `fleet_bridge.handle` deposited (keyed on the check id,
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 from willow_bot.steward.config import (
@@ -33,6 +36,9 @@ from willow_bot.steward.config import (
 )
 
 _MAX_CONSUMED = 5000
+#: Where a consumed item goes: out of the inbox, into a month folder under it,
+#: never deleted. `glob("*.json")` on the inbox does not reach it.
+CONSUMED_DIR = "consumed"
 _MAX_SIGNALS = 100
 _MAX_CLOSED = 500
 
@@ -55,6 +61,19 @@ def _repo_pr(item: dict) -> str:
     return ""
 
 
+def _archive(inbox: Path, path: Path, month: str) -> bool:
+    """Move a consumed item out of the inbox into ``consumed/<YYYY-MM>/``.
+    True when it moved. A failed move leaves the file where it is; its
+    work_id is still in ``inbox_consumed``, so it is not emitted again."""
+    dest_dir = inbox / CONSUMED_DIR / month
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path.replace(dest_dir / path.name)
+    except OSError:
+        return False
+    return True
+
+
 def ingest(state_path: Path) -> int:
     if watcher_call_enabled():
         _emit(
@@ -74,13 +93,18 @@ def ingest(state_path: Path) -> int:
     state.setdefault("seen", [])
     state.setdefault("open", [])
     state.setdefault("merged_synced", [])
-    consumed: set[str] = set(state.get("inbox_consumed") or [])
+    # In the order they were consumed (oldest first), so the cap below keeps
+    # the most recent ids. A state written before this kept them sorted by
+    # name; those come first and age out first.
+    consumed_order: list[str] = [str(w) for w in state.get("inbox_consumed") or []]
+    consumed: set[str] = set(consumed_order)
+    month = time.strftime("%Y-%m", time.gmtime())
     signals: list[dict] = list(state.get("webhook_signals") or [])
     closed: dict[str, dict] = dict(state.get("pr_closed") or {})
 
     if not inbox.is_dir():
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        state["inbox_consumed"] = sorted(consumed)
+        state["inbox_consumed"] = consumed_order
         state["webhook_signals"] = signals[-_MAX_SIGNALS:]
         state["pr_closed"] = closed
         state_path.write_text(json.dumps(state, indent=2) + "\n")
@@ -92,7 +116,13 @@ def ingest(state_path: Path) -> int:
         except (json.JSONDecodeError, OSError):
             continue
         wid = item.get("work_id")
-        if not wid or wid in consumed:
+        if not wid:
+            continue
+        if wid in consumed:
+            # Already emitted: a later webhook for the same work_id (fleet_bridge
+            # keys a PR by its number) or a move that failed last time. Emitting
+            # once per work_id is unchanged; the file just leaves the inbox.
+            _archive(inbox, path, month)
             continue
         kind = item.get("kind")
 
@@ -101,6 +131,7 @@ def ingest(state_path: Path) -> int:
             if not key:
                 continue
             consumed.add(wid)
+            consumed_order.append(wid)
             ev = {
                 "event": "webhook_pr",
                 "repo_pr": key,
@@ -119,6 +150,7 @@ def ingest(state_path: Path) -> int:
                 "head_sha": item.get("head_sha") or "",
             }
             _emit(ev)
+            _archive(inbox, path, month)
             signals.append({k: v for k, v in ev.items() if k != "event"})
             # A closed PR is remembered durably (gap 52928edb3fc7): the
             # signals window above rolls at _MAX_SIGNALS, so the ci step
@@ -140,6 +172,7 @@ def ingest(state_path: Path) -> int:
             # startup_failure / cancelled) the ci step files. Missing
             # (`None`) is preserved as null, not coerced to a string.
             consumed.add(wid)
+            consumed_order.append(wid)
             ev = {
                 "event": "webhook_check_run",
                 "repo": item.get("repo") or "",
@@ -156,6 +189,7 @@ def ingest(state_path: Path) -> int:
                 "source": item.get("source") or "willow-bot",
             }
             _emit(ev)
+            _archive(inbox, path, month)
             signals.append({"kind": "check_run",
                             **{k: v for k, v in ev.items() if k != "event"}})
         else:
@@ -165,8 +199,13 @@ def ingest(state_path: Path) -> int:
             # not dropped, not double-emitted.
             continue
 
-    if len(consumed) > _MAX_CONSUMED:
-        consumed = set(sorted(consumed)[-_MAX_CONSUMED:])
+    # Keep the most recently consumed ids, never the alphabetically last: the
+    # old `sorted(...)[-N:]` evicted by name, and since files stayed in the
+    # inbox every evicted one was consumed and emitted again on the next tick
+    # (on a live box, ~6,400 replays a tick). Consumed files now leave the
+    # inbox, so the set only has to cover a re-delivery or a failed move.
+    if len(consumed_order) > _MAX_CONSUMED:
+        consumed_order = consumed_order[-_MAX_CONSUMED:]
 
     if len(closed) > _MAX_CLOSED:
         # Oldest by received_at go first; a PR closed months ago has no
@@ -174,7 +213,7 @@ def ingest(state_path: Path) -> int:
         keep = sorted(closed, key=lambda k: str(closed[k].get("at") or ""))[-_MAX_CLOSED:]
         closed = {k: closed[k] for k in keep}
 
-    state["inbox_consumed"] = sorted(consumed)
+    state["inbox_consumed"] = consumed_order
     state["webhook_signals"] = signals[-_MAX_SIGNALS:]
     state["pr_closed"] = closed
     state_path.parent.mkdir(parents=True, exist_ok=True)
