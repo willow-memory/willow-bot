@@ -61,6 +61,7 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
             pytest.fail(f"state_path() resolved to {p}, outside tmp_path {root} (gap 9)")
         return p
 
+    _guarded_state._willow_guard = True  # a guard a module may have bound in an earlier test
     monkeypatch.setattr(_config, "state_path", _guarded_state)
 
     # The operator profile. The suite's fixtures speak willow-memory repos, so
@@ -120,6 +121,14 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_app_grant, "_fetch_app", _no_network_ingress)
 
+    from willow_bot.steward import ci_backfill as _ci_backfill
+    from willow_bot.steward import redeliver as _redeliver
+
+    monkeypatch.setattr(_redeliver, "_fetch_deliveries", _no_network_ingress)
+    monkeypatch.setattr(_redeliver, "_redeliver", _no_network_ingress)
+    monkeypatch.setattr(_ci_backfill, "_get_pull", _no_network_ingress)
+    monkeypatch.setattr(_ci_backfill, "_check_runs", _no_network_ingress)
+
     # The voice's counters live in the box now (tmp_path above). The retired
     # ~/.willow they are carried over from is pointed at an empty dir under
     # tmp_path, so no test reads — or copies — the real one.
@@ -133,11 +142,17 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
     monkeypatch.setattr(_persona_store, "_legacy_dir", _no_real_legacy)
     # Modules that bound the name at import (`from ...config import state_path`).
     for modname in ("willow_bot.steward.tick", "willow_bot.steward.voice", "willow_bot.steward.inbox",
-                    "willow_bot.steward.merge", "willow_bot.steward.heartbeat"):
+                    "willow_bot.steward.merge", "willow_bot.steward.heartbeat",
+                    "willow_bot.steward.upstream_desk"):
         try:
             mod = __import__(modname, fromlist=["state_path"])
         except ImportError:
             continue
-        if getattr(mod, "state_path", None) is real_state:
+        bound = getattr(mod, "state_path", None)
+        # The real function, or an EARLIER test's guard: a module first
+        # imported inside a test (this fixture imports tick) binds whatever
+        # config.state_path was then, and a stale guard points at another
+        # test's tmp_path.
+        if bound is real_state or getattr(bound, "_willow_guard", False):
             monkeypatch.setattr(mod, "state_path", _guarded_state)
     yield root

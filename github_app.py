@@ -190,6 +190,22 @@ def _app_get(path: str, *, params: dict | None = None):
     return r.json()
 
 
+def redeliver(delivery_id: int) -> None:
+    """Ask GitHub to send an App-webhook delivery again
+    (``POST /app/hook/deliveries/{id}/attempts``, under the App's own JWT).
+    The new attempt carries the same ``X-GitHub-Delivery`` guid, so the
+    delivery guard in bot.py still runs it once. Raises on an unconfigured
+    App or HTTP error."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured")
+    r = requests.post(
+        f"https://api.github.com/app/hook/deliveries/{int(delivery_id)}/attempts",
+        headers={"Authorization": f"Bearer {_make_jwt()}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    r.raise_for_status()
+
+
 def list_hook_deliveries(per_page: int = 30) -> list[dict]:
     """The App webhook's most recent deliveries, newest first, as GitHub
     recorded them: ``status_code`` is what the receiving end answered (0
