@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.3.0](https://github.com/willow-memory/willow-bot/compare/v1.2.5...v1.3.0) (2026-10-11)
+
+
+### Added
+
+* **deps:** seat extra ships the grove seat runtime in the bot venv ([4af57fb](https://github.com/willow-memory/willow-bot/commit/4af57fb5c837d2b18305f8d83f3f4d763a832733))
+* **seat:** bot venv ships the seat runtime via a seat extra ([119c956](https://github.com/willow-memory/willow-bot/commit/119c956cb483a867a5cc124257ad636b78c28e5b))
+
 ## [1.2.5](https://github.com/willow-memory/willow-bot/compare/v1.2.4...v1.2.5) (2026-10-11)
 
 
