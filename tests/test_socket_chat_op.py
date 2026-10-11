@@ -379,17 +379,25 @@ def _mode(path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
-def test_call_log_is_created_owner_only(tmp_path, fake_ollama):
-    os.umask(0o022)  # the umask that would hand a plain open() 0644
+@pytest.fixture
+def umask_022():
+    """The umask that would hand a plain open() 0644; restored after."""
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
+
+def test_call_log_is_created_owner_only(tmp_path, fake_ollama, umask_022):
     _dispatch(_req(), _policy(tmp_path, fake_ollama))
     assert _mode(_log(tmp_path)) == 0o600
 
 
-def test_rotated_backup_is_owner_only_too(tmp_path, fake_ollama, monkeypatch):
+def test_rotated_backup_is_owner_only_too(
+    tmp_path, fake_ollama, monkeypatch, umask_022
+):
     from willow_bot.deterministic import chat_op
 
     monkeypatch.setattr(chat_op, "CALL_LOG_MAX_BYTES", 200)
-    os.umask(0o022)
     pol = _policy(tmp_path, fake_ollama)
     for _ in range(6):
         _dispatch(_req(), pol)
