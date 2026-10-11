@@ -13,7 +13,7 @@ import runes
 import sigh
 import troll
 from integrations import fleet_bridge
-from willow_bot import contributions
+from willow_bot import contributions, welcome
 
 log = logging.getLogger("willow-bot.router")
 
@@ -79,6 +79,20 @@ def _may(repo: str, number: object, moment: str, association: object, *, bot: bo
     return True
 
 
+def _welcome(repo: str, number: object, user: dict | None, association: object, post: Callable) -> bool:
+    """Post the one plain welcome a first-time contributor gets, when the
+    operator profile turns it on (``willow_bot.welcome``). True when posted."""
+    try:
+        line = welcome.line_for(repo, user, association)
+    except Exception:  # noqa: BLE001 — the welcome must never break the webhook
+        log.exception("welcome failed on %s#%s", repo, number)
+        return False
+    if not line:
+        return False
+    post(repo, number, line)
+    return True
+
+
 def _troll_line(event: str, repo: str, facts: dict, sha: str = "") -> str:
     try:
         line, tag = troll.say(event, repo, facts, sha=sha)
@@ -98,6 +112,9 @@ def _handle_pull_request(payload: dict, post: Callable) -> None:
     sha = pr.get("head", {}).get("sha", "")
     human = pr.get("user", {}).get("type") != "Bot"
     assoc = pr.get("author_association")
+
+    if action == "opened":
+        _welcome(repo, number, pr.get("user"), assoc, post)
 
     if _mode_override():
         # The old single-voice path, behind the same scope and limits.
@@ -250,6 +267,9 @@ def _handle_issues(payload: dict, post: Callable) -> None:
     issue = payload.get("issue", {})
 
     if action == "opened":
+        # A first-timer gets the welcome instead of a quip: one comment, not two.
+        if _welcome(repo, issue.get("number"), issue.get("user"), issue.get("author_association"), post):
+            return
         msg = quips.pick("gap_filed")
         if msg:
             post(repo, issue.get("number"), msg)

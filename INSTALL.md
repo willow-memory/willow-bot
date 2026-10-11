@@ -135,6 +135,7 @@ Each install says who runs it in one file, `$WILLOW_HOME/willow-bot/operator.jso
 | `voice.orgs` | where the PR voice may speak | `willow-bot.json` `troll_scope.orgs` (empty) |
 | `grove.ci_red_orgs`, `grove.operator_sender` | Grove CI-red lines; Loki's thread-drift check | off |
 | `broker_pairs` | venv fallback when the broker allowlist is missing | none |
+| `welcome.orgs`, `welcome.message` | one plain welcome on a first-time contributor's first PR or issue, once per person per repo | off |
 
 Older env overrides still win (`LOKI_PR_WATCH_ORGS`, `LOKI_PR_WATCH_USER`,
 `WILLOW_BOT_UPSTREAM_WATCH_REPOS`, `GITHUB_ROOT`, `WILLOW_BOT_NAME`). The

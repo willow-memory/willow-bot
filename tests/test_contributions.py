@@ -300,3 +300,63 @@ def test_backfill_cli_with_no_repos_says_so(monkeypatch, tmp_path, capsys):
     operator_profile.reset()
     assert contributions.main(["--backfill"]) == 2
     assert "no repos" in capsys.readouterr().err
+
+
+# ── first-timer welcome ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def welcoming(monkeypatch, tmp_path):
+    from willow_bot import operator_profile
+
+    path = tmp_path / "operator.json"
+    path.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"]}}))
+    monkeypatch.setenv(operator_profile.PROFILE_ENV, str(path))
+    operator_profile.reset()
+    return path
+
+
+def test_a_first_timers_pr_gets_one_welcome(posts, welcoming):
+    out, post = posts
+    router.route("pull_request", _pr_event("opened", assoc="FIRST_TIME_CONTRIBUTOR"), post)
+    welcomes = [b for _, _, b in out if "first contribution" in b]
+    assert welcomes == [f"Thanks for your first contribution to {REPO}, @ada! A maintainer will take a look soon."]
+    router.route("pull_request", _pr_event("opened", assoc="FIRST_TIME_CONTRIBUTOR"), post)
+    assert len([b for _, _, b in out if "first contribution" in b]) == 1  # once per person per repo
+
+
+def test_a_first_timers_issue_gets_the_welcome_instead_of_a_quip(posts, welcoming):
+    out, post = posts
+    payload = {"action": "opened", "repository": {"full_name": REPO},
+               "issue": {"number": 4, "author_association": "FIRST_TIMER", "user": {"login": "bo", "type": "User"}}}
+    router.route("issues", payload, post)
+    assert len(out) == 1 and "@bo" in out[0][2]
+
+
+@pytest.mark.parametrize("assoc,typ,repo", [
+    ("CONTRIBUTOR", "User", REPO),               # not a first-timer
+    ("FIRST_TIME_CONTRIBUTOR", "Bot", REPO),     # a bot
+    ("FIRST_TIME_CONTRIBUTOR", "User", "other-org/x"),  # outside welcome.orgs
+])
+def test_no_welcome(posts, welcoming, assoc, typ, repo):
+    from willow_bot import welcome
+
+    assert welcome.line_for(repo, {"login": "ada", "type": typ}, assoc) == ""
+
+
+def test_off_unless_the_profile_turns_it_on(posts):
+    from willow_bot import welcome
+
+    # The suite's profile (willow-memory) has no welcome section.
+    assert welcome.line_for(REPO, {"login": "ada", "type": "User"}, "FIRST_TIMER") == ""
+
+
+def test_a_custom_message_and_a_broken_one(posts, welcoming):
+    from willow_bot import operator_profile, welcome
+
+    welcoming.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"], "message": "Hi {login} in {repo}"}}))
+    operator_profile.reset()
+    assert welcome.line_for(REPO, {"login": "ada", "type": "User"}, "FIRST_TIMER") == f"Hi ada in {REPO}"
+    welcoming.write_text(json.dumps({"welcome": {"orgs": ["willow-memory"], "message": "Hi {nope}"}}))
+    operator_profile.reset()
+    assert "first contribution" in welcome.line_for(REPO, {"login": "cy", "type": "User"}, "FIRST_TIMER")
