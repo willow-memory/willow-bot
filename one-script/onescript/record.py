@@ -89,7 +89,9 @@ class Record:
             return [], []
         rows, garbled = [], []
         text = self.path.read_bytes().decode("utf-8", errors="replace")
-        for i, line in enumerate(text.splitlines(), 1):
+        # "\n" only: canon() writes ensure_ascii=False, so a row can hold a raw
+        # U+2028/U+2029/U+0085 that str.splitlines() would cut the row at.
+        for i, line in enumerate(text.split("\n"), 1):
             if not line.strip():
                 continue
             try:

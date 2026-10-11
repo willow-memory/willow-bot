@@ -539,3 +539,61 @@ def test_same_inputs_same_screen_bytes(tmp_path):
         "GRADES",
         "QUIET",
     ]
+
+
+# ── record line-safety (gap 6d5a986ce99f) ──────────────────────────────────
+
+PINNED_CANON_HASH = "35b791ab6a3d5b3595e275fdf6d24916b622ecf3b3e3bd03784eb77a14ae4280"
+SEPARATORS = [
+    "\u2028",
+    "\u2029",
+    "\u0085",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\r",
+]
+
+
+@pytest.mark.parametrize("sep", SEPARATORS, ids=lambda c: f"U+{ord(c):04X}")
+def test_a_line_separator_in_a_row_does_not_split_it(run, sep):
+    run.turn(ident("hanuman"), "edit")
+    before = len(run.rec.rows())
+    run.rec.append("note", run.sys, text=f"a{sep}b")
+    rows, garbled = run.rec._read()
+    assert garbled == []
+    assert len(rows) == before + 1
+    assert rows[-1]["text"] == f"a{sep}b"
+    assert run.rec.verify_chain() == []
+    assert run.checkin()["hard_close"] is False
+
+
+def test_a_raw_separator_already_on_disk_reads_back_as_one_row(run):
+    """canon() writes non-ASCII raw, so records on disk hold the separator itself."""
+    run.rec.append("note", run.sys, text="x\u2028y\u2029z\u0085w")
+    raw = run.rec.path.read_bytes()
+    assert "\u2028".encode() in raw
+    assert raw.count(b"\n") == len(run.rec.rows())
+    assert run.rec.verify_chain() == []
+
+
+def test_crlf_and_blank_lines_still_read_and_numbers_stay_physical(run):
+    run.rec.append("note", run.sys, text="a")
+    good = run.rec.path.read_bytes()
+    run.rec.path.write_bytes(good.replace(b"\n", b"\r\n") + b"\n\n{bad\n")
+    rows, garbled = run.rec._read()
+    assert len(rows) == 1
+    assert garbled == [4]
+
+
+def test_canon_bytes_are_pinned_so_hashes_do_not_move():
+    """canon() feeds every row hash; ensure_ascii=False must stay."""
+    from onescript.record import canon, h256
+
+    obj = {"b": "caf\u00e9 \u2028 \u4e2d", "a": [1, None, True]}
+    assert canon(obj).encode("utf-8") == (
+        b'{"a":[1,null,true],"b":"caf\xc3\xa9 \xe2\x80\xa8 \xe4\xb8\xad"}'
+    )
+    assert h256(canon(obj)) == PINNED_CANON_HASH
