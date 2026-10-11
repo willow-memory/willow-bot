@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.5.0](https://github.com/willow-memory/willow-bot/compare/v1.4.0...v1.5.0) (2026-10-11)
+
+
+### Added
+
+* **voice:** one quiet status comment per PR, plus PR hygiene labels ([d9fe482](https://github.com/willow-memory/willow-bot/commit/d9fe482b7d0551734fd716951f335296b0495246))
+* **voice:** one quiet status comment per PR, plus PR hygiene labels ([33a5591](https://github.com/willow-memory/willow-bot/commit/33a5591922ab5ca4c0febc5ee3ec14cf8c0987c6))
+
 ## [1.4.0](https://github.com/willow-memory/willow-bot/compare/v1.3.0...v1.4.0) (2026-10-11)
 
 
