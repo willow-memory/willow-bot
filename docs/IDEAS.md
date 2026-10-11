@@ -55,6 +55,56 @@ Checked and absent: slash commands (`router._handle_comment` only logs outside c
 22. **Flaky test detection**: a leg red then green on the same sha, counted per test. L, med. Builds on `ci_log.py` and `ci_backfill.py`. No source; per-test names need log parsing.
 23. **Conditional requests** (ETag / `If-None-Match`) for per-tick GETs. S-M, med-high. Source: [GitHub best practices](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api) (a 304 costs no primary rate limit; not re-fetched). Note: the "under 1%" figure in `github_app.list_open_pulls` predates #123; the voice step now reads every open PR every tick (`get_pull` plus the label GET, ~24/hr per PR), and items 7-11 add a files read, so the cost scales with open PRs. Fit: cache beside the other tick state; a failed cache read falls back to a normal GET.
 
+## Beyond GitHub: the box, the fleet, the voice
+
+Everything above is about what the bot does on github.com. These are about the rest of it: the steward on the box, the fleet bridge and Grove, the persona counters, Loki, the deterministic runner, and the person running the install. Same rules as above, plus three of its own: **the vault is Sean's key** (no idea here reads, writes, rotates or caches vault material beyond what `credentials.resolve` already does, and none adds a vault key); local files stay inside `$WILLOW_HOME` (`willow_bot/paths.py`); and every feature passes the [LOSC](../losc/MANIFESTO.md) rules: runs offline, no phone-home, deletes clean. No external sources this pass; each "builds on" was read in this tree.
+
+### Steward and the box
+
+24. **`status --doctor`**: one command that runs the checks already scattered across the tree (`app-grant`, `ingress`, `tunnel.py` preflight, `scripts/preflight.py`, inbox depth, persona DB readable, operator profile parsed) and prints one fix line per failure. S-M, high. Builds on `status.report()`, whose sources already name their own state. Fit: read-only; "could not check" is its own row, never a pass.
+25. **Inbox replay and quarantine**: `steward inbox --replay <work_id>` moves an item back from `consumed/<YYYY-MM>/`; an item that fails to parse twice goes to `webhook_inbox/quarantine/` with the error beside it instead of being retried every tick. S, med. Builds on `steward/inbox.py` (already never deletes). Fit: moves files only, inside the box.
+26. **Retention for the local ledgers**: `event-log.jsonl`, `contributions.jsonl`, deposits and `consumed/` grow forever. Monthly roll into `<name>-YYYY-MM.jsonl.gz`, with a `status` line for total size. S, med. Fit: off by default (`retention_months` unset); the deposit hash chain must survive the roll, so a rolled file ends with its last `row_hash` and the next file starts from it.
+27. **Deposit chain verifier**: `steward deposits --verify` walks `prev_hash` / `row_hash` and names the first broken row. S, med. Builds on the chain in `deposits.py`. Fit: read-only; report, never repair.
+28. **Tick budget and backoff**: record each tick's wall time and GitHub calls in the status receipt; when the rate limit runs low, skip the optional passes (voice, backfill, upstream tracker) before the required ones (inbox, CI filing). S-M, med. Pairs with 23. Fit: the skip is logged in `status`, never silent.
+29. **Dry-run tick**: `steward tick --dry-run` runs everything and prints the writes it would make (comments, labels, checks, deposits, Grove sends) without making them. M, high. Builds on the tick's JSON events. Fit: the easiest way for a new operator to trust an install before turning `voice.orgs` on.
+30. **Profile linter**: `steward profile --check` flags unknown keys, typos (`stale_day`), orgs the App is not installed on, and `voice.orgs` that are not in `orgs`. S, med. Builds on `operator_profile.py` and `scripts/list_installations.py`. Fit: read-only.
+
+### Fleet bridge and Grove
+
+31. **One Grove digest instead of many pings**: batch CI-red and upstream-desk notices into one Grove message per N minutes per channel, with a count and links. S-M, med. Builds on `ci_comments` / `_grove_sender`. Fit: off by default; the per-event path stays for operators who want it.
+32. **Gitsync flag receipts**: the push path drops `trigger-<owner>-<repo>.flag`, but nothing says whether the local sync ran. Read back the consumer's receipt (or the flag's age) into `status`: "flag older than 1h, nobody picked it up". S, med. Builds on `fleet_bridge` and `install_receipt.py`. Fit: read-only; an unreadable flag dir is "unknown".
+33. **Local event bus**: alongside the inbox files, emit each routed event as one line on a Unix socket (or a named pipe) so other local tools subscribe instead of polling the directory. M, low-med. Builds on the deterministic runner's socket server. Fit: loopback only; the files stay the source of truth.
+34. **Upstream desk triage in the terminal**: `willow-bot-steward desk` lists `upstream_steward/pending/*.json` by lane and lets the operator mark one done / snooze / ignore, writing to a local state file. M, med. Builds on `upstream_desk.py` / `upstream_triage.py`. Fit: never posts to GitHub on its own; "reply" opens the URL.
+
+### Voice and persona
+
+35. **Voice preview**: `willow-bot voice --event pr_merged --login x --sha y` prints what troll / quips / runes / horoscope would say, from the same deterministic picks. S, high. Builds on `troll.py`, `quips.pick`, `runes.cast`, `horoscope.reading`. Fit: no network; the pools in `willow-bot.json` get edited with a preview instead of a live PR.
+36. **Pool linter**: check `willow-bot.json` for lines that drop a fact placeholder, duplicates, pools too small to cycle before a repeat, and lines over a length cap. S, med. Builds on the troll's "never repeated in a repo until that pool is spent". Fit: CI-runnable, read-only.
+37. **Persona counters export / import**: dump the three SQLite files in `persona/` (titles, sigh streaks, rebase shame) to one JSON and back, so an operator moving boxes keeps their contributors' titles. S, low-med. Builds on `persona_store.py`'s one-time carry-over. Fit: plain data, no credentials in it.
+38. **Seasonal / per-repo voice packs**: a second pool file chosen by date range or repo from the profile (`voice.packs`), merged over the default. S-M, low. Fit: off by default; a missing pack falls back to the default pools, never to silence.
+39. **Quiet hours**: the voice holds non-essential lines (quips, runes, horoscope) during the operator's quiet hours or on a `willow-bot/quiet` repo topic; status comments and checks still post. S, low-med. Fit: profile key, empty by default.
+
+### Loki
+
+40. **Loki dry-run and replay**: run the seven triggers (plus Surfacing) over a saved Grove export and print which would fire, with the context packet, without calling the model. M, high. Builds on `loki/accumulator.py` and `context.py`. Fit: makes thresholds tunable without spamming Grove.
+41. **Local model first**: the spec already plans the Ollama swap in `cerebras.py`. Do it as a profile switch (`loki.model_url`), defaulting to loopback, with Cerebras as the opt-in. S, med. Fit: LOSC rule 2; the remote endpoint and its key stay outside the vault unless Sean says otherwise.
+42. **Loki silence log**: keep the `SILENCE` answers and the packet hash in a local JSONL, so "Loki said nothing" can be told apart from "Loki never ran". S, low-med. Fit: local only, rolled with 26.
+
+### Deterministic runner and one-script
+
+43. **Fixture recorder**: capture a live chat-op exchange as a new `S-growth-*.json` fixture so regressions come from real use, not hand-written cases. M, med. Builds on `willow_bot/deterministic/chain.py` / `runner.py`. Fit: strip anything credential-shaped before writing; the operator reviews each fixture before it is kept.
+44. **Model drift report**: run the fixture set against two local models (or two versions) and diff the outputs. M, low-med. Builds on `runner.py` and `host_probe.py`. Fit: loopback Ollama only.
+
+### People and onboarding
+
+45. **`willow-bot init`**: an interactive first run that writes `operator.json` from `operator.example.json`, discovering login and orgs (the profile already can), then runs 24 and 29. M, high. Fit: never asks for or stores a secret; it points at where `credentials.resolve` looks and stops there.
+46. **`willow-bot-contribute --watch`**: the contribute CLI, run on a timer, with a desktop notification (or a line appended to a local file) when something new waits on you. S-M, med. Builds on `contribute.py`. Fit: the user's own token, never the App's (already the rule there).
+47. **Contributor cards**: `contributions --person LOGIN` prints one person's history across repos, their title from `quips`, and first-contribution date. S, low-med. Builds on `contributions.summary` and the persona titles. Fit: local read; nothing posted.
+
+### Pick-up order for this half
+
+24 (`doctor`), 29 (dry-run tick), 35 (voice preview) and 45 (`init`) first: all four are mostly read-only, reuse code that exists, and make the install easier to trust. Then 25, 26, 27 together (the box's own hygiene), then Loki's 40 and 41.
+
 ## Next batch (one PR: "PR hygiene checks and opt-in housekeeping")
 
 All eight share the hygiene pass in `voice.py` and the profile settings block, and none needs a new webhook handler.
