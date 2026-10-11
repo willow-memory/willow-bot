@@ -28,6 +28,8 @@ Console scripts: `willow-bot` (webhook), `willow-bot-steward` (`tick` | `loop` |
 
 Dogfood venv (preferred for systemd): `$WILLOW_HOME/venvs/willow-bot` — keep separate from `venvs/willow-mcp`.
 
+Seat provisioning: the grove CLI seat runs from this venv and needs `ratatosk` on its bin and `willow_mcp` importable (Python >=3.11). Install the `seat` extra: `$WILLOW_HOME/venvs/willow-bot/bin/pip install -e '.[dev,seat]'`. Re-provision the existing venv with that command after this lands.
+
 ## Local service / secrets
 
 Secrets live in the **operator data vault**, not in the checkout. Drop new
@@ -272,7 +274,7 @@ Bootstrap one-liners (operator terminal, canonical checkout):
 ```bash
 source ~/.willow/fleet.env
 test -x "$WILLOW_HOME/venvs/willow-bot/bin/python" || python3 -m venv "$WILLOW_HOME/venvs/willow-bot"
-"$WILLOW_HOME/venvs/willow-bot/bin/pip" install -e '/home/sean-campbell/github/willow-memory/willow-bot[dev]'
+"$WILLOW_HOME/venvs/willow-bot/bin/pip" install -e '/home/sean-campbell/github/willow-memory/willow-bot[dev,seat]'
 mkdir -p "$WILLOW_HOME/willow-bot/runs"
 cp /home/sean-campbell/github/willow-memory/willow-bot/deploy/deterministic-policy.template.json "$WILLOW_HOME/willow-bot/deterministic-policy.json"
 # Stop any nohup serve; run through systemd (same pattern as webhook + steward):
