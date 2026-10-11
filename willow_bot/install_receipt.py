@@ -57,7 +57,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from willow_bot.paths import bot_dir, willow_home
+# Through the module, at call time — never `from willow_bot.paths import
+# willow_home`: a name bound at import keeps whatever `willow_home` was then,
+# so a later re-point of the box (a test's sandbox, an env change) is missed.
+from willow_bot import paths as _paths
+from willow_bot.paths import bot_dir
 
 log = logging.getLogger("willow-bot.install_receipt")
 
@@ -185,7 +189,7 @@ def _broker_pair_for(root: Path) -> dict[str, Any] | None:
     if not slug:
         return None
     pairs: dict[str, Any] = dict(_default_broker_pairs())
-    allow = willow_home() / "constitutional" / "pip_sync_allowlist.json"
+    allow = _paths.willow_home() / "constitutional" / "pip_sync_allowlist.json"
     if allow.is_file():
         try:
             doc = json.loads(allow.read_text(encoding="utf-8"))

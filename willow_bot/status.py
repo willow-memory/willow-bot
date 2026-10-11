@@ -61,11 +61,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Through the module, at call time — never `from willow_bot.paths import
+# willow_home`: a name bound at import keeps whatever `willow_home` was then,
+# so a later re-point of the box (a test's sandbox, an env change) is missed.
+from willow_bot import paths as _paths
 from willow_bot.paths import (
     bot_dir as _bot_dir,
     deposits_dir as _deposits_dir,
     webhook_inbox_dir as _inbox_dir,
-    willow_home as _willow_home,
 )
 from willow_bot.steward import ci_comments as _ci_comments
 
@@ -349,7 +352,7 @@ def _read_upstream_ledger() -> dict[str, Any]:
 
 
 def _read_upstream_pending() -> dict[str, Any]:
-    pending_dir = _willow_home() / "upstream_steward" / "pending"
+    pending_dir = _paths.willow_home() / "upstream_steward" / "pending"
     if not pending_dir.is_dir():
         return {"status": "empty", "total": 0, "by_lane": {}}
     try:
@@ -682,13 +685,13 @@ def report() -> dict[str, Any]:
     from willow_bot.paths import BoxNotConfigured
 
     try:
-        _willow_home()
+        _paths.willow_home()
     except BoxNotConfigured as exc:
         return {"at": _now(), "willow_home": None, "status": "no-box", "detail": str(exc),
                 "version": _read_version(), "running_commit": _read_running_commit()}
     return {
         "at": _now(),
-        "willow_home": str(_willow_home()),
+        "willow_home": str(_paths.willow_home()),
         "version": _read_version(),
         "running_commit": _read_running_commit(),
         "heartbeat": _read_last_receipt(_heartbeat_receipts_path()),
