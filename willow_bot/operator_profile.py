@@ -183,6 +183,25 @@ def grove_operator_sender() -> str:
     return str(_section("grove").get("operator_sender") or "").strip()
 
 
+#: PR hygiene defaults: labels only, all under the bot's own prefix.
+_HYGIENE_DEFAULTS: dict[str, Any] = {
+    "size": True,               # willow-bot/size/{xs,s,m,l,xl} from lines changed
+    "conflict": True,           # willow-bot/conflict while GitHub says the PR cannot merge
+    "stale_days": 21,           # willow-bot/stale once the head commit is this old; 0 turns it off
+    "conventional_titles": False,  # willow-bot/title when the PR title is not a conventional commit
+}
+
+
+def pr_hygiene() -> dict[str, Any]:
+    """The operator profile's ``pr_hygiene`` section over the defaults
+    (size, conflict and stale labels on; the title check off)."""
+    raw = profile().get("pr_hygiene")
+    out = dict(_HYGIENE_DEFAULTS)
+    if isinstance(raw, dict):
+        out.update({k: v for k, v in raw.items() if k in _HYGIENE_DEFAULTS})
+    return out
+
+
 def broker_pairs() -> dict[str, dict[str, Any]]:
     """``owner/name`` → ``{"venv", "extras"}`` fallback for the broker
     allowlist when its file is absent."""

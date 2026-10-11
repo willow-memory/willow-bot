@@ -2144,10 +2144,10 @@ def _notify_watchers(items: dict, state: dict, receipt: dict, *, pace: "_Pacer",
 
 
 def _comment_on_pr(item: dict, state_view: dict, *, at: str) -> dict:
-    """Keep the bot's ONE per-head status comment current with the CI line
+    """Keep the bot's ONE status comment on the PR current with the CI line
     (acfd27ae3259 item 1). Same marker, same body builder as the voice
-    step, so the two writers converge on one comment per head sha — never
-    a second comment. Direct GitHub call (App token), not the limiter.
+    step, so the two writers converge on one comment per PR — never a
+    second comment, and the voice step finds nothing left to change. Direct GitHub call (App token), not the limiter.
     Three-state receipt, never raises."""
     if not item.get("pr"):
         return {"state": "skipped", "reason": "no pr"}
@@ -2156,7 +2156,7 @@ def _comment_on_pr(item: dict, state_view: dict, *, at: str) -> dict:
         from willow_bot.steward import voice
 
         key = f"{item['repo']}#{item['pr']}"
-        body = voice._status_comment_body(key, item["head_sha"], state_view, at=at)
+        body = voice._status_comment_body(key, item["head_sha"], state_view)
         result = pr_voice.upsert_status_comment(item["repo"], int(item["pr"]), item["head_sha"], body)
     except Exception as exc:  # noqa: BLE001 — a comment that cannot land is a line, not a raise
         return {"state": "refused", "reason": f"{type(exc).__name__}: {exc}"[:300]}

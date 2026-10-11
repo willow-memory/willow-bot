@@ -36,5 +36,11 @@
       "your-org"
     ],
     "message": "Thanks for your first contribution to {repo}, @{login}! A maintainer will take a look soon."
+  },
+  "pr_hygiene": {
+    "size": true,
+    "conflict": true,
+    "stale_days": 21,
+    "conventional_titles": false
   }
 }

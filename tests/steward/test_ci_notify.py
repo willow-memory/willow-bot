@@ -477,14 +477,14 @@ def test_voice_comment_body_carries_the_ci_line_for_a_filed_head(home):
                                              "legs": ["lint"], "stuck": False,
                                              "url": "https://x/job/1"}},
              "ci_filed": {f"{SHA}:1": "hr-1"}}
-    body = voice._status_comment_body(f"{RAT}#48", SHA, state, at="T")
+    body = voice._status_comment_body(f"{RAT}#48", SHA, state)
     assert f"- CI red: {RAT}#48 @ {SHA[:7]} — lint — https://x/job/1\n" in body
     state["ci_items"][f"{RAT}#48@{SHA}"]["resolved"] = {"by": SHA2, "how": "superseded", "at": "T"}
-    body2 = voice._status_comment_body(f"{RAT}#48", SHA, state, at="T")
+    body2 = voice._status_comment_body(f"{RAT}#48", SHA, state)
     assert f"- CI resolved: {RAT}#48 @ {SHA[:7]} — superseded by {SHA2[:7]}, green\n" in body2
 
 
 def test_voice_comment_body_is_unchanged_when_nothing_is_filed(home):
-    body = voice._status_comment_body(f"{RAT}#48", SHA, {}, at="T")
+    body = voice._status_comment_body(f"{RAT}#48", SHA, {})
     assert body == (f"willow-bot status for `{SHA[:12]}`\n- audit: not dispatched\n"
-                    "- CI red: none filed\n- last tick: T\n")
+                    "- CI red: none filed\n")

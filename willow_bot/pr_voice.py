@@ -53,6 +53,17 @@ def comment_marker(head_sha: str) -> str:
     return f"{COMMENT_MARKER_PREFIX}{head_sha}{COMMENT_MARKER_SUFFIX}"
 
 
+#: One sticky status comment per PR. The per-head marker above opened a new
+#: comment on every push; a PR now has one, edited in place, and names its
+#: head in the body. A comment carrying an older per-head marker is adopted
+#: (rewritten with this marker) so an existing PR does not gain a second one.
+PR_STATUS_MARKER = "<!-- willow-bot:status pr -->"
+
+
+def _is_status_comment(body: str) -> bool:
+    return PR_STATUS_MARKER in body or COMMENT_MARKER_PREFIX in body
+
+
 def _has_marker(body: str, head_sha: str) -> bool:
     if not body:
         return False
@@ -119,20 +130,19 @@ def _update_comment(repo: str, comment_id: int, body: str, headers: dict) -> dic
 def upsert_status_comment(
     repo: str, pr_number: int, head_sha: str, body: str
 ) -> dict[str, Any]:
-    """Post one status comment for this (repo, pr, head_sha), or update
-    the existing one. Returns a receipt.
+    """Post the PR's one status comment, or update it. Returns a receipt.
 
-    The comment body is ``<marker>\\n\\n<body>``. A caller that keeps its
-    own header inside ``body`` gets a stable-shape comment across ticks;
-    the marker is invisible in the rendered PR and unique per head_sha.
+    The comment body is ``<PR marker>\\n\\n<body>``; the body names the head.
+    One comment per PR, edited in place across pushes (it used to be one
+    per head, so every push added a comment). An unchanged body is not
+    PATCHed (``action="unchanged"``): no edit, no webhook, no notification.
     """
     if not head_sha:
         return {"status": "could-not-run", "detail": "no head_sha", "action": "skipped"}
     receipt: dict[str, Any] = {
         "repo": repo, "pr": pr_number, "head_sha": head_sha,
     }
-    marker = comment_marker(head_sha)
-    full_body = f"{marker}\n\n{body}".strip() + "\n"
+    full_body = f"{PR_STATUS_MARKER}\n\n{body}".strip() + "\n"
     try:
         headers = github_app._auth_headers(repo)
     except Exception as exc:  # noqa: BLE001 — an unavailable App is a line, not a raise
@@ -144,7 +154,14 @@ def upsert_status_comment(
         receipt.update(status="could-not-run", detail=f"list: {exc}"[:400], action="skipped")
         return receipt
 
-    existing = next((c for c in comments if _by_a_bot(c) and _has_marker(c.get("body", ""), head_sha)), None)
+    ours = [c for c in comments if _by_a_bot(c) and _is_status_comment(c.get("body", ""))]
+    # The sticky one if it exists, else the newest per-head one to adopt.
+    existing = next((c for c in ours if PR_STATUS_MARKER in c.get("body", "")), None) or (
+        max(ours, key=lambda c: int(c.get("id") or 0)) if ours else None)
+    if existing and (existing.get("body") or "").strip() == full_body.strip():
+        receipt.update(status="ok", action="unchanged", comment_id=int(existing["id"]),
+                       url=existing.get("html_url", ""))
+        return receipt
     try:
         if existing:
             result = _update_comment(repo, int(existing["id"]), full_body, headers)

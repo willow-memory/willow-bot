@@ -129,6 +129,12 @@ def _sandboxed_willow_home(tmp_path, monkeypatch):
     monkeypatch.setattr(_ci_backfill, "_get_pull", _no_network_ingress)
     monkeypatch.setattr(_ci_backfill, "_check_runs", _no_network_ingress)
 
+    # The voice's hygiene labels read the PR live; unread, they stay as they are.
+    from willow_bot.steward import voice as _voice
+
+    monkeypatch.setattr(_voice, "_fetch_pull", _no_network_ingress)
+    monkeypatch.setattr(_voice, "_fetch_commit_date", _no_network_ingress)
+
     # The voice's counters live in the box now (tmp_path above). The retired
     # ~/.willow they are carried over from is pointed at an empty dir under
     # tmp_path, so no test reads — or copies — the real one.

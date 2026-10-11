@@ -108,7 +108,7 @@ def test_upsert_creates_on_first_call(rec: _Recorder):
 
     posted = next(c for c in rec.calls if c[0] == "POST")
     body = posted[2]["json"]["body"]
-    assert pr_voice.comment_marker(SHA) in body
+    assert pr_voice.PR_STATUS_MARKER in body  # one sticky comment per PR
     assert "Body of the status." in body
 
 
@@ -132,22 +132,36 @@ def test_upsert_updates_when_marker_present(rec: _Recorder):
     assert not any(c[0] == "POST" for c in rec.calls)
 
 
-def test_distinct_head_shas_write_distinct_comments(rec: _Recorder):
-    """A force-push moves the head; the new head deserves a fresh comment
-    row, not a rewrite of the old one. Marker uniqueness is what makes
-    that safe: the head1 marker is not found on head2's call."""
+def test_a_new_head_edits_the_prs_one_comment(rec: _Recorder):
+    """One sticky comment per PR: a push moves the head and the same comment
+    is rewritten (it used to be one comment per head, so every push added
+    one). A comment left under the old per-head marker is adopted."""
     head1_marker = pr_voice.comment_marker("head1")
     existing = {"id": 100, "user": {"type": "Bot"}, "body": head1_marker + "\n\nHead1 body"}
     rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
         _FakeResp(_payload=[existing]),
     ]
-    rec.responses[("POST", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
-        _FakeResp(_payload={"id": 200, "html_url": ""}),
+    rec.responses[("PATCH", f"https://api.github.com/repos/{REPO}/issues/comments/100")] = [
+        _FakeResp(_payload={"id": 100, "html_url": ""}),
     ]
 
     receipt = pr_voice.upsert_status_comment(REPO, PR, "head2", "Second head")
-    assert receipt["action"] == "created"
-    assert receipt["comment_id"] == 200
+    assert receipt["action"] == "updated" and receipt["comment_id"] == 100
+    assert not any(c[0] == "POST" for c in rec.calls)
+    patched = next(c for c in rec.calls if c[0] == "PATCH")[2]["json"]["body"]
+    assert patched.startswith(pr_voice.PR_STATUS_MARKER)
+
+
+def test_an_unchanged_body_is_not_edited(rec: _Recorder):
+    """No PATCH when nothing changed: no edit event, no notification."""
+    body = f"{pr_voice.PR_STATUS_MARKER}\n\nSame body\n"
+    existing = {"id": 7, "user": {"type": "Bot"}, "body": body}
+    rec.responses[("GET", f"https://api.github.com/repos/{REPO}/issues/{PR}/comments")] = [
+        _FakeResp(_payload=[existing]),
+    ]
+    receipt = pr_voice.upsert_status_comment(REPO, PR, SHA, "Same body")
+    assert receipt["action"] == "unchanged" and receipt["comment_id"] == 7
+    assert [c[0] for c in rec.calls] == ["GET"]
 
 
 def test_upsert_walks_paginated_comments(rec: _Recorder):
