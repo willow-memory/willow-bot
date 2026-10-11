@@ -13,6 +13,7 @@ import runes
 import sigh
 import troll
 from integrations import fleet_bridge
+from willow_bot import contributions
 
 log = logging.getLogger("willow-bot.router")
 
@@ -29,6 +30,10 @@ def route(event: str, payload: dict, post: Callable[[str, str], None]) -> None:
         fleet_bridge.handle(event, payload)
     except Exception:
         log.exception("fleet_bridge failed for event %s", event)
+    try:
+        contributions.record(event, payload)
+    except Exception:  # noqa: BLE001 — the ledger must never break the webhook
+        log.exception("contributions ledger failed for event %s", event)
 
     handlers = {
         "pull_request":  _handle_pull_request,
@@ -36,7 +41,14 @@ def route(event: str, payload: dict, post: Callable[[str, str], None]) -> None:
         "push":          _handle_push,
         "check_run":     _handle_check_run,
         "create":        _handle_create,
+        "fork":          _handle_fork,
         "issues":        _handle_issues,
+        "issue_comment": _handle_comment,
+        "pull_request_review_comment": _handle_comment,
+        "workflow_run":  _handle_workflow_run,
+        "release":       _handle_release,
+        "watch":         _handle_watch,
+        "discussion":    _handle_discussion,
     }
     handler = handlers.get(event)
     if handler:
@@ -241,3 +253,68 @@ def _handle_issues(payload: dict, post: Callable) -> None:
         msg = quips.pick("gap_filed")
         if msg:
             post(repo, issue.get("number"), msg)
+
+
+def _handle_fork(payload: dict, post: Callable) -> None:
+    """The real fork event (``create`` never carries one). Logged, not posted:
+    there is no PR or issue to speak on."""
+    repo = payload.get("repository", {}).get("full_name", "")
+    forkee = (payload.get("forkee") or {}).get("full_name", "?")
+    msg = quips.pick("new_fork")
+    log.info("[%s] forked to %s: %s", repo, forkee, msg or "")
+
+
+def _handle_comment(payload: dict, post: Callable) -> None:
+    """Issue, PR and review-line comments. The voice stays silent on a
+    comment; an outside contributor's is logged so it is not missed."""
+    if payload.get("action") != "created":
+        return
+    comment = payload.get("comment") or {}
+    if (comment.get("user") or {}).get("type") == "Bot":
+        return
+    assoc = str(comment.get("author_association") or "").upper()
+    if assoc in contributions.INSIDERS:
+        return
+    repo = payload.get("repository", {}).get("full_name", "")
+    number = (payload.get("issue") or payload.get("pull_request") or {}).get("number")
+    log.info("[%s] #%s outside comment (%s) by %s: %s", repo, number, assoc or "NONE",
+             (comment.get("user") or {}).get("login", "?"), comment.get("html_url", ""))
+
+
+def _handle_workflow_run(payload: dict, post: Callable) -> None:
+    """A workflow that fails on the default branch is logged; PR runs are
+    already covered per check by ``check_run``."""
+    if payload.get("action") != "completed":
+        return
+    run = payload.get("workflow_run") or {}
+    repo_obj = payload.get("repository") or {}
+    default = repo_obj.get("default_branch") or "main"
+    if run.get("head_branch") != default or run.get("event") == "pull_request":
+        return
+    conclusion = run.get("conclusion")
+    if conclusion in ("failure", "timed_out", "startup_failure"):
+        log.warning("[%s] %s %s on %s @ %s: %s", repo_obj.get("full_name", ""), run.get("name", "?"),
+                    conclusion, default, str(run.get("head_sha") or "")[:7], run.get("html_url", ""))
+
+
+def _handle_release(payload: dict, post: Callable) -> None:
+    if payload.get("action") != "published":
+        return
+    rel = payload.get("release") or {}
+    log.info("[%s] released %s: %s", payload.get("repository", {}).get("full_name", ""),
+             rel.get("tag_name", "?"), rel.get("html_url", ""))
+
+
+def _handle_watch(payload: dict, post: Callable) -> None:
+    if payload.get("action") != "started":
+        return
+    log.info("[%s] starred by %s", payload.get("repository", {}).get("full_name", ""),
+             (payload.get("sender") or {}).get("login", "?"))
+
+
+def _handle_discussion(payload: dict, post: Callable) -> None:
+    if payload.get("action") != "created":
+        return
+    disc = payload.get("discussion") or {}
+    log.info("[%s] discussion #%s opened by %s: %s", payload.get("repository", {}).get("full_name", ""),
+             disc.get("number"), (disc.get("user") or {}).get("login", "?"), disc.get("title", ""))

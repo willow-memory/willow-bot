@@ -3573,8 +3573,12 @@ def main(argv: list[str] | None = None) -> int:
         return scan_mod.main()
     if args[0] == "annul":
         return run_annul(args[1:])
+    if args[0] == "contributions":
+        from willow_bot import contributions
+
+        return contributions.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|voice|status|inbox <state>|scan|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|voice|status|inbox <state>|scan|contributions [--days N|--all] [--repo R]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2

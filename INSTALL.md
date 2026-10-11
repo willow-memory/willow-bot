@@ -137,6 +137,13 @@ Webhook events:
 - `issues`
 - `issue_comment` (upstream desk inbox)
 - `installation` / `installation_repositories` (catalog refresh when repos change)
+- `pull_request_review`, `pull_request_review_comment` (reviews and line comments)
+- `fork`, `watch`, `release`, `discussion` (contributions ledger; logged, never posted)
+- `workflow_run` (a red workflow on the default branch is logged)
+
+Optional for `discussion`: Discussions: read. Nothing else needs a wider grant;
+the new App helpers (`list_check_runs`, `list_pull_reviews`, `list_issue_comments`,
+`list_contributors`, …) are all reads under the grants above.
 
 ## Fleet bridge (local integration)
 
@@ -147,6 +154,7 @@ Verified webhooks fan out into local queues under `$WILLOW_HOME`:
 | `pull_request`, `issues`, `issue_comment`, `check_run` | `upstream_steward/webhook_inbox/*.json` |
 | `push` to `main`/`master` (local clone exists) | `gitsync/trigger-<owner>-<repo>.flag` |
 | all events | `willow-bot/event-log.jsonl` audit trail |
+| PRs, issues, comments, reviews, forks, stars, releases, discussions | `willow-bot/contributions.jsonl` ledger (`willow-bot-steward contributions`) |
 
 Map App installations to local clones:
 
