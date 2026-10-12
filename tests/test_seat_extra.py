@@ -44,6 +44,15 @@ def test_seat_extra_declares_the_seat_runtime():
         assert "<" in r, f"Rule 1: every pin is capped: {r}"
 
 
+def test_ratatosk_floor_carries_the_flowering_class_flag():
+    # `ratatosk --onescript --class flowering` (grove seat flowering turns):
+    # --onescript ships in 1.13.0, --class in 1.16.0; 1.7.x has neither.
+    req = next(r for r in _seat_extra() if _name(r) == "willow-ratatosk")
+    floor = re.search(r">=\s*([0-9.]+)", req)
+    assert floor, f"willow-ratatosk needs an explicit floor: {req}"
+    assert tuple(int(x) for x in floor.group(1).split(".")) >= (1, 16, 0), req
+
+
 def test_seat_extra_does_not_name_willow_bot():
     assert "willow-bot" not in {_name(r) for r in _seat_extra()}
 

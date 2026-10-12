@@ -67,7 +67,10 @@ def read_record(json_path: Path) -> list[dict]:
     if not json_path.exists():
         return []
     return [
-        json.loads(line) for line in json_path.read_text().splitlines() if line.strip()
+        # "\n" only: splitlines() also cuts at U+2028/U+2029/U+0085 inside a row.
+        json.loads(line)
+        for line in json_path.read_text(encoding="utf-8").split("\n")
+        if line.strip()
     ]
 
 

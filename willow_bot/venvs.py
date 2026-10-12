@@ -23,9 +23,12 @@ checkout (``one-script/deep_thought.measure_venvs`` draws the same line).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -141,6 +144,116 @@ def editables(venv: Path) -> list[str]:
     return out
 
 
+_DIST_INFO = re.compile(r"^(?P<name>.+)-(?P<version>[^-]+)\.dist-info$")
+#: Installed by the venv itself, never pinned by ``pip-compile`` by default:
+#: not drift when a lock does not list them.
+_TOOLING = frozenset({"pip", "setuptools", "wheel", "distribute"})
+_LOCK_PIN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*==\s*([^\s;\\#]+)")
+
+
+def _norm(name: str) -> str:
+    """PEP 503 name: runs of ``-_.`` are one ``-``, lower-case."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _site_packages(venv: Path) -> list[Path]:
+    return sorted(venv.glob("lib/python*/site-packages"))
+
+
+def installed(venv: Path) -> dict[str, Any]:
+    """What is installed in ``venv``, read from its ``*.dist-info`` directory
+    names (no subprocess, nothing imported). Three states: ``unreachable``
+    (no ``site-packages`` or one that cannot be listed: the set is unknown, not
+    empty), ``empty`` (listed, no distributions) or ``populated``. ``packages``
+    maps normalised name to version; ``editable`` names the ones installed with
+    ``-e`` (a lock cannot pin those); ``hash`` is a sha256 prefix over the sorted
+    ``name==version`` set, so two venvs (or one venv over time) compare."""
+    sites = _site_packages(venv)
+    if not sites:
+        return {"status": "unreachable", "detail": "no lib/python*/site-packages"}
+    packages: dict[str, str] = {}
+    editable: list[str] = []
+    newest = 0.0
+    try:
+        for site in sites:
+            newest = max(newest, site.stat().st_mtime)
+            for entry in sorted(site.iterdir()):
+                m = _DIST_INFO.match(entry.name)
+                if not m:
+                    continue
+                name = _norm(m["name"])
+                packages[name] = m["version"]
+                try:
+                    direct = json.loads((entry / "direct_url.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(direct, dict) and (direct.get("dir_info") or {}).get("editable"):
+                    editable.append(name)
+    except OSError as exc:
+        return {"status": "unreachable", "detail": f"{exc.filename}: {exc.strerror}"}
+    digest = hashlib.sha256("\n".join(f"{n}=={v}" for n, v in sorted(packages.items())).encode()).hexdigest()
+    return {
+        "status": "populated" if packages else "empty",
+        "count": len(packages),
+        "hash": digest[:16],
+        "modified": datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "packages": packages,
+        "editable": sorted(editable),
+    }
+
+
+def lock_path(venv: Path) -> Path:
+    """Where the human's lock for ``venv`` goes: ``<locks_dir>/<name>.requirements.lock``."""
+    return _paths.locks_dir() / f"{_target_name(venv)}.requirements.lock"
+
+
+def read_lock(path: Path) -> dict[str, str] | None:
+    """The ``name -> version`` pins of a ``pip-compile`` lock, or ``None`` when
+    the file is not there. Raises ``OSError`` when it is there and unreadable."""
+    if not path.is_file():
+        return None
+    pins: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = _LOCK_PIN.match(line)
+        if m:
+            pins[_norm(m.group(1))] = m.group(2)
+    return pins
+
+
+def drift(venv: Path, have: dict[str, Any]) -> dict[str, Any]:
+    """Installed-versus-lock for ``venv``. The lock is one the human generates
+    (``pip-compile --generate-hashes``); the bot only reads it. No lock is
+    ``empty`` with ``drift: None``: never "no drift". An unreadable lock or an
+    unreadable install is ``unreachable``, also ``drift: None``."""
+    path = lock_path(venv)
+    base: dict[str, Any] = {"path": str(path), "drift": None}
+    try:
+        pins = read_lock(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        return {**base, "status": "unreachable", "detail": f"lock unreadable: {exc}"[:200]}
+    if pins is None:
+        return {**base, "status": "empty", "detail": "no lock: generate one with pip-compile --generate-hashes"}
+    if not pins:
+        return {**base, "status": "empty", "detail": "the lock file pins nothing"}
+    if have.get("status") == "unreachable":
+        return {**base, "status": "unreachable", "detail": f"installed set unknown: {have.get('detail')}"[:200]}
+    pkgs: dict[str, str] = have["packages"]
+    skip = set(have["editable"])
+    missing = sorted(n for n in pins if n not in pkgs)
+    changed = [
+        {"name": n, "installed": pkgs[n], "locked": v} for n, v in sorted(pins.items()) if n in pkgs and pkgs[n] != v
+    ]
+    extra = sorted(n for n in pkgs if n not in pins and n not in skip and n not in _TOOLING)
+    return {
+        **base,
+        "status": "populated",
+        "drift": bool(missing or changed or extra),
+        "missing": missing,
+        "changed": changed,
+        "extra": extra,
+    }
+
+
 def _target_name(venv: Path) -> str:
     """``<checkout>/.venv`` is named for its checkout; anything else keeps
     its own name."""
@@ -166,12 +279,20 @@ def inventory() -> dict[str, Any]:
             if key in seen:
                 continue
             cfg = _read_cfg(venv)
+            inside = any(key.is_relative_to(h) for h in homes)
+            have = installed(key)
             seen[key] = {
                 "path": str(key),
                 "root": label,
-                "inside": any(key.is_relative_to(h) for h in homes),
+                "inside": inside,
                 "python": _python_version(cfg),
                 "editables": editables(key),
+                "installed": {k: v for k, v in have.items() if k not in ("packages", "editable")},
+                # A lock is the bot's own venvs' business; an outside venv (the
+                # broker's among them) is not checked, and says so.
+                "lock": drift(key, have)
+                if inside
+                else {"status": "unchecked", "drift": None, "detail": "outside the bot: not ours to lock"},
             }
     venvs = sorted(seen.values(), key=lambda v: (v["inside"], v["path"]))
     outside = [v for v in venvs if not v["inside"]]
@@ -249,6 +370,12 @@ def plan(inv: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     return steps
 
 
+def _lock_word(lock: dict[str, Any]) -> str:
+    if lock["status"] == "populated":
+        return "DRIFT" if lock["drift"] else "matches"
+    return {"empty": "none", "unreachable": "unknown", "unchecked": "-"}.get(lock["status"], lock["status"])
+
+
 def _print_text(inv: dict[str, Any], steps: list[dict[str, Any]] | None) -> None:
     if inv.get("status") == "no-box":
         print(f"venvs: no box — {inv['detail']}")
@@ -256,7 +383,9 @@ def _print_text(inv: dict[str, Any], steps: list[dict[str, Any]] | None) -> None
     print(f"venvs: {inv['inside']} inside the bot, {inv['outside']} outside  (home: {inv['home']})")
     for v in inv["venvs"]:
         where = "inside " if v["inside"] else "OUTSIDE"
-        print(f"  {where}  {v['path']}  python {v['python'] or '?'}")
+        have = v["installed"]
+        pkgs = f"{have['count']} pkgs #{have['hash']}" if "hash" in have else f"packages {have['status']}"
+        print(f"  {where}  {v['path']}  python {v['python'] or '?'}  {pkgs}  lock: {_lock_word(v['lock'])}")
     for bad in inv["unreadable"]:
         print(f"  could not read {bad}")
     if steps is None:

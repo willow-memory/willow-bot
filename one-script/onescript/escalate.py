@@ -211,7 +211,8 @@ def ratatosk_rung(
                 raise RungCap(f"output over {out_cap} bytes")
             text = out.read_text(encoding="utf-8", errors="replace")
         rows = []
-        for i, ln in enumerate(text.splitlines(), 1):
+        # "\n" only: splitlines() also cuts at U+2028/U+2029/U+0085 inside a row.
+        for i, ln in enumerate(text.split("\n"), 1):
             if not ln.strip():
                 continue
             try:

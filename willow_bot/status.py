@@ -31,6 +31,10 @@ One operation: ``report()`` returns a dict of the form:
       "app": {"status": ..., "verdict": "ok"|"partial"|"failing"|..., "last": {...}},
       "operator": {"status": ..., "path": ..., "login": ..., "orgs": [...]|"discovered", ...},
       "contributions": {"status": ..., "rows": N, "by_kind": {...}, "outside_contributors": [...]},
+      "chat_log": {"status": ..., "path": ..., "size": N, "last_at": <ISO8601>|None}  # or "off"
+      "venvs": {"status": ..., "inside": N, "outside": N, "venvs": [{"path", "inside", "python",
+                "installed": {"status", "count", "hash", "modified"}, "lock": {"status", "drift", ...}}],
+                "drifted": [...], "unlocked": [...]},
     }
 
 Three states per source, chosen deliberately:
@@ -725,7 +729,39 @@ def _read_venvs() -> dict[str, Any]:
         "outside": inv["outside"],
         "outside_paths": [v["path"] for v in inv["venvs"] if not v["inside"]],
         "unreadable": inv["unreadable"],
+        # Per venv: python, a hash of the installed set, when it last changed,
+        # and installed-versus-lock. A set or lock the bot cannot read is
+        # "unreachable", and no lock is "empty" with drift None, never "no drift".
+        "venvs": [
+            {
+                "path": v["path"],
+                "inside": v["inside"],
+                "python": v["python"] or None,
+                "installed": v["installed"],
+                "lock": v["lock"],
+            }
+            for v in inv["venvs"]
+        ],
+        "drifted": [v["path"] for v in inv["venvs"] if v["lock"]["drift"] is True],
+        "unlocked": [v["path"] for v in inv["venvs"] if v["inside"] and v["lock"]["status"] == "empty"],
     }
+
+
+# ── chat call log ────────────────────────────────────────────────────────
+
+
+def _read_chat_log() -> dict[str, Any]:
+    """The socket ``chat`` op's call log (``bot_dir()/chat-calls.jsonl``):
+    populated / empty / unreachable, or ``off`` when the policy turns it off.
+    A last-write failure is held by the socket process and shows on its
+    ``status`` op; here the file is what is read."""
+    from willow_bot.deterministic.chat_op import chat_log_state
+    from willow_bot.deterministic.policy import load_policy
+
+    try:
+        return chat_log_state(load_policy())
+    except Exception as exc:  # noqa: BLE001 — a status read never raises
+        return {"status": "unreachable", "detail": f"chat log: {exc}"[:200]}
 
 
 # ── the surface ──────────────────────────────────────────────────────────
@@ -761,6 +797,7 @@ def report() -> dict[str, Any]:
         "operator": _read_operator(),
         "contributions": _read_contributions(),
         "venvs": _read_venvs(),
+        "chat_log": _read_chat_log(),
     }
 
 
@@ -810,10 +847,16 @@ def _brief_detail(name: str, sec: dict[str, Any]) -> str:
         return f"{sec.get('login') or '(no login)'} via {sec.get('path')}"
     if name == "contributions":
         return f"{sec.get('rows', 0)} in {sec.get('days')}d, {len(sec.get('outside_contributors') or [])} outside"
+    if name == "chat_log":
+        return f"{sec.get('size', 0)} bytes, last call {sec.get('last_at')}"
     if name == "venvs":
         line = f"{sec.get('inside', 0)} inside the bot, {sec.get('outside', 0)} outside"
         if sec.get("outside"):
             line += " — D2: `venvs --plan`"
+        if sec.get("drifted"):
+            line += f"; {len(sec['drifted'])} drifted from the lock"
+        if sec.get("unlocked"):
+            line += f"; {len(sec['unlocked'])} without a lock"
         if sec.get("unreadable"):
             line += f"; {len(sec['unreadable'])} dirs unreadable"
         return line
