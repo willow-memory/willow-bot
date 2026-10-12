@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [1.8.0](https://github.com/willow-memory/willow-bot/compare/v1.7.0...v1.8.0) (2026-10-12)
+
+
+### Added
+
+* **chat:** metadata-only call log for the socket chat op (IDEAS 66, log half) ([369eec0](https://github.com/willow-memory/willow-bot/commit/369eec0d4494f8d770b8f774338cb084cc9d3e3c))
+* **status:** model inventory with digests (IDEAS 61) ([3e91724](https://github.com/willow-memory/willow-bot/commit/3e9172401b091601c812a74045f8cd15488d682a))
+* **status:** venv inventory detail and lock drift (IDEAS 54, 57) ([bfbd9fe](https://github.com/willow-memory/willow-bot/commit/bfbd9feb8f448a2f65480ac847f024b080fc5451))
+
+
+### Fixed
+
+* **chat:** call log is 0600, lives in bot_dir, and status reports its state (IDEAS 66) ([3234ff1](https://github.com/willow-memory/willow-bot/commit/3234ff105ac02b02fe1fe3882ebad3a67b40c7fb))
+* **deps:** seat extra needs willow-ratatosk 1.16.0 for --class flowering ([d23a644](https://github.com/willow-memory/willow-bot/commit/d23a6442a49f2ee29ffd9e0f727c82082e3fa129))
+* **one-script:** ledger and side-runner readers split on \n only ([809ff4f](https://github.com/willow-memory/willow-bot/commit/809ff4ffd0396387581b1059f9ce8f2e7a488002))
+* **one-script:** read the record on \n only so Unicode line separators can't split a row ([40576ce](https://github.com/willow-memory/willow-bot/commit/40576ce5504f82455d5f8c76b429ebb34b295629))
+
 ## [1.7.0](https://github.com/willow-memory/willow-bot/compare/v1.6.0...v1.7.0) (2026-10-11)
 
 
