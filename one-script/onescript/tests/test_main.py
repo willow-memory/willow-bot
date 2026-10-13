@@ -47,6 +47,7 @@ def rows(tmp: Path) -> list[dict]:
     return [json.loads(x) for x in text.splitlines()]
 
 
+@pytest.mark.needs_grove
 def test_checkin_turn_checkout_is_one_run(tmp_path, capsys):
     v = venv_with(
         tmp_path,
@@ -67,6 +68,7 @@ def test_checkin_turn_checkout_is_one_run(tmp_path, capsys):
     assert "NEEDS YOU\n  · nothing" in capsys.readouterr().out
 
 
+@pytest.mark.needs_grove
 def test_every_invocation_names_its_inputs(tmp_path):
     v = venv_with(tmp_path, "0.16.7")
     run(tmp_path, v, "checkin")
@@ -99,7 +101,10 @@ def test_the_tests_gate_never_nests(monkeypatch):
     is the child's alone: this process never carries it (Loki A276BE90 N1)."""
     monkeypatch.delenv(cli.NESTED, raising=False)
     first = cli._gate_cfg(False, "", Path("/v"))
-    assert "tests" in first and first["tests"][0]["env"] == {cli.NESTED: "1"}
+    assert "tests" in first and first["tests"][0]["env"] == {
+        cli.NESTED: "1",
+        "ONESCRIPT_GROVE": str(cli.GROVE),
+    }
     assert cli.NESTED not in cli.os.environ
     monkeypatch.setenv(cli.NESTED, "1")  # now we are the child
     assert "tests" not in cli._gate_cfg(False, "", Path("/v"))
@@ -121,7 +126,8 @@ def test_two_checkins_in_one_process_both_run_the_tests_gate(tmp_path, monkeypat
         gcfg["tests"][0]["needs"] = []
         rows = cli.boot.tests_gate(gcfg["tests"], runner=runner)
         assert [r["verdict"] for r in rows] == ["satisfied"]
-    assert seen == [{cli.NESTED: "1"}, {cli.NESTED: "1"}]
+    want = {cli.NESTED: "1", "ONESCRIPT_GROVE": str(cli.GROVE)}
+    assert seen == [want, want]
     assert cli.NESTED not in cli.os.environ
 
 
@@ -134,6 +140,7 @@ def test_the_child_alone_gets_the_marker(tmp_path, monkeypatch):
     assert cli.NESTED not in cli.os.environ
 
 
+@pytest.mark.needs_grove
 def test_a_breached_checkin_closes_the_box_for_later_turns(
     tmp_path, capsys, monkeypatch
 ):
@@ -155,6 +162,7 @@ def test_a_breached_checkin_closes_the_box_for_later_turns(
     assert "HARD CLOSE · box won't open" in out and "options: stop here" in out
 
 
+@pytest.mark.needs_grove
 def test_checkout_reads_claims_acts_and_probes_from_the_record(tmp_path, capsys):
     """A checkout in its own invocation shows what earlier ones recorded."""
     v = venv_with(tmp_path, "0.16.7")
@@ -187,6 +195,7 @@ def test_checkout_reads_claims_acts_and_probes_from_the_record(tmp_path, capsys)
     assert "probes held: 4/4" in out
 
 
+@pytest.mark.needs_grove
 def test_the_toolchain_gate_reads_the_bot_venv_not_path(tmp_path, capsys):
     v = venv_with(tmp_path, "0.15.0")
     assert run(tmp_path, v, "checkin") == 1
@@ -194,6 +203,7 @@ def test_the_toolchain_gate_reads_the_bot_venv_not_path(tmp_path, capsys):
     assert "HARD CLOSE" in out and f"ruff: 0.15.0 in {v}" in out
 
 
+@pytest.mark.needs_grove
 def test_a_hard_close_holds_across_invocations(tmp_path, capsys):
     """Loki 2CC8701A F1: the hard close lives in the record, not in memory."""
     v = venv_with(tmp_path, "0.15.0")
@@ -208,11 +218,13 @@ def test_a_hard_close_holds_across_invocations(tmp_path, capsys):
     assert not any(r["kind"] == "turn_open" for r in rows(tmp_path))
 
 
+@pytest.mark.needs_grove
 def test_no_turn_without_a_checkin(tmp_path, capsys):
     assert run(tmp_path, venv_with(tmp_path, "0.16.7"), "turn", "x") == 1
     assert "no check-in on record" in capsys.readouterr().out
 
 
+@pytest.mark.needs_grove
 def test_the_law_reads_the_constitutions_own_ids():
     """Loki 2CC8701A F2: Article 0 and hyphenated clauses are law too."""
     ids = cli._law(cli.CONSTITUTION.read_text(encoding="utf-8"))["trace_ids"]
@@ -224,6 +236,7 @@ def test_the_law_reads_the_constitutions_own_ids():
     ]
 
 
+@pytest.mark.needs_grove
 def test_an_exposed_keys_file_is_refused(tmp_path, capsys):
     v = venv_with(tmp_path, "0.16.7")
     run(tmp_path, v, "checkin")
@@ -234,6 +247,7 @@ def test_an_exposed_keys_file_is_refused(tmp_path, capsys):
     assert stat.S_IMODE(k.parent.stat().st_mode) == 0o700
 
 
+@pytest.mark.needs_grove
 def test_a_venv_without_ruff_is_unreachable_and_deferred_not_a_hard_close(
     tmp_path, capsys
 ):
@@ -253,6 +267,7 @@ def test_a_venv_without_ruff_is_unreachable_and_deferred_not_a_hard_close(
     assert [r["kind"] for r in rows(tmp_path)].count("deferred_result") == 1
 
 
+@pytest.mark.needs_grove
 def test_the_same_venv_on_the_box_hard_closes(tmp_path, capsys):
     """Loki 8E0652F5 F5: no ruff is a deferral only when the run says it is on
     the phone. On the box (no --phone) it is a hard close, and the record
@@ -265,6 +280,7 @@ def test_the_same_venv_on_the_box_hard_closes(tmp_path, capsys):
     assert rows(tmp_path)[0]["phone"] is False
 
 
+@pytest.mark.needs_grove
 def test_no_tests_leaves_a_gate_row_saying_it_was_skipped(tmp_path, capsys):
     v = venv_with(tmp_path, "0.16.7")
     assert run(tmp_path, v, "checkin") == 0  # the helper passes --no-tests
@@ -286,6 +302,7 @@ def test_a_nested_checkin_leaves_a_gate_row_saying_why(monkeypatch):
     assert (row["gate"], row["verdict"]) == ("tests", "differently")
 
 
+@pytest.mark.needs_grove
 def test_keys_never_live_in_the_box(tmp_path, capsys):
     rc = cli.main(
         [
@@ -303,6 +320,7 @@ def test_keys_never_live_in_the_box(tmp_path, capsys):
     assert not (tmp_path / "box" / "keys.json").exists()
 
 
+@pytest.mark.needs_grove
 def test_the_keys_file_is_owner_only(tmp_path):
     run(tmp_path, venv_with(tmp_path, "0.16.7"), "checkin")
     mode = stat.S_IMODE((tmp_path / "keys" / "keys.json").stat().st_mode)
@@ -319,6 +337,7 @@ def test_the_record_chain_holds_after_each_command(tmp_path, cmd):
     assert rec.verify_chain() == []
 
 
+@pytest.mark.needs_grove
 def test_a_garbled_record_line_hard_closes_the_checkin(tmp_path, capsys):
     v = venv_with(tmp_path, "0.0.0")
     run(tmp_path, v, "checkin")
@@ -330,6 +349,7 @@ def test_a_garbled_record_line_hard_closes_the_checkin(tmp_path, capsys):
     assert "garbled, not a record row" in out and "HARD CLOSE" in out
 
 
+@pytest.mark.needs_grove
 def test_the_checkin_screen_says_the_chain_is_unanchored(tmp_path, capsys):
     run(tmp_path, venv_with(tmp_path, "0.0.0"), "checkin")
     assert "anchor: never sealed" in capsys.readouterr().out
@@ -337,6 +357,7 @@ def test_the_checkin_screen_says_the_chain_is_unanchored(tmp_path, capsys):
 
 
 # ── gap f58dd6dac53a: what #114 left out ────────────────────────────────────
+@pytest.mark.needs_grove
 def test_a_nested_checkin_says_so_on_the_screen(tmp_path, capsys, monkeypatch):
     v = venv_with(tmp_path, "0.16.7")
     monkeypatch.setenv(cli.NESTED, "1")
@@ -348,6 +369,7 @@ def test_a_nested_checkin_says_so_on_the_screen(tmp_path, capsys, monkeypatch):
     assert "nested:" not in capsys.readouterr().out
 
 
+@pytest.mark.needs_grove
 def test_every_boot_row_records_its_options(tmp_path, monkeypatch):
     v = venv_with(tmp_path, "0.16.7")
     run(tmp_path, v, "checkin")  # open: no options
@@ -362,6 +384,7 @@ def test_every_boot_row_records_its_options(tmp_path, monkeypatch):
     assert [b["options"] for b in boots] == [[], cli.boot.OPTIONS, ["stop here"]]
 
 
+@pytest.mark.needs_grove
 def test_a_breach_records_every_probe_not_none(tmp_path, capsys, monkeypatch):
     v = venv_with(tmp_path, "0.16.7")
     planted = [
@@ -375,6 +398,7 @@ def test_a_breach_records_every_probe_not_none(tmp_path, capsys, monkeypatch):
     assert "probes held: 1/2" in capsys.readouterr().out
 
 
+@pytest.mark.needs_grove
 def test_no_turn_after_checkout_until_a_new_checkin(tmp_path, capsys):
     v = venv_with(tmp_path, "0.16.7")
     run(tmp_path, v, "checkin")
@@ -387,6 +411,7 @@ def test_no_turn_after_checkout_until_a_new_checkin(tmp_path, capsys):
     assert run(tmp_path, v, "turn", "next bite") == 0
 
 
+@pytest.mark.needs_grove
 def test_the_boot_report_from_the_record_keeps_when(tmp_path):
     """Checkout's boot report is the one boot() wrote, `at` included."""
     from onescript.run import Run
@@ -399,3 +424,13 @@ def test_the_boot_report_from_the_record_keeps_when(tmp_path):
     fresh = r.checkin()
     assert fresh["report"]["state"] == "current" and "at" in fresh["report"]
     assert cli._last_boot(r.rec.rows())["report"] == fresh["report"]
+
+
+def test_the_gate_hands_the_child_the_grove_this_checkin_resolved(
+    tmp_path, monkeypatch
+):
+    """An api caller's cfg.grove need not be where the child would look."""
+    monkeypatch.delenv(cli.NESTED, raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    cfg = cli.api._gate_cfg(False, "", tmp_path, cli.ROOT, elsewhere)
+    assert cfg["tests"][0]["env"]["ONESCRIPT_GROVE"] == str(elsewhere)
