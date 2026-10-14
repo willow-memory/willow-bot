@@ -248,7 +248,10 @@ def _gate_cfg(
         cfg["tests"] = [
             {
                 "name": "onescript",
-                "env": {NESTED: "1"},
+                # The child resolves the grove from its own environment, so
+                # hand it the one this check-in resolved (cfg.grove), not
+                # whatever it would find beside itself.
+                "env": {NESTED: "1", "ONESCRIPT_GROVE": str(grove)},
                 "argv": [
                     sys.executable,
                     "-m",

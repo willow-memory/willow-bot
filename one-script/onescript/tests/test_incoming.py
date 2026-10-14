@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import __main__ as cli  # noqa: E402
@@ -79,6 +81,7 @@ def test_agreement_records_that_no_dissent_was_recorded(tmp_path):
     assert "dissent: none recorded" in screen
 
 
+@pytest.mark.needs_grove
 def test_the_misattributed_quote_in_the_haiku_pass_is_caught():
     text = (
         INCOMING / "haiku-2026-10-02" / "proposal-overnight-and-morning-screen.md"
@@ -99,6 +102,7 @@ def test_the_misattributed_quote_in_the_haiku_pass_is_caught():
     assert not any(c in r["claim"] for r in rows for c in ("\n", "|", "self."))
 
 
+@pytest.mark.needs_grove
 def test_the_operators_real_words_in_the_haiku_pass_verify():
     text = (
         INCOMING / "haiku-2026-10-02" / "proposal-heartbeat-and-loops.md"
