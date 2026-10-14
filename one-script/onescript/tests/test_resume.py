@@ -7,6 +7,7 @@ and leaves the human's seal over a subject that no longer exists.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import __main__ as cli  # noqa: E402
-from onescript import api, gate  # noqa: E402
+from onescript import api, gate, record  # noqa: E402
 
 HUMAN_KEY = b"passkey-in-a-coat-pocket"
 CAP = 10**6
@@ -110,6 +111,49 @@ def test_resume_is_the_newest_seal_and_its_own_scope_row(cfg):
     assert got["spec"] == second["spec"]
 
 
+def test_sealed_at_is_the_seal_rows_own_stamp_not_the_scope_rows(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    card = api.scope(cfg, by=("who",))
+    later = dataclasses.replace(cfg, now="2026-10-12T08:30:00Z")
+    assert api.seal_scope(later, card["subject"], proof=proof(card["subject"]))[
+        "sealed"
+    ]
+    seal = [r for r in rows(cfg) if r["kind"] == "seal"][-1]
+    scope = [r for r in rows(cfg) if r["kind"] == "scope"][-1]
+    assert seal["ts"] != scope["ts"]
+    got = api.resume(cfg)
+    assert got["sealed_at"] == seal["ts"] == "2026-10-12T08:30:00Z"
+
+
+def test_sealed_at_is_the_newest_human_seals_stamp(cfg):
+    sealed_scope(cfg)
+    grow(cfg)
+    second = api.scope(cfg, by=("who",))
+    later = dataclasses.replace(cfg, now="2026-10-13T09:00:00Z")
+    assert api.seal_scope(later, second["subject"], proof=proof(second["subject"]))[
+        "sealed"
+    ]
+    got = api.resume(dataclasses.replace(cfg, now="2026-10-14T00:00:00Z"))
+    assert got["subject"] == second["subject"]
+    assert got["sealed_at"] == "2026-10-13T09:00:00Z"
+
+
+def test_a_seal_row_without_ts_omits_sealed_at(cfg, monkeypatch):
+    card = sealed_scope(cfg)
+    orig = record.Record.rows
+
+    def stripped(self):
+        return [
+            {k: v for k, v in r.items() if not (r["kind"] == "seal" and k == "ts")}
+            for r in orig(self)
+        ]
+
+    monkeypatch.setattr(record.Record, "rows", stripped)
+    got = api.resume(cfg)
+    assert got["subject"] == card["subject"]
+    assert "sealed_at" not in got
+
+
 def test_with_no_seal_resume_is_none(cfg):
     assert api.checkin(cfg)["code"] == 0
     assert api.resume(cfg) == {"resume": None, "code": 0}
@@ -181,7 +225,12 @@ def test_the_cli_prints_the_spec_and_subject_as_json(cfg, capsys, monkeypatch):
     capsys.readouterr()
     assert cli.main([*base, "resume"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out == {"spec": card["spec"], "subject": card["subject"]}
+    seal = [r for r in rows(cfg) if r["kind"] == "seal"][-1]
+    assert out == {
+        "spec": card["spec"],
+        "subject": card["subject"],
+        "sealed_at": seal["ts"],
+    }
 
 
 def test_the_cli_prints_none_when_nothing_is_sealed(cfg, capsys, monkeypatch):
