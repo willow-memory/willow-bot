@@ -636,7 +636,9 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     (with the `upto` it was proposed at) and the `subject` the human sealed.
     Serving that spec again stays `populated` however many rows were added
     since, where a fresh scope at `upto=latest` would move the subject out from
-    under the seal. Read-only, like `pooled`: it writes an `invocation` row and
+    under the seal. `sealed_at` is the seal row's own `ts`, the stamp the record
+    put on it when the human sealed (never the scope row's, never now); a seal
+    row without a `ts` leaves the key out. Read-only, like `pooled`: it writes an `invocation` row and
     nothing else, needs no open box, and never seals, serves or mints. With no
     human seal over a scope, or no scope row behind it, the answer is
     {"resume": None}."""
@@ -668,7 +670,10 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     )
     if scoped is None or not isinstance(scoped.get("spec"), dict):
         return {"resume": None, "code": 0}
-    return {"spec": scoped["spec"], "subject": seal["subject"], "code": 0}
+    found = {"spec": scoped["spec"], "subject": seal["subject"], "code": 0}
+    if seal.get("ts"):
+        found["sealed_at"] = seal["ts"]
+    return found
 
 
 def escalate(
