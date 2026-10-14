@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [1.9.0](https://github.com/willow-memory/willow-bot/compare/v1.8.0...v1.9.0) (2026-10-14)
+
+
+### Added
+
+* **one-script:** resume says when the seal was made ([d90341a](https://github.com/willow-memory/willow-bot/commit/d90341a713ec6735246073c22771e5a8445a2ded))
+* **one-script:** resume says when the seal was made ([5a7d137](https://github.com/willow-memory/willow-bot/commit/5a7d1372484bc1df08acbe65f42460e0f6f23334))
+
+
+### Fixed
+
+* **one-script:** a missing willows-grove is one line, not 23 failures ([f5ff03a](https://github.com/willow-memory/willow-bot/commit/f5ff03a01f8ac372eb09408fa5b21620b479b00b))
+* **one-script:** a missing willows-grove is one line, not 23 failures ([99bde5e](https://github.com/willow-memory/willow-bot/commit/99bde5e6a04ab8bded91b82cc3c4cbfc7182ad2a))
+
 ## [1.8.0](https://github.com/willow-memory/willow-bot/compare/v1.7.0...v1.8.0) (2026-10-12)
 
 
