@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [1.10.0](https://github.com/willow-memory/willow-bot/compare/v1.9.0...v1.10.0) (2026-10-15)
+
+
+### Added
+
+* **one-script:** needs reads the morning screen's NEEDS YOU lines without checking out ([b777a37](https://github.com/willow-memory/willow-bot/commit/b777a37459bcc2488be4d0b9bfda86178279cbd1))
+
+
+### Fixed
+
+* **one-script:** a rung's exit says why, and rows that say nothing are not an answer ([cf0d5d5](https://github.com/willow-memory/willow-bot/commit/cf0d5d53a292438458b2156b09e8e141dabf8cda))
+* **one-script:** needs reads NEEDS YOU without checking out; a rung's exit says why; empty rows are not an answer ([e8313d3](https://github.com/willow-memory/willow-bot/commit/e8313d3100acd9396bdb8895de4d697da3738e19))
+
 ## [1.9.0](https://github.com/willow-memory/willow-bot/compare/v1.8.0...v1.9.0) (2026-10-14)
 
 
