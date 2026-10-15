@@ -10,6 +10,7 @@
     python3 -m onescript escalate "the task"  # D0, then small pieces to the local rung
     python3 -m onescript pooled             # unsealed pass proposals, JSON lines
     python3 -m onescript resume             # the last sealed scope's spec + subject, JSON
+    python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
     python3 -m onescript checkout           # reverse, then the morning screen
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
@@ -221,6 +222,10 @@ def main(argv: list[str] | None = None) -> int:
         "resume",
         help="the last human-sealed scope's spec (with its upto) and subject, as JSON",
     )
+    sub.add_parser(
+        "needs",
+        help="the NEEDS YOU lines the morning screen would list, as JSON; read-only",
+    )
     sub.add_parser("checkout")
     for name in ("scope", "serve"):
         s = sub.add_parser(name)
@@ -290,6 +295,13 @@ def main(argv: list[str] | None = None) -> int:
         return res["code"]
     elif args.cmd == "resume":
         res = api.resume(cfg, raw)
+        if "refused" in res:  # stdout stays parseable: the reason goes to stderr
+            print(f"refused: {res['refused']}", file=sys.stderr)
+        else:
+            _print_json({k: v for k, v in res.items() if k != "code"})
+        return res["code"]
+    elif args.cmd == "needs":
+        res = api.needs(cfg, raw)
         if "refused" in res:  # stdout stays parseable: the reason goes to stderr
             print(f"refused: {res['refused']}", file=sys.stderr)
         else:
