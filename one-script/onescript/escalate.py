@@ -39,11 +39,13 @@ One vocabulary for "couldn't answer": `answered`, or `escalated:<reason>`.
     d0_escalate     D0 had no answer for the act and said so (or needs flowering)
     local_escalate  the model returned path == "ESCALATE", its reason in `claim`
     uncited         an answer row with no cites, or a cite not in this piece
-    silent          the rung returned nothing
+    silent          the rung returned nothing, or rows that say nothing (no
+                    claim and no data: "the local model gave an empty answer")
     timeout         the rung did not return in time
     cap             a piece or a rung's output was over its cap
-    rung_error      the rung failed (non-zero exit, unreadable output, a row the
-                    door or the contract refused)
+    rung_error      the rung failed (non-zero exit with the end of its stderr,
+                    else of its stdout summary, on the detail, unreadable output, a row the door or the
+                    contract refused)
     empty_scope     nothing populated is served in this check-in
 
 A model's rows go through `Run.turn`'s proposal handling (the door, the served
@@ -163,6 +165,39 @@ def _rung_env() -> dict[str, str]:
     return env
 
 
+#: The most of a rung's stderr that rides on its error, and how many of its
+#: last lines: enough to say why it exited, never a log.
+STDERR_LINES = 2
+STDERR_CHARS = 240
+_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _stderr_tail(raw: object) -> str:
+    """The end of a failed rung's stderr as `: <tail>` for its error message,
+    or "" when it said nothing. Bounded (the last `STDERR_LINES` non-empty
+    lines, `STDERR_CHARS` characters, the end kept) and sanitized (decoded
+    leniently, control characters and escape sequences dropped, whitespace
+    folded): stderr is data from a subprocess, never trusted to be tidy."""
+    text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else ""
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)  # CSI colour/cursor codes
+    lines = [" ".join(_CTRL.sub(" ", ln).split()) for ln in text.split("\n")]
+    tail = " | ".join([ln for ln in lines if ln][-STDERR_LINES:])
+    if len(tail) > STDERR_CHARS:
+        tail = "…" + tail[-(STDERR_CHARS - 1) :]
+    return f": {tail}" if tail else ""
+
+
+def _exit_tail(done: object) -> str:
+    """Why a rung exited non-zero, as `: <tail>`: the end of its stderr, and,
+    when stderr said nothing, the end of its stdout. Rat refuses (exit 2) on
+    stderr, but a turn that ended early (exit 1: a timeout, a provider error, a
+    cap) says so only in the `[onescript] ... end=<why>` summary line it prints
+    on stdout."""
+    return _stderr_tail(getattr(done, "stderr", None)) or _stderr_tail(
+        getattr(done, "stdout", None)
+    )
+
+
 def ratatosk_rung(
     cmd: tuple[str, ...] | list[str] = ("ratatosk",),
     timeout: float = RUNG_TIMEOUT_S,
@@ -204,7 +239,7 @@ def ratatosk_rung(
             except OSError as e:
                 raise RungError(f"can't run {cmd[0]}: {type(e).__name__}") from e
             if done.returncode != 0:
-                raise RungError(f"{cmd[0]} exited {done.returncode}")
+                raise RungError(f"{cmd[0]} exited {done.returncode}" + _exit_tail(done))
             if not out.is_file():
                 return []
             if out.stat().st_size > out_cap:
@@ -341,6 +376,9 @@ def judge(rows: list, table_ids: set[str]) -> dict:
             claim if isinstance(claim, str) and claim.strip() else "no reason given",
             cites,
         )
+    if not any(_said(r) for r in rows):
+        # rows came back but none says anything: nothing was answered
+        return _j(ESCALATED, SILENT, EMPTY_ANSWER)
     for r in rows:
         cites = r.get("cites")
         if (
@@ -353,6 +391,18 @@ def judge(rows: list, table_ids: set[str]) -> dict:
         if stray:
             return _j(ESCALATED, UNCITED, "a cite is not in this piece")
     return _j(ANSWERED, None, "", [c for r in rows for c in r["cites"]])
+
+
+#: What a rung that returned rows with no claim and no data is said to have done.
+EMPTY_ANSWER = "the local model gave an empty answer"
+
+
+def _said(row: dict) -> bool:
+    """A row says something when its `claim` or its `data` holds a non-blank
+    string. A row of paths and cites alone is a label with nothing under it."""
+    return any(
+        isinstance(row.get(k), str) and row[k].strip() for k in ("claim", "data")
+    )
 
 
 def _cites(row: dict) -> list[str]:

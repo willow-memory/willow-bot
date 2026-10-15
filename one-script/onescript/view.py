@@ -23,13 +23,14 @@ def proposal_line(row: dict) -> str:
     return f"{lead} · {where} · {row.get('verdict')}{why}"
 
 
-def morning(
+def needs_you(
     report: dict,
     boot: dict | None = None,
     claims: list | None = None,
     acts: list | None = None,
-) -> str:
-    L: list[str] = []
+) -> list[str]:
+    """The NEEDS YOU lines, one string each (no bullet), in the screen's order.
+    The morning screen prints them; `api.needs` hands them to a seat as data."""
     needs: list[str] = []
     if boot and boot["hard_close"]:
         needs += [f"HARD CLOSE · {x}" for x in boot["lines"]]
@@ -69,6 +70,17 @@ def morning(
         )
     if boot and boot.get("report", {}).get("state") == "never":
         needs.append("coverage: no reconcile on record; enforcement status unknown")
+    return needs
+
+
+def morning(
+    report: dict,
+    boot: dict | None = None,
+    claims: list | None = None,
+    acts: list | None = None,
+) -> str:
+    L: list[str] = []
+    needs = needs_you(report, boot, claims, acts)
     L.append("NEEDS YOU")
     L += [f"  · {x}" for x in needs] or ["  · nothing"]
     if boot and boot["hard_close"]:

@@ -503,6 +503,29 @@ class Run:
         )
         return how
 
+    def reconciled(
+        self,
+        *,
+        changed_law=frozenset(),
+        sealed=None,
+        task_of=None,
+        human_key: bytes | None = None,
+    ) -> dict:
+        """The reverse report over the record as it stands: pure, it appends
+        nothing. `checkout` draws its screen from it; `api.needs` reads it."""
+        return reverse.reconcile(
+            self.rec.box,
+            self.rec.pile(),
+            self.rec.rows(),
+            self.version,
+            changed_law=changed_law,
+            answers=self.answers,
+            sealed=sealed,
+            task_of=task_of,
+            predictions=self.graded,
+            wagers_through=reverse.covered_through(self.rec, human_key),
+        )
+
     def checkout(
         self,
         *,
@@ -514,17 +537,11 @@ class Run:
     ) -> tuple[dict, str]:
         """`human_key` lets reverse check the sealed anchor tip; without it no
         wager outcome counts (it cannot be shown to be covered)."""
-        rep = reverse.reconcile(
-            self.rec.box,
-            self.rec.pile(),
-            self.rec.rows(),
-            self.version,
+        rep = self.reconciled(
             changed_law=changed_law,
-            answers=self.answers,
             sealed=sealed,
             task_of=task_of,
-            predictions=self.graded,
-            wagers_through=reverse.covered_through(self.rec, human_key),
+            human_key=human_key,
         )
         screen = view.morning(rep, boot_report, self.claims, self.acts)
         self.rec.append("reconcile", self.sys, report_hash=h256(screen))

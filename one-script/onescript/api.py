@@ -9,6 +9,7 @@
     take_proposals(cfg, rows)         # the model's rows in, judged, nothing written
     escalate(cfg, task)               # the deterministic chain on the served scope
     seal_proposal(cfg, subject, ...)  # the human's seal; a sealed pass is written
+    needs(cfg)                        # the morning screen's NEEDS YOU lines, read-only
     checkout(cfg)                     # reverse, then the morning screen
 
 `__main__` is a thin wrapper over these. Every function opens the box fresh,
@@ -41,7 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import boot, gate, nestor_seal, record
+from . import boot, gate, nestor_seal, record, view
 from . import escalate as esc
 from . import serve as served
 from .run import PKG, Run
@@ -404,6 +405,23 @@ def checkout(cfg: Config, argv: Iterable[str] = ("checkout",)) -> dict:
     _from_record(run)
     rep, screen = run.checkout(boot_report=last)
     return {"report": rep, "screen": screen, "code": 0}
+
+
+def needs(cfg: Config, argv: Iterable[str] = ("needs",)) -> dict:
+    """What the morning screen's NEEDS YOU section would list right now, as
+    data: `{"needs": [line, ...], "count": n}` (an empty list is the screen's
+    "nothing"). The lines are `view.needs_you`, the same ones `checkout` prints,
+    drawn from the record by the same reverse report. Read-only, like `pooled`
+    and `resume`: it writes the `invocation` row every verb writes and nothing
+    else, in particular no `reconcile` row, so it does not check the run out and
+    it needs no open box."""
+    run, info = _open(cfg, "needs", argv)
+    if run is None:
+        return info
+    last = _last_boot(run.rec.rows())
+    _from_record(run)
+    lines = view.needs_you(run.reconciled(), last, run.claims, run.acts)
+    return {"needs": lines, "count": len(lines), "code": 0}
 
 
 # ── turn ────────────────────────────────────────────────────────────────────
