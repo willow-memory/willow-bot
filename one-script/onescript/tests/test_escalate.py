@@ -335,6 +335,45 @@ def test_a_failed_rung_is_an_escalation_with_its_reason(cfg, fn, reason):
     ]
 
 
+def blank(**kw):
+    def fn(piece, question, model):
+        return [
+            {"path": "n/a.md", "data": "", "cites": [tid(piece)], "claim": "", **kw}
+        ]
+
+    return fn
+
+
+def test_rows_that_say_nothing_are_silent_not_answered(cfg):
+    served(cfg)
+    res = go(cfg, Stub(blank()))
+    assert res["answered"] == 0
+    assert {p["label"] for p in res["pieces"]} == {"escalated:silent"}
+    assert {p["detail"] for p in res["pieces"]} == {
+        "the local model gave an empty answer"
+    }
+    assert not [r for r in rows(cfg) if r["kind"] == "proposal"]
+
+
+@pytest.mark.parametrize("kw", [{"claim": "c"}, {"claim": "c", "data": "d"}])
+def test_a_row_with_a_claim_is_still_answered(cfg, kw):
+    served(cfg)
+    res = go(cfg, Stub(blank(**kw)))
+    assert res["answered"] == len(res["pieces"]) > 0
+
+
+def test_judge_calls_a_row_empty_only_when_it_has_no_claim_and_no_data():
+    row = {"path": "n/a.md", "cites": ["t"], "claim": "", "data": ""}
+    assert escalate.judge([row], {"t"})["reason"] == "silent"
+    assert escalate.judge([{**row, "claim": None}], {"t"})["reason"] == "silent"
+    assert escalate.judge([{**row, "data": "d"}], {"t"})["outcome"] == "answered"
+    # one row that says something among blank ones is not an empty answer
+    assert escalate.judge([row, {**row, "claim": "c"}], {"t"})["outcome"] == "answered"
+    # an ESCALATE mark keeps its own reason
+    mark = {"path": "ESCALATE", "claim": ""}
+    assert escalate.judge([mark], {"t"})["reason"] == "local_escalate"
+
+
 def test_a_cite_to_another_piece_is_uncited(cfg):
     doc = served(cfg)
     other = piled(doc)[-1]["id"]
@@ -447,6 +486,23 @@ FAKE = textwrap.dedent(
         sys.exit(3)
     if mode == "sleep":
         import time; time.sleep(30)
+    if mode == "why":
+        sys.stderr.buffer.write(
+            b"warming up\\nTraceback (most recent call last):\\n"
+            b"\\x1b[31mhttp error\\x1b[0m\\x07 model qwen3:4b\\xff not found\\n\\n"
+        )
+        sys.exit(1)
+    if mode == "summary":
+        print("[onescript] model=m rung=ollama ctx=4096 (default) served=populated "
+              "proposals=0 turns=1 end=timeout escalated=0")
+        sys.exit(1)
+    if mode == "both":
+        print("[onescript] end=timeout")
+        sys.stderr.write("the real cause\\n")
+        sys.exit(1)
+    if mode == "flood":
+        sys.stderr.write("x" * 5000 + "\\n")
+        sys.exit(1)
     if mode == "silent":
         sys.exit(0)
     if mode == "garbage":
@@ -510,6 +566,48 @@ def test_the_default_rung_runs_rat_with_the_fixed_argv(fake_in, monkeypatch):
 def test_the_default_rung_failures_raise_their_kind(fake_in, mode, exc):
     with pytest.raises(exc):
         escalate.ratatosk_rung(fake_in(mode), 1)({"tables": []}, "q", "m")
+
+
+def test_a_failed_rung_error_carries_the_end_of_its_stderr(fake_in):
+    with pytest.raises(escalate.RungError) as e:
+        escalate.ratatosk_rung(fake_in("why"), 20)({"tables": []}, "q", "m")
+    msg = str(e.value)
+    assert " exited 1: " in msg
+    # the last two non-empty lines only, the colour and bell codes gone, the bad
+    # byte replaced, no control character left
+    assert msg.endswith(
+        "Traceback (most recent call last): | http error model qwen3:4b\ufffd not found"
+    )
+    assert "warming up" not in msg
+    assert not any(ord(c) < 32 or 127 <= ord(c) < 160 for c in msg)
+
+
+def test_an_early_exit_with_no_stderr_carries_the_stdout_summary(fake_in):
+    # Rat's exit 1 (a turn that ended early) says why only on stdout
+    with pytest.raises(escalate.RungError) as e:
+        escalate.ratatosk_rung(fake_in("summary"), 20)({"tables": []}, "q", "m")
+    assert str(e.value).endswith(
+        " exited 1: [onescript] model=m rung=ollama ctx=4096 (default) "
+        "served=populated proposals=0 turns=1 end=timeout escalated=0"
+    )
+
+
+def test_stderr_wins_over_stdout_when_it_has_something_to_say(fake_in):
+    with pytest.raises(escalate.RungError) as e:
+        escalate.ratatosk_rung(fake_in("both"), 20)({"tables": []}, "q", "m")
+    assert str(e.value).endswith(" exited 1: the real cause")
+
+
+def test_a_flood_of_stderr_is_cut_to_its_end(fake_in):
+    with pytest.raises(escalate.RungError) as e:
+        escalate.ratatosk_rung(fake_in("flood"), 20)({"tables": []}, "q", "m")
+    tail = str(e.value).split(": ", 1)[1]
+    assert len(tail) == escalate.STDERR_CHARS and tail.startswith("…")
+
+
+@pytest.mark.parametrize("raw, want", [(b"", ""), (b" \n\t\n", ""), (None, "")])
+def test_no_stderr_leaves_the_error_as_it_was(raw, want):
+    assert escalate._stderr_tail(raw) == want
 
 
 def test_the_default_rung_silence_is_no_rows_and_a_missing_command_is_an_error(fake_in):
