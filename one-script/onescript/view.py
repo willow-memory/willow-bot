@@ -23,6 +23,27 @@ def proposal_line(row: dict) -> str:
     return f"{lead} · {where} · {row.get('verdict')}{why}"
 
 
+def cover_line(c: dict) -> str:
+    """One row a tip would newly cover, as `seal-tip` lists it before the human
+    signs (`api.covers`): a forecast or outcome, a table verdict session, or an
+    agm_head row. `who` is the record's label, never a signature."""
+    if c.get("what") == "agm_head":
+        return (
+            f"row {c['n']} · agm_head · {c.get('ledger')} n {c.get('ledger_n')}"
+            f" head {c.get('head')} · who {c.get('who')} · {c.get('ts')}"
+        )
+    if c.get("what") == "verdict session":
+        return (
+            f"row {c['n']} · verdict session {c.get('session')} · {c.get('rows')} row(s)"
+            f" · forecast {c.get('forecast') or 'none'} · who {', '.join(c.get('who') or [])}"
+            f" · {c.get('ts')}"
+        )
+    return (
+        f"row {c['n']} · {c['what']} · {c.get('id')}"
+        f" · by {c.get('by_claimed')} (claimed) · {c.get('ts')}"
+    )
+
+
 def needs_you(
     report: dict,
     boot: dict | None = None,

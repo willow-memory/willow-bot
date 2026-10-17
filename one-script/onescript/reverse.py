@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import unicodedata
 from pathlib import Path
+from typing import Callable
 
 from . import calibration
 from .gate import verify_seal
@@ -416,6 +417,7 @@ def reconcile_wagers(
     human_key: bytes | None = None,
     unreachable: dict[str, str] | None = None,
     breaks: list[str] | None = None,
+    basis: Callable[[dict, list[dict], dict], str | None] | None = None,
 ) -> dict:
     """Line each declared wager up against the outcome a human sealed. Never
     grades: `graded_by` stays None. `through` is the row number the human's
@@ -436,7 +438,13 @@ def reconcile_wagers(
     record whose proof can't be checked here (`unreachable`, subject -> why,
     from `Run.held`) makes the row `unreachable` with why, not `escalate`; a
     broken record (`breaks`, from `verify_chain` and `verify_anchor`) says so
-    in every row's reason; no seal at all stays `escalate`."""
+    in every row's reason; no seal at all stays `escalate`.
+
+    `basis(wager, rows, outcome)` is an injected check on where a sealed
+    outcome came from (SPEC R3 for table verdict rows: `table.basis`). It is
+    asked only once an outcome is sealed, covered and in chain order; a reason
+    back makes the row `escalate` with no score, no predicted p and no path,
+    so calibration and misses never see it. None means it has nothing to say."""
     if not in_place(rows):  # order is read from `n`: a label out of place
         through, held, human_key = None, None, None  # lets nothing count
         breaks = [*(breaks or []), "a row's n is not its place in these rows"]
@@ -495,6 +503,8 @@ def reconcile_wagers(
                 "reason": "no tip the human sealed holds this forecast before its "
                 "outcome seal (wager.n <= tip.n < tip_seal.n < outcome.n)",
             }
+        elif basis is not None and (why := basis(w, rows, outcome)) is not None:
+            row |= {"state": "escalate", "escalate_to": "human", "reason": f"R3: {why}"}
         elif w.get("distribution"):
             idx, entry = _match_distribution(w, outcome)
             if entry is None:
@@ -651,6 +661,7 @@ def reconcile(
     unreachable: dict[str, str] | None = None,
     wagers_key: bytes | None = None,
     wagers_breaks: list[str] | None = None,
+    wagers_basis: Callable[[dict, list[dict], dict], str | None] | None = None,
 ) -> dict:
     """`held` is the subjects the human's seal still holds over
     (`serve.sealed_verified`, via `Run.held`). A seal row is only a claim, so
@@ -685,7 +696,13 @@ def reconcile(
         if r["kind"] == "proposal" and r.get("subject") not in sealed_rows
     ]
     wagers = reconcile_wagers(
-        rows, wagers_through, held, wagers_key, unreachable, wagers_breaks
+        rows,
+        wagers_through,
+        held,
+        wagers_key,
+        unreachable,
+        wagers_breaks,
+        wagers_basis,
     )
     counts: dict[str, int] = {}
     for i in items:

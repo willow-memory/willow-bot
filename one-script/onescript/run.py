@@ -392,26 +392,52 @@ class Run:
                 continue
             card = {"own_idea": True, **d.card} if own else d.card
             rows.append(
-                self.rec.append(
-                    "proposal",
+                self.append_proposal(
                     who,
-                    where=p["path"],
-                    turn=n,
-                    line=got["line"],
-                    path=p["path"],
-                    sha=h256(p["data"]),
-                    data=p["data"],
-                    cites=p["cites"],
-                    claim=p["claim"],
-                    subject=proposals.subject(p),
+                    p,
                     verdict="link_fail" if lost else d.verdict,
                     reason="a cite is not in the served file" if lost else d.reason,
                     link_fail=lost,
                     own_idea=own,
                     card=card,
+                    turn=n,
+                    line=got["line"],
                 )
             )
         return rows
+
+    def append_proposal(
+        self,
+        who,
+        p: dict,
+        *,
+        verdict: str,
+        reason: str,
+        link_fail: list,
+        own_idea: bool,
+        card: dict,
+        **extra,
+    ) -> dict:
+        """One judged `proposal` row, the shape `find_proposal` and
+        `seal_proposal` read: the model's rows (`_take`) and the table's
+        decision beats (`table.propose_beat`) both go through here."""
+        return self.rec.append(
+            "proposal",
+            who,
+            where=p["path"],
+            path=p["path"],
+            sha=h256(p["data"]),
+            data=p["data"],
+            cites=p["cites"],
+            claim=p["claim"],
+            subject=proposals.subject(p),
+            verdict=verdict,
+            reason=reason,
+            link_fail=link_fail,
+            own_idea=own_idea,
+            card=card,
+            **extra,
+        )
 
     def find_proposal(self, subject: str) -> tuple[dict | None, str | None]:
         """The stored proposal row for `subject` that really is that proposal,
@@ -560,6 +586,7 @@ class Run:
         by: str | None = None,
         committed: dict | None = None,
         commit: str | None = None,
+        table: dict | None = None,
     ) -> dict:
         """Record a declared wager. Its row hash is the subject a human seal
         names to say what happened; nothing here grades it.
@@ -572,6 +599,8 @@ class Run:
         extra: dict = {}
         if commit is not None:
             extra = {"by": by, "committed": committed, "commit": commit}
+        if table is not None:  # the world and sheets a table forecast is about
+            extra["table"] = table
         return self.rec.append(
             "wager",
             self.sys,
@@ -713,11 +742,23 @@ class Run:
         sealed=None,
         task_of=None,
         human_key: bytes | None = None,
+        basis=None,
     ) -> dict:
         """The reverse report over the record as it stands: pure, it appends
         nothing. `checkout` draws its screen from it; `api.needs` reads it.
-        The record is read, and its tip checked, once."""
+        The record is read, and its tip checked, once.
+
+        `basis` is the R3 hook `reverse.reconcile_wagers` asks about each
+        sealed outcome (`table.basis`). Left None, it is bound here whenever
+        the record holds table verdict rows, so every report (reconcile,
+        needs, checkout, the morning screen) goes through the one door."""
         rows = self.rec.rows()
+        if basis is None and any(
+            r["kind"] == "verdict" and r.get("who") == "table" for r in rows
+        ):
+            from . import table  # table imports api, which imports this module
+
+            basis = table.basis(human_key)
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))
@@ -736,6 +777,7 @@ class Run:
             held=held,
             unreachable=unreachable,
             wagers_key=human_key,  # tip seals re-checked row by row (SPEC R3)
+            wagers_basis=basis,
             # a broken record is said, never read as "no seal" (INVARIANTS §1)
             wagers_breaks=(
                 self.rec.verify_chain() + self.rec.verify_anchor(human_key)
@@ -752,14 +794,17 @@ class Run:
         task_of=None,
         boot_report: dict | None = None,
         human_key: bytes | None = None,
+        basis=None,
     ) -> tuple[dict, str]:
         """`human_key` lets reverse check the sealed anchor tip; without it no
-        wager outcome counts (it cannot be shown to be covered)."""
+        wager outcome counts (it cannot be shown to be covered). `basis` as
+        `reconciled` takes it."""
         rep = self.reconciled(
             changed_law=changed_law,
             sealed=sealed,
             task_of=task_of,
             human_key=human_key,
+            basis=basis,
         )
         screen = view.morning(rep, boot_report, self.claims, self.acts)
         self.rec.append("reconcile", self.sys, report_hash=h256(screen))
