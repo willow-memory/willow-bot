@@ -13,7 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from .gate import verify_seal
-from .record import h256, tip_subject
+from .record import canon, h256, tip_subject
+
+WAGER = "wager:"
 
 KEEP_OUT = {"record.jsonl", "pile.json"}
 
@@ -213,38 +215,54 @@ def pinned(rec, human_key: bytes | None) -> tuple[int | None, str | None]:
     return (tn, None) if at is not None and at["hash"] == th else (None, None)
 
 
+def outcome_subject(wager: str, outcome: dict) -> str:
+    """What the human signs to seal a wager's outcome: one hash over the
+    wager's row hash and the outcome together, so the outcome is signed."""
+    return WAGER + h256(canon({"wager": wager, "outcome": outcome}))
+
+
 def _outcome_of(
-    wager: dict, rows: list[dict], through: int | None = None
+    wager: dict,
+    rows: list[dict],
+    through: int | None = None,
+    held: set[str] | None = None,
 ) -> dict | None:
     """The outcome a human seal carries over this wager, or None. Only a
-    `seal` row stamped by the human counts, only one whose subject is the
-    wager's own hash, and only one the sealed anchor tip covers (row number
-    <= `through`); the latest such seal wins."""
-    if through is None:
+    `seal` row whose subject is `outcome_subject` of this wager and the
+    outcome on the row, whose proof re-checks (`held`, from
+    `serve.sealed_verified`), and that the sealed anchor tip covers (row
+    number <= `through`); the latest such seal wins. A row's `who` is a label,
+    so it alone counts for nothing, and without `held` no outcome counts."""
+    if through is None or not held:
         return None
     got = [
         r
         for r in rows
         if r["kind"] == "seal"
-        and r["who"] == "human"
-        and r.get("subject") == wager["hash"]
+        and r.get("wager") == wager["hash"]
         and isinstance(r.get("outcome"), dict)
+        and r.get("subject") == outcome_subject(wager["hash"], r["outcome"])
+        and r["subject"] in held
         and r["n"] <= through
     ]
     return got[-1]["outcome"] if got else None
 
 
-def reconcile_wagers(rows: list[dict], through: int | None = None) -> dict:
+def reconcile_wagers(
+    rows: list[dict], through: int | None = None, held: set[str] | None = None
+) -> dict:
     """Line each declared wager up against the outcome a human sealed. Never
     grades: `graded_by` stays None. `through` is the row number the human's
     verified anchor tip covers (see `covered_through`); a seal after it, or no
-    verified anchor at all, counts for nothing. With no covered outcome, or one
+    verified anchor at all, counts for nothing. `held` is the subjects whose
+    seal proof re-checks (`Run.held`); an outcome seal outside it counts for
+    nothing either. With no covered outcome, or one
     that names nothing the wager declared, the row escalates to the human,
     never to a model."""
     out = []
     for w in (r for r in rows if r["kind"] == "wager"):
         row = {"id": w.get("id", "?"), "subject": w["hash"], "graded_by": None}
-        outcome = _outcome_of(w, rows, through)
+        outcome = _outcome_of(w, rows, through, held)
         if outcome is None:
             row |= {
                 "state": "escalate",
@@ -358,7 +376,7 @@ def reconcile(
         "grades": grades(list(answers), sealed or {}, task_of or {}),
         "predictions": list(predictions),  # the mechanical bite grades, untouched
         "wagers": reconcile_wagers(
-            rows, wagers_through
+            rows, wagers_through, held
         ),  # declared wagers vs human seals
         "awaiting": awaiting,
         "proposals": proposals,

@@ -574,17 +574,25 @@ class Run:
         human_key: bytes,
         outcome: dict | None = None,
     ) -> dict:
-        """`outcome` rides on the row for a wager seal (path_index / path /
-        winner). The proof signs the subject only, not the outcome. The proof
-        rides on the row too: it is what a reader re-checks (`held`), since a
-        row's `who` is only a label anyone writing the record can set."""
+        """The proof rides on the row: it is what a reader re-checks (`held`),
+        since a row's `who` is only a label anyone writing the record can set.
+
+        A wager seal passes the wager's row hash as `subject` and its `outcome`
+        (path_index / path / winner). What the human signs is then the
+        outcome's own subject, `reverse.outcome_subject(wager, outcome)`, so the
+        outcome is inside what was signed: a proof copied onto another row
+        can't carry a different outcome. The row keeps `wager` and `outcome`
+        beside it, and a reader works the subject out again from them."""
+        extra: dict = {}
+        if outcome is not None:
+            extra = {"wager": subject, "outcome": outcome}
+            subject = reverse.outcome_subject(subject, outcome)
         try:
             hum = gate.human(subject, proof, human_key)
         except gate.Refused as e:
             return self.rec.append(
                 "refused", self.sys, at="seal", reason=str(e), subject=subject
             )
-        extra = {"outcome": outcome} if outcome is not None else {}
         return self.rec.append(
             "seal", hum, where=subject, subject=subject, proof=proof, **extra
         )
