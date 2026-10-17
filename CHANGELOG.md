@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [1.10.1](https://github.com/willow-memory/willow-bot/compare/v1.10.0...v1.10.1) (2026-10-17)
+
+
+### Fixed
+
+* **onescript:** a wager's outcome is inside what the human signs ([c46416a](https://github.com/willow-memory/willow-bot/commit/c46416a8b120e830a2b20c5c36134160200f3bd7))
+* **onescript:** an unreachable newer seal no longer hides a verified older one in resume ([863bfaf](https://github.com/willow-memory/willow-bot/commit/863bfaf4bbedf6a8f8d4a5751d4f9b7e21c1bbcd))
+* **onescript:** old Nestor seal rows hold inside the sealed tip too ([79432e8](https://github.com/willow-memory/willow-bot/commit/79432e87a37db4205e19aa63261a0167f6582e64))
+* **onescript:** old proofless seals count only up to the tip pinned at first run ([688dcf9](https://github.com/willow-memory/willow-bot/commit/688dcf998f1ebe99373241876e0a03ae782fa9ab))
+* **onescript:** old seal rows hold inside the sealed tip; awaiting reads proofs ([bbc1a42](https://github.com/willow-memory/willow-bot/commit/bbc1a4223a75fba1be34cd63704447bdfc1b2aa1))
+* **onescript:** re-verify human seal proofs instead of trusting `who` ([ec3c785](https://github.com/willow-memory/willow-bot/commit/ec3c7850cdfff1c678512c9466c4290b640e4fc8))
+* **onescript:** re-verify human seal proofs instead of trusting `who` ([7a1b490](https://github.com/willow-memory/willow-bot/commit/7a1b490f11de0baf7bfcf165508e66ec69e00b1e))
+* **onescript:** resume takes the seal row that verifies, not any row over a held subject ([6abad4d](https://github.com/willow-memory/willow-bot/commit/6abad4dcc7dcceaa4a7d8c862a3c5238a7c45687))
+* **onescript:** review findings on the seal re-check ([#4](https://github.com/willow-memory/willow-bot/issues/4), [#5](https://github.com/willow-memory/willow-bot/issues/5), [#8](https://github.com/willow-memory/willow-bot/issues/8), [#9](https://github.com/willow-memory/willow-bot/issues/9), [#10](https://github.com/willow-memory/willow-bot/issues/10)) ([9ba8e17](https://github.com/willow-memory/willow-bot/commit/9ba8e177afae8ab6f1dbb2ad3a3ae57b2a967f14))
+
 ## [1.10.0](https://github.com/willow-memory/willow-bot/compare/v1.9.0...v1.10.0) (2026-10-15)
 
 
