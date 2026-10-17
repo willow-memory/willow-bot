@@ -58,6 +58,7 @@ _TABLE = re.compile(r"^\|")
 _FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})")
 _COMMENT = re.compile(r"<!--.*?-->")
 _TAG = re.compile(r"</?[A-Za-z][^<>]*>")
+_ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
 _QUOTE = re.compile(r"^(>\s?)+")
 
 
@@ -67,7 +68,8 @@ def _indent(ln: str) -> int:
 
 def _clean(s: str) -> str:
     """Inline HTML comments and tags are markup, not world text."""
-    return re.sub(r" {2,}", " ", _TAG.sub("", _COMMENT.sub("", s))).strip(" \t")
+    s = _ZW.sub("", _TAG.sub("", _COMMENT.sub("", s)))
+    return re.sub(r" {2,}", " ", s).strip(" \t")
 
 
 def facts_of(path: str, data: str) -> list[tuple[str, str]]:

@@ -100,15 +100,25 @@ def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
             )
         except (OSError, subprocess.SubprocessError) as e:
             raise Unreachable(f"cbm: {type(e).__name__}: {e}") from e
-        if p.returncode != 0 and not p.stdout.strip():
-            # exactly rc 1, nothing on stderr, and the name that was asked for: that
-            # is cbm's answer for a name it lacks. A signal (rc < 0), a locked
-            # store or any stderr text is a failure, not an absence.
-            key = MISS_IS_SILENT.get(tool)
-            if key and p.returncode == 1 and not p.stderr.strip() and args.get(key):
-                return ""
-            raise Unreachable(f"cbm {tool}: exit {p.returncode}, no output")
-        return p.stdout
+        # Any non-zero exit, and any stderr text, is a failure: partial stdout from a
+        # killed or erroring cbm is never read as an answer. The one exception is
+        # cbm's own miss: exactly rc 1, empty stdout, empty stderr, and the name key
+        # that was asked for (trace_path, get_code_snippet).
+        if p.returncode == 0 and not p.stderr.strip():
+            return p.stdout
+        key = MISS_IS_SILENT.get(tool)
+        if (
+            key
+            and p.returncode == 1
+            and not p.stdout.strip()
+            and not p.stderr.strip()
+            and args.get(key)
+        ):
+            return ""
+        raise Unreachable(
+            f"cbm {tool}: exit {p.returncode}"
+            + (f", stderr: {p.stderr.strip()[:80]}" if p.stderr.strip() else "")
+        )
 
     return run
 

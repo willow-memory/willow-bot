@@ -398,3 +398,46 @@ def test_NEW2_a_wrong_argument_key_is_refused_not_empty():
     ):
         r = graph.graph_read("p", tool, args, runner=boom)
         assert r["state"] == "unreachable" and "refused" in r["why"]
+
+
+# ── N-A: partial output from a failing cbm is never an answer ───────────────
+PARTIAL = """#!/bin/sh
+case "$1" in
+ list_projects) exec %(cbm)s list_projects '{}';;
+ *) printf 'total: 3\\nresults: 3\\n  a Function\\n'
+    [ -n "$FAKE_ERR" ] && echo "$FAKE_ERR" >&2
+    [ "$FAKE_KILL" = 1 ] && kill -9 $$
+    exit ${FAKE_RC:-0};;
+esac
+"""
+
+
+@needs_cbm
+@pytest.mark.parametrize(
+    "rc,err,kill",
+    [("0", "", "1"), ("2", "", ""), ("0", "warn: something", ""), ("1", "", "")],
+)
+def test_NA_partial_stdout_on_a_failure_is_unreachable(
+    repo, tmp_path, monkeypatch, rc, err, kill
+):
+    project = indexed(repo)
+    fake = tmp_path / "partial.sh"
+    fake.write_text(PARTIAL % {"cbm": CBM})
+    fake.chmod(0o755)
+    monkeypatch.setenv("FAKE_RC", rc)
+    monkeypatch.setenv("FAKE_ERR", err)
+    monkeypatch.setenv("FAKE_KILL", kill)
+    r = graph.graph_read(
+        project,
+        "search_graph",
+        {"name_pattern": "x"},
+        runner=graph.cbm_runner(str(fake)),
+    )
+    assert r["state"] == "unreachable" and r["rows"] == [], r
+
+
+def test_NA_scene_zero_width_is_stripped_in_facts_of():
+    from onescript import lore
+
+    got = lore.facts_of("world/v.md", "# Va​le\n- fa​ct\n")
+    assert got == [("Vale", "fact")]
