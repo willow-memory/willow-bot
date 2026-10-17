@@ -341,7 +341,8 @@ def test_S1_an_unreachable_proposal_seal_is_said_never_dropped(run):
     seals = ({serve.scope_subject(ids)}, {subject: "unreachable: no Nestor store"})
     doc = serve._serve(rows, chosen, ids, SERVE_KEY, CAP, seals)
     assert doc["state"] == "unreachable" and "can't be checked" in doc["why"]
-    assert "Nestor" in doc["why"] and doc["tables"] == []
+    (t,) = doc["tables"]
+    assert t["state"] == "unreachable" and "Nestor" in t["why"] and t["rows"] == []
 
 
 def test_S2_a_lore_row_must_be_by_the_proposals_author(run):
@@ -448,3 +449,75 @@ def test_N6_facts_are_worked_out_once_per_serve(run, monkeypatch):
     monkeypatch.setattr(lore, "facts_of", lambda p, d: calls.append(p) or real(p, d))
     assert len(served_rows(serve_lore(run))) == 3
     assert len(calls) == 1
+
+
+def _d1(run, own=False):
+    """An honest sealed lore pile plus a forged lore row over proposal Y."""
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    if own:
+        p = {"path": "world/y.md", "data": "- Y fact.\n", "cites": [], "claim": "y"}
+        y = proposals.subject(p)
+        run.rec.append(
+            "proposal",
+            gate.verify(ident(), KEYS),
+            where=p["path"],
+            verdict="pass",
+            subject=y,
+            own_idea=True,
+            **p,
+        )
+    else:
+        y, _ = propose(run, data="# Y\n- Y fact.\n", claim="y")
+    run.rec.append(
+        "lore", gate.verify(ident(), KEYS), where="Y", fact="Y fact.", proposal=y
+    )
+    stack = serve.piles(run.rec.rows(), "what")
+    chosen = serve.choose(stack, what="lore")
+    ids = [serve.table_id(p) for p in chosen]
+    seals = (
+        {serve.scope_subject(ids), subject},
+        {y: "unreachable: forged nestor seal"},
+    )
+    return serve._serve(run.rec.rows(), chosen, ids, SERVE_KEY, CAP, seals)
+
+
+def test_NEW3_one_unreachable_seal_does_not_blank_the_honest_rows(run):
+    doc = _d1(run)
+    assert doc["state"] == "populated"  # the rest is still served
+    (t,) = doc["tables"]
+    assert t["state"] == "unreachable" and "forged nestor seal" in t["why"]
+    assert [r["fact"] for r in t["rows"]][0] == "The ferryman takes only salt."
+    assert len(t["rows"]) == 3 and "Y fact." not in json.dumps(doc)
+
+
+def test_NEW3_a_proposal_that_could_never_be_lore_is_no_lever(run):
+    doc = _d1(run, own=True)
+    (t,) = doc["tables"]
+    assert "state" not in t and len(t["rows"]) == 3
+
+
+def test_NEW4_nested_items_stay_with_their_parent():
+    data = "# V\n- Parent\n  - child one\n    - grand\n\n  - child two\n- Next\n"
+    assert lore.facts_of("world/v.md", data) == [
+        ("V", "Parent; child one; grand; child two"),
+        ("V", "Next"),
+    ]
+
+
+def test_NEW6_markup_is_stripped_from_facts_and_zero_width_hides_no_hash(run):
+    data = "# V\n> - quoted <b>bold</b> <!-- x --> end\n"
+    assert lore.facts_of("world/v.md", data) == [("V", "quoted bold end")]
+    h = "ab" * 16 + "\u200b" + "ab" * 16
+    ful = "ＡＢ" * 32
+    subject, _ = propose(run, data=f"# {ful}\n- mark {h}.\n")
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    (row,) = served_rows(serve_lore(run))
+    assert serve.WITHHELD in row["fact"] and serve.WITHHELD in row["where"]
+
+
+def test_NEW8_a_fence_closes_only_on_its_own_marker():
+    data = "# V\n```\n~~~\n- inside\n```\n- after\n~~~~\n```\n- still\n~~~~\n- out\n"
+    assert [f for _, f in lore.facts_of("world/v.md", data)] == ["after", "out"]

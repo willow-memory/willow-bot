@@ -31,7 +31,8 @@ index is stale when HEAD moved after `indexed_at` (the later of the HEAD
 commit's time and the HEAD reflog's last move, which also catches a checkout of
 another branch or an older commit), or ANY file git lists as tracked or
 untracked-and-not-ignored (`git ls-files -co --exclude-standard`) has an mtime
-after `indexed_at`, or is gone from the tree. LIMITS: the resolution is a second
+after `indexed_at`, or is gone from the tree, or the git staging area (`.git/index`:
+`git rm`, `git mv`, `git add -A`) was rewritten after `indexed_at`. LIMITS: the resolution is a second
 (a commit or an edit in the very second of indexing reads as fresh; mtimes are compared by whole second); a file copied with an
 old mtime (`cp -p`, `rsync -t`, `git stash pop` on some filesystems) after the
 index was made is not seen; so a fresh read is "no sign of change", not proof.
@@ -68,7 +69,7 @@ READ_TOOLS = frozenset(
 )
 #: Tools for which an exit 1 with no output is cbm's answer for a name it does
 #: not hold (observed), not a crash; the project was already confirmed to exist.
-MISS_IS_SILENT = frozenset({"trace_path", "get_code_snippet"})
+MISS_IS_SILENT = {"trace_path": "function_name", "get_code_snippet": "qualified_name"}
 _META = frozenset({"list_projects", "index_status"})
 
 Runner = Callable[[str, dict], str]
@@ -100,7 +101,11 @@ def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
         except (OSError, subprocess.SubprocessError) as e:
             raise Unreachable(f"cbm: {type(e).__name__}: {e}") from e
         if p.returncode != 0 and not p.stdout.strip():
-            if tool in MISS_IS_SILENT:  # cbm exits 1 with no output for a name it lacks
+            # exactly rc 1, nothing on stderr, and the name that was asked for: that
+            # is cbm's answer for a name it lacks. A signal (rc < 0), a locked
+            # store or any stderr text is a failure, not an absence.
+            key = MISS_IS_SILENT.get(tool)
+            if key and p.returncode == 1 and not p.stderr.strip() and args.get(key):
                 return ""
             raise Unreachable(f"cbm {tool}: exit {p.returncode}, no output")
         return p.stdout
@@ -171,7 +176,13 @@ def _facts(root: str) -> dict:
         when.append(int(gd.split("@{", 1)[1].rstrip("}")))  # HEAD@{<unix time>}
     except (Unreachable, ValueError, IndexError):
         pass
+    try:  # the staging area: `git rm`, `git mv`, `git add -A` all rewrite it
+        gi = _git(root, "rev-parse", "--path-format=absolute", "--git-path", "index")
+        staged = int(os.stat(gi.strip()).st_mtime)
+    except (Unreachable, OSError):
+        staged = 0
     return {
+        "staged": staged,
         "head": head,
         "branch": branch,
         "dirty": dirty,
@@ -304,6 +315,9 @@ def graph_read(
         return _out(
             "unreachable", f"'{tool}' is not a graph read this seam makes", None
         )
+    need = MISS_IS_SILENT.get(tool)
+    if need and not (args or {}).get(need):
+        return _out("unreachable", f"refused: {tool} needs '{need}'", None)
     try:
         run = runner or cbm_runner()
         found = [p for p in _projects(run) if p.get("name") == project]
@@ -327,6 +341,13 @@ def graph_read(
             return _out(
                 "stale",
                 "HEAD moved after the index was made; re-index before asking",
+                stamp,
+            )
+        if f["staged"] > stamp["indexed_at"]:
+            return _out(
+                "stale",
+                "the staging area changed after the index was made (a path may have "
+                "been removed, renamed or added); re-index before asking",
                 stamp,
             )
         for rel in f["files"]:

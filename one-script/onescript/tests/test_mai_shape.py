@@ -189,3 +189,16 @@ def test_N4_upper_case_suffix_and_lone_cr_are_checked(tmp_path):
         rec.write_file(gate.system(), "d.MD", BAD["colon"].encode())
     assert mai_shape.problems(BAD["colon"].replace("\n", "\r"))
     assert mai_shape.is_mai("\r@markdownai v1.0\r# T\r")
+
+
+def test_NEW7_quoted_frontmatter_keys_are_keys():
+    fm = "---\n\"name\": x\n'kind': doc\n---\n@markdownai v1.0\n"
+    assert mai_shape.problems(fm) == []
+
+
+def test_NEW8_a_fence_closes_only_on_its_own_marker():
+    doc = "@markdownai v1.0\n# T\n```\n~~~\n@markdownai v1.0\n```\n@constraint: x\n"
+    assert any("colon form" in p for p in mai_shape.problems(doc))
+    ok = "# P\n````\n```\n@markdownai v1.0\n````\ntext\n"
+    assert mai_shape.problems(ok) == []
+    assert mai_shape.problems("# P\n~~~\n```\n@markdownai v1.0\n~~~\n") == []

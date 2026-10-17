@@ -41,7 +41,6 @@ MAX_FACT = 1000  # a fact a person can read on a card; a longer one is not serve
 
 _HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
-_FENCE = re.compile(r"^(```|~~~)")
 
 
 def is_world(path: object) -> bool:
@@ -56,14 +55,30 @@ def is_world(path: object) -> bool:
 _SETEXT = re.compile(r"^(=+|-{2,})\s*$")
 _RULE = re.compile(r"^([-*_])(\s*\1){2,}\s*$")
 _TABLE = re.compile(r"^\|")
+_FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})")
+_COMMENT = re.compile(r"<!--.*?-->")
+_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
+_QUOTE = re.compile(r"^(>\s?)+")
+
+
+def _indent(ln: str) -> int:
+    return len(ln.expandtabs(4)) - len(ln.expandtabs(4).lstrip(" "))
+
+
+def _clean(s: str) -> str:
+    """Inline HTML comments and tags are markup, not world text."""
+    return re.sub(r" {2,}", " ", _TAG.sub("", _COMMENT.sub("", s))).strip(" \t")
 
 
 def facts_of(path: str, data: str) -> list[tuple[str, str]]:
     """[(scene, fact)] for a world document. A fact is a paragraph or one list
-    item (continuation lines joined with a space). Not facts: frontmatter,
-    headings (they set the scene; so does a setext title), code fences, indented
-    code, HTML comments, table rows, rules. The scene is the nearest heading
-    above the fact, else the file's stem."""
+    item: continuation lines are joined with a space, and nested list items stay
+    attached to their parent, joined with "; " (a parent is never a fact on its
+    own once it has children). Not facts: frontmatter, headings (they set the
+    scene; so does a setext title), code fences (closed only by their own
+    marker and length), indented code, HTML comments, table rows, rules.
+    Blockquote `>` markers and inline HTML are stripped. The scene is the nearest
+    heading above the fact, else the file's stem."""
     stem = path.rsplit("/", 1)[-1][: -len(".md")]
     lines = [ln.rstrip("\r") for ln in data.split("\n")]
     if lines and lines[0].strip(" \t") == "---":  # frontmatter: not world text
@@ -72,54 +87,80 @@ def facts_of(path: str, data: str) -> list[tuple[str, str]]:
         )
         lines = lines[end + 1 :] if end is not None else []
     out: list[tuple[str, str]] = []
-    scene, buf, fenced, comment, item = stem, [], False, False, False
+    st = {"scene": stem, "cur": "", "item": False, "ind": 0, "blank": False}
+    fence: str | None = None  # the opener being waited out
+    comment = False
 
     def flush() -> None:
-        if buf:
-            fact = " ".join(buf)
-            if len(fact) <= MAX_FACT:
-                out.append((scene, fact))
-            buf.clear()
+        if st["cur"] and len(st["cur"]) <= MAX_FACT:
+            out.append((st["scene"], st["cur"]))
+        st["cur"], st["item"], st["blank"] = "", False, False
 
-    for ln in lines:
+    for raw in lines:
+        ln = (
+            _QUOTE.sub("", raw.lstrip(" \t"))
+            if raw.lstrip(" \t").startswith(">")
+            else raw
+        )
         s = ln.strip(" \t")
         if comment:
             comment = "-->" not in s
             continue
-        if _FENCE.match(s):
-            flush()
-            fenced = not fenced
+        if fence is not None:
+            m = _FENCE_OPEN.match(s)
+            if (
+                m
+                and m.group(1)[0] == fence[0]
+                and len(m.group(1)) >= len(fence)
+                and s == m.group(1)
+            ):
+                fence = None
             continue
-        if fenced:
+        if not s:
+            st["blank"] = bool(st["cur"])  # a child list item may still follow
+            continue
+        bullet = bool(_BULLET.match(ln.lstrip(" \t"))) and (
+            _indent(ln) < 4 or bool(st["cur"] and st["item"])
+        )
+        child = bool(st["cur"] and st["item"] and bullet and _indent(ln) > st["ind"])
+        if st["blank"] and not child:
+            flush()
+        st["blank"] = False
+        m = _FENCE_OPEN.match(s)
+        if m:
+            flush()
+            fence = m.group(1)
             continue
         if s.startswith("<!--"):
             flush()
             comment = "-->" not in s
             continue
-        if not s:
-            flush()
-            continue
-        if _SETEXT.match(s) and len(buf) == 1 and not item:
-            scene, _ = buf[0], buf.clear()  # "Title" over "=====": a heading
+        if _SETEXT.match(s) and st["cur"] and not st["item"]:
+            st["scene"], st["cur"] = st["cur"], ""  # "Title" over "=====": a heading
             continue
         h = _HEADING.match(s)
         if h:
             flush()
-            scene = h.group(1).strip() or stem
+            st["scene"] = _clean(h.group(1).strip()) or stem
             continue
         if _RULE.match(s) or _SETEXT.match(s) or _TABLE.match(s):
             flush()
             continue
-        if not buf and (ln.startswith("    ") or ln.startswith("\t")):
+        if not st["cur"] and _indent(ln) >= 4:
             continue  # indented code; inside a paragraph or item it is a continuation
-        if _BULLET.match(ln.lstrip(" \t")) and len(ln) - len(ln.lstrip(" \t")) < 4:
-            flush()
-            s = _BULLET.sub("", s, count=1).strip(" \t")
-            item = True
-        elif not buf:
-            item = False
-        if s:
-            buf.append(s)
+        if bullet:
+            text = _clean(_BULLET.sub("", s, count=1))
+            if child:
+                st["cur"] += "; " + text
+            else:
+                flush()
+                st["cur"], st["item"], st["ind"] = text, True, _indent(ln)
+        else:
+            if not st["cur"]:
+                st["item"] = False
+            text = _clean(s)
+            if text:
+                st["cur"] = (st["cur"] + " " + text) if st["cur"] else text
     flush()
     return out
 
@@ -183,16 +224,22 @@ def servable(row: dict, ctx: Index | list[dict], held: set[str]) -> bool:
     return (scene, fact) in ctx.facts(subject)
 
 
-def unchecked_seals(rows: list[dict], held, unchecked) -> dict[str, str]:
+def unchecked_seals(rows: list[dict], ctx: Index, held, unchecked) -> dict[str, str]:
     """{proposal subject: why} for lore rows whose proposal's seal could not be
-    checked here, so serve can say `unreachable` instead of dropping them."""
+    checked here, so serve can mark their table `unreachable` instead of dropping
+    them silently. Only a proposal whose stored row could yield lore at all
+    (`author_problem` is None, same author) counts: a forged row over a proposal
+    that never could be lore must not be a lever to mark a table unreachable."""
     out = {}
     for r in rows:
         s = r.get("proposal")
+        prop = ctx.prop.get(s) if isinstance(s, str) else None
         if (
             r.get("kind") == KIND
             and r.get("who") != "run"
-            and isinstance(s, str)
+            and prop is not None
+            and author_problem(prop) is None
+            and r.get("who") == prop.get("who")
             and s not in held
             and s in unchecked
         ):

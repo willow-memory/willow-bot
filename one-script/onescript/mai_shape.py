@@ -44,8 +44,8 @@ HEADER_RE = re.compile(r"^@markdownai\s+v\d+(\.\d+)*\s*$")
 CONSTRAINT_RE = re.compile(
     r"@constraint(?:\s+severity=[\"']?(\w+)[\"']?)?\s+(.*?)(?=@constraint|$)", re.DOTALL
 )
-_FENCE = re.compile(r"^\s*(```|~~~)")
-_KEY = re.compile(r"^[A-Za-z_][\w.-]*\s*:(\s.*)?$")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_KEY = re.compile(r"""^(["'][^"']+["']|[A-Za-z_][\w.-]*)\s*:(\s.*)?$""")
 
 
 def _norm(text: str) -> str:
@@ -65,13 +65,23 @@ def _split(text: str) -> tuple[list[str] | None, str, bool]:
 
 
 def _unfenced(text: str):
-    fenced = False
+    """Lines outside code fences. A fence closes only on its own marker, at least
+    as long as the opener, with nothing after it."""
+    fence = None
     for ln in text.split("\n"):
-        if _FENCE.match(ln):
-            fenced = not fenced
-            continue
-        if not fenced:
+        m = _FENCE.match(ln)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+                continue
             yield ln
+        elif (
+            m
+            and m.group(1)[0] == fence[0]
+            and len(m.group(1)) >= len(fence)
+            and not m.group(2).strip()
+        ):
+            fence = None
 
 
 def _first(body: str) -> str | None:

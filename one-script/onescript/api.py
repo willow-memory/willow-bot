@@ -676,15 +676,30 @@ def lore(cfg: Config, subject: str, argv: Iterable[str] = ("lore",)) -> dict:
     made = lore_rows.from_sealed(run, subject)
     if made and made[0]["kind"] == "refused":
         return {"refused": made[0]["reason"], "row": made[0], "code": 1}
-    steps = _rescope(run)
+    if not made:  # nothing was written, so nothing moved
+        return {
+            "lore": [],
+            "count": 0,
+            "rescope": {
+                "why": "no new rows: every fact was already lore; no pile moved",
+                "steps": [],
+            },
+            "code": 0,
+        }
+    by = "what"
     return {
         "lore": [{"n": r["n"], "where": r["where"], "fact": r["fact"]} for r in made],
         "count": len(made),
         "rescope": {
-            **steps,
-            "why": "the new lore rows moved the piles they sit in: a scope at the "
-            "new tip serves empty until the human seals it"
-            + ("" if made else " (no new rows: every fact was already lore)"),
+            "why": "the new lore rows moved the what=lore pile (and the author's "
+            "who pile): a scope drawn at the new tip serves empty until the "
+            "human seals it",
+            "steps": [
+                f"python3 -m onescript scope --by {by} --match what=lore",
+                "python3 -m onescript seal <the new subject> --proof P",
+                f"python3 -m onescript serve --by {by} --match what=lore"
+                " --upto <its upto> --max-chars N",
+            ],
         },
         "code": 0,
     }

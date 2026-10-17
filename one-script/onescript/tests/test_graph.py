@@ -298,7 +298,7 @@ def test_S9_a_file_edited_then_reverted_after_the_index_is_stale(repo):
     (root / "m.py").write_text(SRC + "# x\n")
     git(root, "checkout", "--", "m.py")  # clean again, but its mtime is new
     r = graph.graph_read(project, "search_graph", {"name_pattern": "wager"})
-    assert r["state"] == "stale" and "m.py" in r["why"]
+    assert r["state"] == "stale"  # by m.py's mtime or the rewritten staging area
 
 
 @needs_cbm
@@ -326,3 +326,75 @@ def test_N2_cbm_cache_dir_is_honoured(tmp_path, monkeypatch):
     with pytest.raises(graph.Unreachable) as e:
         graph._indexed_at("p", None)
     assert str(tmp_path / "nowhere") in str(e.value) or "cannot tell" in str(e.value)
+
+
+# ── round 3 ─────────────────────────────────────────────────────────────────
+def _stale_after(repo, act):
+    root, cache = repo
+    project = indexed(repo)
+    time.sleep(1.2)
+    act(root)
+    return graph.graph_read(project, "search_graph", {"name_pattern": "wager"})
+
+
+@needs_cbm
+@pytest.mark.parametrize("how", ["git-rm", "git-mv", "rm-then-add-A"])
+def test_NEW1_a_removed_or_renamed_path_reads_stale(repo, how):
+    acts = {
+        "git-rm": lambda r: git(r, "rm", "-q", "m.py"),
+        "git-mv": lambda r: git(r, "mv", "m.py", "n.py"),
+        "rm-then-add-A": lambda r: (os.remove(r / "m.py"), git(r, "add", "-A")),
+    }
+    r = _stale_after(repo, acts[how])
+    assert r["state"] == "stale" and r["rows"] == [], r["why"]
+
+
+FAKE = """#!/bin/sh
+case "$1" in
+ list_projects) exec %(cbm)s list_projects '{}';;
+ trace_path|get_code_snippet)
+   [ -n "$FAKE_ERR" ] && echo "$FAKE_ERR" >&2
+   exit ${FAKE_RC:-1};;
+esac
+"""
+
+
+@needs_cbm
+@pytest.mark.parametrize(
+    "rc,err,state",
+    [
+        ("1", "", "empty"),  # cbm's own answer for a name it lacks
+        ("1", "fatal: database is locked", "unreachable"),
+        ("2", "", "unreachable"),
+        ("139", "", "unreachable"),
+    ],
+)
+def test_NEW2_a_miss_is_empty_only_on_rc1_with_no_stderr(
+    repo, tmp_path, monkeypatch, rc, err, state
+):
+    project = indexed(repo)
+    fake = tmp_path / "fakecbm.sh"
+    fake.write_text(FAKE % {"cbm": CBM})
+    fake.chmod(0o755)
+    monkeypatch.setenv("FAKE_RC", rc)
+    monkeypatch.setenv("FAKE_ERR", err)
+    run = graph.cbm_runner(str(fake))
+    for tool, args in (
+        ("trace_path", {"function_name": "nonesuch", "direction": "inbound"}),
+        ("get_code_snippet", {"qualified_name": "nope"}),
+    ):
+        r = graph.graph_read(project, tool, args, runner=run)
+        assert r["state"] == state, (tool, rc, err, r["why"])
+
+
+def test_NEW2_a_wrong_argument_key_is_refused_not_empty():
+    def boom(tool, args):
+        raise AssertionError("must not run")
+
+    for tool, args in (
+        ("trace_path", {"name": "helper"}),
+        ("get_code_snippet", {"function_name": "x"}),
+        ("trace_path", None),
+    ):
+        r = graph.graph_read("p", tool, args, runner=boom)
+        assert r["state"] == "unreachable" and "refused" in r["why"]

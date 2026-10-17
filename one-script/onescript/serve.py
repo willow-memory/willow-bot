@@ -87,6 +87,7 @@ RETURN = (
     "marked as yours and read only alongside this file. Nothing else is read."
 )
 
+_ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
 _HASH = re.compile(r"[0-9a-f]{64}", re.IGNORECASE)
 WITHHELD = "[hash withheld]"
 
@@ -132,8 +133,13 @@ def view(row: dict) -> dict:
     # already passed through `lore.servable`. On any other row it is not payload.
     islore = (row.get("kind") or row.get("what")) == lore.KIND
     out.update({k: row[k] for k in PAYLOAD if k in row and (k != "fact" or islore)})
-    if isinstance(out.get("fact"), str):  # a hash in another form is still a hash
-        out["fact"] = unicodedata.normalize("NFKC", out["fact"])
+    # A hash in another form is still a hash: `fact` and a lore row's scene are
+    # rewritten to NFKC (so ligatures and fullwidth forms read as plain text; the
+    # served fact can differ from the sealed bytes in those forms only) and
+    # stripped of zero-width characters before the scrub looks for 64-hex.
+    for k in ("fact", "where") if islore else ():
+        if isinstance(out.get(k), str):
+            out[k] = _ZW.sub("", unicodedata.normalize("NFKC", out[k]))
     return _scrub(out)
 
 
@@ -468,40 +474,37 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
     if missing:  # in scope, so a count is no leak; the plain hashes are
         return _nothing("unreachable", f"{len(missing)} sealed table(s) not found")
     ctx = lore.Index(rows)  # once per serve, not once per row
-    stuck = lore.unchecked_seals(
-        [r for t in by_id.values() if table_id(t) in set(scope) for r in t["rows"]],
-        seals,
-        unchecked,
-    )
-    if stuck:  # said, never silently dropped (INVARIANTS section 1)
-        return _nothing(
-            "unreachable",
-            f"{len(stuck)} lore proposal seal(s) can't be checked here "
-            f"({next(iter(stuck.values()))})",
-        )
     served = []
     for tid in sorted(set(scope)):
         t = by_id[tid]
         src = t["source"]
         group = src.get("group", {}) if isinstance(src, dict) else {}
-        served.append(
-            {
-                "id": served_id(serve_key, tid),
-                "trust": "human-sealed" if tid in seals else "untrusted",
-                "group": _scrub(group),
-                "cannot_hold": [CANNOT_HOLD[w] for w in group if w in CANNOT_HOLD],
-                # served == sealed: the seal binds the authored rows only, so a
-                # run row (`who == "run"`) is never served, let alone labelled
-                # human-sealed. `_receipt` above still chain-checks every row.
-                "rows": [
-                    view(r)
-                    for r in authored(t["rows"])
-                    if lore.servable(r, ctx, seals)
-                ],
-            }
-        )
+        stuck = lore.unchecked_seals(t["rows"], ctx, seals, unchecked)
+        entry = {
+            "id": served_id(serve_key, tid),
+            "trust": "human-sealed" if tid in seals else "untrusted",
+            "group": _scrub(group),
+            "cannot_hold": [CANNOT_HOLD[w] for w in group if w in CANNOT_HOLD],
+            # served == sealed: the seal binds the authored rows only, so a
+            # run row (`who == "run"`) is never served, let alone labelled
+            # human-sealed. `_receipt` above still chain-checks every row.
+            "rows": [
+                view(r) for r in authored(t["rows"]) if lore.servable(r, ctx, seals)
+            ],
+        }
+        if stuck:  # said on the table, never shown as empty (INVARIANTS section 1)
+            entry["state"] = "unreachable"
+            entry["why"] = (
+                f"{len(stuck)} lore proposal seal(s) can't be checked here "
+                f"({next(iter(stuck.values()))}); those lore rows are not served"
+            )
+        served.append(entry)
     served.sort(key=lambda t: t["id"])
     doc = {"state": "populated", "why": "", "return": RETURN, "tables": served}
+    if served and all(
+        t.get("state") == "unreachable" and not t["rows"] for t in served
+    ):
+        doc["state"], doc["why"] = "unreachable", served[0]["why"]
     if len(canon(doc)) > max_chars:
         return _nothing(
             "empty", "the scope is too large for this model; narrow the stack"

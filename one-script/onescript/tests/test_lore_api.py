@@ -74,3 +74,12 @@ def test_cli_lore_command(cfg, capsys):
     out = capsys.readouterr().out
     assert code == 0 and "lore 2 row(s)" in out and "rescope:" in out
     assert "python3 -m onescript scope" in out
+
+
+def test_NEW5_rescope_names_the_lore_pile_and_says_nothing_moved_for_zero_rows(cfg):
+    subject = sealed_world(cfg)
+    first = api.lore(cfg, subject)
+    assert "what=lore" in " ".join(first["rescope"]["steps"])
+    again = api.lore(cfg, subject)
+    assert again["count"] == 0 and again["rescope"]["steps"] == []
+    assert "no pile moved" in again["rescope"]["why"]
