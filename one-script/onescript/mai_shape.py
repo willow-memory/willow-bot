@@ -198,3 +198,32 @@ def check(rel: str, data: bytes) -> str | None:
             "written: " + "; ".join(bad)
         )
     return "clean" if is_mai(text) else None
+
+
+# ── T-mai-2: the phases of a document, read the way mai reads them ────────────
+_PHASE = re.compile(r"^@phase\s+(\S+)", re.MULTILINE)
+
+
+def phases_of(text: str) -> list[tuple[str, str]]:
+    """[(name, body)] for each `@phase NAME` section, vendored from willow-mcp
+    `mai/parser.py:extract_phases` and `mai/tools.py:_strip_yaml_frontmatter`
+    (willow-mcp master at 8215d1d) so a lookup here answers what
+    `mai_resolve_phase` answers (`tests/test_rules.py` pins the two together
+    when the `mai` tool is on the box). A phase runs from its line to the next
+    `@phase` line, or to the end of the document, and its body is that span
+    stripped of outer whitespace and otherwise byte for byte. The name is the
+    one non-space token after `@phase`, exactly as written: the same name twice
+    is two entries, and a lookup must refuse it, not pick one."""
+    t = text.lstrip()
+    if t.startswith("---") and (end := t.find("---", 3)) >= 0:
+        text = t[end + 3 :].lstrip("\n")
+    bounds = [(m.start(), m.group(1), m.end()) for m in _PHASE.finditer(text)]
+    return [
+        (
+            name,
+            text[
+                after : bounds[i + 1][0] if i + 1 < len(bounds) else len(text)
+            ].strip(),
+        )
+        for i, (_, name, after) in enumerate(bounds)
+    ]

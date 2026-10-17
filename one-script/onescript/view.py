@@ -198,7 +198,11 @@ def morning(
         L.append(f"  · gates {json.dumps(tally, sort_keys=True)}")
     if claims:
         ok = sum(c["verdict"] == "verified" for c in claims)
-        L.append(f"  · claims checked: {ok}/{len(claims)} verified")
+        gap = sum(c["verdict"] == "unchecked" for c in claims)
+        L.append(
+            f"  · claims checked: {ok}/{len(claims)} verified"
+            + (f" · {gap} unchecked" if gap else "")
+        )
     if boot:
         held = sum(p["held"] for p in boot["probes"])
         L.append(

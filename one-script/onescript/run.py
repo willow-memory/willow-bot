@@ -569,9 +569,15 @@ class Run:
                 subject=subject,
             )
 
-    def say(self, text: str, facts: dict) -> list[dict]:
+    def say(self, text: str, facts: dict, *, symbols=None) -> list[dict]:
         """Layer 5: the claims in an output, checked before the human reads it.
-        The text itself is never rewritten; the rows sit beside it."""
+        The text itself is never rewritten; the rows sit beside it.
+
+        `symbols` (T-cbm-1) is a callable `text -> {file: entry}` (see
+        `graph.symbols_for`) that turns on the `symbol` kind when the facts do
+        not already carry one. Left None, no symbol row is made."""
+        if symbols is not None and "symbols" not in facts:
+            facts = {**facts, "symbols": symbols(text)}
         rows = gate.check_claims(text, facts)
         self.claims += rows
         self.rec.append("claims", self.sys, text_hash=h256(text), claims=rows)

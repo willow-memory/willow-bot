@@ -708,6 +708,42 @@ def lore(cfg: Config, subject: str, argv: Iterable[str] = ("lore",)) -> dict:
     }
 
 
+def rules(cfg: Config, subject: str, argv: Iterable[str] = ("rules",)) -> dict:
+    """Turn a human-sealed `rules/*.md` `@markdownai` proposal into `rules` rows,
+    one `@phase` each (SPEC R15, T-mai-2; `rules.from_sealed`). Refused, recorded,
+    when the proposal is not sealed, not a pass, an own idea, not under rules/ or
+    not an `@markdownai` document. Writes no seal and not the file
+    (`seal_proposal` does). Ends with the rescope step, as `lore` does."""
+    from . import rules as rules_rows
+
+    run, info = _open(cfg, "rules", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "rules", subject=subject)) is not None:
+        return refusal
+    made = rules_rows.from_sealed(run, subject)
+    if made and made[0]["kind"] == "refused":
+        return {"refused": made[0]["reason"], "row": made[0], "code": 1}
+    steps = [
+        "python3 -m onescript scope --by what --match what=rules",
+        "python3 -m onescript seal <the new subject> --proof P",
+        "python3 -m onescript serve --by what --match what=rules"
+        " --upto <its upto> --max-chars N",
+    ]
+    return {
+        "rules": [{"n": r["n"], "phase": r["where"]} for r in made],
+        "count": len(made),
+        "rescope": {
+            "why": "the new rules rows moved the what=rules pile: a scope drawn at "
+            "the new tip serves empty until the human seals it"
+            if made
+            else "no new rows: every phase was already rules; no pile moved",
+            "steps": steps if made else [],
+        },
+        "code": 0,
+    }
+
+
 def pooled(cfg: Config, argv: Iterable[str] = ("pooled",)) -> dict:
     """The pooled unsealed pass set, for the close-out deposit: every passing
     proposal on record that no human seal covers, one per subject, each as

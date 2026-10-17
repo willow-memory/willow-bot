@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import nestor_seal
+from . import graph, nestor_seal
 from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
@@ -434,9 +434,68 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+def _in(span: list, lo: int, hi: int) -> bool:
+    return span[0] <= lo and hi <= span[1]
+
+
+def _symbol_row(c: dict, entry: object) -> dict:
+    """One qualified cite against what the graph said about its file (T-cbm-1).
+    `verified`: the name is defined there, or the line falls inside a symbol.
+    `unverified` (struck): the graph is fresh and holds no such file or symbol.
+    `unchecked`: the graph was stale, unreachable, not asked, or the file name
+    is ambiguous; the record says which, and nothing is claimed either way."""
+    base = {"at": c["at"], "kind": "symbol", "claim": c["claim"]}
+    if not isinstance(entry, dict) or "state" not in entry:
+        return {**base, "verdict": "unchecked", "record": "the graph was not asked"}
+    state = entry["state"]
+    if state in ("stale", "unreachable"):
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": f"graph {state}: {entry.get('why', '')}".rstrip(": "),
+        }
+    if state != "populated":  # empty: a fresh graph that holds no symbol there
+        return {
+            **base,
+            "verdict": "unverified",
+            "record": entry.get("why") or "not in the graph",
+        }
+    paths = entry.get("paths") or []
+    if len(paths) != 1:
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": f"{c['file']} names {len(paths)} files in the graph: "
+            + ", ".join(paths[:3]),
+        }
+    names, ref = entry.get("names") or {}, c["ref"]
+    at = (entry.get("stamp") or {}).get("head_sha", "")[:12]
+    if ref[0].isdigit():
+        lo, _, hi = ref.partition("-")
+        lo, hi = int(lo), int(hi or lo)
+        ok = lo <= hi and any(_in(sp, lo, hi) for v in names.values() for sp in v)
+    elif "." in ref:  # Class.method: the method sits inside that class
+        cls, meth = ref.split(".", 1)
+        ok = any(
+            _in(k, m[0], m[1]) for k in names.get(cls, []) for m in names.get(meth, [])
+        )
+    else:
+        ok = ref in names
+    return {
+        **base,
+        "verdict": "verified" if ok else "unverified",
+        "record": f"{paths[0]} at {at}" if ok else f"not in {paths[0]} at {at}",
+    }
+
+
 def check_claims(text: str, facts: dict) -> list[dict]:
     """Checkable claims only. A claim the record can't check isn't listed:
-    it stays agent-reported, and the stamp says so."""
+    it stays agent-reported, and the stamp says so.
+
+    `facts["symbols"]` ({file: `graph.symbols_of(...)`}, from `graph.symbols_for`)
+    turns on the `symbol` kind (T-cbm-1): each qualified `file.py:name` or
+    `file.py:line` cite is read against the code graph. Without that key no
+    symbol row is listed. Bare names are never read."""
     rows = []
     for noun, value in sorted(facts.get("counts", {}).items()):
         pat = re.compile(
@@ -507,4 +566,9 @@ def check_claims(text: str, facts: dict) -> list[dict]:
                     "record": "" if ok else "not in the human's turns",
                 }
             )
+    if "symbols" in facts:
+        got = facts["symbols"] if isinstance(facts["symbols"], dict) else {}
+        rows += [
+            _symbol_row(c, got.get(c["file"])) for c in graph.qualified_cites(text)
+        ]
     return sorted(rows, key=lambda r: (r["at"], r["kind"]))

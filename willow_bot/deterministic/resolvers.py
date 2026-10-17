@@ -75,6 +75,15 @@ The table act (box-build SPEC ruling R12; SPEC-documented §11 J6, C13):
   own bands (``BANDS``, from ``story_session.py``'s strong 10+ / weak 7-9 /
   miss 6-) name the buckets a brief may ask for; they are never the answer,
   which always cites a row.
+- ``table.rules: @phase NAME`` (T-mai-2) answers a ``@phase`` of a SEALED
+  ``@markdownai`` rules document, ``verbatim``: the body of the served ``rules``
+  row whose ``where`` is NAME, byte for byte, citing the served table id. The
+  brief must be exactly ``@phase`` and one space and the name: a name that
+  differs by case or whitespace is ``phase_name_not_exact`` or
+  ``no_phase_on_record``, never a near match. A row is served only when its
+  proposal's human seal re-checks (``onescript/rules.py``), so an unsealed
+  document never answers; two served readings that differ are
+  ``conflicting_field``.
 - ``table.state: tally [session S]`` answers the tally and path of one
   session's served roll rows in turn order; a gap is ``turns_missing``.
 - R20: when a table act's D0 escalates, ``escalate.run_escalate`` sends it
@@ -577,9 +586,46 @@ def _rule_readings(excerpts: list) -> list[tuple[str, str, str]]:
     return out
 
 
-def _resolve_table_rules(fixture_id: str, brief: str, excerpts: list) -> dict:
-    """``table.rules: <bucket>`` -> the band text a served lore rule gives."""
+_PHASE_WORD_RE = re.compile(r"@phase\b", re.IGNORECASE)
+_PHASE_BRIEF_RE = re.compile(r"@phase (\S+)")
+
+
+def _resolve_table_phase(fixture_id: str, brief: str, excerpts: list) -> dict:
+    """``table.rules: @phase NAME`` -> the served ``rules`` row for NAME, verbatim.
+    The name is matched exactly (no case folding, no whitespace trimming inside
+    it); only served ``rules`` rows are read, no other row kind is a rule."""
     cls = "table.rules"
+    m = _PHASE_BRIEF_RE.fullmatch(brief or "")
+    if m is None or len(_PHASE_WORD_RE.findall(brief)) != 1:
+        return _record(
+            fixture_id, cls, STATUS_ESCALATE, None, [], "phase_name_not_exact"
+        )
+    name = m.group(1)
+    found = [
+        (eid, row["body"])
+        for eid, row in _served_rows(excerpts)
+        if (row.get("what") or row.get("kind")) == "rules"
+        and row.get("where") == name
+        and isinstance(row.get("body"), str)
+        and row["body"]
+    ]
+    if not found:
+        return _record(
+            fixture_id, cls, STATUS_ESCALATE, None, [], "no_phase_on_record"
+        )
+    bodies = {b for _, b in found}
+    if len(bodies) > 1:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
+    cites = list(dict.fromkeys(eid for eid, _ in found if eid))
+    return _record(fixture_id, cls, STATUS_VERBATIM, bodies.pop(), cites, None)
+
+
+def _resolve_table_rules(fixture_id: str, brief: str, excerpts: list) -> dict:
+    """``table.rules: <bucket>`` -> the band text a served lore rule gives;
+    ``table.rules: @phase NAME`` -> that phase of a sealed rules document."""
+    cls = "table.rules"
+    if _PHASE_WORD_RE.search(brief or ""):
+        return _resolve_table_phase(fixture_id, brief, excerpts)
     words = [w.lower().strip(".,:;?!") for w in (brief or "").split()]
     buckets = list(dict.fromkeys(w for w in words if w in BANDS))
     if len(buckets) > 1:

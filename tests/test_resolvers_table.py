@@ -364,3 +364,67 @@ def test_NIT4_a_session_id_with_spaces_is_named_quoted():
     assert res["status"] == STATUS_RESOLVED and res["answer"]["total"] == 8
     res = resolve_fixture(act("table.roll", "turn 1 session s 1", ex))
     assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_session_on_record"
+
+
+# -------------------------------------------- table.rules: @phase NAME (T-mai-2)
+
+PHASE_BODY = "A weak hit (7-9)  lands, but it costs.   \n\n  Indented line."
+
+
+def rules_ex(name: str, body: str = PHASE_BODY, eid: str = "ex-r", what: str = "rules") -> dict:
+    return excerpt(eid, {"who": "willow", "what": what, "where": name, "body": body})
+
+
+def test_phase_lookup_is_verbatim_byte_for_byte_and_cites_the_served_id():
+    res = resolve_fixture(act("table.rules", "@phase R-weak", rules_ex("R-weak")))
+    assert res["status"] == resolvers.STATUS_VERBATIM and res["reason"] is None
+    assert res["answer"] == PHASE_BODY  # the double space, the trailing spaces, the blank line
+    assert res["cites"] == ["ex-r"]
+
+
+@pytest.mark.parametrize(
+    "brief",
+    [
+        "@phase r-weak",
+        "@phase R-WEAK",
+        "@Phase R-weak",
+        "@phase  R-weak",
+        "@phase R-weak ",  # a trailing space is part of what was asked
+        " @phase R-weak",
+        "@phase R-weak R-miss",
+        "@phase R- weak",
+        "@phase\tR-weak",
+        "@phase",
+        "what does @phase R-weak say",
+        "@phase R-weak @phase R-weak",
+    ],
+)
+def test_a_phase_name_that_differs_by_case_or_whitespace_is_refused(brief):
+    res = resolve_fixture(act("table.rules", brief, rules_ex("R-weak")))
+    assert res["status"] == STATUS_ESCALATE and res["answer"] is None
+    assert res["reason"] in ("phase_name_not_exact", "no_phase_on_record")
+
+
+def test_the_phase_is_read_from_rules_rows_only():
+    for what in ("lore", "verdict", "note"):
+        res = resolve_fixture(act("table.rules", "@phase R-weak", rules_ex("R-weak", what=what)))
+        assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_phase_on_record"
+
+
+def test_two_readings_of_a_phase_that_differ_escalate_and_equal_ones_do_not():
+    a, b = rules_ex("R-weak", "one", "ex-a"), rules_ex("R-weak", "two", "ex-b")
+    res = resolve_fixture(act("table.rules", "@phase R-weak", a, b))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "conflicting_field"
+    same = resolve_fixture(act("table.rules", "@phase R-weak", a, rules_ex("R-weak", "one", "ex-b")))
+    assert same["status"] == resolvers.STATUS_VERBATIM and same["cites"] == ["ex-a", "ex-b"]
+
+
+def test_a_body_that_is_not_text_or_is_empty_is_not_an_answer():
+    for body in ("", None, 7, ["x"]):
+        res = resolve_fixture(act("table.rules", "@phase R-weak", rules_ex("R-weak", body)))
+        assert res["status"] == STATUS_ESCALATE
+
+
+def test_the_bucket_form_of_table_rules_is_unchanged():
+    res = resolve_fixture(act("table.rules", "weak", lore("rule: weak 7-9 the hit lands but costs")))
+    assert res["status"] == STATUS_RESOLVED
