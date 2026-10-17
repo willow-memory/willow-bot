@@ -307,6 +307,7 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
     clock: Callable[[], str] = (lambda: cfg.now) if cfg.now else _now
     run = Run(cfg.box, keys, law, clock, anchor=cfg.keys.parent / ANCHOR)
     run.serve_key = _load_serve_key(cfg)
+    run.keyring, run.nestor_db = cfg.keyring, cfg.nestor_db
     run.rec.append(
         "invocation",
         run.sys,
@@ -332,6 +333,7 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
         trace_ids=len(law["trace_ids"]),
         nested=nested,  # the tests gate is skipped, and says so
     )
+    run.pin()  # once per box: the first verb this code runs pins the old tip
     return run, {"ci_text": ci_text, "nested": nested}
 
 
@@ -659,22 +661,37 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     row without a `ts` leaves the key out. Read-only, like `pooled`: it writes an `invocation` row and
     nothing else, needs no open box, and never seals, serves or mints. With no
     human seal over a scope, or no scope row behind it, the answer is
-    {"resume": None}."""
+    {"resume": None}. A newer seal row that can't be checked here does not hide
+    an older verified one: the older one is resumed and the newer one rides
+    along as `newer` ({subject, state: "unreachable", why}). Only when no seal
+    verifies is the answer {"resume": None, "state": "unreachable"}."""
     run, info = _open(cfg, "resume", argv)
     if run is None:
         return info
     rows = run.rec.rows()
-    seal = next(
-        (
-            r
-            for r in reversed(rows)
-            if r["kind"] == "seal"
-            and r.get("who") == gate.HUMAN
-            and str(r.get("subject", "")).startswith("serve:")
-        ),
-        None,
-    )
+    good, unchecked = run.seal_rows(rows)  # the row itself, not its subject
+    seal = newer = None
+    for r in reversed(rows):
+        subject = str(r.get("subject", ""))
+        if r["kind"] != "seal" or not subject.startswith("serve:"):
+            continue
+        if r["n"] in good:
+            seal = r
+            break
+        if r["n"] in unchecked and newer is None:  # said, not guessed
+            newer = {
+                "subject": subject,
+                "state": "unreachable",
+                "why": unchecked[r["n"]],
+            }
     if seal is None:
+        if newer is not None:
+            return {
+                "resume": None,
+                "state": "unreachable",
+                "why": newer["why"],
+                "code": 0,
+            }
         return {"resume": None, "code": 0}
     scoped = next(
         (
@@ -691,6 +708,8 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     found = {"spec": scoped["spec"], "subject": seal["subject"], "code": 0}
     if seal.get("ts"):
         found["sealed_at"] = seal["ts"]
+    if newer is not None:  # a newer seal it could not check: shown, not dropped
+        found["newer"] = newer
     return found
 
 

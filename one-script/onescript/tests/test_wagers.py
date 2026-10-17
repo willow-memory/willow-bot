@@ -31,10 +31,13 @@ def run(tmp_path):
     return Run(tmp_path / "box", KEYS, {}, clock(), anchor=tmp_path / "anchor.json")
 
 
+def signed(w, outcome):
+    """The human's proof over this wager's outcome: the outcome is signed."""
+    return gate.sign(HUMAN_KEY, "seal", reverse.outcome_subject(w["hash"], outcome))
+
+
 def seal(run, w, outcome):
-    return run.seal(
-        w["hash"], gate.sign(HUMAN_KEY, "seal", w["hash"]), HUMAN_KEY, outcome
-    )
+    return run.seal(w["hash"], signed(w, outcome), HUMAN_KEY, outcome)
 
 
 def anchor(run):
@@ -44,9 +47,12 @@ def anchor(run):
 
 
 def recon(run, key=HUMAN_KEY):
-    """Reconcile the way check-out does: through what the anchor provably covers."""
+    """Reconcile the way check-out does: through what the anchor provably
+    covers, over the seals whose proofs re-check."""
     return reverse.reconcile_wagers(
-        run.rec.rows(), reverse.covered_through(run.rec, key)
+        run.rec.rows(),
+        reverse.covered_through(run.rec, key),
+        run.held(human_key=key)[0],
     )
 
 
@@ -107,9 +113,11 @@ def test_wager_with_scores_reconciles_winner(run):
 
 def test_a_non_seal_row_is_not_a_seal(run):
     w = run.wager("P1", DIST)
-    hum = gate.human(w["hash"], gate.sign(HUMAN_KEY, "seal", w["hash"]), HUMAN_KEY)
+    out = {"path_index": 1}
+    sub = reverse.outcome_subject(w["hash"], out)
+    hum = gate.human(sub, signed(w, out), HUMAN_KEY)
     run.rec.append(  # the human's hand, same subject and outcome, but not a seal
-        "note", hum, subject=w["hash"], outcome={"path_index": 1}
+        "note", hum, subject=sub, wager=w["hash"], outcome=out, proof=signed(w, out)
     )
     anchor(run)
     row = recon(run)["rows"][0]
@@ -118,7 +126,15 @@ def test_a_non_seal_row_is_not_a_seal(run):
 
 def test_a_seal_row_not_stamped_by_the_human_is_not_a_seal(run):
     w = run.wager("P1", DIST)
-    run.rec.append("seal", run.sys, subject=w["hash"], outcome={"path_index": 1})
+    out = {"path_index": 1}
+    run.rec.append(
+        "seal",
+        run.sys,
+        subject=reverse.outcome_subject(w["hash"], out),
+        wager=w["hash"],
+        outcome=out,
+        proof=signed(w, out),
+    )
     anchor(run)
     row = recon(run)["rows"][0]
     assert row["state"] == "escalate"
@@ -144,6 +160,7 @@ def test_reconcile_carries_wagers_beside_untouched_predictions(run, tmp_path):
         run.version,
         predictions=[{"x": 1}],
         wagers_through=reverse.covered_through(run.rec, HUMAN_KEY),
+        held=run.held(human_key=HUMAN_KEY)[0],
     )
     assert rep["predictions"] == [{"x": 1}]
     assert rep["wagers"]["reconciled"] == ["P1"]
@@ -236,3 +253,75 @@ def test_checkout_threads_the_human_key(run):
     anchor(run)
     assert run.checkout()[0]["wagers"]["escalate"] == ["P1"]
     assert run.checkout(human_key=HUMAN_KEY)[0]["wagers"]["reconciled"] == ["P1"]
+
+
+def forge(run, **fields):
+    """A seal row by hand, stamped `who: human`, chained the way the record
+    chains: what anyone with write access to the record can append."""
+    import json
+
+    rs = [json.loads(x) for x in run.rec.path.read_text().splitlines()]
+    row = {
+        "n": len(rs),
+        "kind": "seal",
+        "who": "human",
+        "family": "human",
+        "standing": "sealed",
+        "version": rs[-1]["version"],
+        "ts": "t",
+        "prev": rs[-1]["hash"],
+        "where": fields.get("subject"),
+        **fields,
+    }
+    row["hash"] = record.h256(record.canon(row))
+    with run.rec.path.open("a") as f:
+        f.write(record.canon(row) + "\n")
+
+
+def test_a_forged_outcome_with_no_proof_is_no_outcome_even_inside_the_tip(run):
+    """The tip vouches that rows don't change after it, not that the human
+    wrote them: a proofless outcome row slipped in before it is no seal."""
+    w = run.wager("P1", DIST)
+    out = {"path_index": 1}
+    forge(
+        run,
+        subject=reverse.outcome_subject(w["hash"], out),
+        wager=w["hash"],
+        outcome=out,
+    )
+    anchor(run)
+    assert recon(run)["rows"][0]["state"] == "escalate"
+
+
+def test_a_copied_proof_cannot_carry_another_outcome(run):
+    w = run.wager("P1", DIST)
+    seal(run, w, {"path_index": 0})
+    real = run.rec.rows()[-1]
+    forge(  # the human's real proof, a later row, another outcome
+        run,
+        subject=real["subject"],
+        wager=w["hash"],
+        outcome={"path_index": 1},
+        proof=real["proof"],
+    )
+    anchor(run)
+    row = recon(run)["rows"][0]
+    assert row["state"] == "reconciled" and row["path_index"] == 0
+
+
+def test_an_outcome_sealed_over_the_bare_wager_hash_is_no_outcome(run):
+    """The old shape: the proof signs the wager's hash only, the outcome rides
+    unsigned. It counts for nothing now."""
+    w = run.wager("P1", DIST)
+    proof = gate.sign(HUMAN_KEY, "seal", w["hash"])
+    hum = gate.human(w["hash"], proof, HUMAN_KEY)
+    run.rec.append(
+        "seal",
+        hum,
+        where=w["hash"],
+        subject=w["hash"],
+        proof=proof,
+        outcome={"path_index": 1},
+    )
+    anchor(run)
+    assert recon(run)["rows"][0]["state"] == "escalate"

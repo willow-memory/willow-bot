@@ -27,6 +27,7 @@ CAP = 10**6  # serve needs the caller's cap; most tests don't care what it is
 
 def capped(*args, **kw):
     kw.setdefault("max_chars", CAP)
+    kw.setdefault("human_key", HUMAN_KEY)  # what the seal rows are re-checked by
     return serve.serve(*args, **kw)
 
 
@@ -40,8 +41,9 @@ def box(tmp_path):
 
 
 def seal(rec, subject):
-    hum = gate.human(subject, gate.sign(HUMAN_KEY, "seal", subject), HUMAN_KEY)
-    rec.append("seal", hum, subject=subject)
+    proof = gate.sign(HUMAN_KEY, "seal", subject)
+    hum = gate.human(subject, proof, HUMAN_KEY)
+    rec.append("seal", hum, subject=subject, proof=proof)  # as Run.seal writes it
 
 
 def scoped(rec, *tables):
@@ -428,14 +430,14 @@ def test_a_sealed_subject_survives_launches_that_add_only_run_rows(tmp_path, by,
     card = serve.propose(stack, **match)
     assert card["subject"] and card["ids"]
     seal(rec, card["subject"])
-    assert card["subject"] in serve.sealed(rec.rows())
+    assert card["subject"] in serve.claimed_seals(rec.rows())
 
     launch(rec)
     launch(rec)
     again_stack = serve.piles(rec.rows(), *by)
     again = serve.propose(again_stack, **match)
     assert again["subject"] == card["subject"] and again["ids"] == card["ids"]
-    assert again["subject"] in serve.sealed(rec.rows())
+    assert again["subject"] in serve.claimed_seals(rec.rows())
     doc = capped(rec, again_stack, again["ids"], SERVE_KEY)
     assert doc["state"] == "populated"  # the old seal still opens the new run
 
@@ -488,7 +490,7 @@ def test_an_authored_row_still_moves_the_subject_and_needs_a_new_seal(tmp_path):
     )
     moved = serve.propose(serve.piles(rec.rows(), "who"))
     assert moved["subject"] != card["subject"]
-    assert moved["subject"] not in serve.sealed(rec.rows())
+    assert moved["subject"] not in serve.claimed_seals(rec.rows())
     doc = capped(rec, serve.piles(rec.rows(), "who"), moved["ids"], SERVE_KEY)
     assert doc["state"] == "empty" and "no human seal" in doc["why"]
 
@@ -522,7 +524,7 @@ def test_sealing_a_scope_does_not_move_its_subject(tmp_path, by, match):
     seal(rec, card["subject"])
     again = serve.propose(serve.piles(rec.rows(), *by), **match)
     assert again["subject"] == card["subject"] and again["ids"] == card["ids"]
-    assert again["subject"] in serve.sealed(rec.rows())
+    assert again["subject"] in serve.claimed_seals(rec.rows())
     doc = capped(rec, serve.piles(rec.rows(), *by), again["ids"], SERVE_KEY)
     assert doc["state"] == "populated"
     assert "serve:" not in json.dumps(doc["tables"])  # no scope seal is served
@@ -563,4 +565,4 @@ def test_mutant_seal_rows_back_in_the_pile_drift_the_subject(tmp_path, monkeypat
     seal(rec, card["subject"])
     again = serve.propose(serve.piles(rec.rows(), "who"), who="human")
     assert again["subject"] != card["subject"]  # the drift the fix removes
-    assert again["subject"] not in serve.sealed(rec.rows())
+    assert again["subject"] not in serve.claimed_seals(rec.rows())

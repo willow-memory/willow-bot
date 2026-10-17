@@ -19,8 +19,21 @@ import json
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import boot, gate, predict, proposals, record, resolve, reverse, serve, view
+from . import (
+    boot,
+    gate,
+    nestor_seal,
+    predict,
+    proposals,
+    record,
+    resolve,
+    reverse,
+    serve,
+    view,
+)
 from .record import h256
+
+_TIP = object()  # `held`: work out how far old seals reach here
 
 PKG = Path(__file__).resolve().parent
 
@@ -43,6 +56,10 @@ class Run:
         self.claims: list[dict] = []
         self.acts: list[dict] = []
         self.serve_key: bytes | None = None  # made at check-in, never the seal key
+        # what a Nestor seal row is re-checked by; set from the operator's
+        # Config, never from a caller (api._open)
+        self.keyring: Path | None = None
+        self.nestor_db: Path | None = None
 
     def checkin(self, gate_cfg: dict | None = None) -> dict:
         report = boot.boot(self.rec, self.keys, self.law, gate_cfg)
@@ -177,7 +194,104 @@ class Run:
     ) -> dict:
         """Write the one file the model reads. Before check-in there's no serve
         key, and serve fails closed. `max_chars` is the caller's cap."""
-        return serve.serve(self.rec, tables, scope, self.serve_key, max_chars=max_chars)
+        return serve.serve(
+            self.rec,
+            tables,
+            scope,
+            self.serve_key,
+            max_chars=max_chars,
+            human_key=self.keys.get(gate.HUMAN),
+            keyring=self.keyring,
+            nestor_db=self.nestor_db,
+            **self.old_seals(self.keys.get(gate.HUMAN)),
+        )
+
+    def held(
+        self,
+        rows: list[dict] | None = None,
+        human_key: bytes | None = None,
+        through: dict | object = _TIP,
+    ) -> tuple[set[str], dict[str, str]]:
+        """(held, unreachable): the subjects whose seal proof re-checks against
+        this run's key, keyring and store (`serve.sealed_verified`). A row that
+        only says `who == "human"` is in neither. `human_key` stands in for the
+        run's own when given, for the proofs and the tip alike; `through` is the
+        `old_seals` answer when the caller already worked it out."""
+        key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
+        old = self.old_seals(key) if through is _TIP else through
+        return serve.sealed_verified(
+            self.rec.rows() if rows is None else rows,
+            key,
+            self.keyring,
+            self.nestor_db,
+            **old,  # type: ignore[arg-type]
+        )
+
+    def old_seals(self, human_key: bytes | None) -> dict:
+        """How far a seal row with no proof may count, as `sealed_verified`
+        takes it: `through`, the pinned tip while the sealed tip still covers
+        it, and `unpinned` when the box has no pin yet (`reverse.pinned`)."""
+        tip = reverse.covered_through(self.rec, human_key)
+        if tip is None:
+            return {"through": None, "unpinned": None}
+        pin, why = reverse.pinned(self.rec, human_key)
+        if why is not None:
+            return {"through": None, "unpinned": (tip, why)}
+        return {"through": None if pin is None else min(pin, tip), "unpinned": None}
+
+    def _anchor(self) -> dict | None:
+        try:
+            return self.rec.anchor()
+        except (ValueError, OSError):
+            return None
+
+    _NOW = object()
+
+    def pin(self, anchor: dict | None | object = _NOW) -> dict | None:
+        """Write the `pin` row, once: the tip the human had sealed when this
+        code first wrote to the box, so old seal rows with no proof count only
+        up to it (`reverse.pinned`). No anchor, or one that can't be read, pins
+        no tip, and then no proofless row counts. `api._open` calls it on every
+        verb, right after the `invocation` row; `seal_tip` hands over the anchor
+        as it was before the new tip replaced it. A pin already on record is left alone,
+        and None is returned."""
+        if any(r["kind"] == "pin" for r in self.rec.rows()):
+            return None
+        a = self._anchor() if anchor is Run._NOW else anchor
+        if not isinstance(a, dict):
+            return self.rec.append("pin", self.sys, tip_n=None)
+        return self.rec.append(
+            "pin", self.sys, tip_n=a["n"], tip_hash=a["hash"], proof=a["proof"]
+        )
+
+    def seal_rows(
+        self, rows: list[dict] | None = None
+    ) -> tuple[set[int], dict[int, str]]:
+        """Per row, not per subject: the `n` of every seal row whose own proof
+        re-checks, and of every one that can't be checked here, with why.
+        `held` answers whether a subject is sealed; a reader that takes
+        anything else from the seal row (a spec beside it, its stamp) needs
+        this, since a forged row over a sealed subject is in `held` too."""
+        rows = self.rec.rows() if rows is None else rows
+        key = self.keys.get(gate.HUMAN)
+        old = self.old_seals(key)
+        ring = self.keyring
+        if ring is not None and not isinstance(ring, dict):
+            try:
+                ring = nestor_seal.load_keyring(ring)
+            except nestor_seal.Unverifiable:
+                pass  # sealed_verified says why, row by row
+        good: set[int] = set()
+        unchecked: dict[int, str] = {}
+        for r in rows:
+            if r.get("kind") != "seal" or not isinstance(r.get("n"), int):
+                continue
+            ok, why = serve.sealed_verified([r], key, ring, self.nestor_db, **old)
+            if ok:
+                good.add(r["n"])
+            elif why:
+                unchecked[r["n"]] = next(iter(why.values()))
+        return good, unchecked
 
     # ── proposals: the model's Write is a row, and a seal is what writes it ──
     def _current_serve(self) -> tuple[dict, bytes] | None:
@@ -347,12 +461,14 @@ class Run:
     def pooled(self) -> list[dict]:
         """The pooled unsealed pass set, read-only: every proposal on record
         that stands as a pass (`find_proposal`: hashes to its subject, fits the
-        contract, passes the door now) and that the record holds no human seal
-        over. One entry per subject, in the order each subject first appeared;
-        the latest valid row for a subject is the one that counts. Nothing is
-        written and nothing is sealed."""
+        contract, passes the door now) and that the record holds no verified
+        human seal over (`held`). A seal that can't be checked here leaves the
+        proposal listed, marked `seal: unreachable`. One entry per subject, in
+        the order each subject first appeared; the latest valid row for a
+        subject is the one that counts. Nothing is written and nothing is
+        sealed."""
         rows = self.rec.rows()
-        held = serve.sealed(rows)
+        held, unchecked = self.held(rows)
         subjects = dict.fromkeys(
             r["subject"]
             for r in rows
@@ -365,9 +481,10 @@ class Run:
         for s in subjects:
             prop, why = self.find_proposal(s)
             if why is None and prop is not None:
-                out.append(
-                    {"subject": s, **{k: prop[k] for k in sorted(proposals.KEYS)}}
-                )
+                item = {"subject": s, **{k: prop[k] for k in sorted(proposals.KEYS)}}
+                if s in unchecked:
+                    item |= {"seal": "unreachable", "why": unchecked[s]}
+                out.append(item)
         return out
 
     @staticmethod
@@ -384,11 +501,22 @@ class Run:
         to the sealed subject, so a row edited after the fact writes nothing."""
         rows = self.rec.rows()
         prop, why = self.find_proposal(subject)
-        if why is None and subject not in serve.sealed(rows):
-            why = "no human seal over this proposal; nothing written"
+        state = {}
+        if why is None:
+            held, unchecked = self.held(rows)
+            if subject in unchecked and subject not in held:
+                why = f"{unchecked[subject]}; nothing written"
+                state = {"state": "unreachable"}
+            elif subject not in held:
+                why = "no human seal over this proposal; nothing written"
         if why is not None:
             return self.rec.append(
-                "refused", self.sys, at="write_proposal", reason=why, subject=subject
+                "refused",
+                self.sys,
+                at="write_proposal",
+                reason=why,
+                subject=subject,
+                **state,
             )
         data = prop["data"].encode("utf-8")
         on_disk = self.rec.box / prop["path"]
@@ -446,16 +574,28 @@ class Run:
         human_key: bytes,
         outcome: dict | None = None,
     ) -> dict:
-        """`outcome` rides on the row for a wager seal (path_index / path /
-        winner). The proof signs the subject only, not the outcome."""
+        """The proof rides on the row: it is what a reader re-checks (`held`),
+        since a row's `who` is only a label anyone writing the record can set.
+
+        A wager seal passes the wager's row hash as `subject` and its `outcome`
+        (path_index / path / winner). What the human signs is then the
+        outcome's own subject, `reverse.outcome_subject(wager, outcome)`, so the
+        outcome is inside what was signed: a proof copied onto another row
+        can't carry a different outcome. The row keeps `wager` and `outcome`
+        beside it, and a reader works the subject out again from them."""
+        extra: dict = {}
+        if outcome is not None:
+            extra = {"wager": subject, "outcome": outcome}
+            subject = reverse.outcome_subject(subject, outcome)
         try:
             hum = gate.human(subject, proof, human_key)
         except gate.Refused as e:
             return self.rec.append(
                 "refused", self.sys, at="seal", reason=str(e), subject=subject
             )
-        extra = {"outcome": outcome} if outcome is not None else {}
-        return self.rec.append("seal", hum, where=subject, subject=subject, **extra)
+        return self.rec.append(
+            "seal", hum, where=subject, subject=subject, proof=proof, **extra
+        )
 
     def seal_nestor(
         self,
@@ -465,15 +605,23 @@ class Run:
         verifiers: frozenset | None = None,
     ) -> dict:
         """The human's seal as a sealed Nestor pair whose conclusion is exactly
-        `subject`: no terminal, no key typed. The row says whose pair it was."""
+        `subject`: no terminal, no key typed. The row says whose pair it was,
+        and carries the pair's signed fields, so a reader can re-check it."""
         try:
             hum, who = gate.human_nestor(subject, pair, keyring, verifiers)
         except gate.Refused as e:
             return self.rec.append(
                 "refused", self.sys, at="seal", reason=str(e), subject=subject
             )
+        signed = {k: pair[k] for k in nestor_seal.PAIR_FIELDS}  # type: ignore[index]
         return self.rec.append(
-            "seal", hum, where=subject, subject=subject, via="nestor", verifier=who
+            "seal",
+            hum,
+            where=subject,
+            subject=subject,
+            via="nestor",
+            verifier=who,
+            pair=signed,
         )
 
     def seal_tip(self, proof: str, human_key: bytes) -> dict:
@@ -490,8 +638,11 @@ class Run:
             return self.rec.append(
                 "refused", self.sys, at="seal_tip", reason=str(e), subject=subject
             )
+        before = self._anchor()  # the tip a first pin keeps, read before it moves
         self.rec.set_anchor(tip, proof)
-        return self.rec.append("seal", hum, where=subject, subject=subject)
+        row = self.rec.append("seal", hum, where=subject, subject=subject, proof=proof)
+        self.pin(before)
+        return row
 
     def night(self, questions, models, budget: resolve.Budget, present) -> str:
         got, how = resolve.night_pool(list(questions), list(models), budget, present)
@@ -512,18 +663,26 @@ class Run:
         human_key: bytes | None = None,
     ) -> dict:
         """The reverse report over the record as it stands: pure, it appends
-        nothing. `checkout` draws its screen from it; `api.needs` reads it."""
+        nothing. `checkout` draws its screen from it; `api.needs` reads it.
+        The record is read, and its tip checked, once."""
+        rows = self.rec.rows()
+        key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
+        through = reverse.covered_through(self.rec, key)
+        held, unreachable = self.held(rows, key, self.old_seals(key))
         return reverse.reconcile(
             self.rec.box,
             self.rec.pile(),
-            self.rec.rows(),
+            rows,
             self.version,
             changed_law=changed_law,
             answers=self.answers,
             sealed=sealed,
             task_of=task_of,
             predictions=self.graded,
-            wagers_through=reverse.covered_through(self.rec, human_key),
+            # a wager outcome counts only when the caller handed the key over
+            wagers_through=through if human_key is not None else None,
+            held=held,
+            unreachable=unreachable,
         )
 
     def checkout(

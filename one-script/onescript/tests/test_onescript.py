@@ -42,7 +42,9 @@ def clock():
 
 @pytest.fixture
 def run(tmp_path):
-    return Run(tmp_path / "box", KEYS, LAW, clock())
+    # The human's key sits in the keys file, as on the box: the morning
+    # screen checks a seal against it before it clears what awaits.
+    return Run(tmp_path / "box", {**KEYS, gate.HUMAN: HUMAN_KEY}, LAW, clock())
 
 
 DOC_EDIT = "from pathlib import Path\np=Path('w.md');s=p.read_text();p.write_text(s.replace('a','b'))\n"

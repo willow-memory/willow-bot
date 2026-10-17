@@ -244,7 +244,12 @@ def main(argv: list[str] | None = None) -> int:
     sl.add_argument(
         "--pair", type=Path, help="a sealed Nestor pair, as JSON, to find in the store"
     )
-    sl.add_argument("--verifier", action="append", help="only these may seal")
+    sl.add_argument(
+        "--verifier",
+        action="append",
+        help="take a pair signed by one of these names, for this seal only; it "
+        "is not stored and does not bind later readers (the keyring does)",
+    )
     args = p.parse_args(argv)
     raw = list(argv if argv is not None else sys.argv[1:])
 

@@ -210,21 +210,30 @@ def _sig_ok(kind: str, key: bytes, msg: bytes, sig: str) -> tuple[bool, str]:
     return True, ""
 
 
+def shape(pair: object, subject: str) -> str:
+    """ "" when `pair` is shaped like a sealed pair over `subject`; else why.
+    No key, keyring or store is needed for this, so a reader that has none can
+    still tell a malformed row (no seal) from one it can't check (unreachable)."""
+    if not isinstance(pair, dict):
+        return "the pair is not a record"
+    if not all(isinstance(pair.get(k), str) for k in _PAIR_FIELDS):
+        return "the pair is missing a field a seal is signed over"
+    if pair["status"] != "sealed":
+        return f"the pair is {pair['status']!r}, not sealed"
+    if pair["target_text"] != subject:
+        return "the pair's conclusion is not this subject"
+    return ""
+
+
 def check(
     pair: object, subject: str, keyring: dict, verifiers: frozenset | None = None
 ) -> tuple[str | None, str]:
     """(verifier, "") when `pair` is a sealed Nestor pair whose conclusion is
     exactly `subject`; else (None, why). Never raises on a bad pair."""
-    if not isinstance(pair, dict):
-        return None, "the pair is not a record"
-    fields = ("source_norm", "target_text", "verifier", "seal_sig", "status")
-    if not all(isinstance(pair.get(k), str) for k in fields):
-        return None, "the pair is missing a field a seal is signed over"
-    if pair["status"] != "sealed":
-        return None, f"the pair is {pair['status']!r}, not sealed"
-    if pair["target_text"] != subject:
-        return None, "the pair's conclusion is not this subject"
-    who = pair["verifier"]
+    why = shape(pair, subject)
+    if why:
+        return None, why
+    who = pair["verifier"]  # type: ignore[index]
     if verifiers is not None and who not in verifiers:
         return None, f"{who!r} is not a verifier this seal may come from"
     entry = keyring.get("verifiers", {}).get(who)
@@ -268,6 +277,8 @@ def pairs_for(db: str | Path, subject: str) -> list[dict]:
 
 
 _PAIR_FIELDS = ("source_norm", "target_text", "verifier", "seal_sig", "status")
+#: What a seal row keeps of the pair, so a reader can check it again.
+PAIR_FIELDS = _PAIR_FIELDS
 
 
 def current(db: str | Path, subject: str, pair: object = None) -> list[dict]:
