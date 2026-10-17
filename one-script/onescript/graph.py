@@ -1,12 +1,13 @@
 """graph — a code-graph read that says when, where and whether it can be trusted.
 
-Cites: SPEC.md ruling R15 and SPEC-tools.md phase T-cbm-4. The seam W4 uses
-(T-cbm-1 `symbol` cites); nothing calls it yet.
+Cites: SPEC.md rulings R15 and R18 and SPEC-tools.md phase T-cbm-4. The seam W4
+uses (T-cbm-1 `symbol` cites, `trace_path`); nothing calls it yet.
 
 It wraps `cbm` (codebase-memory-mcp), the binary named by `ONESCRIPT_CBM`
 (default /home/user/tools/bin/cbm). onescript never imports cbm and never runs
 its `install`, `update` or `--ui`: only the read tools below are allowed, and
-`index_repository` only through `reindex`.
+`index_repository` only through `reindex`. A missing or broken binary is
+`unreachable`, never an empty graph.
 
 Every read comes back as `{state, why, stamp, rows, total}`:
 
@@ -18,21 +19,31 @@ Every read comes back as `{state, why, stamp, rows, total}`:
                 freshness that cannot be told; nothing is said about the code
   stale         the index is older than the checkout (refused, rows withheld)
 
+R18 (recorded guess, 65%): `stale` is a refusal. It does not re-index behind the
+caller's back, because a silent re-index changes what the next read says without
+the caller having asked; the caller decides, and `reindex` is there to call.
+
 `stamp` is {project, nodes, edges, head_sha, dirty, indexed_at, branch}. cbm
-records no commit, only when (`projects.indexed_at` in its store); the branch
-`list_projects` shows is the live one, not the one indexed. So an index is stale
-when HEAD moved after `indexed_at` (the later of the HEAD commit's time and the
-HEAD reflog's last move, which also catches a checkout of another branch or an
-older commit), or a tracked file that differs from HEAD was modified after
-`indexed_at`. The
-resolution is a second: a commit made in the very second of indexing reads as
-fresh. `dirty` is the stamp's own fact: tracked files differ from HEAD.
+records no commit, only when (`projects.indexed_at` in its store, found under
+`ONESCRIPT_CBM_CACHE`, else `CBM_CACHE_DIR`, else ~/.cache/codebase-memory-mcp);
+the branch `list_projects` shows is the live one, not the one indexed. So an
+index is stale when HEAD moved after `indexed_at` (the later of the HEAD
+commit's time and the HEAD reflog's last move, which also catches a checkout of
+another branch or an older commit), or ANY file git lists as tracked or
+untracked-and-not-ignored (`git ls-files -co --exclude-standard`) has an mtime
+after `indexed_at`, or is gone from the tree. LIMITS: the resolution is a second
+(a commit or an edit in the very second of indexing reads as fresh; mtimes are compared by whole second); a file copied with an
+old mtime (`cp -p`, `rsync -t`, `git stash pop` on some filesystems) after the
+index was made is not seen; so a fresh read is "no sign of change", not proof.
+`dirty` is the stamp's own fact: tracked files differ from HEAD, or there are
+untracked files.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
@@ -55,6 +66,9 @@ READ_TOOLS = frozenset(
         "detect_changes",
     }
 )
+#: Tools for which an exit 1 with no output is cbm's answer for a name it does
+#: not hold (observed), not a crash; the project was already confirmed to exist.
+MISS_IS_SILENT = frozenset({"trace_path", "get_code_snippet"})
 _META = frozenset({"list_projects", "index_status"})
 
 Runner = Callable[[str, dict], str]
@@ -86,6 +100,8 @@ def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
         except (OSError, subprocess.SubprocessError) as e:
             raise Unreachable(f"cbm: {type(e).__name__}: {e}") from e
         if p.returncode != 0 and not p.stdout.strip():
+            if tool in MISS_IS_SILENT:  # cbm exits 1 with no output for a name it lacks
+                return ""
             raise Unreachable(f"cbm {tool}: exit {p.returncode}, no output")
         return p.stdout
 
@@ -95,7 +111,8 @@ def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
 def _git(root: str, *args: str) -> str:
     try:
         p = subprocess.run(
-            ["git", "-C", root, *args],
+            ["git", "--no-optional-locks", "-C", root, *args],
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
             capture_output=True,
             text=True,
             timeout=30,
@@ -111,7 +128,12 @@ def _git(root: str, *args: str) -> str:
 def _indexed_at(project: str, cache: str | os.PathLike | None) -> float:
     base = Path(
         os.path.expanduser(
-            str(cache or os.environ.get("ONESCRIPT_CBM_CACHE") or DEFAULT_CACHE)
+            str(
+                cache
+                or os.environ.get("ONESCRIPT_CBM_CACHE")
+                or os.environ.get("CBM_CACHE_DIR")
+                or DEFAULT_CACHE
+            )
         )
     )
     db = base / f"{project}.db"
@@ -135,8 +157,13 @@ def _indexed_at(project: str, cache: str | os.PathLike | None) -> float:
 def _facts(root: str) -> dict:
     head = _git(root, "rev-parse", "HEAD").strip()
     branch = _git(root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    changed = [
-        p for p in _git(root, "diff", "--name-only", "-z", "HEAD").split("\0") if p
+    dirty = bool(
+        _git(root, "status", "--porcelain", "-z", "--untracked-files=normal").strip()
+    )
+    files = [
+        p
+        for p in _git(root, "ls-files", "-co", "--exclude-standard", "-z").split("\0")
+        if p
     ]
     when = [int(_git(root, "log", "-1", "--format=%ct", "HEAD").strip())]
     try:  # the last time HEAD moved, however it moved
@@ -144,7 +171,13 @@ def _facts(root: str) -> dict:
         when.append(int(gd.split("@{", 1)[1].rstrip("}")))  # HEAD@{<unix time>}
     except (Unreachable, ValueError, IndexError):
         pass
-    return {"head": head, "branch": branch, "changed": changed, "moved": max(when)}
+    return {
+        "head": head,
+        "branch": branch,
+        "dirty": dirty,
+        "files": files,
+        "moved": max(when),
+    }
 
 
 def _projects(runner: Runner) -> list[dict]:
@@ -157,34 +190,87 @@ def _projects(runner: Runner) -> list[dict]:
     return [p for p in got if isinstance(p, dict)]
 
 
-def parse(out: str) -> tuple[int, list[str]]:
-    """(total, rows) from a cbm result. Text results carry `total: N` then the
-    rows under `results:`; a JSON result is its list (or `results`/`rows`)."""
+def _num(out: str, key: str) -> int | None:
+    m = re.search(rf"^{key}:\s*(\d+)", out, re.MULTILINE)
+    return int(m.group(1)) if m else None
+
+
+def _block(out: str, start: str, stop: tuple[str, ...], indented: bool = False):
+    """Lines after the line opening `start:` up to a line opening a `stop:` key
+    (or, if `indented`, up to the first line that is not indented)."""
+    rows, inside = [], False
+    for ln in out.splitlines():
+        if not inside:
+            inside = ln.startswith(start + ":")
+            continue
+        if ln.startswith(tuple(k + ":" for k in stop)) or (
+            indented and ln.strip() and not ln.startswith(" ")
+        ):
+            break
+        if ln.strip():
+            rows.append(ln.rstrip())
+    return rows
+
+
+def parse(tool: str, out: str) -> tuple[int, list[str]]:
+    """(total, rows) from `cbm <tool>`'s real output. Each tool has its own
+    shape (observed against cbm on a throwaway repo, see tests/test_graph.py).
+    An answer whose count cannot be found is `Unreachable`: empty is never
+    guessed from output that did not say so."""
     text = out.strip()
-    if text[:1] in "[{":
+    if text[:1] == "{":
         try:
             j = json.loads(text)
         except ValueError:
-            j = None
-        if isinstance(j, dict):
-            j = next((j[k] for k in ("results", "rows", "matches") if k in j), None)
-        if isinstance(j, list):
-            return len(j), [json.dumps(r, sort_keys=True) for r in j]
-    total, rows, inside = None, [], False
-    for ln in text.splitlines():
-        if ln.startswith("total:"):
-            try:
-                total = int(ln.split(":", 1)[1])
-            except ValueError:
-                raise Unreachable("cbm: unreadable total") from None
-        elif ln.startswith("results:"):
-            inside = True
-        elif ln.startswith(("has_more:", "hint:")):
-            inside = False
-        elif inside and ln.strip():
-            rows.append(ln.rstrip())
+            raise Unreachable(f"cbm {tool}: unreadable JSON") from None
+        if not isinstance(j, dict) or "error" in j:
+            raise Unreachable(f"cbm {tool}: {str((j or {}).get('error', j))[:120]}")
+        if tool == "get_code_snippet":
+            return 1, [json.dumps(j, sort_keys=True)]
+        raise Unreachable(f"cbm {tool}: unexpected JSON")
+    if not text:
+        if tool in ("trace_path", "get_code_snippet"):
+            return 0, []  # cbm prints nothing for a name it does not hold
+        raise Unreachable(f"cbm {tool}: no output; cannot tell empty from broken")
+    if tool == "search_graph":
+        total, rows = _num(text, "total"), _block(text, "results", ("has_more", "hint"))
+    elif tool == "query_graph":
+        total, rows = _num(text, "total"), _block(text, "rows", ("total", "hint"))
+    elif tool == "trace_path":
+        parts = [_num(text, k) for k in ("callers_total", "callees_total")]
+        total = (
+            sum(p for p in parts if p is not None)
+            if any(p is not None for p in parts)
+            else None
+        )
+        head = ("function", "direction", "callers_total", "callees_total")
+        rows = [
+            ln.rstrip()
+            for ln in text.splitlines()
+            if ln.strip()
+            and not ln.startswith(tuple(h + ":" for h in head))
+            and not re.match(r"^(callers|callees):\s*\d+", ln)
+        ]
+    elif tool == "search_code":
+        total, rows = (
+            _num(text, "total_results"),
+            _block(text, "results", (), indented=True),
+        )
+    elif tool == "get_architecture":
+        total, rows = (
+            _num(text, "total_nodes"),
+            [ln.rstrip() for ln in text.splitlines() if ln.strip()],
+        )
+    elif tool == "detect_changes":
+        a, b = _num(text, "changed_files"), _num(text, "impacted_total")
+        total = None if a is None else a + (b or 0)
+        rows = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    else:
+        raise Unreachable(f"cbm {tool}: no parser for this tool")
     if total is None:
-        raise Unreachable("cbm: output has no total; cannot tell empty from broken")
+        raise Unreachable(
+            f"cbm {tool}: output has no count; cannot tell empty from broken"
+        )
     return total, rows
 
 
@@ -233,7 +319,7 @@ def graph_read(
             "nodes": p.get("nodes"),
             "edges": p.get("edges"),
             "head_sha": f["head"],
-            "dirty": bool(f["changed"]),
+            "dirty": f["dirty"],
             "indexed_at": _indexed_at(project, cache),
             "branch": f["branch"],
         }
@@ -243,18 +329,21 @@ def graph_read(
                 "HEAD moved after the index was made; re-index before asking",
                 stamp,
             )
-        for rel in f["changed"]:
+        for rel in f["files"]:
             try:
-                newer = os.stat(os.path.join(root, rel)).st_mtime > stamp["indexed_at"]
+                newer = (
+                    int(os.lstat(os.path.join(root, rel)).st_mtime)
+                    > stamp["indexed_at"]
+                )
             except OSError:
-                newer = True  # gone from the tree: the index may still hold it
+                newer = True  # listed but gone: the index may still hold it
             if newer:
                 return _out(
                     "stale",
                     f"'{rel}' changed after the index was made; re-index before asking",
                     stamp,
                 )
-        total, rows = parse(run(tool, {**(args or {}), "project": project}))
+        total, rows = parse(tool, run(tool, {**(args or {}), "project": project}))
     except Unreachable as e:
         return _out("unreachable", str(e), None)
     if total == 0:

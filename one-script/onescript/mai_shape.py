@@ -19,28 +19,54 @@ Carried (each maps to a real parser sharp edge):
   frontmatter a `@phase` or `@macro` line inside the YAML frontmatter (#157)
   balance     unbalanced `@if`/`@endif` and `@macro`/`@endmacro`
 
-A plain markdown document (no `@markdownai` line outside a code fence) is never
-checked. A header-less version (`@markdownai`) is a warning in mai_lint, not a
-failure, and passes here too.
+A document is `@markdownai` (mai_lint's `_is_mai`) when the first non-blank line
+of its body, after an optional frontmatter block, is `@markdownai vN`. Anything
+else is plain markdown and passes untouched: prose, indented or fenced mentions
+of the word, a header-less `@markdownai`. One stricter rule than mai_lint: a
+column-0 `@markdownai vN` line outside a fence anywhere but the first body line
+(or inside frontmatter) is refused as a misplaced header, because a doc that
+carries one meant to be mai. A leading BOM is stripped first, `.MD` counts, and
+CR / CRLF line ends are read as line ends.
+
+Frontmatter: mai_lint parses the YAML and checks a JSON schema. This stdlib
+shape check refuses an unclosed `---` block (when a header follows) and a line
+that is neither `key: value`, an indented / list continuation, nor a comment.
+THE REMAINING GAP against yaml: quoting, nesting and duplicate-key errors, and
+the schema (`kind`, `name`, ... types), are not checked here.
 """
 
 from __future__ import annotations
 
 import re
 
-FM_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 HEADER_RE = re.compile(r"^@markdownai\s+v\d+(\.\d+)*\s*$")
 # the parser's own constraint regex (mai_lint.CONSTRAINT_RE), reproduced
 CONSTRAINT_RE = re.compile(
     r"@constraint(?:\s+severity=[\"']?(\w+)[\"']?)?\s+(.*?)(?=@constraint|$)", re.DOTALL
 )
-_MAI_LINE = re.compile(r"^\s*@markdownai\b")
 _FENCE = re.compile(r"^\s*(```|~~~)")
+_KEY = re.compile(r"^[A-Za-z_][\w.-]*\s*:(\s.*)?$")
+
+
+def _norm(text: str) -> str:
+    return text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _split(text: str) -> tuple[list[str] | None, str, bool]:
+    """(frontmatter lines, body, unclosed). Frontmatter is a `---` first line to
+    the next `---` line; with no closing line the whole text is the body."""
+    lines = text.split("\n")
+    if lines and lines[0].rstrip() == "---":
+        for i, ln in enumerate(lines[1:], 1):
+            if ln.rstrip() == "---":
+                return lines[1:i], "\n".join(lines[i + 1 :]), False
+        return None, text, True
+    return None, text, False
 
 
 def _unfenced(text: str):
     fenced = False
-    for ln in text.splitlines():
+    for ln in text.split("\n"):
         if _FENCE.match(ln):
             fenced = not fenced
             continue
@@ -48,30 +74,68 @@ def _unfenced(text: str):
             yield ln
 
 
+def _first(body: str) -> str | None:
+    return next((ln.strip() for ln in body.splitlines() if ln.strip()), None)
+
+
 def is_mai(text: str) -> bool:
-    """A document that claims to be `@markdownai`: a line of it opens with the
-    header word, outside a code fence. Where that line sits is `problems`' job."""
-    return any(_MAI_LINE.match(ln) for ln in _unfenced(text))
+    """A document whose first body line is `@markdownai vN` (mai_lint's rule)."""
+    text = _norm(text)
+    fm, body, _ = _split(text)
+    first = _first(body)
+    return bool(first and HEADER_RE.match(first))
+
+
+def _misplaced(text: str) -> bool:
+    """A column-0 `@markdownai vN` outside a fence that is not the first body
+    line: the doc meant to be mai and the header is in the wrong place."""
+    fm, body, unclosed = _split(text)
+    if fm is not None and any(HEADER_RE.match(ln) for ln in fm):
+        return True
+    first = _first(body)
+    seen = False
+    for ln in _unfenced(body):
+        if HEADER_RE.match(ln):
+            if ln.strip() == first and not seen and not unclosed:
+                seen = True
+                continue
+            return True
+    return False
 
 
 def problems(text: str) -> list[str]:
     """Why `text` is not a well-formed `@markdownai` document, each a sentence.
     Empty when it is clean, and for a plain markdown document."""
-    if not is_mai(text):
+    text = _norm(text)
+    fm, body, unclosed = _split(text)
+    mai = is_mai(text)
+    if not mai:
+        if unclosed and any(HEADER_RE.match(ln) for ln in _unfenced(text)):
+            return ["frontmatter is not closed: no second `---` line"]
+        if _misplaced(text):
+            return [
+                "first body line is not a @markdownai header: "
+                f"{_first(body)!r} (the header is placed later or in frontmatter)"
+            ]
         return []
     fails: list[str] = []
-    text = text.replace("\r\n", "\n")
-    m = FM_RE.match(text)
-    fm_raw, body = (m.group(1), m.group(2)) if m else ("", text)
+    if _misplaced(text):
+        fails.append("a second @markdownai header appears after the first body line")
+    fm_raw = "\n".join(fm or [])
+    for n, ln in enumerate(fm or [], 2):
+        t = ln.strip()
+        if (
+            t
+            and not t.startswith("#")
+            and not (_KEY.match(ln) or ln[:1] in " \t" or t.startswith("- "))
+        ):
+            fails.append(f"frontmatter line {n} is not `key: value`: {t!r}")
     for hidden in ("@phase", "@macro"):
         if fm_raw and re.search(rf"^{hidden}\b", fm_raw, re.MULTILINE):
             fails.append(
                 f"{hidden} appears inside frontmatter (invisible to the renderer, "
                 "but the phase/macro tools parse raw; #157)"
             )
-    first = next((ln.strip() for ln in body.splitlines() if ln.strip()), None)
-    if not (first and (HEADER_RE.match(first) or first.startswith("@markdownai"))):
-        fails.append(f"first body line is not a @markdownai header: {first!r}")
     n_colon = len(re.findall(r"@constraint:", body))
     if n_colon:
         fails.append(
@@ -114,15 +178,13 @@ def check(rel: str, data: bytes) -> str | None:
     """For `Record.write_file`: `"clean"` for a well-formed `@markdownai` `.md`,
     None for anything else that is not checked (not `.md`, or plain markdown),
     and a `PermissionError` naming every problem for a malformed one."""
-    if not rel.endswith(".md"):
+    if not rel.lower().endswith(".md"):
         return None
     text = data.decode("utf-8", errors="replace")
-    if not is_mai(text):
-        return None
     bad = problems(text)
     if bad:
         raise PermissionError(
             f"record: '{rel}' is a malformed @markdownai document; nothing "
             "written: " + "; ".join(bad)
         )
-    return "clean"
+    return "clean" if is_mai(text) else None

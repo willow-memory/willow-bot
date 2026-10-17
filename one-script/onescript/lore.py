@@ -17,8 +17,16 @@ Served only when ALL hold (`servable`), checked from the record on every serve:
   * `proposal` is a subject whose human seal proof re-checks (`held`);
   * a stored proposal row hashes to that subject (path, data, cites, claim), is a
     pass, and lies under `world/` as `.md`;
-  * the fact is a line of that proposal's own data, and `where` is not blank.
-Edit the data after sealing and the hash no longer matches: nothing is served.
+  * the fact is a fact of that proposal's own data, and `where` is not blank;
+  * `who` is the proposal's author, and the proposal is not an own idea
+    (`cites: []`; SPEC-documented J5: an own-idea proposal never yields lore).
+Edit the data after sealing and the hash no longer matches: nothing is served,
+and `serve.serve` says why (a broken chain, or a seal it cannot check).
+
+A fact is a LOGICAL unit: one paragraph, or one list item with its continuation
+lines joined by a space. A wrapped sentence is never cut into fragments (a cut
+at "never" / "takes salt" would invert the meaning). Lines split at "\n" only,
+the rule of `record.py:_read`: U+2028 and \x0c stay inside the fact.
 """
 
 from __future__ import annotations
@@ -29,7 +37,7 @@ from . import gate, proposals
 
 KIND = "lore"
 ROOT = "world/"
-MAX_FACT = 400  # a fact is a line a person can read; a longer one is not a fact
+MAX_FACT = 1000  # a fact a person can read on a card; a longer one is not served
 
 _HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 _BULLET = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
@@ -45,57 +53,123 @@ def is_world(path: object) -> bool:
     )
 
 
+_SETEXT = re.compile(r"^(=+|-{2,})\s*$")
+_RULE = re.compile(r"^([-*_])(\s*\1){2,}\s*$")
+_TABLE = re.compile(r"^\|")
+
+
 def facts_of(path: str, data: str) -> list[tuple[str, str]]:
-    """[(scene, fact)] for a world document: one fact per non-blank line.
-    Frontmatter, headings, code fences and horizontal rules are not facts. The
-    scene is the nearest heading above the fact, else the file's stem."""
+    """[(scene, fact)] for a world document. A fact is a paragraph or one list
+    item (continuation lines joined with a space). Not facts: frontmatter,
+    headings (they set the scene; so does a setext title), code fences, indented
+    code, HTML comments, table rows, rules. The scene is the nearest heading
+    above the fact, else the file's stem."""
     stem = path.rsplit("/", 1)[-1][: -len(".md")]
-    lines = data.splitlines()
-    if lines and lines[0].strip() == "---":  # frontmatter: not world text
-        try:
-            end = next(i for i, ln in enumerate(lines[1:], 1) if ln.strip() == "---")
-            lines = lines[end + 1 :]
-        except StopIteration:
-            lines = []
-    out, scene, fenced = [], stem, False
+    lines = [ln.rstrip("\r") for ln in data.split("\n")]
+    if lines and lines[0].strip(" \t") == "---":  # frontmatter: not world text
+        end = next(
+            (i for i, x in enumerate(lines[1:], 1) if x.strip(" \t") == "---"), None
+        )
+        lines = lines[end + 1 :] if end is not None else []
+    out: list[tuple[str, str]] = []
+    scene, buf, fenced, comment, item = stem, [], False, False, False
+
+    def flush() -> None:
+        if buf:
+            fact = " ".join(buf)
+            if len(fact) <= MAX_FACT:
+                out.append((scene, fact))
+            buf.clear()
+
     for ln in lines:
-        s = ln.strip()
+        s = ln.strip(" \t")
+        if comment:
+            comment = "-->" not in s
+            continue
         if _FENCE.match(s):
+            flush()
             fenced = not fenced
             continue
-        if fenced or not s or re.fullmatch(r"[-*_=]{3,}", s):
+        if fenced:
+            continue
+        if s.startswith("<!--"):
+            flush()
+            comment = "-->" not in s
+            continue
+        if not s:
+            flush()
+            continue
+        if _SETEXT.match(s) and len(buf) == 1 and not item:
+            scene, _ = buf[0], buf.clear()  # "Title" over "=====": a heading
             continue
         h = _HEADING.match(s)
         if h:
+            flush()
             scene = h.group(1).strip() or stem
             continue
-        fact = _BULLET.sub("", s).strip()
-        if fact and len(fact) <= MAX_FACT:
-            out.append((scene, fact))
+        if _RULE.match(s) or _SETEXT.match(s) or _TABLE.match(s):
+            flush()
+            continue
+        if not buf and (ln.startswith("    ") or ln.startswith("\t")):
+            continue  # indented code; inside a paragraph or item it is a continuation
+        if _BULLET.match(ln.lstrip(" \t")) and len(ln) - len(ln.lstrip(" \t")) < 4:
+            flush()
+            s = _BULLET.sub("", s, count=1).strip(" \t")
+            item = True
+        elif not buf:
+            item = False
+        if s:
+            buf.append(s)
+    flush()
     return out
 
 
-def _proposal_for(rows: list[dict], subject: str) -> dict | None:
-    """The stored proposal row that really hashes to `subject`, or None."""
-    for r in reversed(rows):
-        if r.get("kind") != "proposal" or r.get("subject") != subject:
-            continue
-        if not all(k in r for k in proposals.KEYS):
-            continue
-        try:
-            same = proposals.subject({k: r[k] for k in proposals.KEYS}) == subject
-        except (TypeError, ValueError):
-            continue
-        if same and r.get("verdict") == "pass":
-            return r
+class Index:
+    """What `servable` needs, worked out once per serve (not once per row): the
+    latest proposal row that really hashes to each subject, and its facts."""
+
+    def __init__(self, rows: list[dict]):
+        self.prop: dict[str, dict] = {}
+        for r in rows:  # later rows win, as in `Run.find_proposal`
+            if r.get("kind") != "proposal" or not isinstance(r.get("subject"), str):
+                continue
+            if all(k in r for k in proposals.KEYS) and _hashes_to(r, r["subject"]):
+                self.prop[r["subject"]] = r
+        self._facts: dict[str, set] = {}
+
+    def facts(self, subject: str) -> set[tuple[str, str]]:
+        if subject not in self._facts:
+            p = self.prop[subject]
+            self._facts[subject] = set(facts_of(p["path"], p["data"]))
+        return self._facts[subject]
+
+
+def _hashes_to(row: dict, subject: str) -> bool:
+    try:
+        return proposals.subject({k: row[k] for k in proposals.KEYS}) == subject
+    except (TypeError, ValueError):
+        return False
+
+
+def author_problem(prop: dict) -> str | None:
+    """Why a stored proposal row can never yield lore, or None."""
+    if prop.get("verdict") != "pass":
+        return f"the proposal is {prop.get('verdict')}, not a pass"
+    if not is_world(prop.get("path")):
+        return f"'{prop.get('path')}' is not a world/*.md document"
+    if not prop.get("cites") or prop.get("own_idea"):
+        return "an own-idea proposal (no cites) is not lore"
     return None
 
 
-def servable(row: dict, rows: list[dict], held: set[str]) -> bool:
+def servable(row: dict, ctx: Index | list[dict], held: set[str]) -> bool:
     """Whether `row` may be served. A row that is not lore always may (this
-    gate adds a condition for lore, it removes none)."""
+    gate adds a condition for lore, it removes none). `ctx` is an `Index`, or
+    the rows to make one from."""
     if row.get("kind") != KIND:
         return True
+    if not isinstance(ctx, Index):
+        ctx = Index(ctx)
     subject, fact, scene = row.get("proposal"), row.get("fact"), row.get("where")
     if row.get("who") == "run" or not isinstance(subject, str):
         return False
@@ -103,10 +177,27 @@ def servable(row: dict, rows: list[dict], held: set[str]) -> bool:
         return False
     if not scene.strip() or subject not in held:
         return False  # the human's proof over this proposal, re-checked
-    prop = _proposal_for(rows, subject)  # the hash, re-checked
-    if prop is None or not is_world(prop.get("path")):
+    prop = ctx.prop.get(subject)  # the hash, re-checked
+    if prop is None or author_problem(prop) or row.get("who") != prop.get("who"):
         return False
-    return (scene, fact) in facts_of(prop["path"], prop["data"])
+    return (scene, fact) in ctx.facts(subject)
+
+
+def unchecked_seals(rows: list[dict], held, unchecked) -> dict[str, str]:
+    """{proposal subject: why} for lore rows whose proposal's seal could not be
+    checked here, so serve can say `unreachable` instead of dropping them."""
+    out = {}
+    for r in rows:
+        s = r.get("proposal")
+        if (
+            r.get("kind") == KIND
+            and r.get("who") != "run"
+            and isinstance(s, str)
+            and s not in held
+            and s in unchecked
+        ):
+            out[s] = unchecked[s]
+    return out
 
 
 def from_sealed(run, subject: str) -> list[dict]:
@@ -120,8 +211,8 @@ def from_sealed(run, subject: str) -> list[dict]:
         held, unchecked = run.held()
         if subject not in held:
             why = unchecked.get(subject) or "no human seal over this proposal"
-        elif not is_world(prop["path"]):
-            why = f"'{prop['path']}' is not a world/*.md document"
+        elif (bad := author_problem(prop)) is not None:
+            why = bad
         elif run.keys.get(prop["who"]) is None:
             why = f"no key for the proposal's author '{prop['who']}'"
     if why is not None:

@@ -20,7 +20,7 @@ from onescript.record import h256  # noqa: E402
 from onescript.run import Run  # noqa: E402
 
 HUMAN_KEY = b"passkey-in-a-coat-pocket"
-KEYS = {"willow": b"k-willow", gate.HUMAN: HUMAN_KEY}
+KEYS = {"willow": b"k-willow", "hanuman": b"k-hanuman", gate.HUMAN: HUMAN_KEY}
 LAW = {"trace_ids": ["CONST-III", "CONST-VI"], "grants": []}
 CAP = 10**6
 SERVE_KEY = b"serve-key"
@@ -284,3 +284,167 @@ def test_unserved_training_is_struck_by_the_vocabulary_check(run):
     assert not seat_say.check_nothing_lacking(
         "The ferryman keeps a palantir [b1]", boxes
     )
+
+
+# ── revision round (Opus audit of 48b3408) ──────────────────────────────────
+def test_B1_fact_on_a_non_lore_row_is_not_payload(run):
+    """P2: any row may carry a `fact` field; only a servable lore row serves it."""
+    run.rec.append(
+        "note", gate.verify(ident(), KEYS), where="x", fact="UNSEALED-FACT seed=424242"
+    )
+    stack = serve.piles(run.rec.rows(), "what")
+    chosen = serve.choose(stack, what="note")
+    ids = [serve.table_id(p) for p in chosen]
+    seal(run, serve.scope_subject(ids))
+    doc = run.serve(chosen, ids, max_chars=CAP)
+    assert doc["state"] == "populated" and served_rows(doc)  # the row is served
+    assert all("fact" not in r for r in served_rows(doc))
+    assert (
+        "UNSEALED-FACT" not in json.dumps(doc) + (run.rec.box / serve.OUT).read_text()
+    )
+
+
+def test_B2_a_wrapped_bullet_is_one_fact_and_the_meaning_holds():
+    data = "# Vale\n- The ferryman never\n  takes salt from strangers.\n\nThe miller is not\nhonest.\n"
+    got = lore.facts_of("world/v.md", data)
+    assert got == [
+        ("Vale", "The ferryman never takes salt from strangers."),
+        ("Vale", "The miller is not honest."),
+    ]
+    assert not any(f in ("The ferryman never", "honest.") for _, f in got)
+
+
+def test_B2_unicode_line_separators_never_split_a_fact():
+    got = lore.facts_of("world/v.md", "# V\n- A B\x0cC \u2028D\n")
+    assert got == [("V", "A B\x0cC \u2028D")]  # record.py:95 splits on "\n" only
+
+
+def test_N5_comments_tables_and_setext_titles_are_not_facts():
+    data = (
+        "Title\n=====\n<!-- private\nnote -->\n| a | b |\n|---|---|\n"
+        "    code line\n\nA real fact.\n- item one\n---\n"
+    )
+    assert lore.facts_of("world/v.md", data) == [
+        ("Title", "A real fact."),
+        ("Title", "item one"),
+    ]
+
+
+def test_S1_an_unreachable_proposal_seal_is_said_never_dropped(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    stack = serve.piles(run.rec.rows(), "what")
+    chosen = serve.choose(stack, what="lore")
+    ids = [serve.table_id(p) for p in chosen]
+    rows = run.rec.rows()
+    seals = ({serve.scope_subject(ids)}, {subject: "unreachable: no Nestor store"})
+    doc = serve._serve(rows, chosen, ids, SERVE_KEY, CAP, seals)
+    assert doc["state"] == "unreachable" and "can't be checked" in doc["why"]
+    assert "Nestor" in doc["why"] and doc["tables"] == []
+
+
+def test_S2_a_lore_row_must_be_by_the_proposals_author(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    run.rec.append(
+        "lore",
+        gate.verify(ident("hanuman"), KEYS),
+        where="The Vale",
+        fact="The ferryman takes only salt.",
+        proposal=subject,
+    )
+    who = [r["who"] for r in served_rows(serve_lore(run))]
+    assert who and set(who) == {"willow"}
+    assert len(who) == 3  # the three real facts; hanuman's copy is not served
+
+
+def test_S3_an_own_idea_world_proposal_never_yields_lore(run):
+    p = {
+        "path": "world/v.md",
+        "data": "- Own idea fact.\n",
+        "cites": [],
+        "claim": "mine",
+    }
+    subject = proposals.subject(p)
+    run.rec.append(
+        "proposal",
+        gate.verify(ident(), KEYS),
+        where=p["path"],
+        turn=1,
+        line=1,
+        sha=h256(p["data"]),
+        verdict="pass",
+        reason="",
+        subject=subject,
+        own_idea=True,
+        **p,
+    )
+    seal(run, subject)
+    (refused,) = lore.from_sealed(run, subject)
+    assert refused["kind"] == "refused" and "own-idea" in refused["reason"]
+    run.rec.append(  # and a forged row for it is not served either
+        "lore",
+        gate.verify(ident(), KEYS),
+        where="v",
+        fact="Own idea fact.",
+        proposal=subject,
+    )
+    assert served_rows(serve_lore(run)) == []
+
+
+@pytest.mark.parametrize("h", ["AB" * 32, "ab" * 31 + "aB", "ａｂ" * 32])
+def test_S4_hashes_are_withheld_in_upper_case_and_fullwidth(run, h):
+    subject, _ = propose(run, data=f"# V\n- mark {h}.\n")
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    (row,) = served_rows(serve_lore(run))
+    assert serve.WITHHELD in row["fact"]
+    assert h.lower() not in row["fact"].lower() and "ab" * 8 not in row["fact"].lower()
+
+
+def test_S5_data_edited_after_sealing_serves_nothing_and_says_why(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    stack = serve.piles(run.rec.rows(), "what")
+    chosen = serve.choose(stack, what="lore")
+    ids = [serve.table_id(p) for p in chosen]
+    seal(run, serve.scope_subject(ids))
+    path = run.rec.path
+    rec = [json.loads(x) for x in path.read_text().splitlines()]
+    i = next(k for k, r in enumerate(rec) if r["kind"] == "proposal")
+    rec[i]["data"] = rec[i]["data"].replace("salt", "gold")
+    path.write_text("\n".join(json.dumps(r) for r in rec) + "\n")
+    doc = run.serve(chosen, ids, max_chars=CAP)
+    assert doc["state"] == "unreachable" and doc["tables"] == []
+    assert "chain is broken" in doc["why"]
+    assert "gold" not in (run.rec.box / serve.OUT).read_text()
+
+
+def test_N5_the_latest_verdict_for_a_subject_decides(run):
+    subject, row = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    run.rec.append(  # a later row for the same bytes that no longer passes
+        "proposal",
+        gate.verify(ident(), KEYS),
+        where="world/vale.md",
+        verdict="link_fail",
+        subject=subject,
+        **{k: row[k] for k in proposals.KEYS},
+    )
+    assert served_rows(serve_lore(run)) == []
+    assert lore.from_sealed(run, subject)[0]["kind"] == "refused"
+
+
+def test_N6_facts_are_worked_out_once_per_serve(run, monkeypatch):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    calls = []
+    real = lore.facts_of
+    monkeypatch.setattr(lore, "facts_of", lambda p, d: calls.append(p) or real(p, d))
+    assert len(served_rows(serve_lore(run))) == 3
+    assert len(calls) == 1

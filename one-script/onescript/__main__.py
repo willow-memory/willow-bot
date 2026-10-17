@@ -13,6 +13,7 @@
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
     python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
+    python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
     python3 -m onescript seal-tip tip:N:HASH [--proof P] # what it covers; then seal
     python3 -m onescript seal-forecast WAGER --proof P   # the human: this one is mine
     python3 -m onescript reconcile [--human-key FILE]    # wagers scored, read-only
@@ -278,6 +279,10 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         help="take a pair signed by one of these names, for this seal only",
     )
+    lo = sub.add_parser(
+        "lore", help="a sealed world/*.md proposal becomes lore rows (SPEC R11)"
+    )
+    lo.add_argument("subject", help="the proposal:<hash> the human sealed")
     sf = sub.add_parser(
         "seal-forecast",
         aliases=["seal_forecast"],
@@ -401,6 +406,14 @@ def main(argv: list[str] | None = None) -> int:
             if "counts_when" in res:  # the C6 gap: a Nestor seal needs a key tip
                 print(f"counts when: {res['counts_when']}")
             print(f"rescope: {res['rescope']['why']}")  # SPEC R14: the last step
+            for step in res["rescope"]["steps"]:
+                print(f"  {step}")
+            return 0
+    elif args.cmd == "lore":
+        res = api.lore(cfg, args.subject, argv=raw)
+        if "refused" not in res:
+            print(f"lore {res['count']} row(s)")
+            print(f"rescope: {res['rescope']['why']}")  # SPEC R14, as seal-outcome
             for step in res["rescope"]["steps"]:
                 print(f"  {step}")
             return 0

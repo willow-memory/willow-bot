@@ -48,6 +48,7 @@ from __future__ import annotations
 import hmac
 import os
 import re
+import unicodedata
 
 from . import gate, lore, nestor_seal
 from .record import Record, canon, h256
@@ -86,7 +87,7 @@ RETURN = (
     "marked as yours and read only alongside this file. Nothing else is read."
 )
 
-_HASH = re.compile(r"[0-9a-f]{64}")
+_HASH = re.compile(r"[0-9a-f]{64}", re.IGNORECASE)
 WITHHELD = "[hash withheld]"
 
 
@@ -127,7 +128,12 @@ def view(row: dict) -> dict:
         "when": row.get("ts") or row.get("when"),
         "where": w_of(row, "where"),
     }
-    out.update({k: row[k] for k in PAYLOAD if k in row})
+    # `fact` is lore (R11): it rides only on a lore row, which `_serve` has
+    # already passed through `lore.servable`. On any other row it is not payload.
+    islore = (row.get("kind") or row.get("what")) == lore.KIND
+    out.update({k: row[k] for k in PAYLOAD if k in row and (k != "fact" or islore)})
+    if isinstance(out.get("fact"), str):  # a hash in another form is still a hash
+        out["fact"] = unicodedata.normalize("NFKC", out["fact"])
     return _scrub(out)
 
 
@@ -386,6 +392,14 @@ def serve(
             rows, human_key, keyring, nestor_db, through, unpinned=unpinned
         )
         doc = _serve(rows, tables, scope, serve_key, max_chars, seals)
+        if doc["state"] == "populated" and _has_lore(doc, tables, scope):
+            # lore rests on the stored proposal bytes: a rewritten record serves none
+            broken = rec.verify_chain()
+            if broken:
+                doc = _nothing(
+                    "unreachable",
+                    f"the record's chain is broken ({broken[0]}); no lore is served",
+                )
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
     except Exception as e:  # serve that can't think clearly serves nothing
@@ -409,6 +423,16 @@ def serve(
         sha=h256(data),
     )
     return doc
+
+
+def _has_lore(doc: dict, tables: list[dict], scope) -> bool:
+    ids = set(scope or ())
+    return any(
+        r.get("kind") == lore.KIND
+        for t in tables
+        if table_id(t) in ids
+        for r in t["rows"]
+    )
 
 
 def _nothing(state: str, why: str) -> dict:
@@ -443,6 +467,18 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
     missing = set(scope) - set(by_id)
     if missing:  # in scope, so a count is no leak; the plain hashes are
         return _nothing("unreachable", f"{len(missing)} sealed table(s) not found")
+    ctx = lore.Index(rows)  # once per serve, not once per row
+    stuck = lore.unchecked_seals(
+        [r for t in by_id.values() if table_id(t) in set(scope) for r in t["rows"]],
+        seals,
+        unchecked,
+    )
+    if stuck:  # said, never silently dropped (INVARIANTS section 1)
+        return _nothing(
+            "unreachable",
+            f"{len(stuck)} lore proposal seal(s) can't be checked here "
+            f"({next(iter(stuck.values()))})",
+        )
     served = []
     for tid in sorted(set(scope)):
         t = by_id[tid]
@@ -460,7 +496,7 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
                 "rows": [
                     view(r)
                     for r in authored(t["rows"])
-                    if lore.servable(r, rows, seals)
+                    if lore.servable(r, ctx, seals)
                 ],
             }
         )

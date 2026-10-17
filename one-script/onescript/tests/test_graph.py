@@ -20,6 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from onescript import graph  # noqa: E402
 
 CBM = graph.cbm_path()
+SRC = (
+    "def helper(x):\n    return x + 1\n\n\n"
+    "def wager_total(x):\n    return helper(x)\n\n\n"
+    "class K:\n    def m(self):\n        return wager_total(2)\n"
+)
 needs_cbm = pytest.mark.skipif(not os.access(CBM, os.X_OK), reason="cbm is not here")
 
 
@@ -45,7 +50,7 @@ def repo(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
     git(root, "init", "-q", "-b", "main")
-    (root / "m.py").write_text("def wager_total():\n    return 1\n")
+    (root / "m.py").write_text(SRC)
     git(root, "add", ".")
     git(root, "commit", "-qm", "one")
     return root, cache
@@ -214,3 +219,110 @@ def test_fake_runner_populated_and_empty_are_stamped(repo):
         "p", "search_graph", {}, runner=fake(root), cache=cache / "elsewhere"
     )
     assert r["state"] == "unreachable" and "cannot tell when" in r["why"]
+
+
+# ── revision round (Opus audit of 48b3408) ──────────────────────────────────
+def indexed(repo):
+    root, cache = repo
+    assert graph.reindex(root)["state"] == "populated"
+    return name_of(root)
+
+
+@needs_cbm
+@pytest.mark.parametrize(
+    "tool,hit,miss",
+    [
+        ("search_graph", {"name_pattern": "wager"}, {"name_pattern": "zzqq"}),
+        (
+            "query_graph",
+            {"query": "MATCH (n:Function) RETURN n.name LIMIT 3"},
+            {"query": 'MATCH (n:Function {name:"zz"}) RETURN n.name'},
+        ),
+        (
+            "trace_path",
+            {"function_name": "helper", "direction": "inbound"},
+            {"function_name": "nonesuch", "direction": "inbound"},
+        ),
+        ("search_code", {"pattern": "helper"}, {"pattern": "zzzqq"}),
+        ("get_architecture", {}, None),
+        ("detect_changes", None, {}),
+        ("get_code_snippet", "SNIPPET", {"qualified_name": "nope"}),
+    ],
+)
+def test_S11_every_read_tool_is_parsed_from_its_real_output(repo, tool, hit, miss):
+    project = indexed(repo)
+    if hit == "SNIPPET":
+        hit = {"qualified_name": f"{project}.m.helper"}
+    if hit is not None:
+        r = graph.graph_read(project, tool, hit)
+        assert r["state"] == "populated", (tool, r)
+        assert r["total"] >= 1 and r["rows"], (tool, r)
+    if miss is not None:
+        e = graph.graph_read(project, tool, miss)
+        assert e["state"] == "empty" and e["rows"] == [], (tool, e)
+        assert "not in the graph at" in e["why"]
+
+
+def test_S11_parse_refuses_output_that_did_not_say_its_count():
+    for tool, out in (
+        ("search_graph", "hello"),
+        ("query_graph", "rows: 2\n  a\n"),
+        ("search_code", "elapsed_ms: 3"),
+        ("get_architecture", "project: x"),
+        ("detect_changes", "base: main"),
+        ("search_graph", ""),
+        ("search_graph", '{"error": "no such project"}'),
+        ("get_code_snippet", '{"error": "x"}'),
+        ("search_graph", '{"total": 5, "items": [1]}'),
+    ):
+        with pytest.raises(graph.Unreachable):
+            graph.parse(tool, out)
+    assert graph.parse("trace_path", "") == (0, [])
+
+
+@needs_cbm
+def test_S9_an_untracked_file_added_after_the_index_is_stale(repo):
+    root, cache = repo
+    project = indexed(repo)
+    time.sleep(1.2)
+    (root / "new.py").write_text("def brand_new():\n    pass\n")
+    r = graph.graph_read(project, "search_graph", {"name_pattern": "wager"})
+    assert r["state"] == "stale" and "new.py" in r["why"] and r["stamp"]["dirty"]
+
+
+@needs_cbm
+def test_S9_a_file_edited_then_reverted_after_the_index_is_stale(repo):
+    root, cache = repo
+    project = indexed(repo)
+    time.sleep(1.2)
+    (root / "m.py").write_text(SRC + "# x\n")
+    git(root, "checkout", "--", "m.py")  # clean again, but its mtime is new
+    r = graph.graph_read(project, "search_graph", {"name_pattern": "wager"})
+    assert r["state"] == "stale" and "m.py" in r["why"]
+
+
+@needs_cbm
+def test_a_fresh_clean_index_stays_populated_and_reads_do_not_touch_git(repo):
+    root, cache = repo
+    project = indexed(repo)
+    before = (root / ".git" / "index").stat().st_mtime_ns
+    time.sleep(1.1)
+    r = graph.graph_read(project, "search_graph", {"name_pattern": "wager"})
+    assert r["state"] == "populated" and r["stamp"]["dirty"] is False, r["why"]
+    assert (root / ".git" / "index").stat().st_mtime_ns == before  # N1
+
+
+def test_S12_a_missing_default_binary_is_unreachable_not_empty(monkeypatch):
+    monkeypatch.setenv("ONESCRIPT_CBM", "/nonexistent/cbm")
+    assert graph.cbm_path() == "/nonexistent/cbm"
+    r = graph.graph_read("anything", "search_graph", {"name_pattern": "x"})
+    assert r["state"] == "unreachable" and r["rows"] == [] and r["stamp"] is None
+    assert graph.reindex("/tmp")["state"] == "unreachable"
+
+
+def test_N2_cbm_cache_dir_is_honoured(tmp_path, monkeypatch):
+    monkeypatch.delenv("ONESCRIPT_CBM_CACHE", raising=False)
+    monkeypatch.setenv("CBM_CACHE_DIR", str(tmp_path / "nowhere"))
+    with pytest.raises(graph.Unreachable) as e:
+        graph._indexed_at("p", None)
+    assert str(tmp_path / "nowhere") in str(e.value) or "cannot tell" in str(e.value)

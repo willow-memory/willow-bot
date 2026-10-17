@@ -139,3 +139,53 @@ def test_drift_same_verdicts_as_mai_lint(tmp_path, capsys):
             assert not theirs and not ours
         else:
             assert theirs == ours, (name, capsys.readouterr().out)
+
+
+# ── revision round (Opus audit of 48b3408) ──────────────────────────────────
+def test_S7_only_a_first_body_line_header_makes_a_doc_mai(tmp_path):
+    rec = box(tmp_path)
+    for i, text in enumerate(
+        (
+            "# Readme\n@markdownai is a format we use.\n@constraint: prose\n",
+            "# Readme\nExample:\n\n    @markdownai v1.0\n    @constraint: x\n",
+            "# Readme\n```\n@markdownai v1.0\n@constraint: x\n```\n",
+            "@markdownai\n@constraint: header-less is mai_lint's warning, not mai\n",
+        )
+    ):
+        assert "lint" not in rec.write_file(gate.system(), f"p{i}.md", text.encode())
+
+
+def test_S7_a_header_placed_late_or_in_frontmatter_is_refused(tmp_path):
+    rec = box(tmp_path)
+    for text in (
+        "# T\n\n@markdownai v1.0\n",
+        "---\nname: x\n@markdownai v1.0\n---\nbody\n",
+        "@markdownai v1.0\n\n# T\n\n@markdownai v1.0\n",
+    ):
+        with pytest.raises(PermissionError):
+            rec.write_file(gate.system(), "d.md", text.encode())
+
+
+def test_S8_a_bom_does_not_hide_a_defect(tmp_path):
+    rec = box(tmp_path)
+    with pytest.raises(PermissionError, match="colon form"):
+        rec.write_file(gate.system(), "d.md", ("﻿" + BAD["colon"]).encode())
+    row = rec.write_file(gate.system(), "ok.md", ("﻿" + CLEAN).encode())
+    assert row["lint"] == "clean"
+
+
+def test_S8_frontmatter_shape_is_checked_with_the_stdlib():
+    fm = "---\nname: x\njust a sentence\n---\n@markdownai v1.0\n"
+    assert any("not `key: value`" in p for p in mai_shape.problems(fm))
+    unclosed = "---\nname: x\n\n@markdownai v1.0\n# T\n"
+    assert any("not closed" in p for p in mai_shape.problems(unclosed))
+    ok = "---\nname: x\ntags:\n  - a\n  - b\n# note\ndesc: |\n  long\n---\n@markdownai v1.0\n"
+    assert mai_shape.problems(ok) == []
+
+
+def test_N4_upper_case_suffix_and_lone_cr_are_checked(tmp_path):
+    rec = box(tmp_path)
+    with pytest.raises(PermissionError):
+        rec.write_file(gate.system(), "d.MD", BAD["colon"].encode())
+    assert mai_shape.problems(BAD["colon"].replace("\n", "\r"))
+    assert mai_shape.is_mai("\r@markdownai v1.0\r# T\r")
