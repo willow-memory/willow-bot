@@ -17,6 +17,18 @@ Not checked here, said (SPEC-rival T10): the beacon's BLS signature. A reader
 (`Config.beacon`) hands back what drand says round R's randomness is; that is
 what a session's randomness is compared with. The reader is the operator's,
 fixed in `Config`, never the caller's.
+
+What is trusted, said (R23a): the reader. No box clock is: a round is "still
+ahead" only when the reader can't read it yet (`latest(read)` below the
+round), and that reading is recorded on the wager and on the tip seal. A
+reader that lies (or a drand whose BLS is not checked) wins; nothing else does.
+
+The dice (R23a): `Stream` restates the-table's `the_table/stream.py`
+(`Stream.u32`, `Stream.below`, generator `sha256-stream/v1`) so a roll can be
+REPLAYED from the open row's randomness alone; `roll_2d6` replays
+`engine_v1_7.Engine.roll`'s two `random.randint(1, 6)` draws
+(`apps/game/engine_v1_7.py`, through `StreamRandom.randint`). e2e pins both
+equal to the-table's.
 """
 
 from __future__ import annotations
@@ -65,12 +77,61 @@ def seed_id(randomness: str) -> str:
     return hashlib.sha256(bytes.fromhex(randomness)).hexdigest()[:16]
 
 
-def drand_reader(rnd: int) -> dict:
-    """Round `rnd` from drand over HTTPS (play.py:40-43). Raises on any
-    failure; the caller says `unreachable`. BLS is not checked."""
+def drand_reader(rnd: int | str) -> dict:
+    """Round `rnd` (or "latest") from drand over HTTPS (play.py:40-43). Raises
+    on any failure, and for a round not out yet; the caller says
+    `unreachable`. BLS is not checked."""
     import json
     import urllib.request
 
-    url = f"{DRAND}/{CHAIN}/public/{int(rnd)}"
+    which = "latest" if rnd == "latest" else str(int(rnd))
+    url = f"{DRAND}/{CHAIN}/public/{which}"
     with urllib.request.urlopen(url, timeout=15) as r:
         return json.loads(r.read())
+
+
+def latest(read) -> tuple[int | None, str | None]:
+    """(the newest round the reader can read, None) or (None, why). The reader
+    is asked `read("latest")` and must answer {"round": int}."""
+    if read is None:
+        return None, "no beacon reader on this box"
+    try:
+        got = read("latest")
+    except Exception as e:  # any failure of the reader: said, never guessed
+        return None, f"the beacon reader failed: {type(e).__name__}: {e}"
+    rnd = got.get("round") if isinstance(got, dict) else None
+    if isinstance(rnd, bool) or not isinstance(rnd, int):
+        return None, "the beacon reader gave no latest round"
+    return rnd, None
+
+
+# ── the dice, replayed (R23a) ────────────────────────────────────────────────
+GENERATOR_ID = "sha256-stream/v1"  # the_table/stream.py GENERATOR_ID
+
+
+class Stream:
+    """the_table/stream.py `Stream`, restated: SHA-256 over seed + counter."""
+
+    def __init__(self, seed: bytes, n: int = 0):
+        self.seed, self.n = seed, n
+
+    def u32(self) -> int:
+        d = hashlib.sha256(self.seed + self.n.to_bytes(8, "big")).digest()
+        self.n += 1
+        return int.from_bytes(d[:4], "big")
+
+    def below(self, k: int) -> int:
+        """Uniform in 0..k-1, by rejection (no modulo bias), as the table's."""
+        cap = (1 << 32) - (1 << 32) % k
+        while (x := self.u32()) >= cap:
+            pass
+        return x % k
+
+
+def roll_2d6(randomness: str, counter_before: int) -> tuple[int, int, int]:
+    """(die a, die b, counter after) for one `Engine.roll` replayed on the
+    stream seeded by `randomness`, from `counter_before`."""
+    s = Stream(bytes.fromhex(randomness), counter_before)
+    a = 1 + s.below(6)
+    b = 1 + s.below(6)
+    return a, b, s.n

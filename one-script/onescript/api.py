@@ -443,8 +443,9 @@ def checkout(
     """Reverse, then the morning screen. `human_key` is the human's key in a
     file outside the box (0600, `read_human_key`): with it, wager outcomes the
     sealed tip covers count, and GRADES shows their scores. `basis` is the R3
-    hook (`table.basis`); left None, `Run.reconciled` binds it whenever the
-    box holds table verdict rows. `read_head` is the table's ledger reader
+    hook; on a box holding table rows or table wagers `Run.reconciled` binds
+    its own (`table.basis` on `Config.beacon`) and ignores this one (R23a).
+    `read_head` is the table's ledger reader
     (`table.check_agm_head`); the screen's TABLE section shows its state."""
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
@@ -522,6 +523,10 @@ def peek(
         return _refused(why, 2)
     if not (cfg.box / "record.jsonl").is_file():
         return {"needs": [], "count": 0, "empty": True, "code": 0}
+    if not cfg.keys.is_file():
+        # R23a: `_keys` would mint a keys file; peek writes nothing, ever
+        why = f"unreachable: no keys file at {cfg.keys}; nothing was read or made"
+        return {"needs": [], "count": 0, "state": "unreachable", "why": why, "code": 1}
     before = _breaks_before(cfg, key)
     run, info = _open(cfg, "peek", ("peek",), write=False)
     if run is None:
@@ -962,20 +967,24 @@ TABLE_KEYS = {"world", "sheets_sha"}  # a table forecast's world (SPEC W2 S2)
 TABLE_FORECAST_KEYS = TABLE_KEYS | {"beacon_round"}
 
 
-def _future_round(rnd: object, run: Run) -> str | None:
-    """Why `rnd` is not a drand round that fires after now (this box's
-    clock), or None. A round already out is a seed anyone may know."""
+def _future_round(rnd: object, run: Run) -> tuple[str | None, int | None]:
+    """(why `rnd` is not a drand round still ahead, None) or (None, the
+    reader's latest round). Ahead means the operator's reader can NOT read it
+    yet: `rnd` > the newest round it reads (R23a). No box clock is asked: a
+    clock set back (`--now`) would let a round already out pass. A round
+    already out is a seed anyone may know; with no reader, nothing can be
+    shown to be ahead, and the forecast is refused."""
     if isinstance(rnd, bool) or not isinstance(rnd, int) or rnd < 1:
-        return "beacon_round is a drand round number"
-    now = beacon.epoch(run.rec.clock())
-    if now is None:
-        return "the box's clock can't be read, so no round can be shown to be ahead"
-    if beacon.round_time(rnd) <= now:
+        return "beacon_round is a drand round number", None
+    newest, why = beacon.latest(run.beacon)
+    if newest is None:
+        return f"{why}: no round can be shown to be still ahead", None
+    if rnd <= newest:
         return (
-            f"beacon round {rnd} fired at {beacon.round_time(rnd)}, not after now "
-            f"({now}): its randomness may be known; name a round still ahead"
-        )
-    return None
+            f"beacon round {rnd} is out already (the reader reads up to {newest}): "
+            "its randomness may be known; name a round still ahead"
+        ), None
+    return None, newest
 
 
 def forecast(
@@ -1025,8 +1034,20 @@ def forecast(
             f"table names exactly {sorted(TABLE_FORECAST_KEYS)}: world and "
             "sheets_sha as text, beacon_round a future drand round"
         )
-    elif table is not None and (why := _future_round(table["beacon_round"], run)):
-        pass
+    elif table is not None and (
+        (got := _future_round(table["beacon_round"], run))[0] is not None
+    ):
+        why = got[0]
+    elif table is not None and any(
+        r["kind"] == "wager"
+        and (r.get("table") or {}).get("beacon_round") == table["beacon_round"]
+        for r in run.rec.rows()
+    ):
+        # R23a: one table forecast per round, or a hedge's loser is never graded
+        why = (
+            f"a table forecast already names beacon round {table['beacon_round']}: "
+            "one forecast per round"
+        )
     elif any(r["kind"] == "wager" and r.get("id") == wid for r in run.rec.rows()):
         why = f"a wager {wid!r} is already on record; a forecast stands"
     else:
@@ -1041,6 +1062,9 @@ def forecast(
         committed=committed,
         commit=reverse.COMMIT,
         table=table,
+        # R23a: the reader's newest round as the forecast was made, a fact
+        # the reader checked; the round named must be after it
+        beacon_latest=got[1] if table is not None else None,
     )
     return {
         "row": row,
@@ -1303,7 +1327,15 @@ def seal_tip(
             "refused", run.sys, at="seal_tip", reason=why, subject=subject
         )
         return {"refused": why, "row": row, "sealed": False, "covers": newly, "code": 1}
-    row = run.seal_tip(proof, run.keys[gate.HUMAN], {"n": int(n), "hash": hsh})  # type: ignore[arg-type]
+    # R23a: the reader's newest round as the human seals, so "the round fired
+    # after the tip seal" rests on the reader, never on this box's clock
+    newest, _ = beacon.latest(cfg.beacon)
+    row = run.seal_tip(
+        proof,
+        run.keys[gate.HUMAN],  # type: ignore[arg-type]
+        {"n": int(n), "hash": hsh},
+        beacon_latest=newest,
+    )
     ok = row["kind"] == "seal"
     return {"row": row, "sealed": ok, "covers": newly, "code": 0 if ok else 1}
 
@@ -1337,7 +1369,8 @@ def reconcile(
     box, 0600). Read-only, like `needs`: an `invocation` row and nothing else,
     no `reconcile` row, so it checks nothing out. Without the key no outcome
     counts, and the answer says so. `graded_by` stays None (SPEC R4). `basis`
-    as `checkout` takes it: a table box goes through R3 here too."""
+    as `checkout` takes it: on a table box the Run's own hook, never this
+    one (R23a)."""
     # W4 break 7: the anchor as it stood before this verb's own rows
     before = _breaks_before(cfg, read_human_key(human_key, cfg.box)[0])
     run, info = _open(cfg, "reconcile", argv)

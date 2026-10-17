@@ -595,6 +595,7 @@ class Run:
         committed: dict | None = None,
         commit: str | None = None,
         table: dict | None = None,
+        beacon_latest: int | None = None,
     ) -> dict:
         """Record a declared wager. Its row hash is the subject a human seal
         names to say what happened; nothing here grades it.
@@ -609,6 +610,8 @@ class Run:
             extra = {"by": by, "committed": committed, "commit": commit}
         if table is not None:  # the world and sheets a table forecast is about
             extra["table"] = table
+        if beacon_latest is not None:  # the reader's newest round then (R23a)
+            extra["beacon_latest"] = beacon_latest
         return self.rec.append(
             "wager",
             self.sys,
@@ -689,7 +692,13 @@ class Run:
             **extra,
         )
 
-    def seal_tip(self, proof: str, human_key: bytes, tip: dict | None = None) -> dict:
+    def seal_tip(
+        self,
+        proof: str,
+        human_key: bytes,
+        tip: dict | None = None,
+        beacon_latest: int | None = None,
+    ) -> dict:
         """The human seals the record's tip; the anchor keeps it outside the box.
         A broken chain is never anchored: sealing it would bless the break.
 
@@ -729,7 +738,10 @@ class Run:
             )
         before = self._anchor()  # the tip a first pin keeps, read before it moves
         self.rec.set_anchor(tip, proof)
-        row = self.rec.append("seal", hum, where=subject, subject=subject, proof=proof)
+        extra = {} if beacon_latest is None else {"beacon_latest": beacon_latest}
+        row = self.rec.append(
+            "seal", hum, where=subject, subject=subject, proof=proof, **extra
+        )
         self.pin(before)
         return row
 
@@ -759,10 +771,12 @@ class Run:
         The record is read, and its tip checked, once.
 
         `basis` is the R3 hook `reverse.reconcile_wagers` asks about each
-        sealed outcome (`table.basis`). Left None, it is bound here whenever
-        the record holds table verdict rows or a wager naming a table world,
-        so every report (reconcile, needs, checkout, the morning screen) goes
-        through the one door.
+        sealed outcome (`table.basis`). Whenever the record holds table verdict
+        rows or a wager naming a table world it is bound HERE, to the
+        operator's beacon reader, and a caller's `basis` is ignored (R23a: the
+        reader is the operator's, never the caller's), so every report
+        (reconcile, needs, peek, checkout, the morning screen) goes through the
+        one door. A caller's `basis` is used only on a box with no table.
 
         `breaks` are the chain and anchor breaks as read BEFORE this verb's
         own rows were appended (`api._breaks_before`, W4 break 7): a record
@@ -773,13 +787,15 @@ class Run:
         hands `table.check_agm_head`; it only matters for a table box, where
         the report gains a `table` key (sessions and the agm_head check)."""
         rows = self.rec.rows()
-        if basis is None and any(
+        if any(
             (r["kind"] == "verdict" and r.get("who") == "table")
             or (r["kind"] == "wager" and isinstance(r.get("table"), dict))
             for r in rows
         ):
             from . import table  # table imports api, which imports this module
 
+            # R23a: on a table box the hook is the Run's, bound to the
+            # operator's reader (Config.beacon); a caller's `basis` is ignored
             basis = table.basis(human_key, self.beacon)
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)

@@ -33,8 +33,11 @@ SEED_ID = beacon.seed_id(RANDOMNESS)
 FORECAST = {**WORLD, "beacon_round": ROUND}
 
 
-def drand(rnd: int) -> dict:
-    """The operator's beacon reader, offline: one round known."""
+def drand(rnd) -> dict:
+    """The operator's beacon reader, offline: the rounds up to NOW are out,
+    and ROUND (ahead) answers its randomness when read by number."""
+    if rnd == "latest":
+        return {"round": beacon.round_at(NOW)}
     if rnd != ROUND:
         raise LookupError(f"round {rnd} not in this reader")
     return {"round": rnd, "randomness": RANDOMNESS}
@@ -124,8 +127,10 @@ def play(
         opened["forecast"] = forecast
     out = [table.verdict(cfg, opened)]
     path: list[str] = []
+    at = 0
     for i, v in enumerate(verdicts):
         path.append(v)
+        roll, at = honest_roll(at, v, f"S{i}")
         out.append(
             table.verdict(
                 cfg,
@@ -136,15 +141,10 @@ def play(
                     "seat": i % 2,
                     "character": f"c{i % 2}",
                     "move": ["act", "Grit"],
-                    "total": 10 if v == "strong" else 8 if v == "weak" else 4,
+                    "total": roll["result"],
                     "verdict": v,
-                    "reason": f"2d6+1 = {v}",
-                    "roll": {
-                        "seed_id": SEED_ID,
-                        "counter_before": 2 * i,
-                        "counter": 2 * (i + 1),
-                        "result": 10 if v == "strong" else 8 if v == "weak" else 4,
-                    },
+                    "reason": f"2d6+{roll['stat_value']} = {v}",
+                    "roll": roll,
                     "path": "-".join(path),
                 },
             )
@@ -164,6 +164,26 @@ def play(
         )
     assert all(r["code"] == 0 for r in out), out
     return out
+
+
+BAND_TOTAL = {"strong": 10, "weak": 8, "miss": 4}
+
+
+def honest_roll(at: int, verdict: str, stat: str, randomness: str = RANDOMNESS):
+    """A roll record the stream really gives at counter `at` (R23a replay),
+    its modifier picked so the total lands in `verdict`'s band."""
+    a, b, end = beacon.roll_2d6(randomness, at)
+    mod = BAND_TOTAL[verdict] - (a + b)
+    roll = {
+        "generator_id": beacon.GENERATOR_ID,
+        "seed_id": beacon.seed_id(randomness),
+        "stat": stat,
+        "stat_value": mod,
+        "counter_before": at,
+        "counter": end,
+        "result": a + b + mod,
+    }
+    return roll, end
 
 
 def forecast_sealed(cfg, wid="f1"):
@@ -394,7 +414,7 @@ def test_a_row_whose_path_is_not_the_rolls_so_far_escalates(cfg, key_file):
             "seed_id": SEED_ID,
         },
     )
-    honest = {"seed_id": SEED_ID, "counter_before": 0, "counter": 2, "result": 10}
+    honest, _ = honest_roll(0, "strong", "Grit")
     table.verdict(
         cfg,
         {
@@ -515,8 +535,9 @@ def test_needs_runs_through_the_hook(cfg):
     assert api.needs(cfg)["code"] == 0
 
 
-def test_the_hook_is_bound_only_on_a_box_with_table_rows(cfg, key_file):
-    f = forecast_sealed(cfg)
+def test_a_callers_hook_is_used_off_the_table_once_per_wager(cfg, key_file):
+    f = api.forecast(cfg, "f1", DIST, by="oracle")  # no table: not a table box
+    assert seal_tip(cfg, f["tip"])["sealed"]
     _seal_and_tip(cfg, f["subject"], {"path": "weak-weak"})
     run, _ = api._open(cfg, "probe", ("probe",))
     called = []
@@ -525,6 +546,19 @@ def test_the_hook_is_bound_only_on_a_box_with_table_rows(cfg, key_file):
     )
     assert called == ["f1"]  # asked once per wager, never twice
     assert rep["wagers"]["rows"][0]["state"] == "reconciled"
+
+
+def test_R23a_on_a_table_box_a_callers_hook_is_ignored(cfg, key_file):
+    """The reader is the operator's (Config.beacon), never the caller's: a
+    no-op or a lying hook handed to reconcile, needs, checkout or peek changes
+    nothing on a box holding table rows or table wagers."""
+    f = forecast_sealed(cfg)
+    _seal_and_tip(cfg, f["subject"], {"path": "weak-weak"})  # no session plays it
+    for hook in (lambda w, r, o: None, table.basis(HUMAN_KEY, lambda r: {})):
+        w = api.reconcile(cfg, human_key=key_file, basis=hook)["wagers"]["rows"][0]
+        assert w["state"] == "escalate" and "no table session" in w["reason"]
+        lines = api.peek(cfg, human_key=key_file, basis=hook)["needs"]
+        assert not [x for x in lines if x.startswith("wager f1 reconciled")]
 
 
 def test_round3_N1_a_table_forecast_no_session_claims_escalates(cfg, key_file):
@@ -932,13 +966,39 @@ def test_round3_N5_a_beat_with_no_world_is_refused(cfg):
     [
         (WORLD, "table names exactly"),  # no round at all
         ({**WORLD, "beacon_round": True}, "drand round number"),
-        ({**WORLD, "beacon_round": beacon.round_at(NOW)}, "not after now"),
-        ({**WORLD, "beacon_round": 1}, "not after now"),
+        ({**WORLD, "beacon_round": beacon.round_at(NOW)}, "out already"),
+        ({**WORLD, "beacon_round": 1}, "out already"),
     ],
 )
 def test_a_table_forecast_needs_a_round_still_ahead(cfg, bad, why):
     res = api.forecast(cfg, "f1", DIST, by="oracle", table=bad)
     assert res["code"] == 1 and why in res["refused"]
+
+
+def test_R23a_the_forecast_door_asks_the_reader_never_the_box_clock(cfg):
+    """A clock set back can't make a round that is out look ahead; with no
+    reader nothing can be shown ahead; the reader's latest is recorded."""
+    old = api.Config(**{**cfg.__dict__, "now": "2026-01-01T00:00:00Z"})
+    out = beacon.round_at(NOW) - 1000  # ahead of the skewed clock, out by the reader
+    res = api.forecast(
+        old, "f0", DIST, by="oracle", table={**WORLD, "beacon_round": out}
+    )
+    assert res["code"] == 1 and "out already" in res["refused"]
+    off = api.Config(**{**cfg.__dict__, "beacon": None})
+    res = api.forecast(off, "f0", DIST, by="oracle", table=FORECAST)
+    assert res["code"] == 1 and "no beacon reader" in res["refused"]
+    f = forecast_sealed(cfg)
+    assert f["row"]["beacon_latest"] == beacon.round_at(NOW)
+    tip = next(
+        r for r in rows(cfg) if r["kind"] == "seal" and r.get("subject") == f["tip"]
+    )
+    assert tip["beacon_latest"] == beacon.round_at(NOW)
+
+
+def test_R23a_one_table_forecast_per_round(cfg):
+    forecast_sealed(cfg)
+    res = api.forecast(cfg, "f2", DIST, by="oracle", table=FORECAST)
+    assert res["code"] == 1 and "one forecast per round" in res["refused"]
 
 
 def test_the_round_arithmetic_is_play_pys():
@@ -998,13 +1058,27 @@ def test_a_seed_that_is_not_the_rounds_randomness_escalates(cfg, key_file):
 
 
 def test_a_round_that_fired_before_the_tip_seal_escalates():
-    w = {"table": {**WORLD, "beacon_round": ROUND}}
+    before = beacon.round_at(NOW)
+    w = {"table": {**WORLD, "beacon_round": ROUND}, "beacon_latest": before}
     opened = {"beacon_round": ROUND, "randomness": RANDOMNESS}
-    late = {"ts": "2030-01-01T00:00:00Z"}
-    state, why = table.beacon_problem(opened, w, late, drand)
-    assert state == "escalate" and "not after the tip seal" in why
+    sealed = {"ts": NOW, "beacon_latest": before}
+    assert table.beacon_problem(opened, w, sealed, drand) is None
+    # R23a: the reader's round, never a ts, carries the order
+    for tip, wager, said in (
+        ({**sealed, "beacon_latest": ROUND}, w, "out when the tip seal"),
+        ({"ts": NOW}, w, "tip seal holds no reader round"),
+        (sealed, {**w, "beacon_latest": ROUND + 5}, "out when the forecast"),
+        (
+            sealed,
+            {k: v for k, v in w.items() if k != "beacon_latest"},
+            "forecast holds no",
+        ),
+        ({**sealed, "ts": "2030-01-01T00:00:00Z"}, w, "not after the tip seal"),
+    ):
+        state, why = table.beacon_problem(opened, wager, tip, drand)
+        assert state == "escalate" and said in why, (said, why)
     other = {**opened, "beacon_round": ROUND + 1}
-    state, why = table.beacon_problem(other, w, {"ts": NOW}, drand)
+    state, why = table.beacon_problem(other, w, sealed, drand)
     assert state == "escalate" and f"awaits round {ROUND}" in why
 
 
@@ -1012,37 +1086,58 @@ def test_a_round_that_fired_before_the_tip_seal_escalates():
 OPEN = {"randomness": RANDOMNESS, "seed_id": SEED_ID}
 
 
-def _roll(n, before, after, result, total=None, verdict=None, seed=SEED_ID):
-    total = result if total is None else total
-    return {
-        "n": n,
-        "what": "roll",
-        "total": total,
-        "verdict": verdict or table.bucket(total),
-        "roll": {
-            "seed_id": seed,
-            "counter_before": before,
-            "counter": after,
-            "result": result,
-        },
-    }
+def _rolls(*verdicts):
+    """Honest roll rows, one per verdict, counters running on from 0."""
+    out, at = [], 0
+    for i, v in enumerate(verdicts):
+        roll, at = honest_roll(at, v, f"S{i}")
+        out.append({"n": i + 1, "what": "roll", "seat": 0, "total": roll["result"],
+                    "verdict": v, "roll": roll})  # fmt: skip
+    return out
+
+
+def _edit(rows, i, **roll):
+    rows = [dict(r, roll=dict(r["roll"])) for r in rows]
+    top = {k: roll.pop(k) for k in ("total", "verdict") if k in roll}
+    rows[i]["roll"].update(roll)
+    rows[i].update(top)
+    return rows
+
+
+H = _rolls("weak", "strong", "miss")
 
 
 @pytest.mark.parametrize(
     "rolls, why",
     [
-        ([_roll(1, 0, 2, 8), _roll(2, 2, 4, 11)], None),
-        ([_roll(1, 0, 2, 8), _roll(2, 0, 2, 11)], "restart or a gap"),
-        ([_roll(1, 0, 2, 8), _roll(2, 3, 5, 11)], "restart or a gap"),
-        ([_roll(1, 2, 4, 8)], "restart or a gap"),
-        ([_roll(1, 0, 2, 8), _roll(2, 2, 4, 11, seed="ff" * 8)], "reseed"),
-        ([_roll(1, 0, 2, 5, total=12)], "not its own dice's"),
-        ([_roll(1, 0, 2, 5, verdict="strong")], "not the dice's"),
+        (H, None),
+        (_edit(H, 1, counter_before=0), "restart or a gap"),
+        (
+            _edit(H, 1, counter_before=H[1]["roll"]["counter_before"] + 1),
+            "restart or a gap",
+        ),
+        (_edit(H, 0, counter_before=2), "restart or a gap"),
+        (_edit(H, 1, seed_id="ff" * 8), "reseed"),
+        (_edit(H, 0, total=12), "not its own dice's"),
+        (_edit(H, 0, verdict="strong"), "not the dice's"),
+        (_edit(H, 1, generator_id="random/global"), "rolled by generator"),
+        (
+            _edit(H, 1, result=H[1]["roll"]["result"] + 5, total=H[1]["total"] + 5),
+            "replayed from the randomness",
+        ),  # fmt: skip
+        (_edit(H, 1, counter=H[1]["roll"]["counter"] + 2), "stream's two dice end"),
     ],
 )
-def test_dice_problem_reads_the_roll_records(rolls, why):
+def test_dice_problem_replays_the_roll_records(rolls, why):
     got = table.dice_problem(OPEN, rolls)
-    assert got is None if why is None else why in got
+    assert got is None if why is None else why in got, got
+
+
+def test_dice_problem_holds_a_seats_modifier_within_the_session():
+    rows = _rolls("weak", "weak")
+    rows = _edit(rows, 1, stat="S0")  # the same seat and stat, another modifier
+    if rows[0]["roll"]["stat_value"] != rows[1]["roll"]["stat_value"]:
+        assert "is not the" in table.dice_problem(OPEN, rows)
 
 
 def test_dice_problem_needs_the_beacon_seed_on_the_open_row():
@@ -1089,3 +1184,13 @@ def test_a_served_roll_row_carries_its_own_dice_and_no_seed(cfg):
     served = [r for t in doc["tables"] for r in t["rows"] if "total" in r]
     assert served and all(r["dice"] == r["total"] for r in served)
     assert SEED_ID not in json.dumps(doc) and RANDOMNESS not in json.dumps(doc)
+
+
+def test_R23a_peek_with_no_keys_file_makes_nothing_and_says_unreachable(cfg):
+    play(cfg)
+    cfg.keys.unlink()
+    snap = sorted(p for p in cfg.keys.parent.parent.rglob("*"))
+    got = api.peek(cfg)
+    assert got["state"] == "unreachable" and "no keys file" in got["why"]
+    assert not cfg.keys.exists()
+    assert sorted(p for p in cfg.keys.parent.parent.rglob("*")) == snap

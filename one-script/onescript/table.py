@@ -396,11 +396,16 @@ def _int(v: object) -> bool:
 
 def dice_problem(opened: dict, srows: list[dict]) -> str | None:
     """Why a session's roll rows are not one honest run of the dice its `open`
-    row names, or None (W4 break 1-3). Read from the record alone, no seed:
-    the open row's randomness is the seed (`seed_id` is its id); every roll
-    is from that seed (no reseed mid-session), its counters run on from 0
-    with no gap or restart, and each row's `total` is its own dice's
-    `roll.result` and its `verdict` that total's bucket."""
+    row names, or None (W4 break 1-3, R23a). Read from the record alone: the
+    open row's randomness is the seed (`seed_id` is its id); every roll is
+    from that seed on the `sha256-stream/v1` generator (a legacy
+    `random/global` row is refused), its counters run on from 0 with no gap
+    or restart, and each roll is REPLAYED from the randomness
+    (`beacon.roll_2d6`): the two dice the stream gives at `counter_before`,
+    the counter they leave, `result` == dice + `stat_value`, `total` ==
+    `result`, `verdict` == its bucket. Trusted, said: `stat_value` is the
+    roll record's own (the sheet is bound only by `sheets_sha`, not re-read
+    here); it must stay the same for a seat and stat within the session."""
     rnd = opened.get("randomness")
     if not beacon.is_randomness(rnd):
         return "the open row carries no beacon randomness (64 hex) to seed the session"
@@ -410,12 +415,18 @@ def dice_problem(opened: dict, srows: list[dict]) -> str | None:
             "randomness: the session was not seeded by the beacon"
         )
     at = 0
+    mods: dict[tuple, object] = {}
     for r in srows:
         if r.get("what") != "roll":
             continue
         roll = r.get("roll")
         if not isinstance(roll, dict):
             return f"row {r['n']}: a roll row with no roll record"
+        if roll.get("generator_id") != beacon.GENERATOR_ID:
+            return (
+                f"row {r['n']}: rolled by generator {roll.get('generator_id')!r}, "
+                f"not {beacon.GENERATOR_ID!r}: no table outcome from it"
+            )
         if roll.get("seed_id") != opened["seed_id"]:
             return (
                 f"row {r['n']}: rolled from seed {roll.get('seed_id')!r}, not the open "
@@ -428,7 +439,27 @@ def dice_problem(opened: dict, srows: list[dict]) -> str | None:
                 f"{at} (a restart or a gap)"
             )
         at = after
-        if not _int(roll.get("result")) or r.get("total") != roll["result"]:
+        mod = roll.get("stat_value")
+        if not _int(mod) or not _int(roll.get("result")):
+            return f"row {r['n']}: the roll record has no stat_value or result"
+        if mods.setdefault((r.get("seat"), roll.get("stat")), mod) != mod:
+            return (
+                f"row {r['n']}: stat_value {mod} for seat {r.get('seat')!r} "
+                f"{roll.get('stat')!r} is not the {mods[(r.get('seat'), roll.get('stat'))]} "
+                "it was before in this session"
+            )
+        a, b, end = beacon.roll_2d6(rnd, before)
+        if end != after:
+            return (
+                f"row {r['n']}: the stream's two dice end at counter {end}, the record "
+                f"says {after}"
+            )
+        if roll["result"] != a + b + mod:
+            return (
+                f"row {r['n']}: result {roll['result']} is not the stream's dice "
+                f"{a}+{b} + {mod} = {a + b + mod} (replayed from the randomness)"
+            )
+        if r.get("total") != roll["result"]:
             return (
                 f"row {r['n']}: total {r.get('total')!r} is not its own dice's "
                 f"{roll.get('result')!r}"
@@ -445,11 +476,15 @@ def beacon_problem(
     opened: dict, w: dict, tip_seal: dict, read: Callable[[int], dict] | None
 ) -> tuple[str, str] | None:
     """(state, why) when the session's seed is not shown to be the forecast's
-    beacon, or None. The round is the one the wager committed to; it fired
-    after the tip seal that committed the forecast (chain order AND the
-    round's time, as export.py's beacon_then < target); and the operator's
-    reader says that round's randomness is the open row's. No reader, or one
-    that fails: `unreachable`. BLS is not checked (T10, said)."""
+    beacon, or None. The round is the one the wager committed to; the
+    reader could NOT read it when the forecast was made nor when the human
+    sealed the tip that commits it (`beacon_latest` on the wager and on the
+    tip seal, each the reader's newest round then; R23a: never a box clock);
+    and the reader says that round's randomness is the open row's. The tip
+    seal's own `ts` is still compared too, as an extra refusal only (a clock
+    set back can't pass a round, it can only stop one). No reader, or one
+    that fails: `unreachable`. Trusted, said: the reader (BLS not checked,
+    T10)."""
     rnd = (w.get("table") or {}).get("beacon_round")
     if not _int(rnd):
         return "escalate", "the forecast names no beacon round (W4 break 1)"
@@ -458,6 +493,20 @@ def beacon_problem(
             f"the session was seeded for round {opened.get('beacon_round')!r}, the "
             f"forecast awaits round {rnd}"
         )
+    for what, seen in (
+        ("forecast", w.get("beacon_latest")),
+        ("tip seal", tip_seal.get("beacon_latest")),
+    ):
+        if not _int(seen):
+            return "escalate", (
+                f"the {what} holds no reader round: round {rnd} can't be shown to "
+                f"have been ahead when it was made (R23a)"
+            )
+        if rnd <= seen:
+            return "escalate", (
+                f"round {rnd} was out when the {what} was made (the reader read up "
+                f"to {seen}): its randomness may have been known"
+            )
     sealed_at = beacon.epoch(str(tip_seal.get("ts")))
     if sealed_at is None or beacon.round_time(rnd) <= sealed_at:
         return "escalate", (
