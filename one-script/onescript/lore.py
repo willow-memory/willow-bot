@@ -59,7 +59,8 @@ _TABLE = re.compile(r"^\|")
 #: mai's syntax, never world text (W4 break 5)
 _DIRECTIVE = re.compile(r"^@[A-Za-z]")
 _FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})")
-_COMMENT = re.compile(r"<!--.*?-->")
+#: an HTML comment, across newlines, closed by `-->` or `--!>`, or unclosed to the end
+_COMMENT = re.compile(r"<!--.*?(?:--!?>|\Z)", re.DOTALL)
 _TAG = re.compile(r"</?[A-Za-z][^<>]*>")
 _ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
 _QUOTE = re.compile(r"^(>\s?)+")
@@ -86,6 +87,8 @@ def facts_of(path: str, data: str) -> list[tuple[str, str]]:
     Blockquote `>` markers and inline HTML are stripped. The scene is the nearest
     heading above the fact, else the file's stem."""
     stem = path.rsplit("/", 1)[-1][: -len(".md")]
+    # a comment can span lines: strip it from the whole document first
+    data = _COMMENT.sub("", data)
     lines = [ln.rstrip("\r") for ln in data.split("\n")]
     if lines and lines[0].strip(" \t") == "---":  # frontmatter: not world text
         end = next(

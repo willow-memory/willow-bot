@@ -557,3 +557,20 @@ def test_a_well_formed_mai_world_doc_writes_its_lore(run):
     got = lore.from_sealed(run, subject)
     assert got and all(r["kind"] == "lore" for r in got)
     assert not any(r["fact"].startswith("@") for r in got)
+
+
+def test_html_comments_across_newlines_and_bang_closers_are_not_facts():
+    """CodeQL py/bad-tag-filter: a comment spanning lines, closed by `--!>`,
+    or never closed is markup, not world text."""
+    from onescript import lore
+
+    data = (
+        "# Vale\n\n"
+        "The ferryman <!-- a\nsecret --> takes salt.\n\n"
+        "The miller <!-- hidden --!> is honest.\n\n"
+        "The bell rings <!-- never closed\n"
+    )
+    facts = [f for _, f in lore.facts_of("world/vale.md", data)]
+    assert "The ferryman takes salt." in facts
+    assert "The miller is honest." in facts
+    assert not any("secret" in f or "hidden" in f or "never closed" in f for f in facts)

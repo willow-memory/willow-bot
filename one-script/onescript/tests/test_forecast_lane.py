@@ -574,7 +574,10 @@ def test_export_refuses_an_edited_round_and_a_moved_answer():
 
 
 @pytest.mark.skipif(
-    not (TABLE / "onescript_table.py").is_file(), reason="the table is not in reach"
+    not (TABLE / "onescript_table.py").is_file()
+    or "def wager_rows" not in (TABLE / "onescript_table.py").read_text(),
+    reason="the table's wager_rows is not in this willows-grove checkout yet "
+    "(it lands with willows-grove PR 157)",
 )
 def test_the_tables_f1_becomes_a_wager_and_f2_is_held():
     """C17: f1 is a binary desk wager at its stated 0.62; f2 is held with
