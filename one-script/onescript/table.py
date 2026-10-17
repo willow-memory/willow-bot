@@ -13,6 +13,7 @@ rulings R9, R10, R3, R19); SPEC-documented §9 J4 and §12 J9; SPEC-rival §2,
     basis(key)                        # the R3 hook reverse.reconcile_wagers asks
     reconcile_table(cfg, human_key=FILE)               # api.reconcile with basis bound
     check_agm_head(rows, read_head)   # satisfied / failing / unreachable (+ unanchored)
+    surface(rows, covered_through=, read_head=)  # the lines a seat shows (R13): sessions + agm
 
 A `verdict` row is code's record of what happened at the table. It is never a
 seal (R10, the A5 class): it is written under the verified `table` identity
@@ -671,3 +672,46 @@ def agm_check(
     through = reverse.covered_through(run.rec, key)
     out = check_agm_head(run.rec.rows(), read_head, covered_through=through)
     return {**out, "code": 0 if out["state"] == SATISFIED else 1}
+
+
+# ── R13: what the seat shows ───────────────────────────────────────────────
+def _no_reader() -> dict:
+    return {"state": "unreachable", "why": "no ledger reader was handed over"}
+
+
+def surface(
+    rows: list[dict],
+    *,
+    covered_through: int | None = None,
+    read_head: Callable[[], dict] | None = None,
+) -> dict | None:
+    """The table's part of the reverse report, for `view.table_lines` (SPEC R13;
+    nothing but a read of rows): one entry per verdict session (rows, the
+    forecast it claims, whether a sealed tip covers all of it: True, False, or
+    None when no human key was handed over) and the `agm_head` check. None when
+    the record holds no table verdict row, so a box that is not a table's shows
+    nothing new. The agm check states are the documented ones plus `unanchored`;
+    with an anchor on record and no `read_head`, it is `unreachable`, said."""
+    mine = [r for r in rows if r["kind"] == "verdict" and r.get("who") == TABLE[0]]
+    if not mine:
+        return None
+    wagers = {r["hash"]: r.get("id") for r in rows if r["kind"] == "wager"}
+    sessions: dict[str, dict] = {}
+    for r in mine:
+        if r.get("what") == "agm_head":
+            continue
+        sid = str(r.get("session"))
+        got = sessions.setdefault(
+            sid, {"session": sid, "rows": 0, "forecast": None, "last": 0}
+        )
+        got["rows"] += 1
+        got["last"] = max(got["last"], r["n"])
+        if r.get("forecast") and got["forecast"] is None:
+            got["forecast"] = wagers.get(r["forecast"], str(r["forecast"])[:12])
+    for got in sessions.values():
+        got["sealed"] = (
+            None if covered_through is None else got["last"] <= covered_through
+        )
+    agm = check_agm_head(rows, read_head or _no_reader, covered_through=covered_through)
+    agm.pop("read", None)  # the ledger's own reading stays with the checker
+    return {"sessions": list(sessions.values()), "agm": agm}

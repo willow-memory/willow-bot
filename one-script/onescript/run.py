@@ -749,6 +749,7 @@ class Run:
         task_of=None,
         human_key: bytes | None = None,
         basis=None,
+        read_head=None,
     ) -> dict:
         """The reverse report over the record as it stands: pure, it appends
         nothing. `checkout` draws its screen from it; `api.needs` reads it.
@@ -758,7 +759,11 @@ class Run:
         sealed outcome (`table.basis`). Left None, it is bound here whenever
         the record holds table verdict rows or a wager naming a table world,
         so every report (reconcile, needs, checkout, the morning screen) goes
-        through the one door."""
+        through the one door.
+
+        `read_head` (R13) is the ai-game-master ledger reader `table.surface`
+        hands `table.check_agm_head`; it only matters for a table box, where
+        the report gains a `table` key (sessions and the agm_head check)."""
         rows = self.rec.rows()
         if basis is None and any(
             (r["kind"] == "verdict" and r.get("who") == "table")
@@ -771,7 +776,7 @@ class Run:
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))
-        return reverse.reconcile(
+        report = reverse.reconcile(
             self.rec.box,
             self.rec.pile(),
             rows,
@@ -794,6 +799,17 @@ class Run:
                 else None
             ),
         )
+        from . import table  # table imports api, which imports this module
+
+        # a tip counts as covering only when the caller handed the key over
+        shown = table.surface(
+            rows,
+            covered_through=through if human_key is not None else None,
+            read_head=read_head,
+        )
+        if shown is not None:
+            report["table"] = shown
+        return report
 
     def checkout(
         self,
@@ -804,6 +820,7 @@ class Run:
         boot_report: dict | None = None,
         human_key: bytes | None = None,
         basis=None,
+        read_head=None,
     ) -> tuple[dict, str]:
         """`human_key` lets reverse check the sealed anchor tip; without it no
         wager outcome counts (it cannot be shown to be covered). `basis` as
@@ -814,6 +831,7 @@ class Run:
             task_of=task_of,
             human_key=human_key,
             basis=basis,
+            read_head=read_head,
         )
         screen = view.morning(rep, boot_report, self.claims, self.acts)
         self.rec.append("reconcile", self.sys, report_hash=h256(screen))

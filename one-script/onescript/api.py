@@ -411,12 +411,14 @@ def checkout(
     *,
     human_key: Path | None = None,
     basis=None,
+    read_head=None,
 ) -> dict:
     """Reverse, then the morning screen. `human_key` is the human's key in a
     file outside the box (0600, `read_human_key`): with it, wager outcomes the
     sealed tip covers count, and GRADES shows their scores. `basis` is the R3
     hook (`table.basis`); left None, `Run.reconciled` binds it whenever the
-    box holds table verdict rows."""
+    box holds table verdict rows. `read_head` is the table's ledger reader
+    (`table.check_agm_head`); the screen's TABLE section shows its state."""
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
         return _refused(why, 2)
@@ -425,24 +427,46 @@ def checkout(
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    rep, screen = run.checkout(boot_report=last, human_key=key, basis=basis)
+    rep, screen = run.checkout(
+        boot_report=last, human_key=key, basis=basis, read_head=read_head
+    )
     return {"report": rep, "screen": screen, "code": 0}
 
 
-def needs(cfg: Config, argv: Iterable[str] = ("needs",), *, basis=None) -> dict:
+def needs(
+    cfg: Config,
+    argv: Iterable[str] = ("needs",),
+    *,
+    basis=None,
+    human_key: Path | None = None,
+    read_head=None,
+) -> dict:
     """What the morning screen's NEEDS YOU section would list right now, as
     data: `{"needs": [line, ...], "count": n}` (an empty list is the screen's
     "nothing"). The lines are `view.needs_you`, the same ones `checkout` prints,
     drawn from the record by the same reverse report. Read-only, like `pooled`
     and `resume`: it writes the `invocation` row every verb writes and nothing
     else, in particular no `reconcile` row, so it does not check the run out and
-    it needs no open box."""
+    it needs no open box.
+
+    SPEC R13: the lines also carry the wagers (`wager <id> <state> ...`: a
+    forecast waiting, an outcome waiting on a seal or its tip, a score code
+    made, an unreachable seal) and, on a table box, the table's (`table verdict
+    session ...`, `table agm_head <state> ...`; `view.table_lines`). `human_key`
+    is a file outside the box, as `checkout` takes it: with it a sealed tip is
+    checked and scores show; without, a wager reads as waiting and a session's
+    tip as not checked here. `read_head` is the ledger reader for the agm_head
+    check."""
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
     run, info = _open(cfg, "needs", argv)
     if run is None:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    lines = view.needs_you(run.reconciled(basis=basis), last, run.claims, run.acts)
+    rep = run.reconciled(basis=basis, human_key=key, read_head=read_head)
+    lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
     return {"needs": lines, "count": len(lines), "code": 0}
 
 
