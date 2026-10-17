@@ -27,6 +27,7 @@ CAP = 10**6  # serve needs the caller's cap; most tests don't care what it is
 
 def capped(*args, **kw):
     kw.setdefault("max_chars", CAP)
+    kw.setdefault("human_key", HUMAN_KEY)  # what the seal rows are re-checked by
     return serve.serve(*args, **kw)
 
 
@@ -40,8 +41,9 @@ def box(tmp_path):
 
 
 def seal(rec, subject):
-    hum = gate.human(subject, gate.sign(HUMAN_KEY, "seal", subject), HUMAN_KEY)
-    rec.append("seal", hum, subject=subject)
+    proof = gate.sign(HUMAN_KEY, "seal", subject)
+    hum = gate.human(subject, proof, HUMAN_KEY)
+    rec.append("seal", hum, subject=subject, proof=proof)  # as Run.seal writes it
 
 
 def scoped(rec, *tables):

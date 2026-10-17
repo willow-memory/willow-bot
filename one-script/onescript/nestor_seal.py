@@ -268,6 +268,8 @@ def pairs_for(db: str | Path, subject: str) -> list[dict]:
 
 
 _PAIR_FIELDS = ("source_norm", "target_text", "verifier", "seal_sig", "status")
+#: What a seal row keeps of the pair, so a reader can check it again.
+PAIR_FIELDS = _PAIR_FIELDS
 
 
 def current(db: str | Path, subject: str, pair: object = None) -> list[dict]:

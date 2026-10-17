@@ -307,6 +307,7 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
     clock: Callable[[], str] = (lambda: cfg.now) if cfg.now else _now
     run = Run(cfg.box, keys, law, clock, anchor=cfg.keys.parent / ANCHOR)
     run.serve_key = _load_serve_key(cfg)
+    run.keyring, run.nestor_db = cfg.keyring, cfg.nestor_db
     run.rec.append(
         "invocation",
         run.sys,
@@ -664,16 +665,22 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     if run is None:
         return info
     rows = run.rec.rows()
-    seal = next(
-        (
-            r
-            for r in reversed(rows)
-            if r["kind"] == "seal"
-            and r.get("who") == gate.HUMAN
-            and str(r.get("subject", "")).startswith("serve:")
-        ),
-        None,
-    )
+    held, unchecked = run.held(rows)
+    seal = None
+    for r in reversed(rows):
+        subject = str(r.get("subject", ""))
+        if r["kind"] != "seal" or not subject.startswith("serve:"):
+            continue
+        if subject in held:
+            seal = r
+            break
+        if subject in unchecked:  # can't be checked here: said, not guessed
+            return {
+                "resume": None,
+                "state": "unreachable",
+                "why": unchecked[subject],
+                "code": 0,
+            }
     if seal is None:
         return {"resume": None, "code": 0}
     scoped = next(

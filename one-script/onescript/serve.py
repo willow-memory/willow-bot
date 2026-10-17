@@ -29,8 +29,9 @@ permission. Code fills out every field here; the model never sees a box.
           can't be linked from one session to the next. The serve key makes
           ids; it never signs authority and is never the seal key.
   trust   `human-sealed` when the record holds the human's seal over that
-          table's hash, else `untrusted`. The label is read from the record,
-          never from the table. It covers the table's authored rows, which
+          table's hash, its proof re-checked (`sealed_verified`), else
+          `untrusted`. The label is read from the record, never from the
+          table, and never from a row's `who` alone. It covers the table's authored rows, which
           are all that is served: the run's own rows (`who == "run"`) are
           not bound by a seal, so they are never served.
   return  one fixed line, the same every time, says what the model may return.
@@ -48,7 +49,7 @@ import hmac
 import os
 import re
 
-from . import gate
+from . import gate, nestor_seal
 from .record import Record, canon, h256
 
 OUT = "served.json"
@@ -253,8 +254,79 @@ def served_id(serve_key: bytes, tid: str) -> str:
 
 
 def sealed(rows: list[dict]) -> set[str]:
-    """Every subject the record holds a human seal over."""
+    """Every subject the record holds a row CLAIMING a human seal over. A claim
+    only: anyone who can write the record can append such a row (A5). Nothing
+    that grants authority reads this; it reads `sealed_verified`."""
     return {r["subject"] for r in rows if r["kind"] == "seal" and r["who"] == "human"}
+
+
+def sealed_verified(
+    rows: list[dict],
+    human_key: bytes | None = None,
+    keyring: dict | str | os.PathLike | None = None,
+    nestor_db: str | os.PathLike | None = None,
+) -> tuple[set[str], dict[str, str]]:
+    """(held, unreachable): the subjects whose seal row carries a proof that
+    checks out against that subject right now, and the subjects whose proof
+    could not be checked here, each with why.
+
+    A row's `who == "human"` is a label; the proof on the row is the seal. A key
+    seal carries the HMAC `proof` and is checked with the human's key; a Nestor
+    seal carries the `pair` and is checked against the operator's keyring and
+    Nestor's store as it stands now. A row with no proof, or one that does not
+    verify, is in neither set: it was never a seal. With no key, keyring or
+    store to check by, the answer is `unreachable`, never a pass."""
+    held: set[str] = set()
+    unreachable: dict[str, str] = {}
+    ring: dict | None = keyring if isinstance(keyring, dict) else None
+    ring_why: str | None = None
+    if ring is None and keyring is not None:
+        try:
+            ring = nestor_seal.load_keyring(keyring)
+        except nestor_seal.Unverifiable as e:
+            ring_why = f"unreachable: {e}"
+    for r in rows:
+        subject = r.get("subject")
+        if r.get("kind") != "seal" or r.get("who") != "human":
+            continue
+        if not isinstance(subject, str) or subject in held:
+            continue
+        ok, why = _seal_proof(r, subject, human_key, ring, ring_why, nestor_db)
+        if ok:
+            held.add(subject)
+            unreachable.pop(subject, None)
+        elif why is not None:
+            unreachable.setdefault(subject, why)
+    return held, unreachable
+
+
+def _seal_proof(row, subject, human_key, ring, ring_why, nestor_db):
+    """(True, None) when the row's proof verifies; (False, why) when it can't be
+    checked here; (False, None) when it is no seal at all."""
+    if row.get("via") == "nestor":
+        pair = row.get("pair")
+        if not isinstance(pair, dict):
+            return False, None
+        if ring is None:
+            return False, ring_why or "unreachable: no operator keyring to check by"
+        if nestor_db is None:
+            return False, "unreachable: no Nestor store to confirm it"
+        if not nestor_seal.have_ed25519():
+            return False, nestor_seal.NO_CRYPTO
+        who, _ = nestor_seal.check(pair, subject, ring)
+        if who is None or who != row.get("verifier"):
+            return False, None
+        try:
+            live = nestor_seal.current(nestor_db, subject, pair)
+        except nestor_seal.Unverifiable as e:
+            return False, f"unreachable: {e}"
+        return bool(live), None
+    proof = row.get("proof")
+    if not isinstance(proof, str):
+        return False, None
+    if not human_key:
+        return False, "unreachable: no human key to check the seal by"
+    return gate.verify_seal(subject, proof, human_key), None
 
 
 def serve(
@@ -264,6 +336,10 @@ def serve(
     serve_key: bytes | None,
     out: str = OUT,
     max_chars: int | None = None,
+    *,
+    human_key: bytes | None = None,
+    keyring: dict | str | os.PathLike | None = None,
+    nestor_db: str | os.PathLike | None = None,
 ) -> dict:
     """Write the served file and record it. Returns the served document.
     The receipts and the scope stay in the record's row, never in the file.
@@ -273,7 +349,8 @@ def serve(
     not know the model. Over the cap the answer is `empty`, "narrow the stack",
     never a truncation. No cap is `empty` too: nothing is served uncapped."""
     try:
-        doc = _serve(rec.rows(), tables, scope, serve_key, max_chars)
+        seals = sealed_verified(rec.rows(), human_key, keyring, nestor_db)
+        doc = _serve(rec.rows(), tables, scope, serve_key, max_chars, seals)
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
     except Exception as e:  # serve that can't think clearly serves nothing
@@ -303,7 +380,7 @@ def _nothing(state: str, why: str) -> dict:
     return {"state": state, "why": why, "return": RETURN, "tables": []}
 
 
-def _serve(rows, tables, scope, serve_key, max_chars=None) -> dict:
+def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
     if max_chars is None:
         return _nothing(
             "empty", "no max_chars given; the caller sizes the cap, nothing is uncapped"
@@ -314,7 +391,12 @@ def _serve(rows, tables, scope, serve_key, max_chars=None) -> dict:
         return _nothing("empty", "no serve key; ids are made only after check-in")
     if not scope:
         return _nothing("empty", "no scope given; nothing is served without one")
-    seals = sealed(rows)
+    seals, unchecked = seals if seals is not None else (set(), {})
+    if scope_subject(scope) in unchecked:
+        return _nothing(
+            "unreachable",
+            f"the scope's seal can't be checked here ({unchecked[scope_subject(scope)]})",
+        )
     if scope_subject(scope) not in seals:
         return _nothing(
             "empty", "the scope has no human seal over this exact set; nothing served"
