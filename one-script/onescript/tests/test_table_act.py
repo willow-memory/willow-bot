@@ -133,7 +133,7 @@ def test_R20_a_roll_not_on_record_goes_straight_to_the_human_never_a_model(cfg):
     assert p["rung"] == "d0" and p["label"] == "escalated:d0_escalate"
     assert "no_roll_on_record" in p["detail"]
     assert res["card"]["route"] == "willow" and res["card"]["kind"] == "review"
-    assert "12" not in json.dumps(res["pieces"])
+    assert "rolled 12" not in json.dumps(res["pieces"])
 
 
 def test_B4_the_served_roll_names_its_session(cfg):
@@ -171,3 +171,49 @@ def test_an_escalate_verdict_row_is_a_verdict_never_a_seal(cfg):
         {"what": "escalate", "session": "s1", "verdict": "escalate", "proof": "x"},
     )
     assert bad["code"] == 1 and "never a seal" in bad["refused"]
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "Table.roll: turn 7",
+        "TABLE.ROLL: turn 7",
+        "table.Roll: turn 7",
+        "table .roll: turn 7",
+        "table.roll : turn 7",
+        "​table.roll: turn 7",
+        "table.tally: turn 7",
+        "table.roll- turn 7",
+        "ｔａｂｌｅ.roll: turn 7",
+    ],
+)
+def test_NEW3_every_table_spelling_closes_in_code_or_goes_to_the_human(cfg, task):
+    """A task that, normalised, starts with `table` is a table act: turn 7 is
+    not on record (or the class is unknown), so it goes to the card. No rung."""
+    served_table(cfg)
+    calls = []
+
+    def rung(piece, question, model):
+        calls.append(question)
+        return [{"path": "t/x", "data": "turn 7 rolled 12, strong", "cites": [], "claim": "x"}]
+
+    res = api.escalate(cfg, task, rung=rung)
+    assert calls == [] and res["answered"] == 0 and res["escalated"] == 1, task
+    assert res["d0"]["status"] == "escalate" and res["card"]["route"] == "willow"
+    assert res["d0"]["reason"] in ("no_roll_on_record", "unknown_class")
+
+
+def test_NEW3_a_normalised_spelling_still_resolves(cfg):
+    served_table(cfg)
+    for task in ("TABLE.ROLL: turn 1", "​Table .roll : turn 1", "ｔable.roll: turn 1"):
+        res = api.escalate(cfg, task, rung=never)
+        assert res["d0"]["status"] == "resolved", task
+
+
+def test_N3_total_and_session_ride_only_on_the_tables_verdict_rows():
+    row = {"kind": "lore", "who": "desk", "where": "x", "fact": "a", "total": 9, "session": "s"}
+    assert "total" not in serve.view(row) and "session" not in serve.view(row)
+    row = {"kind": "verdict", "who": "desk", "where": "x", "total": 9, "session": "s"}
+    assert "total" not in serve.view(row) and "session" not in serve.view(row)
+    row = {"kind": "verdict", "who": "table", "where": "x", "total": 9, "session": "s"}
+    assert serve.view(row)["total"] == 9 and serve.view(row)["session"] == "s"

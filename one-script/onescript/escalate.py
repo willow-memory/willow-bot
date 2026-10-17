@@ -66,6 +66,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Callable
 
@@ -263,6 +264,20 @@ def ratatosk_rung(
 #: `G1:`..`G5:`, or a table act `table.roll:` / `table.rules:` / `table.state:`
 #: (box-build R12, C13: namespaced, never G6, so `G6:` stays classless).
 _CLASS_PREFIX = re.compile(r"^\s*(G[1-5]|table\.(?:roll|rules|state))\s*:\s*")
+#: NEW-3: the task is read normalised (zero-width dropped, NFKC, casefold,
+#: strip) before the class is looked for; anything that then starts with
+#: `table` is a table act (`table.<name>`, or `table.` when no name parses)
+#: and goes to code or to the human card, never to a rung.
+_ZW = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
+_G_PREFIX = re.compile(r"^(g[1-5])\s*:\s*", re.IGNORECASE)
+_TABLE_PREFIX = re.compile(r"^table\s*\.?\s*([a-z]+)?\s*[:\-]?\s*", re.IGNORECASE)
+
+
+def norm_task(task: str) -> str:
+    """The task with zero-width characters dropped, NFKC, stripped. Case is
+    kept: the brief's words (a session id) must read as the record has them;
+    the class is matched case-insensitively and lowered on its own."""
+    return unicodedata.normalize("NFKC", _ZW.sub("", task)).strip()
 
 
 def usable(doc: object) -> tuple[bool, str]:
@@ -296,11 +311,16 @@ def act_of(task: str, doc: dict) -> dict:
     `table.rules:` / `table.state:` (R12) at the start names a class outright;
     anything else has none, and D0 escalates it."""
     _, resolvers = _chain()
-    m = _CLASS_PREFIX.match(task)
-    brief = task[m.end() :] if m else task
-    if m:
-        cls = m.group(1)
+    norm = norm_task(task)
+    if norm.casefold().startswith("table"):
+        m = _TABLE_PREFIX.match(norm)
+        cls = f"table.{m.group(1).casefold()}" if m and m.group(1) else "table."
+        brief = norm[m.end() :] if m else norm
+    elif (m := _G_PREFIX.match(norm)) is not None:
+        cls = m.group(1).upper()
+        brief = norm[m.end() :]
     else:
+        brief = task
         cls = "G1" if resolvers.is_route_act({"brief": brief}) else ""
     return {
         "id": "escalate",

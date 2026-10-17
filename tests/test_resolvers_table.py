@@ -117,7 +117,7 @@ def test_S6_a_bool_turn_or_total_is_not_a_number():
     r = roll_row(1, 8)
     r["turn"] = True
     res = resolve_fixture(act("table.roll", "turn 1", excerpt("ex-a", r)))
-    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_roll_on_record"
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_turn_on_record"  # NIT-5
     r = roll_row(1, 8)
     r["total"] = True
     res = resolve_fixture(act("table.roll", "turn 1", excerpt("ex-a", r)))
@@ -288,3 +288,79 @@ def test_g_classes_still_dispatch_as_before(cls):
     escalates (or, for G4, asks for flowering) exactly as it did."""
     res = resolve_fixture({"id": "x", "class": cls, "excerpts": []})
     assert res["class"] == cls and res["reason"] != "unknown_class"
+
+
+# ------------------------------------------------ round 3: NEW-3, NEW-4, NIT-4, NIT-5
+
+
+def test_NEW3_a_class_is_read_normalised_and_any_table_spelling_is_a_table_act():
+    for cls in ("Table.roll", "table.ROLL", "table.roll ", "table .roll", "\u200btable.roll", "ｔａｂｌｅ.roll"):
+        assert resolvers.is_table_class(cls), cls
+        res = resolve_fixture(act(cls, "turn 1", excerpt("ex-a", roll_row(1, 8))))
+        assert res["status"] == STATUS_RESOLVED, cls
+    for cls in ("table.tally", "table.", "table"):
+        assert resolvers.is_table_class(cls)
+        res = resolve_fixture(act(cls, "turn 1", excerpt("ex-a", roll_row(1, 8))))
+        assert res["status"] == STATUS_ESCALATE and res["reason"] == "unknown_class", cls
+    assert resolvers.norm_class("g3") == "G3" and not resolvers.is_table_class("G3")
+    assert not resolvers.is_table_class("stable.roll")
+
+
+def test_NEW4_a_bad_row_beside_a_good_row_for_the_asked_turn_escalates():
+    bad = roll_row(1, 3)
+    bad["verdict"] = "strong"
+    res = resolve_fixture(act("table.roll", "turn 1", excerpt("ex-a", roll_row(1, 8), bad)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "total_band_mismatch"
+    # a bad row for another turn does not touch the asked one
+    res = resolve_fixture(act("table.roll", "turn 0", excerpt("ex-a", roll_row(0, 11), bad)))
+    assert res["status"] == STATUS_RESOLVED
+
+
+def test_NEW4_a_bad_last_turn_escalates_the_tally():
+    bad = roll_row(2, 3)
+    bad["verdict"] = "strong"
+    res = resolve_fixture(act("table.state", "tally", excerpt("ex-a", roll_row(0, 8), roll_row(1, 11), bad)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "total_band_mismatch"
+
+
+def test_NEW4_a_session_with_only_bad_rows_still_counts_for_ambiguity():
+    bad = roll_row(1, 3, session="B")
+    bad["verdict"] = "strong"
+    ex = excerpt("ex-a", roll_row(1, 8, session="A"), bad)
+    res = resolve_fixture(act("table.roll", "turn 1", ex))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "ambiguous_session"
+    res = resolve_fixture(act("table.roll", "turn 1 session A", ex))
+    assert res["status"] == STATUS_RESOLVED and res["answer"] == {"total": 8, "verdict": "weak"}
+    res = resolve_fixture(act("table.roll", "turn 1 session B", ex))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "total_band_mismatch"
+
+
+def test_NIT5_a_roll_row_with_no_turn_escalates():
+    no_turn = {"what": "verdict", "verdict": "miss", "session": "s", "total": 4}
+    res = resolve_fixture(act("table.state", "tally", excerpt("ex-a", roll_row(0, 8), no_turn)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_turn_on_record"
+    res = resolve_fixture(act("table.roll", "turn 0", excerpt("ex-a", roll_row(0, 8), no_turn)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_turn_on_record"
+
+
+@pytest.mark.parametrize("brief, want", [
+    ("turn 1 session A.", "resolved"),
+    ("turn 1 session  A", "resolved"),
+    ("turn 1 Session A", "resolved"),
+    ("turn 1 (session A)", "resolved"),
+    ("turn 1 session A session A", "ambiguous_brief"),
+    ("turn 1 session turn", "no_session_on_record"),
+    ("turn 1 session turn 2", "ambiguous_brief"),
+])
+def test_NIT4_the_session_in_a_brief_is_one_word_or_quoted(brief, want):
+    ex = excerpt("ex-a", roll_row(1, 8, session="A"), roll_row(1, 4, session="B"))
+    res = resolve_fixture(act("table.roll", brief, ex))
+    assert (res["status"] if want == "resolved" else res["reason"]) == want, brief
+
+
+def test_NIT4_a_session_id_with_spaces_is_named_quoted():
+    ex = excerpt("ex-a", roll_row(1, 8, session="s 1"), roll_row(1, 4, session="B"))
+    res = resolve_fixture(act("table.roll", 'turn 1 session "s 1"', ex))
+    assert res["status"] == STATUS_RESOLVED and res["answer"]["total"] == 8
+    res = resolve_fixture(act("table.roll", "turn 1 session s 1", ex))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_session_on_record"

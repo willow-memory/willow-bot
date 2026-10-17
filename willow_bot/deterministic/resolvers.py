@@ -85,6 +85,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -129,7 +130,9 @@ TABLE_CLASSES = ("table.roll", "table.rules", "table.state")
 #: is always a served row's text, never this table.
 BANDS = {"strong": "10+", "weak": "7-9", "miss": "6-"}
 _TURN_RE = re.compile(r"\bturn\s+(\d+)\b", re.IGNORECASE)
-_SESSION_RE = re.compile(r"\bsession\s+(\S+)", re.IGNORECASE)
+#: `session S` or, for an id with spaces (NIT-4), `session "S with spaces"`.
+_SESSION_RE = re.compile(r"\bsession\s+(?:\"([^\"]+)\"|([^\s.,;:()\[\]\"]+))", re.IGNORECASE)
+_ZW_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
 _RULE_RE = re.compile(
     r"^\s*rule:\s*(strong|weak|miss)\b\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL
 )
@@ -432,8 +435,21 @@ def _resolve_g5(fixture_id: str, excerpts: list) -> dict:
 # does not and more than one session is served, the act is ambiguous.
 
 
+def norm_class(cls: object) -> str:
+    """A class name as code reads it (W3b NEW-3): zero-width characters
+    dropped, NFKC, casefolded, stripped, inner spaces around the dot gone.
+    ``G`` classes keep their upper case."""
+    if not isinstance(cls, str):
+        return ""
+    s = unicodedata.normalize("NFKC", _ZW_RE.sub("", cls)).casefold().strip()
+    s = re.sub(r"\s*\.\s*", ".", s)
+    return s.upper() if re.fullmatch(r"g[1-5]", s) else s
+
+
 def is_table_class(cls: object) -> bool:
-    return isinstance(cls, str) and cls.startswith(TABLE_PREFIX)
+    """Anything that, normalised, starts with ``table`` is a table act: it
+    closes in code or goes to the human (R20), and never to a model rung."""
+    return norm_class(cls).startswith("table")
 
 
 def _served_rows(excerpts: list) -> list[tuple[str, dict]]:
@@ -467,26 +483,27 @@ def bucket(total: int) -> str:
     return "strong" if total >= 10 else "weak" if total >= 7 else "miss"
 
 
-def _roll_rows(excerpts: list) -> tuple[list[tuple[str, dict]], str | None]:
-    """The served rows that record a roll, and the first reason one of them
-    cannot be trusted (``total_band_mismatch``, ``no_total_on_record``): a
-    roll row is code's, so a total missing or off its band is a defect to
-    escalate, never a row to skip."""
-    rolls, bad = [], None
+def _roll_rows(excerpts: list) -> tuple[list[tuple[str, dict]], list[tuple[str, dict, str]]]:
+    """The served rows that record a roll, and the bad ones beside them with
+    why (``no_turn_on_record``, ``no_total_on_record``,
+    ``total_band_mismatch``). A roll row is code's, so a bad one is a defect:
+    any bad row for the asked (session, turn), or any bad row in a session
+    being tallied, escalates the act (NEW-4); a session with only bad rows
+    still counts as a session for ambiguity."""
+    rolls, bad = [], []
     for eid, row in _served_rows(excerpts):
         kind = row.get("what") or row.get("kind")
         if kind != "verdict" or row.get("verdict") not in BANDS:
             continue
-        if not _is_int(row.get("turn")):
-            continue
         total = row.get("total")
-        if not _is_int(total):
-            bad = bad or "no_total_on_record"
-            continue
-        if bucket(total) != row["verdict"]:
-            bad = bad or "total_band_mismatch"
-            continue
-        rolls.append((eid, row))
+        if not _is_int(row.get("turn")):
+            bad.append((eid, row, "no_turn_on_record"))
+        elif not _is_int(total):
+            bad.append((eid, row, "no_total_on_record"))
+        elif bucket(total) != row["verdict"]:
+            bad.append((eid, row, "total_band_mismatch"))
+        else:
+            rolls.append((eid, row))
     return rolls, bad
 
 
@@ -495,16 +512,13 @@ def _session_of(row: dict) -> str:
     return s if isinstance(s, str) else ""
 
 
-def _pick_session(
-    brief: str, rolls: list[tuple[str, dict]]
-) -> tuple[str | None, str | None]:
+def _pick_session(brief: str, served: set[str]) -> tuple[str | None, str | None]:
     """The session the act is about: the one the brief names, else the only
     one served. ``(session, reason)``; ``reason`` is set when none can be
     picked (``ambiguous_session``, ``no_session_on_record``)."""
-    named = _SESSION_RE.findall(brief or "")
+    named = [q or w for q, w in _SESSION_RE.findall(brief or "")]
     if len(named) > 1:
         return None, "ambiguous_brief"
-    served = {_session_of(r) for _, r in rolls}
     if named:
         return (named[0], None) if named[0] in served else (None, "no_session_on_record")
     if len(served) > 1:
@@ -515,7 +529,8 @@ def _pick_session(
 def _resolve_table_roll(fixture_id: str, brief: str, excerpts: list) -> dict:
     """``table.roll: turn N [session S]`` -> ``{"total", "verdict"}`` from the
     one served verdict row for that (session, turn), citing its table id.
-    Never draws a number, never reads one out of prose."""
+    Never draws a number, never reads one out of prose. Any bad roll row for
+    that (session, turn), or one with no turn in that session, escalates."""
     cls = "table.roll"
     turns = _TURN_RE.findall(brief or "")
     if len(turns) > 1:
@@ -524,16 +539,20 @@ def _resolve_table_roll(fixture_id: str, brief: str, excerpts: list) -> dict:
         return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_turn_in_brief")
     turn = int(turns[0])
     rolls, bad = _roll_rows(excerpts)
-    session, why = _pick_session(brief, rolls)
-    if why is not None and rolls:
+    sessions = {_session_of(r) for _, r in rolls} | {_session_of(r) for _, r, _ in bad}
+    if not sessions:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
+    session, why = _pick_session(brief, sessions)
+    if why is not None:
         return _record(fixture_id, cls, STATUS_ESCALATE, None, [], why)
+    for _, r, reason in bad:  # a bad row with no turn may be the asked one
+        if _session_of(r) == session and (not _is_int(r.get("turn")) or r["turn"] == turn):
+            return _record(fixture_id, cls, STATUS_ESCALATE, None, [], reason)
     found = [
         (eid, r) for eid, r in rolls if r["turn"] == turn and _session_of(r) == session
     ]
     if not found:
-        return _record(
-            fixture_id, cls, STATUS_ESCALATE, None, [], bad or "no_roll_on_record"
-        )
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
     answers = {(r["total"], r["verdict"]) for _, r in found}
     if len(answers) > 1:
         return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
@@ -580,16 +599,18 @@ def _resolve_table_rules(fixture_id: str, brief: str, excerpts: list) -> dict:
 def _resolve_table_state(fixture_id: str, brief: str, excerpts: list) -> dict:
     """``table.state: tally [session S]`` -> the tally and path of one
     session's served roll rows in turn order; a gap in the turns is
-    ``turns_missing``."""
+    ``turns_missing``; any bad roll row in that session escalates."""
     cls = "table.state"
     rolls, bad = _roll_rows(excerpts)
-    if not rolls:
-        return _record(
-            fixture_id, cls, STATUS_ESCALATE, None, [], bad or "no_roll_on_record"
-        )
-    session, why = _pick_session(brief, rolls)
+    sessions = {_session_of(r) for _, r in rolls} | {_session_of(r) for _, r, _ in bad}
+    if not sessions:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
+    session, why = _pick_session(brief, sessions)
     if why is not None:
         return _record(fixture_id, cls, STATUS_ESCALATE, None, [], why)
+    for _, r, reason in bad:
+        if _session_of(r) == session:
+            return _record(fixture_id, cls, STATUS_ESCALATE, None, [], reason)
     by_turn: dict[int, set[tuple[int, str]]] = {}
     cites: list[str] = []
     for eid, r in rolls:
@@ -598,6 +619,8 @@ def _resolve_table_state(fixture_id: str, brief: str, excerpts: list) -> dict:
         by_turn.setdefault(r["turn"], set()).add((r["total"], r["verdict"]))
         if eid:
             cites.append(eid)
+    if not by_turn:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
     if any(len(v) > 1 for v in by_turn.values()):
         return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
     turns = sorted(by_turn)
@@ -619,7 +642,7 @@ def resolve_table(fixture: dict) -> dict:
     """Dispatch one ``table.*`` act (R12). An unknown ``table.`` class
     escalates as ``unknown_class`` like any other; nothing here rolls."""
     fixture_id = fixture.get("id", "")
-    cls = fixture.get("class", "")
+    cls = norm_class(fixture.get("class", ""))
     brief = fixture.get("brief") if isinstance(fixture.get("brief"), str) else ""
     excerpts = fixture.get("excerpts") or []
     if not isinstance(excerpts, list):

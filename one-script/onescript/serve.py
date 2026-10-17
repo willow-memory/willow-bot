@@ -135,7 +135,11 @@ def view(row: dict) -> dict:
     # `fact` is lore (R11): it rides only on a lore row, which `_serve` has
     # already passed through `lore.servable`. On any other row it is not payload.
     islore = (row.get("kind") or row.get("what")) == lore.KIND
-    out.update({k: row[k] for k in PAYLOAD if k in row and (k != "fact" or islore)})
+    # `total` and `session` are the table's (R12, N3): they ride only on a
+    # verdict row the `table` identity wrote.
+    istable = row.get("kind") == "verdict" and row.get("who") == "table"
+    only = {"fact": islore, "total": istable, "session": istable}
+    out.update({k: row[k] for k in PAYLOAD if k in row and only.get(k, True)})
     # A hash in another form is still a hash: `fact` and a lore row's scene are
     # rewritten to NFKC (so ligatures and fullwidth forms read as plain text; the
     # served fact can differ from the sealed bytes in those forms only) and
