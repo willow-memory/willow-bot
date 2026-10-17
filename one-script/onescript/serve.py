@@ -69,6 +69,8 @@ PAYLOAD = (
     "bite",
     "fact",  # lore (R11): one fact, served only when `lore.servable`
     "total",  # a table roll's 2d6+stat sum (R12): the D0 `table.roll` answer
+    "session",  # which table session a verdict row belongs to (W3b B4);
+    # `table.check_row` keeps it plain text, so it is safe on a card
 )
 
 # What each grouping can't hold, said to the model so absence isn't read as fact.

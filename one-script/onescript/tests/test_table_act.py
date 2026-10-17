@@ -114,19 +114,35 @@ def test_a_table_state_act_tallies_at_d0(cfg):
     assert p["rows"][0]["answer"]["path"] == "strong-weak"
 
 
-def test_a_roll_not_on_record_escalates_to_the_human_not_a_model(cfg):
-    """D0 has no answer for turn 9: it says so (`no_roll_on_record`) and the
-    scope goes to the local rung as any escalate does; nothing is invented."""
-    served_table(cfg)
+def test_R20_a_roll_not_on_record_goes_straight_to_the_human_never_a_model(cfg):
+    """B1 / R20: D0 has no answer for turn 9; the act goes to the human card
+    the way an empty scope does. No model rung is asked, so an invented roll
+    can never read as answered."""
+    doc = served_table(cfg)
     calls = []
 
-    def mark(piece, question, model):
+    def inventing(piece, question, model):
         calls.append(question)
-        return [{"path": "ESCALATE", "data": "", "cites": [], "claim": "no turn 9"}]
+        return [{"path": "table/turn-9", "data": "turn 9 rolled 12, strong",
+                 "cites": [doc["tables"][0]["id"]], "claim": "turn 9 rolled 12"}]
 
-    res = api.escalate(cfg, "table.roll: turn 9", rung=mark, piece_chars=10**6)
+    res = api.escalate(cfg, "table.roll: turn 9", rung=inventing, piece_chars=10**6)
     assert res["d0"] == {"status": "escalate", "reason": "no_roll_on_record"}
-    assert calls and res["card"]["route"] == "willow"
+    assert calls == [] and res["answered"] == 0 and res["escalated"] == 1
+    (p,) = res["pieces"]
+    assert p["rung"] == "d0" and p["label"] == "escalated:d0_escalate"
+    assert "no_roll_on_record" in p["detail"]
+    assert res["card"]["route"] == "willow" and res["card"]["kind"] == "review"
+    assert "12" not in json.dumps(res["pieces"])
+
+
+def test_B4_the_served_roll_names_its_session(cfg):
+    doc = served_table(cfg)
+    served = [r for t in doc["tables"] for r in t["rows"]]
+    assert {r["session"] for r in served} == {"s1"}
+    assert "session" in serve.PAYLOAD
+    res = api.escalate(cfg, "table.roll: turn 1 session s1", rung=never)
+    assert res["d0"]["status"] == "resolved"
 
 
 def test_G6_prefix_is_not_a_class(cfg):

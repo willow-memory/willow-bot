@@ -569,6 +569,14 @@ def run_escalate(
             )
         return _finish(run, out, question, left, resolvers)
 
+    # R20 (W3b audit B1): a table act D0 cannot close goes straight to the
+    # human card, the way an empty scope does. It never reaches a model rung:
+    # a model may not roll, and an invented roll must never read as answered.
+    if resolvers.is_table_class(act.get("class")):
+        detail = f"the table act could not close in code: {d0.get('reason') or 'no reason'}"
+        at_d0(h_act, _j(ESCALATED, D0_ESCALATE, detail, d0.get("cites") or []))
+        return _finish(run, out, question, left, resolvers)
+
     # the pieces: each to the hash record first, then the local rung
     for p in cut(doc, question, piece_chars):
         h, group = p["hash"], p["group"]

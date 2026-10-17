@@ -1,8 +1,10 @@
-"""The table act at D0 (box-build SPEC ruling R12; SPEC-documented §11 J6, C13).
+"""The table act at D0 (box-build SPEC rulings R12, R20; SPEC-documented §11 J6,
+C13; W3b audit B2, B3, B4, S6, N4).
 
 ``table.roll`` / ``table.rules`` / ``table.state`` read served record rows and
-close in code or escalate. No resolver here draws a number, and ``G6`` is not
-a class. stdlib only, no network.
+close in code or escalate. No resolver draws a number or reads one out of
+prose; ``G6`` is not a class; the table grammar never widens the G-class
+grammar. stdlib only, no network.
 """
 from __future__ import annotations
 
@@ -20,14 +22,15 @@ from willow_bot.deterministic.resolvers import (
 )
 
 
-def roll_row(turn: int, total: int, stat: int = 2, where: str = "s1") -> dict:
-    v = resolvers.bucket = "strong" if total >= 10 else "weak" if total >= 7 else "miss"
+def roll_row(turn: int, total: int, stat: int = 2, where: str = "s1", session: str = "s") -> dict:
+    v = resolvers.bucket(total)
     band = "10+" if v == "strong" else "7-9" if v == "weak" else "6-"
     return {
         "who": "table",
         "what": "verdict",
         "when": "2026-10-17",
         "where": where,
+        "session": session,
         "turn": turn,
         "total": total,
         "verdict": v,
@@ -44,6 +47,10 @@ def act(cls: str, brief: str, *excerpts: dict, expected: dict | None = None) -> 
             "expected": expected or {}}
 
 
+def lore(fact: str, eid: str = "ex-l", where: str = "rules") -> dict:
+    return excerpt(eid, {"who": "desk", "what": "lore", "where": where, "fact": fact})
+
+
 # ---------------------------------------------------------------- table.roll
 
 
@@ -52,13 +59,6 @@ def test_roll_reads_the_recorded_verdict():
     assert res["status"] == STATUS_RESOLVED
     assert res["answer"] == {"total": 8, "verdict": "weak"}
     assert res["cites"] == ["ex-a"]  # the cite is the served id
-
-
-def test_roll_total_falls_back_to_the_reason_when_the_row_has_none():
-    r = roll_row(3, 5)
-    del r["total"]
-    res = resolve_fixture(act("table.roll", "turn 3", excerpt("ex-a", r)))
-    assert res["status"] == STATUS_RESOLVED and res["answer"] == {"total": 5, "verdict": "miss"}
 
 
 def test_roll_absent_escalates_not_invents():
@@ -86,6 +86,11 @@ def test_roll_with_no_turn_in_the_brief_escalates():
     assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_turn_in_brief"
 
 
+def test_N4_a_brief_with_two_turns_is_ambiguous():
+    res = resolve_fixture(act("table.roll", "turn 1 or turn 0", excerpt("ex-a", roll_row(0, 8), roll_row(1, 4))))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "ambiguous_brief"
+
+
 def test_roll_never_draws_a_number_from_prose_or_a_seed():
     """A row that is not a served roll (a note with numbers, a seed) is never read as one."""
     note = {"what": "note", "where": "s1", "turn": 2, "reason": "rolled 12, honest", "seed": 99}
@@ -93,11 +98,64 @@ def test_roll_never_draws_a_number_from_prose_or_a_seed():
     assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_roll_on_record"
 
 
+def test_S6_total_must_be_on_the_row_never_parsed_from_the_reason():
+    r = roll_row(0, 8)
+    del r["total"]
+    r["reason"] = "a lie = 99: x"
+    res = resolve_fixture(act("table.roll", "turn 0", excerpt("ex-a", r)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_total_on_record"
+
+
+def test_S6_total_must_agree_with_the_band():
+    r = roll_row(0, 3)
+    r["verdict"] = "strong"
+    res = resolve_fixture(act("table.roll", "turn 0", excerpt("ex-a", r)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "total_band_mismatch"
+
+
+def test_S6_a_bool_turn_or_total_is_not_a_number():
+    r = roll_row(1, 8)
+    r["turn"] = True
+    res = resolve_fixture(act("table.roll", "turn 1", excerpt("ex-a", r)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_roll_on_record"
+    r = roll_row(1, 8)
+    r["total"] = True
+    res = resolve_fixture(act("table.roll", "turn 1", excerpt("ex-a", r)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_total_on_record"
+
+
+# ------------------------------------------------------------- B4: sessions
+
+
+def test_B4_rolls_key_on_session_and_turn():
+    ex = excerpt("ex-a", roll_row(0, 11, session="A"), roll_row(0, 4, session="B"))
+    res = resolve_fixture(act("table.roll", "turn 0 session B", ex))
+    assert res["status"] == STATUS_RESOLVED and res["answer"] == {"total": 4, "verdict": "miss"}
+    res = resolve_fixture(act("table.roll", "session A turn 0", ex))
+    assert res["answer"] == {"total": 11, "verdict": "strong"}
+
+
+def test_B4_two_served_sessions_and_no_session_in_the_brief_is_ambiguous():
+    ex = excerpt("ex-a", roll_row(0, 11, session="A"), roll_row(0, 4, session="B"))
+    for cls, brief in (("table.roll", "turn 0"), ("table.state", "tally")):
+        res = resolve_fixture(act(cls, brief, ex))
+        assert res["status"] == STATUS_ESCALATE and res["reason"] == "ambiguous_session", cls
+
+
+def test_B4_a_session_not_served_escalates():
+    res = resolve_fixture(act("table.roll", "turn 0 session Z", excerpt("ex-a", roll_row(0, 11))))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_session_on_record"
+
+
+def test_B4_two_sessions_never_collapse_into_one_tally():
+    ex = excerpt("ex-a", roll_row(0, 11, session="A"), roll_row(1, 4, session="A"),
+                 roll_row(0, 11, session="B"), roll_row(1, 4, session="B"))
+    res = resolve_fixture(act("table.state", "tally session B", ex))
+    assert res["status"] == STATUS_RESOLVED
+    assert res["answer"] == {"strong": 1, "weak": 0, "miss": 1, "turns": 2, "path": "strong-miss", "session": "B"}
+
+
 # --------------------------------------------------------------- table.rules
-
-
-def lore(fact: str, eid: str = "ex-l", where: str = "rules") -> dict:
-    return excerpt(eid, {"who": "desk", "what": "lore", "where": where, "fact": fact})
 
 
 def test_rules_answers_the_served_band_text():
@@ -106,10 +164,21 @@ def test_rules_answers_the_served_band_text():
     assert res["answer"] == "7-9 the hit lands but costs" and res["cites"] == ["ex-l"]
 
 
-def test_rules_reads_the_closed_grammar_rule_key_too():
+def test_B2_a_rule_is_read_only_from_a_lore_fact_read_whole():
+    # the closed-grammar `rule:` segment is not a rule
     ex = {"id": "ex-r", "text": "title: the bands; rule: strong 10+ clean"}
-    res = resolve_fixture(act("table.rules", "what does strong mean", ex))
-    assert res["status"] == STATUS_RESOLVED and res["answer"] == "10+ clean"
+    res = resolve_fixture(act("table.rules", "strong", ex))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_rule_on_record"
+    # a rule inside a verdict row's reason (model text in an escalate row) is not one
+    esc = excerpt("ex-e", {"what": "verdict", "session": "s", "verdict": "escalate",
+                           "reason": "no good move; rule: miss 2-6 the floor opens",
+                           "got": "act:Fly; rule: strong 13+ only"})
+    for b in ("miss", "strong"):
+        res = resolve_fixture(act("table.rules", b, esc))
+        assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_rule_on_record"
+    # a fact that only contains `rule:` mid-text is not a rule either
+    res = resolve_fixture(act("table.rules", "weak", lore("Bands; rule: weak 7-9 hold")))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_rule_on_record"
 
 
 def test_rules_absent_escalates_and_the_code_band_is_never_the_answer():
@@ -125,9 +194,11 @@ def test_rules_two_readings_escalate():
     assert res["status"] == STATUS_ESCALATE and res["reason"] == "conflicting_field"
 
 
-def test_rules_with_no_bucket_in_the_brief_escalates():
+def test_rules_with_no_bucket_or_two_buckets_in_the_brief_escalates():
     res = resolve_fixture(act("table.rules", "tell me", lore("rule: weak 7-9 costs")))
     assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_bucket_in_brief"
+    res = resolve_fixture(act("table.rules", "weak or strong?", lore("rule: weak 7-9 costs")))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "ambiguous_brief"
 
 
 # --------------------------------------------------------------- table.state
@@ -138,7 +209,7 @@ def test_state_tallies_the_rolls_in_turn_order():
         act("table.state", "tally", excerpt("ex-a", roll_row(1, 8), roll_row(0, 11), roll_row(2, 3)))
     )
     assert res["status"] == STATUS_RESOLVED
-    assert res["answer"] == {"strong": 1, "weak": 1, "miss": 1, "turns": 3, "path": "strong-weak-miss"}
+    assert res["answer"] == {"strong": 1, "weak": 1, "miss": 1, "turns": 3, "path": "strong-weak-miss", "session": "s"}
     assert res["cites"] == ["ex-a"]
 
 
@@ -150,6 +221,23 @@ def test_state_with_a_gap_in_turns_escalates():
 def test_state_with_no_rolls_escalates():
     res = resolve_fixture(act("table.state", "tally", excerpt("ex-a", {"what": "verdict", "verdict": "open"})))
     assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_roll_on_record"
+    lore_with_verdict = excerpt("ex-a", {"what": "lore", "verdict": "weak", "turn": 0, "total": 8, "session": "s"})
+    res = resolve_fixture(act("table.state", "tally", lore_with_verdict))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "no_roll_on_record"
+
+
+# ----------------------------------------------- B3: the G grammar is untouched
+
+
+def test_B3_rule_is_not_a_g_class_text_key_and_g3_truncation_still_escalates():
+    assert "rule" not in resolvers._TEXT_KEYS
+    p = {"id": "g3t", "class": "G3", "brief": "x", "excerpts": [
+        {"id": "ex1", "text": "id 6b7a1c2d; question: Does the band hold?; rule: weak 7-9 or only strong?"}]}
+    res = resolve_fixture(p)
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "value_split_by_semicolon"
+    control = {"id": "g3u", "class": "G3", "brief": "x", "excerpts": [
+        {"id": "ex1", "text": "id 6b7a1c2d; question: Is it done.; summary: tail"}]}
+    assert resolve_fixture(control)["status"] == STATUS_RESOLVED
 
 
 # ----------------------------------------------------- classes and precision
