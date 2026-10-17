@@ -68,6 +68,7 @@ PAYLOAD = (
     "intent",
     "bite",
     "fact",  # lore (R11): one fact, served only when `lore.servable`
+    "total",  # a table roll's 2d6+stat sum (R12): the D0 `table.roll` answer
 )
 
 # What each grouping can't hold, said to the model so absence isn't read as fact.

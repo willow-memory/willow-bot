@@ -62,8 +62,10 @@ TABLE = ("table", "python")
 LEDGER = "ai-game-master"
 
 #: What a verdict row may say it records (SPEC-documented §9 (b), §12 (b);
-#: SPEC R9 names the head row `agm_head`).
-WHATS = ("open", "roll", "step", "decision", "result", "agm_head")
+#: SPEC R9 names the head row `agm_head`; R12 adds `escalate`: a model's
+#: move pick that code refused (off the menu, ESCALATE, or unreachable) and
+#: fell back from, recorded so the human sees it; never a seal).
+WHATS = ("open", "roll", "step", "decision", "result", "agm_head", "escalate")
 
 #: A verdict row carries none of these. The stamp is the record's own; the rest
 #: are what a seal reader reads (`reverse._outcome_row`, `serve.sealed_verified`,

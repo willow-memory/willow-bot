@@ -260,7 +260,9 @@ def ratatosk_rung(
 
 
 # ── the act: the sealed served scope + the task, as the chain reads it ──────
-_CLASS_PREFIX = re.compile(r"^\s*(G[1-5])\s*:\s*")
+#: `G1:`..`G5:`, or a table act `table.roll:` / `table.rules:` / `table.state:`
+#: (box-build R12, C13: namespaced, never G6, so `G6:` stays classless).
+_CLASS_PREFIX = re.compile(r"^\s*(G[1-5]|table\.(?:roll|rules|state))\s*:\s*")
 
 
 def usable(doc: object) -> tuple[bool, str]:
@@ -290,8 +292,9 @@ def act_of(task: str, doc: dict) -> dict:
     """The chain act for a task over a served scope: the shape `resolve_fixture`
     reads. One excerpt per served table, id = the table's served id, so a cite
     in an answer is a served id. The class is set by code from the task text: a
-    brief that opens with `Route` is G1; `G1:`..`G5:` at the start names a class
-    outright; anything else has none, and D0 escalates it."""
+    brief that opens with `Route` is G1; `G1:`..`G5:` or `table.roll:` /
+    `table.rules:` / `table.state:` (R12) at the start names a class outright;
+    anything else has none, and D0 escalates it."""
     _, resolvers = _chain()
     m = _CLASS_PREFIX.match(task)
     brief = task[m.end() :] if m else task
