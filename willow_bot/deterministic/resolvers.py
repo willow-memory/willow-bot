@@ -140,6 +140,7 @@ TABLE_CLASSES = ("table.roll", "table.rules", "table.state")
 BANDS = {"strong": "10+", "weak": "7-9", "miss": "6-"}
 _TURN_RE = re.compile(r"\bturn\s+(\d+)\b", re.IGNORECASE)
 #: `session S` or, for an id with spaces (NIT-4), `session "S with spaces"`.
+WITHHELD_MARK = "[hash withheld]"  # serve.WITHHELD, as a served session reads
 _SESSION_RE = re.compile(r"\bsession\s+(?:\"([^\"]+)\"|([^\s.,;:()\[\]\"]+))", re.IGNORECASE)
 _ZW_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
 _RULE_RE = re.compile(
@@ -495,7 +496,9 @@ def bucket(total: int) -> str:
 def _roll_rows(excerpts: list) -> tuple[list[tuple[str, dict]], list[tuple[str, dict, str]]]:
     """The served rows that record a roll, and the bad ones beside them with
     why (``no_turn_on_record``, ``no_total_on_record``,
-    ``total_band_mismatch``). A roll row is code's, so a bad one is a defect:
+    ``total_band_mismatch``, ``total_dice_mismatch``: the row's own dice,
+    served as ``dice``, are not its total; a row served without ``dice`` is
+    read on its total alone). A roll row is code's, so a bad one is a defect:
     any bad row for the asked (session, turn), or any bad row in a session
     being tallied, escalates the act (NEW-4); a session with only bad rows
     still counts as a session for ambiguity."""
@@ -511,6 +514,10 @@ def _roll_rows(excerpts: list) -> tuple[list[tuple[str, dict]], list[tuple[str, 
             bad.append((eid, row, "no_total_on_record"))
         elif bucket(total) != row["verdict"]:
             bad.append((eid, row, "total_band_mismatch"))
+        elif "dice" in row and row["dice"] != total:
+            # W4 break 2: the served row's own dice (`serve.view` carries
+            # roll.result as `dice`) disagree with its total
+            bad.append((eid, row, "total_dice_mismatch"))
         else:
             rolls.append((eid, row))
     return rolls, bad
@@ -528,6 +535,11 @@ def _pick_session(brief: str, served: set[str]) -> tuple[str | None, str | None]
     named = [q or w for q, w in _SESSION_RE.findall(brief or "")]
     if len(named) > 1:
         return None, "ambiguous_brief"
+    if any(WITHHELD_MARK in s for s in served):
+        # W4 break 4: a session id the serve withheld can't be told apart from
+        # another, or named by a brief; never pick one (check_row refuses such
+        # ids at the write; a hand-written row may still carry one)
+        return None, "ambiguous_session"
     if named:
         return (named[0], None) if named[0] in served else (None, "no_session_on_record")
     if len(served) > 1:

@@ -19,12 +19,27 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import __main__ as cli  # noqa: E402
-from onescript import api, gate, record, reverse, table, view  # noqa: E402
+from onescript import api, beacon, gate, record, reverse, table, view  # noqa: E402
 
 HUMAN_KEY = b"a-throwaway-human-key-for-tests"
 TABLE_KEY = "bb" * 32
 CAP = 10**6
 WORLD = {"world": "hasbeen-late-shift", "sheets_sha": "ab" * 32}
+NOW = "2026-10-17T00:00:00Z"
+#: W4 break 1: a drand round still ahead of the box's clock, and its randomness
+ROUND = beacon.round_at(NOW) + 10
+RANDOMNESS = "5e" * 32
+SEED_ID = beacon.seed_id(RANDOMNESS)
+FORECAST = {**WORLD, "beacon_round": ROUND}
+
+
+def drand(rnd: int) -> dict:
+    """The operator's beacon reader, offline: one round known."""
+    if rnd != ROUND:
+        raise LookupError(f"round {rnd} not in this reader")
+    return {"round": rnd, "randomness": RANDOMNESS}
+
+
 OTHER = {"world": "ironworks-last-pour", "sheets_sha": "cd" * 32}
 DIST = [
     {"path": "strong-weak", "p": 0.4},
@@ -51,9 +66,10 @@ def _cfg(tmp_path, keys_obj):
         root=tmp_path / "no-clone-here",
         grove=grove,
         venv=tmp_path / "no-venv",
-        now="2026-10-17T00:00:00Z",
+        now=NOW,
         no_tests=True,
         phone=True,
+        beacon=drand,
     )
 
 
@@ -103,6 +119,7 @@ def play(
     verdict with the path so far, then a decision (or result) row."""
     opened = {"what": "open", "session": session, "verdict": "open", "reason": "opened"}
     opened.update(world or {})
+    opened.update(beacon_round=ROUND, randomness=RANDOMNESS, seed_id=SEED_ID)
     if forecast is not None:
         opened["forecast"] = forecast
     out = [table.verdict(cfg, opened)]
@@ -122,7 +139,12 @@ def play(
                     "total": 10 if v == "strong" else 8 if v == "weak" else 4,
                     "verdict": v,
                     "reason": f"2d6+1 = {v}",
-                    "roll": {"seed_id": "ab" * 8, "counter": 2 * (i + 1), "result": 8},
+                    "roll": {
+                        "seed_id": SEED_ID,
+                        "counter_before": 2 * i,
+                        "counter": 2 * (i + 1),
+                        "result": 10 if v == "strong" else 8 if v == "weak" else 4,
+                    },
                     "path": "-".join(path),
                 },
             )
@@ -145,7 +167,7 @@ def play(
 
 
 def forecast_sealed(cfg, wid="f1"):
-    f = api.forecast(cfg, wid, DIST, by="oracle", table=WORLD)
+    f = api.forecast(cfg, wid, DIST, by="oracle", table=FORECAST)
     assert f["code"] == 0, f
     assert seal_tip(cfg, f["tip"])["sealed"]
     return f
@@ -305,7 +327,7 @@ def test_T4_a_verdict_row_before_the_forecast_escalates(cfg, key_file):
 def test_T5_verdicts_with_no_sealed_tip_between_escalate(cfg, key_file):
     """T5: the forecast is on record, but the human sealed no tip between it
     and the verdict rows; the tip sealed after them holds both at once."""
-    f = api.forecast(cfg, "f1", DIST, by="oracle", table=WORLD)
+    f = api.forecast(cfg, "f1", DIST, by="oracle", table=FORECAST)
     play(cfg, forecast=f["subject"])
     assert seal_tip(cfg, tip_now(cfg))["sealed"]
     got = table.outcome_from_verdicts(cfg, f["subject"], human_key=key_file)
@@ -361,10 +383,28 @@ def test_T7_the_same_cut_under_a_sealed_tip_is_seen(cfg, key_file):
 def test_a_row_whose_path_is_not_the_rolls_so_far_escalates(cfg, key_file):
     f = forecast_sealed(cfg)
     table.verdict(
-        cfg, {"what": "open", "session": "s1", "forecast": f["subject"], **WORLD}
+        cfg,
+        {
+            "what": "open",
+            "session": "s1",
+            "forecast": f["subject"],
+            **WORLD,
+            "beacon_round": ROUND,
+            "randomness": RANDOMNESS,
+            "seed_id": SEED_ID,
+        },
     )
+    honest = {"seed_id": SEED_ID, "counter_before": 0, "counter": 2, "result": 10}
     table.verdict(
-        cfg, {"what": "roll", "session": "s1", "verdict": "strong", "path": "weak"}
+        cfg,
+        {
+            "what": "roll",
+            "session": "s1",
+            "total": 10,
+            "verdict": "strong",
+            "roll": honest,
+            "path": "weak",
+        },
     )
     table.verdict(cfg, {"what": "decision", "session": "s1", "path": "weak"})
     got = table.outcome_from_verdicts(cfg, f["subject"], human_key=key_file)
@@ -397,7 +437,7 @@ def _seal_and_tip(cfg, wager, outcome):
 def t5_box(cfg):
     """T5: the dice ran before the human sealed a tip holding the forecast;
     the human then sealed one tip over everything, then the outcome."""
-    f = api.forecast(cfg, "f1", DIST, by="oracle", table=WORLD)
+    f = api.forecast(cfg, "f1", DIST, by="oracle", table=FORECAST)
     play(cfg, forecast=f["subject"])
     assert seal_tip(cfg, tip_now(cfg))["sealed"]
     _seal_and_tip(cfg, f["subject"], {"path": "strong-weak"})
@@ -754,7 +794,7 @@ def test_a_beat_proposal_goes_through_the_shared_proposal_append(cfg):
 
 # ── S3: seal-tip lists table rows before the human signs ───────────────────
 def test_S3_seal_tip_lists_verdict_sessions_and_agm_heads(cfg):
-    f = api.forecast(cfg, "f1", DIST, by="oracle", table=WORLD)
+    f = api.forecast(cfg, "f1", DIST, by="oracle", table=FORECAST)
     play(cfg, forecast=f["subject"])
     table.agm_head(cfg, n=3, head=HEAD)
     listing = api.seal_tip(cfg, tip_now(cfg))  # no proof: shown, not sealed
@@ -884,3 +924,168 @@ def test_round3_N5_a_beat_with_no_world_is_refused(cfg):
     res = table.propose_beat(cfg, bare, [cite])
     assert res["code"] == 1 and "names its world" in res["refused"]
     assert not any(r["kind"] == "proposal" for r in rows(cfg))
+
+
+# ── W4 break 1: a table forecast waits for a beacon round ──────────────────
+@pytest.mark.parametrize(
+    "bad, why",
+    [
+        (WORLD, "table names exactly"),  # no round at all
+        ({**WORLD, "beacon_round": True}, "drand round number"),
+        ({**WORLD, "beacon_round": beacon.round_at(NOW)}, "not after now"),
+        ({**WORLD, "beacon_round": 1}, "not after now"),
+    ],
+)
+def test_a_table_forecast_needs_a_round_still_ahead(cfg, bad, why):
+    res = api.forecast(cfg, "f1", DIST, by="oracle", table=bad)
+    assert res["code"] == 1 and why in res["refused"]
+
+
+def test_the_round_arithmetic_is_play_pys():
+    assert beacon.round_time(1) == beacon.GENESIS
+    r = beacon.round_at(NOW)
+    assert beacon.round_time(r) <= beacon.epoch(NOW) < beacon.round_time(r + 1)
+    assert beacon.seed_id("00" * 32) == record.h256(bytes(32))[:16]
+
+
+def honest_box(cfg):
+    f = forecast_sealed(cfg)
+    play(cfg, forecast=f["subject"])
+    return f
+
+
+def test_a_proposal_says_bls_is_unverified(cfg, key_file):
+    f = honest_box(cfg)
+    got = table.outcome_from_verdicts(cfg, f["subject"], human_key=key_file)
+    assert got["state"] == "proposed" and got["beacon"]["round"] == ROUND
+    assert "BLS" in got["beacon"]["bls"]
+
+
+def _with_beacon(cfg, read):
+    return api.Config(**{**cfg.__dict__, "beacon": read})
+
+
+def test_no_beacon_reader_is_unreachable_never_escalate(cfg, key_file):
+    f = honest_box(cfg)
+    off = _with_beacon(cfg, None)
+    got = table.outcome_from_verdicts(off, f["subject"], human_key=key_file)
+    assert got["state"] == "unreachable" and "no beacon reader" in got["reason"]
+    _seal_and_tip(cfg, f["subject"], {"path": "strong-weak"})
+    w = api.reconcile(off, human_key=key_file)["wagers"]["rows"][0]
+    assert w["state"] == "unreachable" and "no beacon reader" in w["why"]
+    assert "brier" not in w
+
+
+def test_a_reader_that_fails_is_unreachable(cfg, key_file):
+    f = honest_box(cfg)
+
+    def down(rnd):
+        raise OSError("no route to drand")
+
+    got = table.outcome_from_verdicts(
+        _with_beacon(cfg, down), f["subject"], human_key=key_file
+    )
+    assert got["state"] == "unreachable" and "no route to drand" in got["reason"]
+
+
+def test_a_seed_that_is_not_the_rounds_randomness_escalates(cfg, key_file):
+    """The grind: the session's randomness is on its open row, but drand says
+    the round was something else."""
+    f = honest_box(cfg)
+    other = _with_beacon(cfg, lambda r: {"randomness": "77" * 32})
+    got = table.outcome_from_verdicts(other, f["subject"], human_key=key_file)
+    assert got["state"] == "escalate" and f"not round {ROUND}'s" in got["reason"]
+
+
+def test_a_round_that_fired_before_the_tip_seal_escalates():
+    w = {"table": {**WORLD, "beacon_round": ROUND}}
+    opened = {"beacon_round": ROUND, "randomness": RANDOMNESS}
+    late = {"ts": "2030-01-01T00:00:00Z"}
+    state, why = table.beacon_problem(opened, w, late, drand)
+    assert state == "escalate" and "not after the tip seal" in why
+    other = {**opened, "beacon_round": ROUND + 1}
+    state, why = table.beacon_problem(other, w, {"ts": NOW}, drand)
+    assert state == "escalate" and f"awaits round {ROUND}" in why
+
+
+# ── W4 break 2, 3: the roll rows are one honest run of the open row's dice ──
+OPEN = {"randomness": RANDOMNESS, "seed_id": SEED_ID}
+
+
+def _roll(n, before, after, result, total=None, verdict=None, seed=SEED_ID):
+    total = result if total is None else total
+    return {
+        "n": n,
+        "what": "roll",
+        "total": total,
+        "verdict": verdict or table.bucket(total),
+        "roll": {
+            "seed_id": seed,
+            "counter_before": before,
+            "counter": after,
+            "result": result,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "rolls, why",
+    [
+        ([_roll(1, 0, 2, 8), _roll(2, 2, 4, 11)], None),
+        ([_roll(1, 0, 2, 8), _roll(2, 0, 2, 11)], "restart or a gap"),
+        ([_roll(1, 0, 2, 8), _roll(2, 3, 5, 11)], "restart or a gap"),
+        ([_roll(1, 2, 4, 8)], "restart or a gap"),
+        ([_roll(1, 0, 2, 8), _roll(2, 2, 4, 11, seed="ff" * 8)], "reseed"),
+        ([_roll(1, 0, 2, 5, total=12)], "not its own dice's"),
+        ([_roll(1, 0, 2, 5, verdict="strong")], "not the dice's"),
+    ],
+)
+def test_dice_problem_reads_the_roll_records(rolls, why):
+    got = table.dice_problem(OPEN, rolls)
+    assert got is None if why is None else why in got
+
+
+def test_dice_problem_needs_the_beacon_seed_on_the_open_row():
+    assert "no beacon randomness" in table.dice_problem({}, [])
+    wrong = {"randomness": RANDOMNESS, "seed_id": "00" * 8}
+    assert "not the id of its randomness" in table.dice_problem(wrong, [])
+
+
+# ── W4 break 4: a session id the serve would withhold is refused ───────────
+@pytest.mark.parametrize(
+    "sid", ["ab" * 32, "s-" + "cd" * 20, "AB" * 20, "x" + "0" * 40]
+)
+def test_a_hash_shaped_session_id_is_refused(cfg, sid):
+    res = table.verdict(cfg, {"what": "open", "session": sid})
+    assert res["code"] == 1 and "shaped like a hash" in res["refused"]
+
+
+def test_a_short_hex_session_id_stands(cfg):
+    assert table.verdict(cfg, {"what": "open", "session": "a" * 39})["code"] == 0
+
+
+# ── W4 break 7: a cut after the sealed tip reads as a cut ──────────────────
+def test_checkout_on_a_record_cut_after_its_tip_says_rows_were_cut(cfg, key_file):
+    f = honest_box(cfg)
+    got = table.outcome_from_verdicts(cfg, f["subject"], human_key=key_file)
+    _seal_and_tip(cfg, f["subject"], got["outcome"])
+    cut = "".join(record.canon(r) + "\n" for r in rows(cfg)[:-3])
+    (cfg.box / "record.jsonl").write_text(cut)
+    rep = api.reconcile(cfg, human_key=key_file)
+    assert any("rows were cut" in b for b in rep["record"]["breaks"])
+    # each verb reads the anchor before its own rows land; on a fresh cut
+    (cfg.box / "record.jsonl").write_text(cut)
+    co = api.checkout(cfg, human_key=key_file)
+    assert "rows were cut" in co["screen"] and "rewritten" not in co["screen"]
+
+
+def test_a_served_roll_row_carries_its_own_dice_and_no_seed(cfg):
+    """W4 break 2: `serve.view` puts `roll.result` beside `total` as `dice`,
+    and nothing else from the roll record (no seed id, no counters)."""
+    play(cfg)
+    sc = api.scope(cfg, by=("who",), match={"who": "table"})
+    assert api.seal_scope(cfg, sc["subject"], proof=proof(sc["subject"]))["sealed"]
+    doc = api.serve(cfg, sc["spec"], max_chars=CAP)["doc"]
+    served = [r for t in doc["tables"] for r in t["rows"] if "total" in r]
+    assert served and all(r["dice"] == r["total"] for r in served)
+    assert SEED_ID not in json.dumps(doc) and RANDOMNESS not in json.dumps(doc)

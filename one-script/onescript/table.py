@@ -42,6 +42,18 @@ R3 goes through the one door: `Run.reconciled` binds `basis(human_key)` into
 `reconcile`, `needs`, `checkout` and the morning screen all demote an outcome
 the verdict rows do not carry, and calibration and misses never see it.
 
+W4 break (the end-to-end breaker): a table forecast names a future drand
+round (`api.forecast(table={world, sheets_sha, beacon_round})`), and its
+session's `open` row carries that round and its public randomness, which is
+the seed. `propose_outcome` takes an outcome only from one honest run of
+those dice (`dice_problem`: seed id, continuous counters, totals and verdicts
+re-read from each roll record) on the round's own randomness, fired after the
+tip seal and as the operator's beacon reader (`Config.beacon`) says
+(`beacon_problem`); else it escalates, or is `unreachable` with no reader.
+So code can't grind seeds offline, relabel its dice, or reseed mid-session.
+The beacon's BLS signature is still not checked (T10, said). A session id
+the serve would withhold (40+ hex) is refused at the write.
+
 R19 (integrator): the anchor runs one way only. The ai-game-master head goes
 into the one-script record as an `agm_head` row under the human's sealed tip;
 there is no reverse anchor into campaign.db and no `LedgerSink.head_n`, since
@@ -51,11 +63,13 @@ depends on one-script state.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import api, gate, proposals, record, reverse
+from . import api, beacon, gate, proposals, record, reverse
+from . import serve as served
 from .record import canon
 
 #: C11 (SPEC-documented §9 (b)): the table's identity, beside `api.DESK`.
@@ -75,6 +89,7 @@ SEAL_FIELDS = frozenset(
     {"proof", "pair", "subject", "via", "verifier", "wager", "outcome"}
 )
 STAMP = frozenset(record.ROW_KEYS | {"where"})
+_HEXRUN = re.compile(r"[0-9a-f]{40,}", re.IGNORECASE)
 
 #: The check's states, as SPEC-documented §12 (b) names them, plus the empty
 #: arm: no agm_head row on record, so nothing to compare (not satisfied, not
@@ -132,6 +147,11 @@ def check_row(row: object) -> str | None:
     if any(unicodedata.category(c)[0] in "CZ" and c != " " for c in sid):
         # proposals.path_problem's rule: a card can't show it as what it is
         return "session is plain text: no control, format or separator character"
+    if _HEXRUN.search(sid) or served._scrub(sid) != sid:
+        # serve._scrub withholds a 64-hex run, so two such ids would be served
+        # as one "[hash withheld]" and no brief could name either (W4 break 4);
+        # 40+ hex is refused too: it reads as a hash on a card
+        return "session id is shaped like a hash (40+ hex): the serve would withhold it"
     try:
         canon(row).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError) as e:
@@ -364,6 +384,107 @@ def path_of(srows: list[dict]) -> tuple[str | None, str | None]:
     )
 
 
+def bucket(total: int) -> str:
+    """StorySession's read of a 2d6+stat sum: strong 10+, weak 7-9, miss 6-
+    (`the_table/story_session.py`, restated: onescript imports no table code)."""
+    return "strong" if total >= 10 else "weak" if total >= 7 else "miss"
+
+
+def _int(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def dice_problem(opened: dict, srows: list[dict]) -> str | None:
+    """Why a session's roll rows are not one honest run of the dice its `open`
+    row names, or None (W4 break 1-3). Read from the record alone, no seed:
+    the open row's randomness is the seed (`seed_id` is its id); every roll
+    is from that seed (no reseed mid-session), its counters run on from 0
+    with no gap or restart, and each row's `total` is its own dice's
+    `roll.result` and its `verdict` that total's bucket."""
+    rnd = opened.get("randomness")
+    if not beacon.is_randomness(rnd):
+        return "the open row carries no beacon randomness (64 hex) to seed the session"
+    if opened.get("seed_id") != beacon.seed_id(rnd):
+        return (
+            f"the open row's seed_id {opened.get('seed_id')!r} is not the id of its "
+            "randomness: the session was not seeded by the beacon"
+        )
+    at = 0
+    for r in srows:
+        if r.get("what") != "roll":
+            continue
+        roll = r.get("roll")
+        if not isinstance(roll, dict):
+            return f"row {r['n']}: a roll row with no roll record"
+        if roll.get("seed_id") != opened["seed_id"]:
+            return (
+                f"row {r['n']}: rolled from seed {roll.get('seed_id')!r}, not the open "
+                f"row's {opened['seed_id']!r} (a reseed mid-session)"
+            )
+        before, after = roll.get("counter_before"), roll.get("counter")
+        if not (_int(before) and _int(after)) or before != at or after <= before:
+            return (
+                f"row {r['n']}: counters {before!r}->{after!r} do not run on from "
+                f"{at} (a restart or a gap)"
+            )
+        at = after
+        if not _int(roll.get("result")) or r.get("total") != roll["result"]:
+            return (
+                f"row {r['n']}: total {r.get('total')!r} is not its own dice's "
+                f"{roll.get('result')!r}"
+            )
+        if r.get("verdict") != bucket(roll["result"]):
+            return (
+                f"row {r['n']}: verdict {r.get('verdict')!r} is not the dice's "
+                f"{bucket(roll['result'])!r}"
+            )
+    return None
+
+
+def beacon_problem(
+    opened: dict, w: dict, tip_seal: dict, read: Callable[[int], dict] | None
+) -> tuple[str, str] | None:
+    """(state, why) when the session's seed is not shown to be the forecast's
+    beacon, or None. The round is the one the wager committed to; it fired
+    after the tip seal that committed the forecast (chain order AND the
+    round's time, as export.py's beacon_then < target); and the operator's
+    reader says that round's randomness is the open row's. No reader, or one
+    that fails: `unreachable`. BLS is not checked (T10, said)."""
+    rnd = (w.get("table") or {}).get("beacon_round")
+    if not _int(rnd):
+        return "escalate", "the forecast names no beacon round (W4 break 1)"
+    if opened.get("beacon_round") != rnd:
+        return "escalate", (
+            f"the session was seeded for round {opened.get('beacon_round')!r}, the "
+            f"forecast awaits round {rnd}"
+        )
+    sealed_at = beacon.epoch(str(tip_seal.get("ts")))
+    if sealed_at is None or beacon.round_time(rnd) <= sealed_at:
+        return "escalate", (
+            f"round {rnd} fired at {beacon.round_time(rnd)}, not after the tip seal "
+            f"that committed the forecast ({tip_seal.get('ts')}): its randomness "
+            "may have been known"
+        )
+    if read is None:
+        return "unreachable", (
+            f"no beacon reader on this box: round {rnd}'s randomness can't be "
+            f"checked; {beacon.BLS_UNVERIFIED}"
+        )
+    try:
+        got = read(rnd)
+    except Exception as e:  # any failure of the reader is unreachable, said
+        return "unreachable", f"round {rnd} could not be read: {type(e).__name__}: {e}"
+    fetched = got.get("randomness") if isinstance(got, dict) else None
+    if not beacon.is_randomness(fetched):
+        return "unreachable", f"the reader gave no randomness for round {rnd}"
+    if fetched != opened.get("randomness"):
+        return "escalate", (
+            f"the session's randomness is not round {rnd}'s: the seed was not the "
+            "beacon (a ground or reseeded seed)"
+        )
+    return None
+
+
 def claimed_by(rows: list[dict], wager: str) -> list[dict]:
     """The `open` verdict rows that name this forecast."""
     return [
@@ -375,7 +496,12 @@ def claimed_by(rows: list[dict], wager: str) -> list[dict]:
     ]
 
 
-def propose_outcome(rows: list[dict], wager: str, human_key: bytes | None) -> dict:
+def propose_outcome(
+    rows: list[dict],
+    wager: str,
+    human_key: bytes | None,
+    read_beacon: Callable[[int], dict] | None = None,
+) -> dict:
     """Code proposes a forecast's outcome from the table's verdict rows; it
     never seals it (R10, C4). The human seals what is proposed with
     `api.seal_outcome`, or does not.
@@ -390,6 +516,12 @@ def propose_outcome(rows: list[dict], wager: str, human_key: bytes | None) -> di
     the forecast (T4), no sealed tip between (T5), rows cut so the session
     never closes (T7, said, not prevented). Without the human's key no tip
     seal can be checked: `unreachable`, never collapsed into escalate.
+
+    W4 break 1-3: the session's seed is the forecast's beacon round
+    (`beacon_problem`: the round the wager names, fired after the tip seal,
+    its randomness as `read_beacon` reads it) and its roll rows are one
+    honest run of those dice (`dice_problem`). With no reader the answer is
+    `unreachable`; BLS is not checked (T10, said on every proposal).
     Returns {"state": "proposed", "outcome": {"path": P}, ...} or why not."""
     w = next((r for r in rows if r["kind"] == "wager" and r["hash"] == wager), None)
     if w is None:
@@ -417,7 +549,12 @@ def propose_outcome(rows: list[dict], wager: str, human_key: bytes | None) -> di
             f"(rows {[r['n'] for r in reopened]}); one session, one open row (N3)",
             session=session,
         )
-    want, got = w.get("table"), {k: reopened[0].get(k) for k in sorted(api.TABLE_KEYS)}
+    want = (
+        {k: w["table"].get(k) for k in sorted(api.TABLE_KEYS)}
+        if isinstance(w.get("table"), dict)
+        else None
+    )
+    got = {k: reopened[0].get(k) for k in sorted(api.TABLE_KEYS)}
     if not isinstance(want, dict):
         return _escalate(
             "the forecast names no world (its `table` {world, sheets_sha}); a "
@@ -443,9 +580,18 @@ def propose_outcome(rows: list[dict], wager: str, human_key: bytes | None) -> di
             f"verdict row {first} (wager.n <= tip.n < tip_seal.n < verdict.n, T5)",
             session=session,
         )
+    bad = dice_problem(reopened[0], srows)
+    if bad is not None:
+        return _escalate(bad, session=session)
     path, why = path_of(srows)
     if path is None:
         return _escalate(why or "no path", session=session)
+    seeded = beacon_problem(reopened[0], w, rows[under[0]], read_beacon)
+    if seeded is not None:
+        state, why = seeded
+        if state == "unreachable":
+            return {"state": "unreachable", "reason": why, "session": session}
+        return _escalate(why, session=session)
     idx, entry = reverse._match_distribution(w, {"path": path})
     if entry is None:
         return _escalate(
@@ -459,6 +605,11 @@ def propose_outcome(rows: list[dict], wager: str, human_key: bytes | None) -> di
         "session": session,
         "basis": [r["n"] for r in srows],
         "under": {"tip_seal": under[0], "tip": under[1]},
+        "beacon": {
+            "round": reopened[0]["beacon_round"],
+            "checked": "randomness matches the operator's reader",
+            "bls": beacon.BLS_UNVERIFIED,
+        },
         "subject": reverse.outcome_subject(wager, {"path": entry["path"]}),
     }
 
@@ -492,12 +643,13 @@ def outcome_from_verdicts(
             "reason": f"the record is broken: {breaks}",
             "code": 1,
         }
-    out = propose_outcome(run.rec.rows(), wager, key)
+    out = propose_outcome(run.rec.rows(), wager, key, run.beacon)
     return {**out, "code": 0 if out["state"] == "proposed" else 1}
 
 
 def basis(
     human_key: bytes | None,
+    read_beacon: Callable[[int], dict] | None = None,
 ) -> Callable[[dict, list[dict], dict], str | dict | None]:
     """The R3 hook for `reverse.reconcile_wagers` (B1). A table forecast (its
     wager names a `table` world) counts only with an outcome `propose_outcome`
@@ -516,7 +668,9 @@ def basis(
             return None
         if not claimed:
             return "no table session on record plays for this forecast"
-        got = propose_outcome(rows, wager["hash"], human_key)
+        got = propose_outcome(rows, wager["hash"], human_key, read_beacon)
+        if got["state"] == "unreachable":
+            return {"unreachable": str(got.get("reason"))}
         if got["state"] != "proposed":
             return str(got.get("reason", got["state"]))
         idx, _ = reverse._match_distribution(wager, outcome)
@@ -542,7 +696,9 @@ def reconcile_table(
     key, why = _key(cfg, human_key)
     if why is not None:
         return api._refused(why, 2)
-    return api.reconcile(cfg, human_key=human_key, argv=argv, basis=basis(key))
+    return api.reconcile(
+        cfg, human_key=human_key, argv=argv, basis=basis(key, cfg.beacon)
+    )
 
 
 # ── J9: the ai-game-master head, checked ───────────────────────────────────

@@ -521,3 +521,39 @@ def test_NEW6_markup_is_stripped_from_facts_and_zero_width_hides_no_hash(run):
 def test_NEW8_a_fence_closes_only_on_its_own_marker():
     data = "# V\n```\n~~~\n- inside\n```\n- after\n~~~~\n```\n- still\n~~~~\n- out\n"
     assert [f for _, f in lore.facts_of("world/v.md", data)] == ["after", "out"]
+
+
+# ── W4 break 5: the T-mai-1 shape gate at the lore door ─────────────────────
+MALFORMED = (
+    "@markdownai v1.0\n# The Floor\n- the floor is lava\n"
+    "@constraint: the parser drops this\n"
+)
+WELL_FORMED_MAI = (
+    "@markdownai v1.0\n\n# The Floor\n\n- the floor is lava\n\n"
+    "@constraint severity=warning\nkeep off the floor\n"
+)
+
+
+def test_a_malformed_mai_world_doc_writes_no_lore(run):
+    subject, _ = propose(run, path="world/floor.md", data=MALFORMED)
+    seal(run, subject)
+    (got,) = lore.from_sealed(run, subject)
+    assert got["kind"] == "refused" and "malformed @markdownai" in got["reason"]
+    assert not [r for r in run.rec.rows() if r["kind"] == "lore"]
+
+
+def test_facts_of_never_yields_a_header_or_a_directive_line():
+    facts = [f for _, f in lore.facts_of("world/floor.md", WELL_FORMED_MAI)]
+    assert facts and not any(f.startswith("@") or "@constraint" in f for f in facts)
+    assert "the floor is lava" in facts
+    # a directive line ends the item before it, never joins it
+    got = lore.facts_of("world/x.md", "- the floor is lava\n@phase p1\nbody\n")
+    assert [f for _, f in got] == ["the floor is lava", "body"]
+
+
+def test_a_well_formed_mai_world_doc_writes_its_lore(run):
+    subject, _ = propose(run, path="world/floor.md", data=WELL_FORMED_MAI)
+    seal(run, subject)
+    got = lore.from_sealed(run, subject)
+    assert got and all(r["kind"] == "lore" for r in got)
+    assert not any(r["fact"].startswith("@") for r in got)

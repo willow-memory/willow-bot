@@ -56,7 +56,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import table, view
+from . import beacon, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -187,6 +187,13 @@ def main(argv: list[str] | None = None) -> int:
         default=api.default_nestor_db(),
         help="Nestor's store, read-only ($WILLOW_NESTOR_DB, else $NESTOR_DB): a "
         "pair seals only while it is sealed there",
+    )
+    p.add_argument(
+        "--drand",
+        action="store_true",
+        help="read table forecasts' beacon rounds from drand over HTTPS (BLS not "
+        "checked). Without it the box is offline and a table outcome is "
+        "`unreachable`, said (W4 break 1)",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
     ks = sub.add_parser("keys", help="the operator's keyring export (run off the box)")
@@ -400,6 +407,7 @@ def main(argv: list[str] | None = None) -> int:
         keyring=args.keyring,
         nestor_db=args.nestor_db,
         phone=args.phone,
+        beacon=beacon.drand_reader if args.drand else None,
     )
 
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome

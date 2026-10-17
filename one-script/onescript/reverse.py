@@ -445,7 +445,9 @@ def reconcile_wagers(
     asked only once an outcome is sealed, covered and in chain order; a reason
     back makes the row `escalate` with no score, no predicted p and no path,
     so calibration and misses never see it. A `{"note": text}` back leaves
-    the row as it would be and carries the note beside it (`basis_note`).
+    the row as it would be and carries the note beside it (`basis_note`); a
+    `{"unreachable": why}` makes the row `unreachable` (the check could not
+    be made here, e.g. no beacon reader), never escalate.
     None means it has nothing to say."""
     if not in_place(rows):  # order is read from `n`: a label out of place
         through, held, human_key = None, None, None  # lets nothing count
@@ -516,7 +518,11 @@ def reconcile_wagers(
                 "reason": "no tip the human sealed holds this forecast before its "
                 "outcome seal (wager.n <= tip.n < tip_seal.n < outcome.n)",
             }
-        elif isinstance(said := ask(), str):
+        elif isinstance(said := ask(), dict) and said.get("unreachable"):
+            # the hook could not check where the outcome came from (the
+            # beacon reader is offline): said, never escalate (INVARIANTS §1)
+            row |= {"state": "unreachable", "why": f"R3: {said['unreachable']}"}
+        elif isinstance(said, str):
             row |= {
                 "state": "escalate",
                 "escalate_to": "human",

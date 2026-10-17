@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import re
 
-from . import gate, proposals
+from . import gate, mai_shape, proposals
 
 KIND = "lore"
 ROOT = "world/"
@@ -55,6 +55,9 @@ def is_world(path: object) -> bool:
 _SETEXT = re.compile(r"^(=+|-{2,})\s*$")
 _RULE = re.compile(r"^([-*_])(\s*\1){2,}\s*$")
 _TABLE = re.compile(r"^\|")
+#: an `@markdownai` header or `@directive` line (`@phase`, `@constraint`, ...):
+#: mai's syntax, never world text (W4 break 5)
+_DIRECTIVE = re.compile(r"^@[A-Za-z]")
 _FENCE_OPEN = re.compile(r"^(`{3,}|~{3,})")
 _COMMENT = re.compile(r"<!--.*?-->")
 _TAG = re.compile(r"</?[A-Za-z][^<>]*>")
@@ -78,7 +81,8 @@ def facts_of(path: str, data: str) -> list[tuple[str, str]]:
     attached to their parent, joined with "; " (a parent is never a fact on its
     own once it has children). Not facts: frontmatter, headings (they set the
     scene; so does a setext title), code fences (closed only by their own
-    marker and length), indented code, HTML comments, table rows, rules.
+    marker and length), indented code, HTML comments, table rows, rules, and
+    any `@markdownai` header or `@directive` line (mai's syntax, W4 break 5).
     Blockquote `>` markers and inline HTML are stripped. The scene is the nearest
     heading above the fact, else the file's stem."""
     stem = path.rsplit("/", 1)[-1][: -len(".md")]
@@ -145,7 +149,7 @@ def facts_of(path: str, data: str) -> list[tuple[str, str]]:
             flush()
             st["scene"] = _clean(h.group(1).strip()) or stem
             continue
-        if _RULE.match(s) or _SETEXT.match(s) or _TABLE.match(s):
+        if _RULE.match(s) or _SETEXT.match(s) or _TABLE.match(s) or _DIRECTIVE.match(s):
             flush()
             continue
         if not st["cur"] and _indent(ln) >= 4:
@@ -253,7 +257,7 @@ def from_sealed(run, subject: str) -> list[dict]:
     """Append the `lore` rows of a sealed `world/*.md` proposal. Returns the new
     rows; an empty list when there is nothing to add; a single `refused` row
     when the proposal is not one (unsealed, tampered, not under world/, no
-    author key). Idempotent: a fact already a row of this proposal is skipped.
+    author key, a malformed `@markdownai` document: `mai_shape.check`). Idempotent: a fact already a row of this proposal is skipped.
     Never writes a seal and never writes the file (`Run.write_proposal` does)."""
     prop, why = run.find_proposal(subject)
     if why is None:
@@ -264,6 +268,13 @@ def from_sealed(run, subject: str) -> list[dict]:
             why = bad
         elif run.keys.get(prop["who"]) is None:
             why = f"no key for the proposal's author '{prop['who']}'"
+        else:
+            # T-mai-1 at the lore door too (W4 break 5): a malformed
+            # `@markdownai` world doc is refused here as `write_file` refuses it
+            try:
+                mai_shape.check(prop["path"], prop["data"].encode("utf-8"))
+            except PermissionError as e:
+                why = str(e).removeprefix("record: ")
     if why is not None:
         return [
             run.rec.append(

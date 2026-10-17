@@ -428,3 +428,36 @@ def test_a_body_that_is_not_text_or_is_empty_is_not_an_answer():
 def test_the_bucket_form_of_table_rules_is_unchanged():
     res = resolve_fixture(act("table.rules", "weak", lore("rule: weak 7-9 the hit lands but costs")))
     assert res["status"] == STATUS_RESOLVED
+
+
+# ------------------------------------------------- W4 break 2 and break 4
+
+
+def test_W4_break2_a_total_that_is_not_its_own_dice_escalates():
+    """`serve.view` carries the roll record's own result as `dice`: a row whose
+    total and verdict were rewritten (both still agree with each other) while
+    the dice stayed is a defect, never an answer."""
+    r = roll_row(0, 12)
+    r["dice"] = 5  # the dice said miss; the label says strong
+    res = resolve_fixture(act("table.roll", "turn 0", excerpt("ex-a", r)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "total_dice_mismatch"
+    res = resolve_fixture(act("table.state", "tally", excerpt("ex-a", r, roll_row(1, 8))))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "total_dice_mismatch"
+    ok = roll_row(0, 12)
+    ok["dice"] = 12
+    res = resolve_fixture(act("table.roll", "turn 0", excerpt("ex-a", ok)))
+    assert res["status"] == STATUS_RESOLVED and res["answer"]["total"] == 12
+
+
+def test_W4_break4_withheld_session_ids_never_collapse_into_one():
+    """Two sessions whose ids the serve withheld read the same on the card:
+    the act escalates ambiguous_session, and no brief can name either."""
+    a = roll_row(0, 8, session="[hash withheld]")
+    b = roll_row(0, 11, session="[hash withheld]")
+    for task in ("tally", "turn 0", "tally session [hash withheld]"):
+        cls = "table.roll" if task == "turn 0" else "table.state"
+        res = resolve_fixture(act(cls, task, excerpt("ex-a", a, b)))
+        assert res["status"] == STATUS_ESCALATE, task
+        assert res["reason"] in ("ambiguous_session", "no_session_on_record"), task
+    res = resolve_fixture(act("table.state", "tally", excerpt("ex-a", a)))
+    assert res["status"] == STATUS_ESCALATE and res["reason"] == "ambiguous_session"

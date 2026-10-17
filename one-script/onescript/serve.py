@@ -142,6 +142,12 @@ def view(row: dict) -> dict:
     isrules = (row.get("kind") or row.get("what")) == rules.KIND
     only = {"fact": islore, "body": isrules, "total": istable, "session": istable}
     out.update({k: row[k] for k in PAYLOAD if k in row and only.get(k, True)})
+    # `dice`: a table roll row's own dice, `roll.result` (W4 break 2), so a
+    # reader can see a `total` or `verdict` that disagrees with them. Only the
+    # sum: the roll record's seed id and counters stay off the card.
+    roll = row.get("roll") if istable else None
+    if isinstance(roll, dict) and isinstance(roll.get("result"), int):
+        out["dice"] = roll["result"]
     # A hash in another form is still a hash: `fact` and a lore row's scene are
     # rewritten to NFKC (so ligatures and fullwidth forms read as plain text; the
     # served fact can differ from the sealed bytes in those forms only) and

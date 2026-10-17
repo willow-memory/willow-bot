@@ -48,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import boot, gate, nestor_seal, record, reverse, view
+from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
 from . import serve as served
 from .run import PKG, Run
@@ -87,6 +87,12 @@ class Config:
     #: tool, venv or clone is missing defers on the phone and hard-closes on the
     #: box; a missing tool never makes a run a phone run.
     phone: bool = False
+    #: The operator's drand reader (`beacon.drand_reader`, or a stand-in):
+    #: round -> {"randomness", ...}. A table outcome counts only once the
+    #: session's randomness is the one this says its round is (W4 break 1).
+    #: Fixed here, never taken from a caller; None: offline, and no table
+    #: outcome can be proposed (`unreachable`, said).
+    beacon: Callable[[int], dict] | None = None
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -314,6 +320,7 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
     run = Run(cfg.box, keys, law, clock, anchor=cfg.keys.parent / ANCHOR)
     run.serve_key = _load_serve_key(cfg)
     run.keyring, run.nestor_db = cfg.keyring, cfg.nestor_db
+    run.beacon = cfg.beacon
     run.rec.append(
         "invocation",
         run.sys,
@@ -405,6 +412,22 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
     }
 
 
+def _breaks_before(cfg: Config, key: bytes | None) -> list[str] | None:
+    """The chain's and the anchor's breaks as the record stands BEFORE a verb
+    appends its own rows (W4 break 7). Read through a reader with no write
+    token; None when there is no key to check the anchor with, or the keys
+    file sits where `_open` will refuse it anyway."""
+    if key is None or cfg.keys.resolve().is_relative_to(cfg.box.resolve()):
+        return None
+    try:
+        rec = record.Record(
+            cfg.box, lambda: "", "", object(), anchor=cfg.keys.parent / ANCHOR
+        )
+    except (PermissionError, OSError):
+        return None
+    return rec.verify_chain() + rec.verify_anchor(key)
+
+
 def checkout(
     cfg: Config,
     argv: Iterable[str] = ("checkout",),
@@ -422,13 +445,18 @@ def checkout(
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
         return _refused(why, 2)
+    before = _breaks_before(cfg, key)
     run, info = _open(cfg, "checkout", argv)
     if run is None:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
     rep, screen = run.checkout(
-        boot_report=last, human_key=key, basis=basis, read_head=read_head
+        boot_report=last,
+        human_key=key,
+        basis=basis,
+        read_head=read_head,
+        breaks=before,
     )
     return {"report": rep, "screen": screen, "code": 0}
 
@@ -754,8 +782,10 @@ def rules(cfg: Config, subject: str, argv: Iterable[str] = ("rules",)) -> dict:
         "python3 -m onescript serve --by what --match what=rules"
         " --upto <its upto> --max-chars N",
     ]
+    prop, _ = run.find_proposal(subject)
     return {
         "rules": [{"n": r["n"], "phase": r["where"]} for r in made],
+        "dropped": rules_rows.dropped(prop["data"]) if prop else {},
         "count": len(made),
         "rescope": {
             "why": "the new rules rows moved the what=rules pile: a scope drawn at "
@@ -782,10 +812,8 @@ def pooled(cfg: Config, argv: Iterable[str] = ("pooled",)) -> dict:
 
 
 def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
-    prop, _ = run.find_proposal(subject)
     """The most recent human-sealed scope, as the record holds it: the `spec`
     (with the `upto` it was proposed at) and the `subject` the human sealed.
-        "dropped": rules_rows.dropped(prop["data"]) if prop else {},
     Serving that spec again stays `populated` however many rows were added
     since, where a fresh scope at `upto=latest` would move the subject out from
     under the seal. `sealed_at` is the seal row's own `ts`, the stamp the record
@@ -895,6 +923,24 @@ def escalate(
 OUTCOME_KEYS = ("path_index", "path", "winner")  # reverse._match_distribution
 COMMITTED_KEYS = {"sha256", "beacon_then", "target"}
 TABLE_KEYS = {"world", "sheets_sha"}  # a table forecast's world (SPEC W2 S2)
+#: ... and the drand round whose randomness seeds its session (W4 break 1)
+TABLE_FORECAST_KEYS = TABLE_KEYS | {"beacon_round"}
+
+
+def _future_round(rnd: object, run: Run) -> str | None:
+    """Why `rnd` is not a drand round that fires after now (this box's
+    clock), or None. A round already out is a seed anyone may know."""
+    if isinstance(rnd, bool) or not isinstance(rnd, int) or rnd < 1:
+        return "beacon_round is a drand round number"
+    now = beacon.epoch(run.rec.clock())
+    if now is None:
+        return "the box's clock can't be read, so no round can be shown to be ahead"
+    if beacon.round_time(rnd) <= now:
+        return (
+            f"beacon round {rnd} fired at {beacon.round_time(rnd)}, not after now "
+            f"({now}): its randomness may be known; name a round still ahead"
+        )
+    return None
 
 
 def forecast(
@@ -915,9 +961,12 @@ def forecast(
     that does not stand (`reverse.check_distribution`), a `by` that is not a
     role, a `committed` that is not {sha256, beacon_then, target}, or an id
     already on record (a forecast stands, `play.py:254-256`). `table` names
-    the world and the stat sheets a table forecast is about, exactly
-    {world, sheets_sha} (`peaks.world_key`); a table session that played
-    another world or other sheets can't supply its outcome (`table.basis`)."""
+    what a table forecast is about, exactly {world, sheets_sha, beacon_round}:
+    the world and its odds' inputs (`peaks.world_key`), and a drand round
+    that has not fired yet by this box's clock, whose randomness must seed
+    the session that answers it (rival R1, H7; W4 break 1). A table session
+    on another world, other sheets or another seed can't supply its outcome
+    (`table.propose_outcome`)."""
     run, info = _open(cfg, "forecast", argv)
     if run is None:
         return info
@@ -934,10 +983,15 @@ def forecast(
         why = f"committed carries exactly {sorted(COMMITTED_KEYS)}"
     elif table is not None and (
         not isinstance(table, dict)
-        or set(table) != TABLE_KEYS
-        or not all(isinstance(v, str) and v for v in table.values())
+        or set(table) != TABLE_FORECAST_KEYS
+        or not all(isinstance(table[k], str) and table[k] for k in TABLE_KEYS)
     ):
-        why = f"table names exactly {sorted(TABLE_KEYS)}, as text"
+        why = (
+            f"table names exactly {sorted(TABLE_FORECAST_KEYS)}: world and "
+            "sheets_sha as text, beacon_round a future drand round"
+        )
+    elif table is not None and (why := _future_round(table["beacon_round"], run)):
+        pass
     elif any(r["kind"] == "wager" and r.get("id") == wid for r in run.rec.rows()):
         why = f"a wager {wid!r} is already on record; a forecast stands"
     else:
@@ -1249,13 +1303,15 @@ def reconcile(
     no `reconcile` row, so it checks nothing out. Without the key no outcome
     counts, and the answer says so. `graded_by` stays None (SPEC R4). `basis`
     as `checkout` takes it: a table box goes through R3 here too."""
+    # W4 break 7: the anchor as it stood before this verb's own rows
+    before = _breaks_before(cfg, read_human_key(human_key, cfg.box)[0])
     run, info = _open(cfg, "reconcile", argv)
     if run is None:
         return info
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
         return _refused(why, 2)
-    rep = run.reconciled(human_key=key, basis=basis)
+    rep = run.reconciled(human_key=key, basis=basis, breaks=before)
     tip = run.rec.tip()
     out = {
         "wagers": rep["wagers"],

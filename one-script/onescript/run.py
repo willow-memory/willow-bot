@@ -60,6 +60,8 @@ class Run:
         # Config, never from a caller (api._open)
         self.keyring: Path | None = None
         self.nestor_db: Path | None = None
+        # the operator's drand reader, from Config (W4 break 1); None: offline
+        self.beacon = None
 
     def checkin(self, gate_cfg: dict | None = None) -> dict:
         report = boot.boot(self.rec, self.keys, self.law, gate_cfg)
@@ -750,6 +752,7 @@ class Run:
         human_key: bytes | None = None,
         basis=None,
         read_head=None,
+        breaks: list[str] | None = None,
     ) -> dict:
         """The reverse report over the record as it stands: pure, it appends
         nothing. `checkout` draws its screen from it; `api.needs` reads it.
@@ -760,6 +763,11 @@ class Run:
         the record holds table verdict rows or a wager naming a table world,
         so every report (reconcile, needs, checkout, the morning screen) goes
         through the one door.
+
+        `breaks` are the chain and anchor breaks as read BEFORE this verb's
+        own rows were appended (`api._breaks_before`, W4 break 7): a record
+        cut after its sealed tip then reads "rows were cut", where the
+        invocation row landing at the cut would read as a rewrite.
 
         `read_head` (R13) is the ai-game-master ledger reader `table.surface`
         hands `table.check_agm_head`; it only matters for a table box, where
@@ -772,7 +780,7 @@ class Run:
         ):
             from . import table  # table imports api, which imports this module
 
-            basis = table.basis(human_key)
+            basis = table.basis(human_key, self.beacon)
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))
@@ -794,7 +802,11 @@ class Run:
             wagers_basis=basis,
             # a broken record is said, never read as "no seal" (INVARIANTS §1)
             wagers_breaks=(
-                self.rec.verify_chain() + self.rec.verify_anchor(human_key)
+                (
+                    breaks
+                    if breaks is not None
+                    else self.rec.verify_chain() + self.rec.verify_anchor(human_key)
+                )
                 if human_key is not None
                 else None
             ),
@@ -821,6 +833,7 @@ class Run:
         human_key: bytes | None = None,
         basis=None,
         read_head=None,
+        breaks: list[str] | None = None,
     ) -> tuple[dict, str]:
         """`human_key` lets reverse check the sealed anchor tip; without it no
         wager outcome counts (it cannot be shown to be covered). `basis` as
@@ -832,6 +845,7 @@ class Run:
             human_key=human_key,
             basis=basis,
             read_head=read_head,
+            breaks=breaks,
         )
         screen = view.morning(rep, boot_report, self.claims, self.acts)
         self.rec.append("reconcile", self.sys, report_hash=h256(screen))
