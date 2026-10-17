@@ -662,6 +662,52 @@ def seal_proposal(
     }
 
 
+def lore(cfg: Config, subject: str, argv: Iterable[str] = ("lore",)) -> dict:
+    """Turn a human-sealed `world/*.md` proposal into `lore` rows, one fact each
+    (SPEC R11; `lore.from_sealed`). Refused, recorded, when the proposal is not
+    sealed, not a pass, an own idea, or not under world/. Writes no seal and not
+    the file (`seal_proposal` does). Ends with the rescope step, as R14 does:
+    new rows move the piles they sit in, so a scope at the new tip serves empty
+    until the human seals it."""
+    from . import lore as lore_rows
+
+    run, info = _open(cfg, "lore", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "lore", subject=subject)) is not None:
+        return refusal
+    made = lore_rows.from_sealed(run, subject)
+    if made and made[0]["kind"] == "refused":
+        return {"refused": made[0]["reason"], "row": made[0], "code": 1}
+    if not made:  # nothing was written, so nothing moved
+        return {
+            "lore": [],
+            "count": 0,
+            "rescope": {
+                "why": "no new rows: every fact was already lore; no pile moved",
+                "steps": [],
+            },
+            "code": 0,
+        }
+    by = "what"
+    return {
+        "lore": [{"n": r["n"], "where": r["where"], "fact": r["fact"]} for r in made],
+        "count": len(made),
+        "rescope": {
+            "why": "the new lore rows moved the what=lore pile (and the author's "
+            "who pile): a scope drawn at the new tip serves empty until the "
+            "human seals it",
+            "steps": [
+                f"python3 -m onescript scope --by {by} --match what=lore",
+                "python3 -m onescript seal <the new subject> --proof P",
+                f"python3 -m onescript serve --by {by} --match what=lore"
+                " --upto <its upto> --max-chars N",
+            ],
+        },
+        "code": 0,
+    }
+
+
 def pooled(cfg: Config, argv: Iterable[str] = ("pooled",)) -> dict:
     """The pooled unsealed pass set, for the close-out deposit: every passing
     proposal on record that no human seal covers, one per subject, each as
