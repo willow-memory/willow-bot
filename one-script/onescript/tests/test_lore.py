@@ -1,0 +1,286 @@
+"""J5 (R11): sealed `world/*.md` proposals reach the model as `lore` rows.
+
+SPEC.md R11; SPEC-rival.md section 5 T14; SPEC-documented.md phase J5. A lore
+fact is served only when the proposal carrying it is sealed (proof AND hash).
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from onescript import __main__ as cli  # noqa: E402
+from onescript import gate, lore, proposals, serve  # noqa: E402
+from onescript.record import h256  # noqa: E402
+from onescript.run import Run  # noqa: E402
+
+HUMAN_KEY = b"passkey-in-a-coat-pocket"
+KEYS = {"willow": b"k-willow", gate.HUMAN: HUMAN_KEY}
+LAW = {"trace_ids": ["CONST-III", "CONST-VI"], "grants": []}
+CAP = 10**6
+SERVE_KEY = b"serve-key"
+WORLD = (
+    "---\nname: vale\n---\n# The Vale\n- The ferryman takes only salt.\n"
+    "- A palantir is not kept in the Vale.\n## The Mill\nThe miller counts nine stones.\n"
+)
+
+
+def proof(subject: str) -> str:
+    return gate.sign(HUMAN_KEY, "seal", subject)
+
+
+def clock():
+    n = iter(range(10**6))
+    return lambda: f"2026-10-17T00:00:{next(n):06d}Z"
+
+
+def ident(who="willow", family="qwen"):
+    return {"who": who, "family": family, "sig": gate.sign(KEYS[who], who, family)}
+
+
+@pytest.fixture
+def run(tmp_path):
+    r = Run(tmp_path / "box", KEYS, LAW, clock())
+    r.serve_key = SERVE_KEY
+    return r
+
+
+def propose(run, path="world/vale.md", data=WORLD, claim="the vale"):
+    """A passing proposal row, as `Run._take` records it."""
+    p = {"path": path, "data": data, "cites": ["x"], "claim": claim}
+    subject = proposals.subject(p)
+    who = gate.verify(ident(), KEYS)
+    row = run.rec.append(
+        "proposal",
+        who,
+        where=path,
+        turn=1,
+        line=1,
+        sha=h256(data),
+        verdict="pass",
+        reason="",
+        subject=subject,
+        **p,
+    )
+    return subject, row
+
+
+def seal(run, subject):
+    hum = gate.human(subject, proof(subject), HUMAN_KEY)
+    run.rec.append("seal", hum, where=subject, subject=subject, proof=proof(subject))
+
+
+def serve_lore(run, max_chars=CAP):
+    """Scope the lore pile, seal the scope, serve it. The served document."""
+    stack = serve.piles(run.rec.rows(), "what")
+    chosen = serve.choose(stack, what="lore")
+    ids = [serve.table_id(p) for p in chosen]
+    seal(run, serve.scope_subject(ids))
+    return run.serve(chosen, ids, max_chars=max_chars)
+
+
+def served_rows(doc):
+    return [r for t in doc["tables"] for r in t["rows"]]
+
+
+def test_facts_are_one_per_line_under_their_scene():
+    got = lore.facts_of("world/vale.md", WORLD)
+    assert got == [
+        ("The Vale", "The ferryman takes only salt."),
+        ("The Vale", "A palantir is not kept in the Vale."),
+        ("The Mill", "The miller counts nine stones."),
+    ]
+    assert lore.facts_of("world/x.md", "plain line\n") == [("x", "plain line")]
+
+
+def test_sealed_world_proposal_serves_its_lore(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    new = lore.from_sealed(run, subject)
+    assert [r["kind"] for r in new] == ["lore"] * 3
+    assert {r["where"] for r in new} == {"The Vale", "The Mill"}
+    assert lore.from_sealed(run, subject) == []  # idempotent
+    doc = serve_lore(run)
+    assert doc["state"] == "populated"
+    rows = served_rows(doc)
+    assert [r["fact"] for r in rows] == [
+        f for _, f in lore.facts_of("world/vale.md", WORLD)
+    ]
+    assert rows[0]["where"] == "The Vale" and rows[0]["what"] == "lore"
+    assert "proposal" not in rows[0]  # the subject hash stays on the record's side
+
+
+def test_unsealed_world_proposal_serves_no_lore(run):
+    subject, _ = propose(run)
+    (refused,) = lore.from_sealed(run, subject)
+    assert refused["kind"] == "refused" and "no human seal" in refused["reason"]
+    # a lore row forged beside it, as anyone who can write the record could
+    run.rec.append(
+        "lore",
+        gate.verify(ident(), KEYS),
+        where="The Vale",
+        fact="The ferryman takes only salt.",
+        proposal=subject,
+    )
+    doc = serve_lore(run)
+    assert served_rows(doc) == []
+    assert "ferryman" not in (run.rec.box / serve.OUT).read_text()
+
+
+def test_a_seal_row_without_proof_is_no_seal(run):
+    subject, _ = propose(run)
+    hum = gate.human(subject, proof(subject), HUMAN_KEY)
+    run.rec.append("seal", hum, where=subject, subject=subject)  # no proof: a claim
+    assert lore.from_sealed(run, subject)[0]["kind"] == "refused"
+
+
+def test_forged_proposal_seal_serves_no_lore(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    other = proposals.subject(
+        {"path": "world/vale.md", "data": "x", "cites": ["x"], "claim": "c"}
+    )
+    # lore rows now point at a proposal whose seal is for different bytes
+    rows = [r for r in run.rec.rows() if r["kind"] == "lore"]
+    assert rows
+    held = {other}
+    assert not any(lore.servable(r, run.rec.rows(), held) for r in rows)
+
+
+def test_edited_data_after_seal_serves_no_lore(run):
+    subject, row = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    # the stored proposal is replaced by one with other data under the same
+    # subject (the record is append-only, so the forger appends)
+    forged = {k: row[k] for k in proposals.KEYS}
+    forged["data"] = "# The Vale\n- The ferryman takes gold.\n"
+    run.rec.append(
+        "proposal",
+        gate.verify(ident(), KEYS),
+        where="world/vale.md",
+        verdict="pass",
+        subject=subject,
+        **forged,
+    )
+    # the last stored row no longer hashes to the sealed subject; the earlier
+    # honest one is still found, so a fact of the FORGED text is what must fail
+    run.rec.append(
+        "lore",
+        gate.verify(ident(), KEYS),
+        where="The Vale",
+        fact="The ferryman takes gold.",
+        proposal=subject,
+    )
+    doc = serve_lore(run)
+    facts = [r["fact"] for r in served_rows(doc)]
+    assert "The ferryman takes gold." not in facts
+    assert "The ferryman takes only salt." in facts
+
+
+def test_a_tampered_only_proposal_serves_nothing(run):
+    subject, row = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    path = run.rec.path
+    lines = path.read_text().splitlines()
+    rec = [json.loads(x) for x in lines]
+    i = next(k for k, r in enumerate(rec) if r["kind"] == "proposal")
+    rec[i]["data"] = rec[i]["data"].replace("salt", "gold")  # edit in place
+    path.write_text("\n".join(json.dumps(r) for r in rec) + "\n")
+    doc = serve_lore(run)
+    assert "salt" not in json.dumps(doc) and "gold" not in json.dumps(doc)
+    assert served_rows(doc) == []
+
+
+def test_run_written_world_text_is_not_served(run):
+    run.rec.write_file(run.sys, "world/vale.md", WORLD.encode(), provenance="authored")
+    run.rec.append(  # even a lore row stamped with the run's own name
+        "lore",
+        run.sys,
+        where="The Vale",
+        fact="The ferryman takes only salt.",
+        proposal="proposal:" + "0" * 64,
+    )
+    stack = serve.piles(run.rec.rows(), "what")
+    ids = [serve.table_id(p) for p in stack]
+    seal(run, serve.scope_subject(ids))
+    doc = run.serve(stack, ids, max_chars=CAP)
+    raw = json.dumps(doc) + (run.rec.box / serve.OUT).read_text()
+    assert "ferryman" not in raw and "miller" not in raw
+
+
+def test_a_world_file_written_as_a_file_names_no_fact(run):
+    """T14: the file is a `write` row; its facts are not served, so a sentence
+    naming them has nothing to rest on."""
+    run.rec.write_file(run.sys, "world/vale.md", WORLD.encode(), provenance="authored")
+    assert not [r for r in run.rec.rows() if r["kind"] == "lore"]
+
+
+def test_not_under_world_is_not_lore(run):
+    subject, _ = propose(run, path="notes/vale.md")
+    seal(run, subject)
+    (refused,) = lore.from_sealed(run, subject)
+    assert refused["kind"] == "refused" and "world" in refused["reason"]
+
+
+def test_over_budget_is_empty_never_truncated(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    doc = serve_lore(run, max_chars=200)
+    assert doc["state"] == "empty" and doc["tables"] == []
+    assert "narrow the stack" in doc["why"]
+    raw = (run.rec.box / serve.OUT).read_text()
+    assert "ferryman" not in raw  # not even the first fact
+
+
+def test_a_hash_inside_lore_is_withheld(run):
+    h = "ab" * 32
+    subject, _ = propose(run, data=f"# Vale\n- The stone is marked {h}.\n")
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    (row,) = served_rows(serve_lore(run))
+    assert h not in row["fact"] and serve.WITHHELD in row["fact"]
+
+
+def test_a_fact_the_model_cites_that_was_not_served_is_struck(run):
+    subject, _ = propose(run)
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    doc = serve_lore(run)
+    good = doc["tables"][0]["id"]
+    assert serve.check_cites(doc, [good]) == []
+    struck = serve.check_cites(doc, ["lore-the-palantir", good])
+    assert [s["cite"] for s in struck] == ["lore-the-palantir"]
+    assert struck[0]["verdict"] == "link_fail"
+
+
+def test_unserved_training_is_struck_by_the_vocabulary_check(run):
+    """`seat_say.check_nothing_lacking` over the served lore rows, not
+    `gate.check_claims`: a sentence naming a thing no served fact holds fails."""
+    sys.path.insert(0, str(cli.GROVE))
+    try:
+        from grove import seat_boxes, seat_say
+    except Exception:  # pragma: no cover - the grove is checked out beside
+        pytest.skip("willows-grove seat_say not importable here")
+    finally:
+        sys.path.remove(str(cli.GROVE))
+    subject, _ = propose(run, data="# The Vale\n- The ferryman takes only salt.\n")
+    seal(run, subject)
+    lore.from_sealed(run, subject)
+    doc = serve_lore(run)
+    boxes = [
+        seat_boxes.Box(id="b1", kind="note", label=r["where"], value=r["fact"])
+        for r in served_rows(doc)
+    ]
+    assert seat_say.check_nothing_lacking("The ferryman takes only salt [b1]", boxes)
+    assert not seat_say.check_nothing_lacking(
+        "The ferryman keeps a palantir [b1]", boxes
+    )

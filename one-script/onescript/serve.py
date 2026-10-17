@@ -49,7 +49,7 @@ import hmac
 import os
 import re
 
-from . import gate, nestor_seal
+from . import gate, lore, nestor_seal
 from .record import Record, canon, h256
 
 OUT = "served.json"
@@ -58,7 +58,16 @@ SYSTEM = "run"  # gate.system()'s who: the run's rows about its own steps
 
 # The payload a served row may carry besides its W's. Anything not named here
 # is left out: a new field reaches the model only when someone adds it here.
-PAYLOAD = ("family", "standing", "turn", "verdict", "reason", "intent", "bite")
+PAYLOAD = (
+    "family",
+    "standing",
+    "turn",
+    "verdict",
+    "reason",
+    "intent",
+    "bite",
+    "fact",  # lore (R11): one fact, served only when `lore.servable`
+)
 
 # What each grouping can't hold, said to the model so absence isn't read as fact.
 CANNOT_HOLD = {
@@ -448,7 +457,11 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
                 # served == sealed: the seal binds the authored rows only, so a
                 # run row (`who == "run"`) is never served, let alone labelled
                 # human-sealed. `_receipt` above still chain-checks every row.
-                "rows": [view(r) for r in authored(t["rows"])],
+                "rows": [
+                    view(r)
+                    for r in authored(t["rows"])
+                    if lore.servable(r, rows, seals)
+                ],
             }
         )
     served.sort(key=lambda t: t["id"])

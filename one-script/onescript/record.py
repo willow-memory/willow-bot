@@ -30,6 +30,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
+from . import mai_shape
+
 GENESIS = "0" * 64
 
 #: Every row carries these. A line without them is garbled, whatever it parses as.
@@ -271,6 +273,7 @@ class Record:
             raise PermissionError(
                 f"record: '{rel}' is temp; nothing kept is written to temp"
             )
+        lint = mai_shape.check(rel, data)  # T-mai-1: a malformed mai doc is refused
         _write_in_box(self.box, rel, data)
         ptr = {
             "where": rel,
@@ -285,8 +288,9 @@ class Record:
         pile = self.pile()
         pile["items"] = [i for i in pile["items"] if i["where"] != rel] + [ptr]
         self._save_pile(pile)
+        extra = {"lint": lint} if lint else {}
         return self.append(
-            "write", who, where=rel, path=rel, sha=ptr["sha"], cites=cites or []
+            "write", who, where=rel, path=rel, sha=ptr["sha"], cites=cites or [], **extra
         )
 
 
