@@ -44,7 +44,19 @@ def _sheet() -> dict:
     return sheet
 
 
-INPUTS = {"sheets": [_sheet()], "stats": [], "stat_map": {}, "beats": []}
+#: six set-piece beats: the unit sessions pick their stats (R22 lets a pick
+#: stand only on a set piece), so the sheet's S<i><band> stats are allowed
+BEATS = [
+    {
+        "id": f"b{i}",
+        "kind": "action",
+        "suggests": f"S{i}weak",
+        "scene": 0,
+        "set_piece": True,
+    }
+    for i in range(6)
+]
+INPUTS = {"sheets": [_sheet()], "stats": [], "stat_map": {}, "beats": BEATS}
 WORLD = {
     "world": "hasbeen-late-shift",
     "sheets_sha": record.h256(
@@ -1101,7 +1113,6 @@ def test_a_round_that_fired_before_the_tip_seal_escalates():
     # seal's as the ANCHOR keeps it (the seal row's own field is not read)
     for tip, wager, at_seal, said in (
         (sealed, w, ROUND, "out when the tip seal"),
-        (sealed, w, None, "tip seal holds no reader round"),
         ({**sealed, "beacon_latest": before}, w, ROUND, "out when the tip seal"),
         (sealed, {**w, "beacon_latest": ROUND + 5}, before, "out when the forecast"),
         (
@@ -1117,6 +1128,26 @@ def test_a_round_that_fired_before_the_tip_seal_escalates():
     other = {**opened, "beacon_round": ROUND + 1}
     state, why = table.beacon_problem(other, w, sealed, drand, before)
     assert state == "escalate" and f"awaits round {ROUND}" in why
+    # an anchor with no round for this tip is unchecked, never a finding
+    state, why = table.beacon_problem(opened, w, sealed, drand, None)
+    assert state == "unreachable" and "anchor holds no reader round" in why
+
+
+def test_R23a_off_a_set_piece_the_stat_is_the_beats_suggests():
+    """R22: code rolls a beat's suggested stat unless the beat is a set piece;
+    a stat picked after the dice on any other beat escalates."""
+    plain = [dict(b, set_piece=False) for b in BEATS]
+    rows = _rolls("weak", "strong")
+    sheets = INPUTS["sheets"]
+    why = table.dice_problem(OPEN, rows, sheets, plain, {})
+    assert "not a set piece" in why and "suggested 'S1weak'" in why
+    assert table.dice_problem(OPEN, rows, sheets, BEATS, {}) is None
+    on = [dict(plain[0], suggests="S0weak"), dict(plain[1], suggests="S1strong")]
+    assert table.dice_problem(OPEN, rows, sheets, on, {}) is None
+    # after the alias map: a world stat and its engine name are one stat
+    alias = [dict(on[0], suggests="Grit"), on[1]]
+    assert table.dice_problem(OPEN, rows, sheets, alias, {"Grit": "S0weak"}) is None
+    assert "no action beat" in table.dice_problem(OPEN, rows, sheets, on[:1], {})
 
 
 # ── W4 break 2, 3: the roll rows are one honest run of the open row's dice ──

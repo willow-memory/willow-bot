@@ -416,7 +416,13 @@ def world_problem(opened: dict, w: dict) -> tuple[list | None, str | None]:
     return inputs["sheets"], None
 
 
-def dice_problem(opened: dict, srows: list[dict], sheets: list) -> str | None:
+def dice_problem(
+    opened: dict,
+    srows: list[dict],
+    sheets: list,
+    beats: list | None = None,
+    stat_map: dict | None = None,
+) -> str | None:
     """Why a session's roll rows are not one honest run of the dice its `open`
     row names, or None (W4 break 1-3, R23a). Read from the record alone: the
     open row's randomness is the seed (`seed_id` is its id); every roll is
@@ -429,7 +435,14 @@ def dice_problem(opened: dict, srows: list[dict], sheets: list) -> str | None:
     record's: it is `sheets[seat][stat]` (the re-hashed world inputs,
     `world_problem`; peaks.sheets_for already maps each stat through the
     engine's aliases), and a record whose `stat_value` says otherwise is
-    refused."""
+    refused.
+
+    The stat is not the writer's either (R22, R23a): roll i answers the
+    forecast's action beat i (`beats`, from the re-hashed world inputs), and
+    on a beat that is not a `set_piece` its stat must be the beat's
+    `suggests` (compared after the engine alias map), the code's own pick.
+    Stated limit: on a set piece the stat is a pick, and once the round is
+    out the dice are public, so that pick is post-hoc; nothing here stops it."""
     rnd = opened.get("randomness")
     if not beacon.is_randomness(rnd):
         return "the open row carries no beacon randomness (64 hex) to seed the session"
@@ -439,12 +452,32 @@ def dice_problem(opened: dict, srows: list[dict], sheets: list) -> str | None:
             "randomness: the session was not seeded by the beacon"
         )
     at = 0
+    k = -1
+    alias = stat_map if isinstance(stat_map, dict) else {}
     for r in srows:
         if r.get("what") != "roll":
             continue
+        k += 1
         roll = r.get("roll")
         if not isinstance(roll, dict):
             return f"row {r['n']}: a roll row with no roll record"
+        if beats is not None:
+            if k >= len(beats):
+                return (
+                    f"row {r['n']}: roll {k} has no action beat in the forecast's "
+                    f"world ({len(beats)} before the first decision)"
+                )
+            beat = beats[k] if isinstance(beats[k], dict) else {}
+            stat = roll.get("stat")
+            want = beat.get("suggests")
+            if beat.get("set_piece") is not True and alias.get(stat, stat) != alias.get(
+                want, want
+            ):
+                return (
+                    f"row {r['n']}: beat {beat.get('id')!r} is not a set piece, so "
+                    f"code rolls its suggested {want!r}, not {stat!r} (a stat "
+                    "picked after the dice, R22)"
+                )
         if roll.get("generator_id") != beacon.GENERATOR_ID:
             return (
                 f"row {r['n']}: rolled by generator {roll.get('generator_id')!r}, "
@@ -529,6 +562,13 @@ def beacon_problem(
         return "escalate", (
             f"the session was seeded for round {opened.get('beacon_round')!r}, the "
             f"forecast awaits round {rnd}"
+        )
+    if not _int(seal_latest):
+        # INVARIANTS §1: the anchor holds no reader round for this tip (missing,
+        # unreadable, or sealed with no reader): unchecked here, not a finding
+        return "unreachable", (
+            f"the anchor holds no reader round for the tip seal: round {rnd} "
+            "can't be shown to have been ahead of it (R23a)"
         )
     for what, seen in (
         ("forecast", w.get("beacon_latest")),
@@ -669,7 +709,11 @@ def propose_outcome(
         )
     sheets, bad = world_problem(reopened[0], w)
     if bad is None:
-        bad = dice_problem(reopened[0], srows, sheets or [])
+        inputs = reopened[0]["world_inputs"]
+        beats = inputs.get("beats") if isinstance(inputs.get("beats"), list) else []
+        bad = dice_problem(
+            reopened[0], srows, sheets or [], beats, inputs.get("stat_map")
+        )
     if bad is not None:
         return _escalate(bad, session=session)
     path, why = path_of(srows)

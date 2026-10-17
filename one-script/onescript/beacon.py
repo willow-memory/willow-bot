@@ -26,6 +26,11 @@ the box). A reader that lies (or a drand whose BLS is not checked) wins;
 nothing else does. The trusted reader must never report a `latest` older than
 a round it serves.
 
+Stated limit (R22, R23a): on a beat that is not a set piece the code rolls
+the beat's suggested stat, and the replay holds it to that. On a set piece
+the stat is a pick (the model's or the human's), and once the round is out
+the dice are public, so a set-piece pick can be made after seeing them.
+
 Stated limit (R23a): "one table forecast per round" holds per box. Two boxes
 on one operator's reader can each forecast the same round and play only the
 box whose forecast the dice favour; closing that needs a round registry
