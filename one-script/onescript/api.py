@@ -782,8 +782,10 @@ def pooled(cfg: Config, argv: Iterable[str] = ("pooled",)) -> dict:
 
 
 def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
+    prop, _ = run.find_proposal(subject)
     """The most recent human-sealed scope, as the record holds it: the `spec`
     (with the `upto` it was proposed at) and the `subject` the human sealed.
+        "dropped": rules_rows.dropped(prop["data"]) if prop else {},
     Serving that spec again stays `populated` however many rows were added
     since, where a fresh scope at `upto=latest` would move the subject out from
     under the seal. `sealed_at` is the seal row's own `ts`, the stamp the record

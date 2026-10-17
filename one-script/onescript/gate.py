@@ -438,12 +438,27 @@ def _in(span: list, lo: int, hi: int) -> bool:
     return span[0] <= lo and hi <= span[1]
 
 
+def _covered(spans: list, lo: int, hi: int) -> bool:
+    """Whether every line of lo..hi lies in the union of `spans` (adjacent spans
+    join: one ends on the line before the next begins)."""
+    reach = lo
+    for a, b in sorted(spans):
+        if a > reach:
+            break
+        reach = max(reach, b + 1)
+        if reach > hi:
+            return True
+    return False
+
+
 def _symbol_row(c: dict, entry: object) -> dict:
     """One qualified cite against what the graph said about its file (T-cbm-1).
     `verified`: the name is defined there, or the line falls inside a symbol.
-    `unverified` (struck): the graph is fresh and holds no such file or symbol.
-    `unchecked`: the graph was stale, unreachable, not asked, or the file name
-    is ambiguous; the record says which, and nothing is claimed either way."""
+    `unverified` (struck): the graph is fresh and stamped and holds no such file
+    or no such name there. `unchecked`: the graph was stale, unreachable, not
+    asked, lacks the project (no stamp), the file name is ambiguous, or a line
+    or range falls outside every symbol (an import, a constant, past the end);
+    the record says which, and nothing is claimed either way."""
     base = {"at": c["at"], "kind": "symbol", "claim": c["claim"]}
     if not isinstance(entry, dict) or "state" not in entry:
         return {**base, "verdict": "unchecked", "record": "the graph was not asked"}
@@ -454,7 +469,15 @@ def _symbol_row(c: dict, entry: object) -> dict:
             "verdict": "unchecked",
             "record": f"graph {state}: {entry.get('why', '')}".rstrip(": "),
         }
-    if state != "populated":  # empty: a fresh graph that holds no symbol there
+    if state == "empty" and not entry.get("stamp"):
+        # S1: no stamp means the project itself is not in the graph: nothing was
+        # looked at, so nothing is struck
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": "project not in the graph",
+        }
+    if state != "populated":  # empty and stamped: a fresh graph holds no symbol there
         return {
             **base,
             "verdict": "unverified",
@@ -473,8 +496,19 @@ def _symbol_row(c: dict, entry: object) -> dict:
     if ref[0].isdigit():
         lo, _, hi = ref.partition("-")
         lo, hi = int(lo), int(hi or lo)
-        ok = lo <= hi and any(_in(sp, lo, hi) for v in names.values() for sp in v)
-    elif "." in ref:  # Class.method: the method sits inside that class
+        if lo > hi:
+            return {**base, "verdict": "unverified", "record": "a reversed range"}
+        # S2: a line is verified inside a symbol; a range only when the union of
+        # the symbols it crosses covers every line of it. A line outside every
+        # symbol is an import, a constant or past the end: the graph cannot say.
+        if _covered(sum(names.values(), []), lo, hi):
+            return {**base, "verdict": "verified", "record": f"{paths[0]} at {at}"}
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": f"outside every symbol the graph holds in {paths[0]} at {at}",
+        }
+    if "." in ref:  # Class.method: the method sits inside that class
         cls, meth = ref.split(".", 1)
         ok = any(
             _in(k, m[0], m[1]) for k in names.get(cls, []) for m in names.get(meth, [])

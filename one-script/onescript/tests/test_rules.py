@@ -118,9 +118,14 @@ MAI = shutil.which("mai") or "/home/user/tools/bin/mai"
 
 @pytest.mark.skipif(not Path(MAI).exists(), reason="the mai tool is not here")
 def test_the_parser_gives_what_mai_resolve_phase_gives(tmp_path):
-    # (mai reads with read_text, which turns CRLF into LF; the sealed bytes are
-    # answered as they are, so a CRLF document is the one place they may differ)
-    docs = {"fixture.md": DOC}
+    # S3: mai reads with read_text, which turns CRLF and a lone CR into LF; so
+    # does phases_of ("verbatim" means mai's bytes), and the parity holds for both
+    docs = {
+        "fixture.md": DOC,
+        "crlf.md": DOC.replace("\n", "\r\n"),
+        "cr.md": DOC.replace("\n", "\r"),
+        "fenced.md": DOC + "\n```\n@phase R-in-a-fence\nexample\n```\n",
+    }
     brief = Path("/home/user/sandbox/box-build/SPEC-documented.md")
     if brief.exists():
         docs["spec.md"] = brief.read_text()
@@ -376,3 +381,35 @@ def test_cli_rules_command(cfg, capsys):
 @pytest.fixture
 def cfg(tmp_path):
     return T.cfg.__wrapped__(tmp_path)
+
+
+def test_S3_a_crlf_document_is_answered_with_mai_s_bytes():
+    crlf = DOC.replace("\n", "\r\n")
+    assert mai_shape.phases_of(crlf) == mai_shape.phases_of(DOC)
+    assert "\r" not in "".join(
+        b for _, b in mai_shape.phases_of(crlf.replace("\n", "\r"))
+    )
+    assert rules.phases(crlf) == rules.phases(DOC)
+
+
+def test_N4_a_phase_line_in_a_fence_opens_a_phase_as_mai_reads_it():
+    data = DOC + "\n```\n@phase R-in-a-fence\nexample\n```\n"
+    names = [n for n, _ in mai_shape.phases_of(data)]
+    assert "R-in-a-fence" in names  # mai's parser does not know fences
+    assert "fence" in mai_shape.phases_of.__doc__
+
+
+def test_N2_dropped_phases_are_named_with_their_reason(cfg):
+    data = (
+        DOC + "\n@phase R-dup\none\n\n@phase R-dup\ntwo\n"
+        "\n@phase R-empty\n\n@phase R-hash\nsee " + "ab" * 32 + "\n"
+    )
+    subject = sealed_through_api(cfg, data)
+    api.seal_proposal(cfg, subject, proof=proof(subject))
+    res = api.rules(cfg, subject)
+    assert res["dropped"] == {
+        "R-dup": "the name is used more than once",
+        "R-empty": "the phase is empty",
+        "R-hash": "the phase holds a 64-hex run, which serving would alter",
+    }
+    assert [r["phase"] for r in res["rules"]] == ["R-weak", "R-miss", "R-strong"]

@@ -80,7 +80,7 @@ def test_a_forged_symbol_cite_is_unverified():
     )
     assert got == [
         ("gate.py:check_claimz", "unverified"),
-        ("gate.py:900", "unverified"),
+        ("gate.py:900", "unchecked"),  # S2: outside every symbol: not struck
         ("gate.py:Run.nope", "unverified"),
     ]
 
@@ -95,8 +95,19 @@ def test_a_class_dot_method_cite_needs_the_method_inside_the_class():
 def test_a_line_range_must_sit_inside_one_symbol():
     s = {"gate.py": populated(GATE)}
     assert verdicts("gate.py:437-510", s) == [("gate.py:437-510", "verified")]
-    assert verdicts("gate.py:430-510", s) == [("gate.py:430-510", "unverified")]
+    assert verdicts("gate.py:430-510", s) == [("gate.py:430-510", "unchecked")]
     assert verdicts("gate.py:510-437", s) == [("gate.py:510-437", "unverified")]
+
+
+def test_S2_a_range_is_verified_by_the_union_of_the_symbols_it_crosses():
+    two = {"a": [[10, 20]], "b": [[21, 30]], "c": [[40, 50]]}  # 20|21 touch, 30..40 gap
+    s = {"gate.py": populated(two)}
+    assert verdicts("gate.py:12-28", s) == [("gate.py:12-28", "verified")]
+    assert verdicts("gate.py:12-45", s) == [("gate.py:12-45", "unchecked")]
+    assert verdicts("gate.py:31", s) == [("gate.py:31", "unchecked")]
+    row = gate.check_claims("gate.py:31", {"symbols": {"gate.py": populated(two)}})[0]
+    assert "outside every symbol the graph holds" in row["record"]
+    assert "not in the file" not in row["record"]
 
 
 def test_bare_names_and_other_shapes_are_never_read():
@@ -123,11 +134,23 @@ def test_stale_and_unreachable_are_unchecked_and_say_so():
         ]
 
 
+def test_S1_empty_without_a_stamp_is_unchecked_project_not_in_the_graph():
+    gone = {
+        "state": "empty",
+        "why": "project 'p' is not in the graph",
+        "stamp": None,
+        "paths": [],
+        "names": {},
+    }
+    (r,) = gate.check_claims("gate.py:x", {"symbols": {"gate.py": gone}})
+    assert (r["verdict"], r["record"]) == ("unchecked", "project not in the graph")
+
+
 def test_empty_is_struck_and_a_missing_entry_is_unchecked():
     empty = {
         "state": "empty",
         "why": "not in the graph at p",
-        "stamp": {},
+        "stamp": {"head_sha": "abc"},
         "paths": [],
         "names": {},
     }
@@ -235,8 +258,31 @@ def test_symbols_for_reads_the_cypher_rows_into_names(repo):
     assert e["names"] == {"helper": [[1, 2]], "K": [[9, 11]]}
     assert verdicts("see m.py:K and m.py:5", got) == [
         ("m.py:K", "verified"),
-        ("m.py:5", "unverified"),
+        ("m.py:5", "unchecked"),
     ]
+
+
+def test_N1_the_graph_is_read_once_per_sentence_not_once_per_file(repo):
+    root, cache = repo
+    stored(cache, root)
+    reply.root = str(root)
+    calls = []
+    out = "rows: 0  (cols: n.name n.file_path n.start_line n.end_line n.label)\ntotal: 0\n"
+    inner = reply(out)
+
+    def spy(tool, args):
+        calls.append(tool)
+        return inner(tool, args)
+
+    got = graph.symbols_for("a.py:x b.py:y c.py:z", "p", runner=spy, cache=cache)
+    assert calls.count("query_graph") == 1 and calls.count("list_projects") == 1
+    assert set(got) == {"a.py", "b.py", "c.py"}
+    assert {e["state"] for e in got.values()} == {"empty"}
+    assert all(
+        e["stamp"] for e in got.values()
+    )  # fresh and stamped: struck, not unchecked
+    assert graph.symbols_for("no cite here", "p", runner=spy, cache=cache) == {}
+    assert calls.count("query_graph") == 1
 
 
 def test_cbm_unreachable_is_unchecked(repo):
@@ -300,7 +346,7 @@ def test_real_graph_verified_forged_empty_and_stale(repo):
         "m.py:K.m": "verified",
         "m.py:6": "verified",
         "m.py:wager_totl": "unverified",
-        "m.py:99": "unverified",
+        "m.py:99": "unchecked",
         "nope.py:helper": "unverified",  # a fresh graph with no such file: struck
     }
     assert got["nope.py"]["state"] == "empty"

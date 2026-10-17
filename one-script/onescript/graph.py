@@ -429,6 +429,61 @@ def _sym_entry(state: str, why: str, stamp, paths=(), names=None) -> dict:
     }
 
 
+def _symbols_read(
+    project: str,
+    files: list[str],
+    runner: Runner | None,
+    cache: str | os.PathLike | None,
+) -> dict[str, dict]:
+    """One graph read for every cited file (N1: the stamp and the freshness are
+    read once per sentence, not once per file). Each file gets its own entry:
+    {state, why, stamp, paths, names: {name: [[start, end], ...]}}, `state` being
+    `graph_read`'s (`populated`, `empty`, `stale`, `unreachable`), never collapsed.
+    `paths` is every indexed file the cited path names (a suffix match at a `/`
+    boundary); more than one is an ambiguous cite, which the gate leaves
+    unchecked rather than guess. `empty` carries the stamp when the graph is
+    fresh and holds nothing there, and no stamp when the project itself is not in
+    the graph (the gate reads the two differently)."""
+    for f in files:
+        if not CITE.fullmatch(f"{f}:1"):
+            return {
+                x: _sym_entry("unreachable", f"'{f}' is not a qualified file", None)
+                for x in files
+            }
+    labels = " OR ".join(f"n:{x}" for x in SYMBOL_LABELS)
+    where = " OR ".join(
+        f'n.file_path = "{f}" OR n.file_path ENDS WITH "/{f}"' for f in files
+    )
+    cy = (
+        f"MATCH (n) WHERE ({where}) AND ({labels}) "
+        "RETURN n.name, n.file_path, n.start_line, n.end_line, n.label LIMIT 5000"
+    )
+    got = graph_read(project, "query_graph", {"query": cy}, runner=runner, cache=cache)
+    if got["state"] != "populated":
+        return {f: _sym_entry(got["state"], got["why"], got["stamp"]) for f in files}
+    found: dict[str, tuple[set, dict]] = {f: (set(), {}) for f in files}
+    for ln in got["rows"]:
+        m = _ROW.match(ln)
+        if not m or int(m[3]) > int(m[4]):
+            bad = _sym_entry(
+                "unreachable", "a graph row could not be read", got["stamp"]
+            )
+            return {f: bad for f in files}
+        for f in files:
+            if m[2] == f or m[2].endswith("/" + f):
+                found[f][0].add(m[2])
+                found[f][1].setdefault(m[1], []).append([int(m[3]), int(m[4])])
+    out = {}
+    for f, (paths, names) in found.items():
+        if paths:
+            out[f] = _sym_entry("populated", "", got["stamp"], paths, names)
+        else:
+            out[f] = _sym_entry(
+                "empty", f"not in the graph at {_said(got['stamp'])}", got["stamp"]
+            )
+    return out
+
+
 def symbols_of(
     project: str,
     file: str,
@@ -436,34 +491,8 @@ def symbols_of(
     runner: Runner | None = None,
     cache: str | os.PathLike | None = None,
 ) -> dict:
-    """The symbols the graph holds for one cited file, stamped:
-    {state, why, stamp, paths, names: {name: [[start, end], ...]}}. `state` is
-    `graph_read`'s own (`populated`, `empty`, `stale`, `unreachable`), never
-    collapsed. `paths` is every indexed file the cited path names (a suffix
-    match at a `/` boundary); more than one is an ambiguous cite, which the gate
-    leaves unchecked rather than guess."""
-    if not CITE.fullmatch(f"{file}:1"):
-        return _sym_entry("unreachable", f"'{file}' is not a qualified file", None)
-    labels = " OR ".join(f"n:{x}" for x in SYMBOL_LABELS)
-    cy = (
-        f'MATCH (n) WHERE (n.file_path = "{file}" OR n.file_path ENDS WITH "/{file}") '
-        f"AND ({labels}) "
-        "RETURN n.name, n.file_path, n.start_line, n.end_line, n.label LIMIT 5000"
-    )
-    got = graph_read(project, "query_graph", {"query": cy}, runner=runner, cache=cache)
-    if got["state"] != "populated":
-        return _sym_entry(got["state"], got["why"], got["stamp"])
-    names: dict[str, list] = {}
-    paths: set[str] = set()
-    for ln in got["rows"]:
-        m = _ROW.match(ln)
-        if not m or int(m[3]) > int(m[4]):
-            return _sym_entry(
-                "unreachable", "a graph row could not be read", got["stamp"]
-            )
-        paths.add(m[2])
-        names.setdefault(m[1], []).append([int(m[3]), int(m[4])])
-    return _sym_entry("populated", "", got["stamp"], paths, names)
+    """`_symbols_read` for one cited file."""
+    return _symbols_read(project, [file], runner, cache)[file]
 
 
 def symbols_for(
@@ -473,13 +502,12 @@ def symbols_for(
     runner: Runner | None = None,
     cache: str | os.PathLike | None = None,
 ) -> dict:
-    """`facts["symbols"]` for `gate.check_claims`: {file: symbols_of(...)} for
-    each file `text` cites with a qualified cite, up to `MAX_FILES` (the rest
-    are left out, which the gate reads as unchecked)."""
+    """`facts["symbols"]` for `gate.check_claims`: {file: entry} for each file
+    `text` cites with a qualified cite, up to `MAX_FILES` (the rest are left out,
+    which the gate reads as unchecked), from ONE graph read. No cite, no read."""
     files: list[str] = []
     for c in qualified_cites(text):
         if c["file"] not in files:
             files.append(c["file"])
-    return {
-        f: symbols_of(project, f, runner=runner, cache=cache) for f in files[:MAX_FILES]
-    }
+    files = files[:MAX_FILES]
+    return _symbols_read(project, files, runner, cache) if files else {}

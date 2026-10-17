@@ -52,17 +52,31 @@ def is_rules(path: object) -> bool:
     )
 
 
+def dropped(data: str) -> dict[str, str]:
+    """{phase name: why} for each phase of the document a lookup will not answer
+    from (N2): a name used more than once, an empty body, one over `MAX_BODY`, or
+    one holding a 64-hex run (the served view would alter it)."""
+    got = mai_shape.phases_of(data)
+    names = [n for n, _ in got]
+    out: dict[str, str] = {}
+    for n, b in got:
+        if names.count(n) > 1:
+            out[n] = "the name is used more than once"
+        elif not b:
+            out[n] = "the phase is empty"
+        elif len(b) > MAX_BODY:
+            out[n] = f"the phase is over {MAX_BODY} characters"
+        elif _HEX64.search(b):
+            out[n] = "the phase holds a 64-hex run, which serving would alter"
+    return out
+
+
 def phases(data: str) -> list[tuple[str, str]]:
     """The phases of a document that a lookup may answer from: each name once
     (a repeated name is dropped from both), body non-empty, in size, with no
-    full-width hash in it."""
-    got = mai_shape.phases_of(data)
-    names = [n for n, _ in got]
-    return [
-        (n, b)
-        for n, b in got
-        if names.count(n) == 1 and b and len(b) <= MAX_BODY and not _HEX64.search(b)
-    ]
+    full-width hash in it (`dropped` says which are not, and why)."""
+    skip = dropped(data)
+    return [(n, b) for n, b in mai_shape.phases_of(data) if n not in skip]
 
 
 class Index(lore.Index):

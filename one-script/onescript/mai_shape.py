@@ -213,7 +213,14 @@ def phases_of(text: str) -> list[tuple[str, str]]:
     `@phase` line, or to the end of the document, and its body is that span
     stripped of outer whitespace and otherwise byte for byte. The name is the
     one non-space token after `@phase`, exactly as written: the same name twice
-    is two entries, and a lookup must refuse it, not pick one."""
+    is two entries, and a lookup must refuse it, not pick one.
+
+    CRLF and a lone CR read as LF, as mai reads a file (`Path.read_text` uses
+    universal newlines): "verbatim" here means mai's bytes (S3), so a phase of
+    a CRLF document comes back with LF line ends. A `@phase` line inside a fenced
+    code block still opens a phase, because mai's parser does not know fences
+    (N4); a document that shows an example `@phase` in a fence must indent it."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     t = text.lstrip()
     if t.startswith("---") and (end := t.find("---", 3)) >= 0:
         text = t[end + 3 :].lstrip("\n")
