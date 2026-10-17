@@ -94,7 +94,9 @@ def test_a_table_roll_act_closes_at_d0_with_no_model(cfg):
     assert res["d0"]["status"] == "resolved" and res["escalated"] == 0
     (p,) = res["pieces"]
     assert p["rung"] == "d0" and p["outcome"] == "answered"
-    assert p["rows"] == [{"status": "resolved", "answer": {"total": 8, "verdict": "weak"}}]
+    assert p["rows"] == [
+        {"status": "resolved", "answer": {"total": 8, "verdict": "weak"}}
+    ]
     assert p["cites"] == [doc["tables"][0]["id"]]  # the served id, nothing else
     assert res["card"] is None
 
@@ -123,8 +125,14 @@ def test_R20_a_roll_not_on_record_goes_straight_to_the_human_never_a_model(cfg):
 
     def inventing(piece, question, model):
         calls.append(question)
-        return [{"path": "table/turn-9", "data": "turn 9 rolled 12, strong",
-                 "cites": [doc["tables"][0]["id"]], "claim": "turn 9 rolled 12"}]
+        return [
+            {
+                "path": "table/turn-9",
+                "data": "turn 9 rolled 12, strong",
+                "cites": [doc["tables"][0]["id"]],
+                "claim": "turn 9 rolled 12",
+            }
+        ]
 
     res = api.escalate(cfg, "table.roll: turn 9", rung=inventing, piece_chars=10**6)
     assert res["d0"] == {"status": "escalate", "reason": "no_roll_on_record"}
@@ -195,7 +203,14 @@ def test_NEW3_every_table_spelling_closes_in_code_or_goes_to_the_human(cfg, task
 
     def rung(piece, question, model):
         calls.append(question)
-        return [{"path": "t/x", "data": "turn 7 rolled 12, strong", "cites": [], "claim": "x"}]
+        return [
+            {
+                "path": "t/x",
+                "data": "turn 7 rolled 12, strong",
+                "cites": [],
+                "claim": "x",
+            }
+        ]
 
     res = api.escalate(cfg, task, rung=rung)
     assert calls == [] and res["answered"] == 0 and res["escalated"] == 1, task
@@ -211,7 +226,14 @@ def test_NEW3_a_normalised_spelling_still_resolves(cfg):
 
 
 def test_N3_total_and_session_ride_only_on_the_tables_verdict_rows():
-    row = {"kind": "lore", "who": "desk", "where": "x", "fact": "a", "total": 9, "session": "s"}
+    row = {
+        "kind": "lore",
+        "who": "desk",
+        "where": "x",
+        "fact": "a",
+        "total": 9,
+        "session": "s",
+    }
     assert "total" not in serve.view(row) and "session" not in serve.view(row)
     row = {"kind": "verdict", "who": "desk", "where": "x", "total": 9, "session": "s"}
     assert "total" not in serve.view(row) and "session" not in serve.view(row)

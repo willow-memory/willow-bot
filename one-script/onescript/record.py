@@ -304,7 +304,13 @@ class Record:
         self._save_pile(pile)
         extra = {"lint": lint} if lint else {}
         return self.append(
-            "write", who, where=rel, path=rel, sha=ptr["sha"], cites=cites or [], **extra
+            "write",
+            who,
+            where=rel,
+            path=rel,
+            sha=ptr["sha"],
+            cites=cites or [],
+            **extra,
         )
 
 
