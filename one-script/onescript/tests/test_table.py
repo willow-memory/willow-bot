@@ -24,23 +24,53 @@ from onescript import api, beacon, gate, record, reverse, table, view  # noqa: E
 HUMAN_KEY = b"a-throwaway-human-key-for-tests"
 TABLE_KEY = "bb" * 32
 CAP = 10**6
-WORLD = {"world": "hasbeen-late-shift", "sheets_sha": "ab" * 32}
 NOW = "2026-10-17T00:00:00Z"
 #: W4 break 1: a drand round still ahead of the box's clock, and its randomness
 ROUND = beacon.round_at(NOW) + 10
 RANDOMNESS = "5e" * 32
 SEED_ID = beacon.seed_id(RANDOMNESS)
+BAND_TOTAL = {"strong": 10, "weak": 8, "miss": 4}
+
+
+def _sheet() -> dict:
+    """R23a: the modifier is the sheet's, never the roll's. One seat; stat
+    `S<i><band>` holds the modifier that lands roll i in that band on
+    RANDOMNESS (the stream's counter at roll i does not depend on modifiers)."""
+    sheet, at = {}, 0
+    for i in range(6):
+        a, b, at = beacon.roll_2d6(RANDOMNESS, at)
+        for v, total in BAND_TOTAL.items():
+            sheet[f"S{i}{v}"] = total - (a + b)
+    return sheet
+
+
+INPUTS = {"sheets": [_sheet()], "stats": [], "stat_map": {}, "beats": []}
+WORLD = {
+    "world": "hasbeen-late-shift",
+    "sheets_sha": record.h256(
+        json.dumps(INPUTS, sort_keys=True, separators=(",", ":"))
+    ),
+}
 FORECAST = {**WORLD, "beacon_round": ROUND}
 
 
-def drand(rnd) -> dict:
-    """The operator's beacon reader, offline: the rounds up to NOW are out,
-    and ROUND (ahead) answers its randomness when read by number."""
-    if rnd == "latest":
-        return {"round": beacon.round_at(NOW)}
-    if rnd != ROUND:
-        raise LookupError(f"round {rnd} not in this reader")
-    return {"round": rnd, "randomness": RANDOMNESS}
+class Drand:
+    """The operator's beacon reader, offline: the rounds up to NOW are out;
+    ROUND is ahead, served only once it has fired (`play` fires it, as the
+    table plays only after the round is out)."""
+
+    def __init__(self, fired: bool = False):
+        self.fired = fired
+
+    def __call__(self, rnd) -> dict:
+        if rnd == "latest":
+            return {"round": ROUND if self.fired else beacon.round_at(NOW)}
+        if rnd != ROUND or not self.fired:
+            raise LookupError(f"round {rnd} has not fired in this reader")
+        return {"round": rnd, "randomness": RANDOMNESS}
+
+
+drand = Drand(fired=True)  # a reader after the round, for direct calls
 
 
 OTHER = {"world": "ironworks-last-pour", "sheets_sha": "cd" * 32}
@@ -72,7 +102,7 @@ def _cfg(tmp_path, keys_obj):
         now=NOW,
         no_tests=True,
         phone=True,
-        beacon=drand,
+        beacon=Drand(),
     )
 
 
@@ -123,6 +153,9 @@ def play(
     opened = {"what": "open", "session": session, "verdict": "open", "reason": "opened"}
     opened.update(world or {})
     opened.update(beacon_round=ROUND, randomness=RANDOMNESS, seed_id=SEED_ID)
+    opened["world_inputs"] = INPUTS
+    if forecast is not None and isinstance(cfg.beacon, Drand):
+        cfg.beacon.fired = True  # a forecast's table plays once its round is out
     if forecast is not None:
         opened["forecast"] = forecast
     out = [table.verdict(cfg, opened)]
@@ -130,7 +163,7 @@ def play(
     at = 0
     for i, v in enumerate(verdicts):
         path.append(v)
-        roll, at = honest_roll(at, v, f"S{i}")
+        roll, at = honest_roll(at, v, i)
         out.append(
             table.verdict(
                 cfg,
@@ -138,8 +171,8 @@ def play(
                     "what": "roll",
                     "session": session,
                     "turn": i,
-                    "seat": i % 2,
-                    "character": f"c{i % 2}",
+                    "seat": 0,
+                    "character": "c0",
                     "move": ["act", "Grit"],
                     "total": roll["result"],
                     "verdict": v,
@@ -166,14 +199,12 @@ def play(
     return out
 
 
-BAND_TOTAL = {"strong": 10, "weak": 8, "miss": 4}
-
-
-def honest_roll(at: int, verdict: str, stat: str, randomness: str = RANDOMNESS):
-    """A roll record the stream really gives at counter `at` (R23a replay),
-    its modifier picked so the total lands in `verdict`'s band."""
+def honest_roll(at: int, verdict: str, i: int, randomness: str = RANDOMNESS):
+    """Roll i as the stream really gives it at counter `at` (R23a replay), on
+    stat `S<i><verdict>`, whose sheet modifier lands it in `verdict`'s band."""
     a, b, end = beacon.roll_2d6(randomness, at)
-    mod = BAND_TOTAL[verdict] - (a + b)
+    stat = f"S{i}{verdict}"
+    mod = INPUTS["sheets"][0][stat]
     roll = {
         "generator_id": beacon.GENERATOR_ID,
         "seed_id": beacon.seed_id(randomness),
@@ -412,14 +443,17 @@ def test_a_row_whose_path_is_not_the_rolls_so_far_escalates(cfg, key_file):
             "beacon_round": ROUND,
             "randomness": RANDOMNESS,
             "seed_id": SEED_ID,
+            "world_inputs": INPUTS,
         },
     )
-    honest, _ = honest_roll(0, "strong", "Grit")
+    cfg.beacon.fired = True
+    honest, _ = honest_roll(0, "strong", 0)
     table.verdict(
         cfg,
         {
             "what": "roll",
             "session": "s1",
+            "seat": 0,
             "total": 10,
             "verdict": "strong",
             "roll": honest,
@@ -1061,24 +1095,27 @@ def test_a_round_that_fired_before_the_tip_seal_escalates():
     before = beacon.round_at(NOW)
     w = {"table": {**WORLD, "beacon_round": ROUND}, "beacon_latest": before}
     opened = {"beacon_round": ROUND, "randomness": RANDOMNESS}
-    sealed = {"ts": NOW, "beacon_latest": before}
-    assert table.beacon_problem(opened, w, sealed, drand) is None
-    # R23a: the reader's round, never a ts, carries the order
-    for tip, wager, said in (
-        ({**sealed, "beacon_latest": ROUND}, w, "out when the tip seal"),
-        ({"ts": NOW}, w, "tip seal holds no reader round"),
-        (sealed, {**w, "beacon_latest": ROUND + 5}, "out when the forecast"),
+    sealed = {"ts": NOW}
+    assert table.beacon_problem(opened, w, sealed, drand, before) is None
+    # R23a: the reader's rounds carry the order: the wager's, and the tip
+    # seal's as the ANCHOR keeps it (the seal row's own field is not read)
+    for tip, wager, at_seal, said in (
+        (sealed, w, ROUND, "out when the tip seal"),
+        (sealed, w, None, "tip seal holds no reader round"),
+        ({**sealed, "beacon_latest": before}, w, ROUND, "out when the tip seal"),
+        (sealed, {**w, "beacon_latest": ROUND + 5}, before, "out when the forecast"),
         (
             sealed,
             {k: v for k, v in w.items() if k != "beacon_latest"},
+            before,
             "forecast holds no",
         ),
-        ({**sealed, "ts": "2030-01-01T00:00:00Z"}, w, "not after the tip seal"),
+        ({"ts": "2030-01-01T00:00:00Z"}, w, before, "not after the tip seal"),
     ):
-        state, why = table.beacon_problem(opened, wager, tip, drand)
+        state, why = table.beacon_problem(opened, wager, tip, drand, at_seal)
         assert state == "escalate" and said in why, (said, why)
     other = {**opened, "beacon_round": ROUND + 1}
-    state, why = table.beacon_problem(other, w, sealed, drand)
+    state, why = table.beacon_problem(other, w, sealed, drand, before)
     assert state == "escalate" and f"awaits round {ROUND}" in why
 
 
@@ -1090,7 +1127,7 @@ def _rolls(*verdicts):
     """Honest roll rows, one per verdict, counters running on from 0."""
     out, at = [], 0
     for i, v in enumerate(verdicts):
-        roll, at = honest_roll(at, v, f"S{i}")
+        roll, at = honest_roll(at, v, i)
         out.append({"n": i + 1, "what": "roll", "seat": 0, "total": roll["result"],
                     "verdict": v, "roll": roll})  # fmt: skip
     return out
@@ -1129,21 +1166,40 @@ H = _rolls("weak", "strong", "miss")
     ],
 )
 def test_dice_problem_replays_the_roll_records(rolls, why):
-    got = table.dice_problem(OPEN, rolls)
+    got = table.dice_problem(OPEN, rolls, INPUTS["sheets"])
     assert got is None if why is None else why in got, got
 
 
-def test_dice_problem_holds_a_seats_modifier_within_the_session():
-    rows = _rolls("weak", "weak")
-    rows = _edit(rows, 1, stat="S0")  # the same seat and stat, another modifier
-    if rows[0]["roll"]["stat_value"] != rows[1]["roll"]["stat_value"]:
-        assert "is not the" in table.dice_problem(OPEN, rows)
+def test_R23a_the_modifier_is_the_sheets_never_the_rolls():
+    sheets = INPUTS["sheets"]
+    # +3 on the record (result, total and verdict re-derived to match): refused
+    r = H[0]["roll"]
+    plus = _edit(H, 0, stat_value=r["stat_value"] + 3, result=r["result"] + 3,
+                 total=r["result"] + 3, verdict=table.bucket(r["result"] + 3))  # fmt: skip
+    assert "the sheet says" in table.dice_problem(OPEN, plus, sheets)
+    # a stat or seat the sheet does not hold: refused
+    assert "not on the forecast's sheets" in table.dice_problem(
+        OPEN, _edit(H, 0, stat="Grit"), sheets
+    )
+    assert "not on the forecast's sheets" in table.dice_problem(
+        OPEN, [dict(H[0], seat=1)], sheets
+    )
+
+
+def test_R23a_the_open_rows_world_inputs_must_hash_to_the_forecast():
+    w = {"table": FORECAST}
+    assert table.world_problem({"world_inputs": INPUTS}, w) == (INPUTS["sheets"], None)
+    edited = {**INPUTS, "sheets": [{k: v + 3 for k, v in INPUTS["sheets"][0].items()}]}
+    _, why = table.world_problem({"world_inputs": edited}, w)
+    assert "another world or sheet" in why
+    _, why = table.world_problem({}, w)
+    assert "no world inputs" in why
 
 
 def test_dice_problem_needs_the_beacon_seed_on_the_open_row():
-    assert "no beacon randomness" in table.dice_problem({}, [])
+    assert "no beacon randomness" in table.dice_problem({}, [], [])
     wrong = {"randomness": RANDOMNESS, "seed_id": "00" * 8}
-    assert "not the id of its randomness" in table.dice_problem(wrong, [])
+    assert "not the id of its randomness" in table.dice_problem(wrong, [], [])
 
 
 # ── W4 break 4: a session id the serve would withhold is refused ───────────

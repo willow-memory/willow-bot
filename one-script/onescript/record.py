@@ -180,12 +180,26 @@ class Record:
             raise ValueError("not an anchor")
         return a
 
-    def set_anchor(self, tip: dict, proof: str) -> None:
-        """Called only by Run.seal_tip, after the gate verified the proof."""
+    def set_anchor(
+        self, tip: dict, proof: str, beacon_latest: int | None = None
+    ) -> None:
+        """Called only by Run.seal_tip, after the gate verified the proof.
+        `beacon_latest` is the operator's beacon reader's newest round as the
+        human sealed this tip (R23a). It is kept HERE, outside the box, per tip
+        row (`rounds`, carried over from the anchor it replaces), never only on
+        the seal row, which the writer could rewrite until the next tip."""
         if self.anchor_path is None:
             raise PermissionError("record: no anchor path; a tip can't be sealed")
         self.anchor_path.parent.mkdir(parents=True, exist_ok=True)
         body = {"n": tip["n"], "hash": tip["hash"], "proof": proof}
+        try:
+            rounds = dict((self.anchor() or {}).get("rounds") or {})
+        except (ValueError, OSError):
+            rounds = {}
+        if beacon_latest is not None:
+            rounds[str(tip["n"])] = beacon_latest
+        if rounds:
+            body["rounds"] = rounds
         _atomic(self.anchor_path, (canon(body) + "\n").encode())
 
     def verify_anchor(self, human_key: bytes | None = None) -> list[str]:

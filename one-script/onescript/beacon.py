@@ -19,9 +19,17 @@ what a session's randomness is compared with. The reader is the operator's,
 fixed in `Config`, never the caller's.
 
 What is trusted, said (R23a): the reader. No box clock is: a round is "still
-ahead" only when the reader can't read it yet (`latest(read)` below the
-round), and that reading is recorded on the wager and on the tip seal. A
-reader that lies (or a drand whose BLS is not checked) wins; nothing else does.
+ahead" only when the reader can't read it yet (`latest(read)` below the round
+AND `read(round)` not answering), and the reader's newest round is recorded on
+the wager row and, at each tip seal, in the anchor beside the keys (outside
+the box). A reader that lies (or a drand whose BLS is not checked) wins;
+nothing else does. The trusted reader must never report a `latest` older than
+a round it serves.
+
+Stated limit (R23a): "one table forecast per round" holds per box. Two boxes
+on one operator's reader can each forecast the same round and play only the
+box whose forecast the dice favour; closing that needs a round registry
+beside the operator's reader, which this module does not have.
 
 The dice (R23a): `Stream` restates the-table's `the_table/stream.py`
 (`Stream.u32`, `Stream.below`, generator `sha256-stream/v1`) so a roll can be

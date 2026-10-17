@@ -247,6 +247,13 @@ class Run:
         except (ValueError, OSError):
             return None
 
+    def seal_rounds(self) -> dict[str, int]:
+        """The reader's newest round at each tip seal, by tip row, as the
+        anchor (outside the box) keeps them (R23a); {} when unreadable."""
+        a = self._anchor() or {}
+        got = a.get("rounds") if isinstance(a, dict) else None
+        return dict(got) if isinstance(got, dict) else {}
+
     _NOW = object()
 
     def pin(self, anchor: dict | None | object = _NOW) -> dict | None:
@@ -737,7 +744,7 @@ class Run:
                 "refused", self.sys, at="seal_tip", reason=str(e), subject=subject
             )
         before = self._anchor()  # the tip a first pin keeps, read before it moves
-        self.rec.set_anchor(tip, proof)
+        self.rec.set_anchor(tip, proof, beacon_latest)
         extra = {} if beacon_latest is None else {"beacon_latest": beacon_latest}
         row = self.rec.append(
             "seal", hum, where=subject, subject=subject, proof=proof, **extra
@@ -796,7 +803,7 @@ class Run:
 
             # R23a: on a table box the hook is the Run's, bound to the
             # operator's reader (Config.beacon); a caller's `basis` is ignored
-            basis = table.basis(human_key, self.beacon)
+            basis = table.basis(human_key, self.beacon, self.seal_rounds())
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))

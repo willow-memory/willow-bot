@@ -970,10 +970,11 @@ TABLE_FORECAST_KEYS = TABLE_KEYS | {"beacon_round"}
 def _future_round(rnd: object, run: Run) -> tuple[str | None, int | None]:
     """(why `rnd` is not a drand round still ahead, None) or (None, the
     reader's latest round). Ahead means the operator's reader can NOT read it
-    yet: `rnd` > the newest round it reads (R23a). No box clock is asked: a
-    clock set back (`--now`) would let a round already out pass. A round
-    already out is a seed anyone may know; with no reader, nothing can be
-    shown to be ahead, and the forecast is refused."""
+    yet: `rnd` > the newest round it says it reads, AND `read(rnd)` does not
+    answer (R23a: a reader whose `latest` lags must not reopen grinding). No
+    box clock is asked: a clock set back (`--now`) would let a round already
+    out pass. A round already out is a seed anyone may know; with no reader,
+    nothing can be shown to be ahead, and the forecast is refused."""
     if isinstance(rnd, bool) or not isinstance(rnd, int) or rnd < 1:
         return "beacon_round is a drand round number", None
     newest, why = beacon.latest(run.beacon)
@@ -983,6 +984,15 @@ def _future_round(rnd: object, run: Run) -> tuple[str | None, int | None]:
         return (
             f"beacon round {rnd} is out already (the reader reads up to {newest}): "
             "its randomness may be known; name a round still ahead"
+        ), None
+    try:  # a reader whose `latest` lags may still serve the round: ask it
+        served = run.beacon(rnd)
+    except Exception:  # not served: not out, as far as this reader knows
+        served = None
+    if isinstance(served, dict) and beacon.is_randomness(served.get("randomness")):
+        return (
+            f"beacon round {rnd} is out already: the reader serves its randomness "
+            f"(though it says its latest is {newest}); name a round still ahead"
         ), None
     return None, newest
 

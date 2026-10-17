@@ -63,6 +63,7 @@ depends on one-script state.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -394,7 +395,28 @@ def _int(v: object) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 
 
-def dice_problem(opened: dict, srows: list[dict]) -> str | None:
+def world_problem(opened: dict, w: dict) -> tuple[list | None, str | None]:
+    """(the session's stat sheets, None) or (None, why) (R23a). The open row
+    must carry the world inputs (`world_inputs`, peaks.world_inputs: sheets,
+    stats, stat map, beats) whose canonical SHA-256 is the wager's committed
+    `sheets_sha` (peaks.world_key, pinned in e2e). A label alone is not
+    enough: the sheets the dice were rolled against are re-hashed here."""
+    inputs = opened.get("world_inputs")
+    want = (w.get("table") or {}).get("sheets_sha")
+    if not isinstance(inputs, dict) or not isinstance(inputs.get("sheets"), list):
+        return None, "the open row carries no world inputs to re-hash (S2, R23a)"
+    got = record.h256(
+        json.dumps(inputs, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    )
+    if got != want:
+        return None, (
+            f"the open row's world inputs hash to {got}, the forecast committed "
+            f"{want}: another world or sheet (S2, R23a)"
+        )
+    return inputs["sheets"], None
+
+
+def dice_problem(opened: dict, srows: list[dict], sheets: list) -> str | None:
     """Why a session's roll rows are not one honest run of the dice its `open`
     row names, or None (W4 break 1-3, R23a). Read from the record alone: the
     open row's randomness is the seed (`seed_id` is its id); every roll is
@@ -403,9 +425,11 @@ def dice_problem(opened: dict, srows: list[dict]) -> str | None:
     or restart, and each roll is REPLAYED from the randomness
     (`beacon.roll_2d6`): the two dice the stream gives at `counter_before`,
     the counter they leave, `result` == dice + `stat_value`, `total` ==
-    `result`, `verdict` == its bucket. Trusted, said: `stat_value` is the
-    roll record's own (the sheet is bound only by `sheets_sha`, not re-read
-    here); it must stay the same for a seat and stat within the session."""
+    `result`, `verdict` == its bucket. The modifier is NEVER the roll
+    record's: it is `sheets[seat][stat]` (the re-hashed world inputs,
+    `world_problem`; peaks.sheets_for already maps each stat through the
+    engine's aliases), and a record whose `stat_value` says otherwise is
+    refused."""
     rnd = opened.get("randomness")
     if not beacon.is_randomness(rnd):
         return "the open row carries no beacon randomness (64 hex) to seed the session"
@@ -415,7 +439,6 @@ def dice_problem(opened: dict, srows: list[dict]) -> str | None:
             "randomness: the session was not seeded by the beacon"
         )
     at = 0
-    mods: dict[tuple, object] = {}
     for r in srows:
         if r.get("what") != "roll":
             continue
@@ -439,15 +462,22 @@ def dice_problem(opened: dict, srows: list[dict]) -> str | None:
                 f"{at} (a restart or a gap)"
             )
         at = after
-        mod = roll.get("stat_value")
-        if not _int(mod) or not _int(roll.get("result")):
-            return f"row {r['n']}: the roll record has no stat_value or result"
-        if mods.setdefault((r.get("seat"), roll.get("stat")), mod) != mod:
+        seat, stat = r.get("seat"), roll.get("stat")
+        sheet = sheets[seat] if _int(seat) and 0 <= seat < len(sheets) else None
+        mod = sheet.get(stat) if isinstance(sheet, dict) else None
+        if not _int(mod):
             return (
-                f"row {r['n']}: stat_value {mod} for seat {r.get('seat')!r} "
-                f"{roll.get('stat')!r} is not the {mods[(r.get('seat'), roll.get('stat'))]} "
-                "it was before in this session"
+                f"row {r['n']}: seat {seat!r} stat {stat!r} is not on the forecast's "
+                "sheets"
             )
+        if roll.get("stat_value") != mod:
+            return (
+                f"row {r['n']}: the roll record says stat_value "
+                f"{roll.get('stat_value')!r}, the sheet says {mod} for seat {seat} "
+                f"{stat!r}"
+            )
+        if not _int(roll.get("result")):
+            return f"row {r['n']}: the roll record has no result"
         a, b, end = beacon.roll_2d6(rnd, before)
         if end != after:
             return (
@@ -473,18 +503,25 @@ def dice_problem(opened: dict, srows: list[dict]) -> str | None:
 
 
 def beacon_problem(
-    opened: dict, w: dict, tip_seal: dict, read: Callable[[int], dict] | None
+    opened: dict,
+    w: dict,
+    tip_seal: dict,
+    read: Callable[[int], dict] | None,
+    seal_latest: object = None,
 ) -> tuple[str, str] | None:
     """(state, why) when the session's seed is not shown to be the forecast's
     beacon, or None. The round is the one the wager committed to; the
     reader could NOT read it when the forecast was made nor when the human
-    sealed the tip that commits it (`beacon_latest` on the wager and on the
-    tip seal, each the reader's newest round then; R23a: never a box clock);
-    and the reader says that round's randomness is the open row's. The tip
-    seal's own `ts` is still compared too, as an extra refusal only (a clock
-    set back can't pass a round, it can only stop one). No reader, or one
-    that fails: `unreachable`. Trusted, said: the reader (BLS not checked,
-    T10)."""
+    sealed the tip that commits it (`beacon_latest` on the wager row, and
+    `seal_latest`: the reader's newest round at that tip seal as the ANCHOR
+    keeps it, outside the box, never the seal row's own field, which the
+    writer could rewrite until the next tip; R23a: never a box clock); and
+    the reader says that round's randomness is the open row's. The tip
+    seal's own `ts` is compared too, but it proves nothing alone: a box
+    clock set back passes it, so the reader's rounds carry the order. No
+    reader, or one that fails: `unreachable`. Trusted, said: the reader
+    (BLS not checked, T10), which must never report a `latest` older than a
+    round it serves (`api._future_round` also asks `read(rnd)`)."""
     rnd = (w.get("table") or {}).get("beacon_round")
     if not _int(rnd):
         return "escalate", "the forecast names no beacon round (W4 break 1)"
@@ -495,7 +532,7 @@ def beacon_problem(
         )
     for what, seen in (
         ("forecast", w.get("beacon_latest")),
-        ("tip seal", tip_seal.get("beacon_latest")),
+        ("tip seal", seal_latest),
     ):
         if not _int(seen):
             return "escalate", (
@@ -550,6 +587,7 @@ def propose_outcome(
     wager: str,
     human_key: bytes | None,
     read_beacon: Callable[[int], dict] | None = None,
+    seal_rounds: dict | None = None,
 ) -> dict:
     """Code proposes a forecast's outcome from the table's verdict rows; it
     never seals it (R10, C4). The human seals what is proposed with
@@ -629,13 +667,17 @@ def propose_outcome(
             f"verdict row {first} (wager.n <= tip.n < tip_seal.n < verdict.n, T5)",
             session=session,
         )
-    bad = dice_problem(reopened[0], srows)
+    sheets, bad = world_problem(reopened[0], w)
+    if bad is None:
+        bad = dice_problem(reopened[0], srows, sheets or [])
     if bad is not None:
         return _escalate(bad, session=session)
     path, why = path_of(srows)
     if path is None:
         return _escalate(why or "no path", session=session)
-    seeded = beacon_problem(reopened[0], w, rows[under[0]], read_beacon)
+    tip_n = int(str(rows[under[0]].get("subject", "")).split(":")[1])
+    seal_latest = (seal_rounds or {}).get(str(tip_n))
+    seeded = beacon_problem(reopened[0], w, rows[under[0]], read_beacon, seal_latest)
     if seeded is not None:
         state, why = seeded
         if state == "unreachable":
@@ -692,13 +734,14 @@ def outcome_from_verdicts(
             "reason": f"the record is broken: {breaks}",
             "code": 1,
         }
-    out = propose_outcome(run.rec.rows(), wager, key, run.beacon)
+    out = propose_outcome(run.rec.rows(), wager, key, run.beacon, run.seal_rounds())
     return {**out, "code": 0 if out["state"] == "proposed" else 1}
 
 
 def basis(
     human_key: bytes | None,
     read_beacon: Callable[[int], dict] | None = None,
+    seal_rounds: dict | None = None,
 ) -> Callable[[dict, list[dict], dict], str | dict | None]:
     """The R3 hook for `reverse.reconcile_wagers` (B1). A table forecast (its
     wager names a `table` world) counts only with an outcome `propose_outcome`
@@ -717,7 +760,7 @@ def basis(
             return None
         if not claimed:
             return "no table session on record plays for this forecast"
-        got = propose_outcome(rows, wager["hash"], human_key, read_beacon)
+        got = propose_outcome(rows, wager["hash"], human_key, read_beacon, seal_rounds)
         if got["state"] == "unreachable":
             return {"unreachable": str(got.get("reason"))}
         if got["state"] != "proposed":
