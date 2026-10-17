@@ -142,14 +142,24 @@ class Record:
         return row
 
     def verify_chain(self) -> list[str]:
-        """Every break, by row number. Empty means the chain holds."""
+        """Every break, by row number. Empty means the chain holds.
+
+        A row's `n` is its 0-based place in the record, and is checked as
+        such: every reader orders by `n` (the sealed tip, the pin, a seal's
+        place before or after a tip, a forecast before its outcome), and the
+        hash chain alone only binds `n` to the bytes, not to the place. Rows
+        after the sealed tip can be rewritten and re-hashed; a row whose label
+        says it came earlier than it did would otherwise read as earlier."""
         rows, garbled = self._read()
         breaks = [f"line {i}: garbled, not a record row" for i in garbled]
         prev = GENESIS
-        for row in rows:
+        for i, row in enumerate(rows):
             body = {k: v for k, v in row.items() if k != "hash"}
             if row.get("prev") != prev or h256(canon(body)) != row.get("hash"):
                 breaks.append(f"row {row.get('n')}: chain broken")
+            n = row.get("n")
+            if isinstance(n, bool) or n != i:
+                breaks.append(f"row {n!r}: out of place, it is row {i} of the record")
             prev = row.get("hash")
         return breaks
 

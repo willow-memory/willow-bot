@@ -421,3 +421,46 @@ def test_every_verb_pins_once(cfg):
     api.resume(cfg)
     api.pooled(cfg)
     assert [r["kind"] for r in rows(cfg)].count("pin") == 1
+
+
+# ── B1 (box build J1 audit): `n` is a row's place, checked, not a label ──────
+
+
+def _relabel_last(path: Path, n: int) -> None:
+    """Give the last row another `n` and re-hash it: prev still links, the
+    hash is right, only the label lies about where the row sits."""
+    rs = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+    last = {k: v for k, v in rs[-1].items() if k != "hash"} | {"n": n}
+    last["hash"] = record.h256(record.canon(last))
+    rs[-1] = last
+    path.write_text("".join(record.canon(r) + "\n" for r in rs))
+
+
+def test_verify_chain_checks_each_n_is_its_place(tmp_path):
+    run = bare_run(tmp_path)
+    for i in range(3):
+        run.rec.append("note", run.sys, i=i)
+    assert run.rec.verify_chain() == []
+    _relabel_last(run.rec.path, 0)  # a duplicate n, before any other break
+    assert any("out of place" in b for b in run.rec.verify_chain())
+    _relabel_last(run.rec.path, 7)  # a gap
+    assert any("out of place" in b for b in run.rec.verify_chain())
+    _relabel_last(run.rec.path, True)  # True == 1 in Python; not a row number
+    assert any("out of place" in b for b in run.rec.verify_chain())
+    _relabel_last(run.rec.path, 2)
+    assert run.rec.verify_chain() == []
+
+
+def test_a_relabelled_proofless_seal_is_no_old_seal(tmp_path):
+    """Hardens the pin (PR 137): a proofless seal appended after the sealed
+    tip and relabelled with an `n` at or before the pinned tip would read as
+    an old seal the pin vouches for. The chain now breaks instead."""
+    run = bare_run(tmp_path)
+    old_world(run, {"subject": "serve:old"})
+    run.pin()
+    run.seal_tip(proof(record.tip_subject(run.rec.tip())), HUMAN_KEY)
+    assert "serve:old" in run.held()[0]
+    forge_row(run.rec.path, "serve:forged")
+    _relabel_last(run.rec.path, 0)
+    assert any("out of place" in b for b in run.rec.verify_chain())
+    assert "serve:forged" not in run.held()[0]
