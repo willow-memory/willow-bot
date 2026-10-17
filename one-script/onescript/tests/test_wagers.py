@@ -252,7 +252,9 @@ def test_checkout_threads_the_human_key(run):
     w = run.wager("P1", DIST)
     seal(run, w, {"path_index": 0})
     anchor(run)
-    assert run.checkout()[0]["wagers"]["escalate"] == ["P1"]
+    # no key handed over: the seal is on record but can't be checked here,
+    # which is `unreachable`, never `escalate` (INVARIANTS §1, J1 re-audit)
+    assert list(run.checkout()[0]["wagers"]["unreachable"]) == ["P1"]
     assert run.checkout(human_key=HUMAN_KEY)[0]["wagers"]["reconciled"] == ["P1"]
 
 

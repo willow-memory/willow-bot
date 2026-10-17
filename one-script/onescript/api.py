@@ -933,13 +933,19 @@ def seal_outcome(
     row = _seal(run, cfg, wager, proof, pair, verifiers, outcome)
     if row["kind"] != "seal":
         return {"row": row, "sealed": False, "code": 1}
-    return {
+    out = {
         "row": row,
         "sealed": True,
         "tip": record.tip_subject(row),  # seal it, or this outcome is not covered
         "rescope": _rescope(run),
         "code": 0,
     }
+    if row.get("via") == "nestor":  # the C6 gap, said where it bites
+        out["counts_when"] = (
+            "sealed by Nestor pair: this outcome counts only once a tip sealed "
+            "by the human's key covers it (a Nestor-sealed tip does not count)"
+        )
+    return out
 
 
 def seal_forecast(
@@ -950,7 +956,9 @@ def seal_forecast(
     argv: Iterable[str] = ("seal-forecast",),
 ) -> dict:
     """The human says a forecast is theirs: a proof over
-    `reverse.forecast_subject(wager)`. `by` on a wager row is the run's claim
+    `reverse.forecast_subject(wager)`. The vouch is authorship, not timing:
+    it says who made the forecast, never when; when is the chain order under
+    the human's sealed tip (SPEC R3), and a vouch sealed later changes none of it. `by` on a wager row is the run's claim
     (`by_claimed`); a forecast claimed as the human's counts under "human" in
     the calibration only with this seal, else under "human (claimed)"."""
     run, info = _open(cfg, "seal-forecast", argv)
@@ -1085,6 +1093,9 @@ def reconcile(
         "calibration": rep["calibration"],
         "misses": rep["misses"],
         "tip": record.tip_subject(tip) if tip else None,
+        # INVARIANTS §1: a broken record and an unchecked seal are said apart
+        "record": {"breaks": rep["wagers"]["breaks"]},
+        "unreachable": rep["wagers"]["unreachable"],
         "code": 0,
     }
     if key is None:

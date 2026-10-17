@@ -11,6 +11,7 @@ Everything here is computed. Same inputs, same report bytes.
 from __future__ import annotations
 
 import math
+import unicodedata
 from pathlib import Path
 
 from . import calibration
@@ -165,7 +166,9 @@ def grades(
 
 
 def _norm(path: object) -> str:
-    return str(path or "").strip().casefold()
+    """Stripped, NFKC-normalised, casefolded: two paths that look the same
+    are the same path."""
+    return unicodedata.normalize("NFKC", str(path or "")).strip().casefold()
 
 
 def _match_distribution(wager: dict, outcome: dict) -> tuple[int | None, dict | None]:
@@ -411,6 +414,8 @@ def reconcile_wagers(
     through: int | None = None,
     held: set[str] | None = None,
     human_key: bytes | None = None,
+    unreachable: dict[str, str] | None = None,
+    breaks: list[str] | None = None,
 ) -> dict:
     """Line each declared wager up against the outcome a human sealed. Never
     grades: `graded_by` stays None. `through` is the row number the human's
@@ -425,9 +430,17 @@ def reconcile_wagers(
     human's tip (SPEC R3): some tip seal whose proof re-checks against
     `human_key` holds the wager row and comes before the outcome seal. Any
     other order escalates. A reconciled forecast carries `brier` and
-    `log_score`, code's score; the grade stays the human's sealed outcome."""
+    `log_score`, code's score; the grade stays the human's sealed outcome.
+
+    Three states are never collapsed (INVARIANTS §1): an outcome seal on
+    record whose proof can't be checked here (`unreachable`, subject -> why,
+    from `Run.held`) makes the row `unreachable` with why, not `escalate`; a
+    broken record (`breaks`, from `verify_chain` and `verify_anchor`) says so
+    in every row's reason; no seal at all stays `escalate`."""
     if not in_place(rows):  # order is read from `n`: a label out of place
         through, held, human_key = None, None, None  # lets nothing count
+        breaks = [*(breaks or []), "a row's n is not its place in these rows"]
+    unchecked = unreachable or {}
     tips = tip_seals(rows, human_key)
     out = []
     for w in (r for r in rows if r["kind"] == "wager"):
@@ -442,7 +455,27 @@ def reconcile_wagers(
         outcome = seal["outcome"] if seal else None
         under = committed_under(w, seal["n"], tips) if seal and forecast else None
         bad = check_distribution(w.get("distribution")) if forecast else None
-        if outcome is None:
+        cant = next(
+            (
+                unchecked[r["subject"]]
+                for r in reversed(rows)
+                if r["kind"] == "seal"
+                and r.get("wager") == w["hash"]
+                and isinstance(r.get("outcome"), dict)
+                and r.get("subject") == outcome_subject(w["hash"], r["outcome"])
+                and r["subject"] in unchecked
+            ),
+            None,
+        )
+        if outcome is None and breaks:
+            row |= {
+                "state": "escalate",
+                "escalate_to": "human",
+                "reason": "the record is broken: " + "; ".join(breaks),
+            }
+        elif outcome is None and cant is not None:
+            row |= {"state": "unreachable", "why": cant}
+        elif outcome is None:
             row |= {
                 "state": "escalate",
                 "escalate_to": "human",
@@ -505,6 +538,8 @@ def reconcile_wagers(
         "reconciled": [r["id"] for r in out if r["state"] == "reconciled"],
         "escalate": [r["id"] for r in out if r["state"] == "escalate"],
         "escalate_to": "human" if any(r["state"] == "escalate" for r in out) else None,
+        "unreachable": {r["id"]: r["why"] for r in out if r["state"] == "unreachable"},
+        "breaks": list(breaks or []),
         "rows": out,
     }
 
@@ -615,6 +650,7 @@ def reconcile(
     held: set[str] | None = None,
     unreachable: dict[str, str] | None = None,
     wagers_key: bytes | None = None,
+    wagers_breaks: list[str] | None = None,
 ) -> dict:
     """`held` is the subjects the human's seal still holds over
     (`serve.sealed_verified`, via `Run.held`). A seal row is only a claim, so
@@ -648,7 +684,9 @@ def reconcile(
         for r in rows
         if r["kind"] == "proposal" and r.get("subject") not in sealed_rows
     ]
-    wagers = reconcile_wagers(rows, wagers_through, held, wagers_key)
+    wagers = reconcile_wagers(
+        rows, wagers_through, held, wagers_key, unreachable, wagers_breaks
+    )
     counts: dict[str, int] = {}
     for i in items:
         counts[i["verdict"]] = counts.get(i["verdict"], 0) + 1

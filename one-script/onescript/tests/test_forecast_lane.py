@@ -563,6 +563,11 @@ def test_export_refuses_an_edited_round_and_a_moved_answer():
     moved["reveal"]["answers"]["3d6"] = not d["reveal"]["answers"]["3d6"]
     with pytest.raises(export.Refused, match="not the beacon's"):
         export.export(moved)
+    for field, value in (("beacon_then", d["target"]), ("at", d["target_at"])):
+        late = json.loads(json.dumps(d))
+        late["forecasts"]["human"][field] = value  # made at its target: too late
+        with pytest.raises(export.Refused, match="at or after its target"):
+            export.export(late)
     rows = export.export(d)
     assert {r["by"] for r in rows} == set(RECORDED)
     assert all(r["committed"] is None for r in rows if r["by"] in ("oracle", "coin"))
@@ -812,7 +817,50 @@ def test_an_outcome_sealed_by_nestor_pair_counts_under_the_humans_tip(
     store(good)
     s = api.seal_outcome(cfg, f["subject"], out, pair=good)
     assert s["sealed"] and s["row"]["via"] == "nestor"
+    assert "key" in s["counts_when"]  # N-N2: the C6 gap is said
     assert s["row"]["wager"] == f["subject"] and s["row"]["outcome"] == out
     seal_tip(cfg, s["tip"])
     w = wager_row(api.reconcile(cfg, human_key=key_file), "f1")
     assert w["state"] == "reconciled" and w["actual_path"] == "no"
+
+
+# ── J1 re-audit (N-S2, N-N1, N-N2) ───────────────────────────────────────────
+def test_populated_empty_and_unreachable_are_never_collapsed(cfg, key_file, tmp_path):
+    """N-S2 / INVARIANTS §1: a sealed outcome reconciles; no seal escalates; a
+    seal that can't be checked here (no key to check its proof by) is
+    `unreachable` with why; a broken record says it is broken."""
+    import dataclasses
+
+    api.checkin(cfg)
+    committed_round_trip(cfg, "sealed")
+    f = api.forecast(cfg, "unsealed", YES_NO)
+    seal_tip(cfg, f["tip"])
+    rep = api.reconcile(cfg, human_key=key_file)
+    assert wager_row(rep, "sealed")["state"] == "reconciled"
+    assert wager_row(rep, "unsealed")["state"] == "escalate"
+    assert rep["record"] == {"breaks": []} and rep["unreachable"] == {}
+
+    keys = json.loads(cfg.keys.read_text())
+    del keys["human"]  # the box can no longer check the outcome proof
+    k2 = tmp_path / "k2" / "keys.json"
+    k2.parent.mkdir(mode=0o700)
+    k2.write_text(json.dumps(keys))
+    k2.chmod(0o600)
+    rep = api.reconcile(dataclasses.replace(cfg, keys=k2))
+    w = wager_row(rep, "sealed")
+    assert w["state"] == "unreachable" and w["why"] and "sealed" in rep["unreachable"]
+    assert wager_row(rep, "unsealed")["state"] == "escalate"
+
+    text = (cfg.box / "record.jsonl").read_text()
+    (cfg.box / "record.jsonl").write_text(text.replace('"p":0.62', '"p":0.61', 1))
+    rep = api.reconcile(cfg, human_key=key_file)
+    assert rep["record"]["breaks"]
+    assert wager_row(rep, "sealed")["reason"].startswith("the record is broken: ")
+
+
+def test_visually_identical_paths_are_one_path():
+    """N-N1: NFKC inside the path name."""
+    dist = [{"path": "ﬁve", "p": 0.5}, {"path": "five", "p": 0.5}]  # ligature fi
+    assert "twice" in reverse.check_distribution(dist)
+    w = {"distribution": [{"path": "Ｒain", "p": 0.4}, {"path": "dry", "p": 0.6}]}
+    assert reverse._match_distribution(w, {"path": "rain"})[0] == 0  # fullwidth R

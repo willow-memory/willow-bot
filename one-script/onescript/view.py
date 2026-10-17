@@ -138,6 +138,8 @@ def morning(
                 if "beacon_then" in w:
                     what += f" · beacon then {w['beacon_then']}"
             L.append(f"  · wager {w['id']} reconciled · {what} · grade is yours")
+        elif w["state"] == "unreachable":  # a seal on record, unchecked here
+            L.append(f"  · wager {w['id']} seal unreachable · {w['why']}")
         else:
             L.append(f"  · wager {w['id']} escalate to human · {w['reason']}")
     cal = report.get("calibration") or {}

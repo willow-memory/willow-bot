@@ -398,6 +398,8 @@ def main(argv: list[str] | None = None) -> int:
         if res.get("sealed"):
             print(f"sealed {res['row']['subject']}")
             print(f"tip {res['tip']}")  # seal it, or this outcome is not covered
+            if "counts_when" in res:  # the C6 gap: a Nestor seal needs a key tip
+                print(f"counts when: {res['counts_when']}")
             print(f"rescope: {res['rescope']['why']}")  # SPEC R14: the last step
             for step in res["rescope"]["steps"]:
                 print(f"  {step}")

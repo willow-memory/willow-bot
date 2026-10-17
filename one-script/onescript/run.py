@@ -736,6 +736,12 @@ class Run:
             held=held,
             unreachable=unreachable,
             wagers_key=human_key,  # tip seals re-checked row by row (SPEC R3)
+            # a broken record is said, never read as "no seal" (INVARIANTS §1)
+            wagers_breaks=(
+                self.rec.verify_chain() + self.rec.verify_anchor(human_key)
+                if human_key is not None
+                else None
+            ),
         )
 
     def checkout(
