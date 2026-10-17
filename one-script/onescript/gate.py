@@ -483,16 +483,23 @@ def _symbol_row(c: dict, entry: object) -> dict:
             "verdict": "unverified",
             "record": entry.get("why") or "not in the graph",
         }
+    if state == "overflow":  # more files cited than a sentence may: struck
+        return {
+            **base,
+            "verdict": "unverified",
+            "record": entry.get("why", "too many files cited"),
+        }
     paths = entry.get("paths") or []
-    if len(paths) != 1:
+    names, ref = entry.get("names") or {}, c["ref"]
+    at = (entry.get("stamp") or {}).get("head_sha", "")[:12]
+    per = entry.get("by_path") or ({paths[0]: names} if len(paths) == 1 else {})
+    if len(paths) != 1 and not per:
         return {
             **base,
             "verdict": "unchecked",
             "record": f"{c['file']} names {len(paths)} files in the graph: "
             + ", ".join(paths[:3]),
         }
-    names, ref = entry.get("names") or {}, c["ref"]
-    at = (entry.get("stamp") or {}).get("head_sha", "")[:12]
     if ref[0].isdigit():
         lo, _, hi = ref.partition("-")
         lo, hi = int(lo), int(hi or lo)
@@ -501,24 +508,42 @@ def _symbol_row(c: dict, entry: object) -> dict:
         # S2: a line is verified inside a symbol; a range only when the union of
         # the symbols it crosses covers every line of it. A line outside every
         # symbol is an import, a constant or past the end: the graph cannot say.
-        if _covered(sum(names.values(), []), lo, hi):
-            return {**base, "verdict": "verified", "record": f"{paths[0]} at {at}"}
+        hit = [p for p, nm in per.items() if _covered(sum(nm.values(), []), lo, hi)]
+        if len(hit) == 1:
+            return {**base, "verdict": "verified", "record": f"{hit[0]} at {at}"}
+        if len(hit) > 1:
+            return _ambiguous(base, c, hit)
         return {
             **base,
             "verdict": "unchecked",
-            "record": f"outside every symbol the graph holds in {paths[0]} at {at}",
+            "record": f"outside every symbol the graph holds in {c['file']} at {at}",
         }
-    if "." in ref:  # Class.method: the method sits inside that class
-        cls, meth = ref.split(".", 1)
-        ok = any(
-            _in(k, m[0], m[1]) for k in names.get(cls, []) for m in names.get(meth, [])
-        )
-    else:
-        ok = ref in names
+
+    def defines(nm: dict) -> bool:
+        if "." in ref:  # Class.method: the method sits inside that class
+            cls, meth = ref.split(".", 1)
+            return any(
+                _in(k, m[0], m[1]) for k in nm.get(cls, []) for m in nm.get(meth, [])
+            )
+        return ref in nm
+
+    hit = [p for p, nm in per.items() if defines(nm)]
+    if len(hit) == 1:  # an ambiguous basename: exactly one file defines it
+        return {**base, "verdict": "verified", "record": f"{hit[0]} at {at}"}
+    if len(hit) > 1:
+        return _ambiguous(base, c, hit)
+    where = paths[0] if len(paths) == 1 else f"all {len(paths)} files named {c['file']}"
+    return {**base, "verdict": "unverified", "record": f"not in {where} at {at}"}
+
+
+def _ambiguous(base: dict, c: dict, hit: list[str]) -> dict:
+    """Two or more files named like the cite all define it: the cite does not say
+    which, and nothing is claimed either way."""
     return {
         **base,
-        "verdict": "verified" if ok else "unverified",
-        "record": f"{paths[0]} at {at}" if ok else f"not in {paths[0]} at {at}",
+        "verdict": "unchecked",
+        "record": f"{c['file']} names {len(hit)} files that define it: "
+        + ", ".join(sorted(hit)[:3]),
     }
 
 

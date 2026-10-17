@@ -5,7 +5,7 @@ Cites: SPEC.md rulings R15 and R18 and SPEC-tools.md phases T-cbm-4 and T-cbm-1.
 reads what they return as `facts["symbols"]`.
 
 It wraps `cbm` (codebase-memory-mcp), the binary named by `ONESCRIPT_CBM`
-(default /home/user/tools/bin/cbm). onescript never imports cbm and never runs
+(else `cbm` on PATH; neither is `unreachable`). onescript never imports cbm and never runs
 its `install`, `update` or `--ui`: only the read tools below are allowed, and
 `index_repository` only through `reindex`. A missing or broken binary is
 `unreachable`, never an empty graph.
@@ -46,13 +46,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-DEFAULT_CBM = "/home/user/tools/bin/cbm"
 DEFAULT_CACHE = "~/.cache/codebase-memory-mcp"
 TIMEOUT = 60
 
@@ -81,7 +81,9 @@ class Unreachable(Exception):
 
 
 def cbm_path() -> str:
-    return os.environ.get("ONESCRIPT_CBM") or DEFAULT_CBM
+    """`ONESCRIPT_CBM`, else `cbm` found on PATH, else "" (no binary: every read
+    is `unreachable`, said). No path of this machine is written into the code."""
+    return os.environ.get("ONESCRIPT_CBM") or shutil.which("cbm") or ""
 
 
 def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
@@ -89,6 +91,8 @@ def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
     exe = path or cbm_path()
 
     def run(tool: str, args: dict) -> str:
+        if not exe:
+            raise Unreachable("no cbm: set ONESCRIPT_CBM or put cbm on PATH")
         if tool not in READ_TOOLS | _META | {"index_repository"}:
             raise Unreachable(f"cbm tool '{tool}' is not one this seam calls")
         try:
@@ -406,8 +410,11 @@ CITE = re.compile(
 #: What a cite may name: the labels `T-cbm-1` reads (SPEC-tools: one query per
 #: label there, one `OR` query here; both return `start_line` and `end_line`).
 SYMBOL_LABELS = ("Function", "Method", "Class")
-#: How many distinct files one sentence may cite before the rest go unchecked.
+#: How many files one graph read asks about (a batch), and how many distinct
+#: files one sentence may cite at all; past that the cites are struck as
+#: "too many files cited".
 MAX_FILES = 8
+MAX_TOTAL = 40
 _ROW = re.compile(r'^\s*(\S+)\s+(.+?)\s+"(\d+)"\s+"(\d+)"\s+(\w+)\s*$')
 
 
@@ -419,13 +426,16 @@ def qualified_cites(text: str) -> list[dict]:
     ]
 
 
-def _sym_entry(state: str, why: str, stamp, paths=(), names=None) -> dict:
+def _sym_entry(state: str, why: str, stamp, paths=(), names=None, by_path=None) -> dict:
     return {
         "state": state,
         "why": why,
         "stamp": stamp,
         "paths": sorted(paths),
         "names": names or {},
+        # per indexed file, so an ambiguous basename is checked in EVERY file it
+        # names (the gate: exactly one defines it = verified, none = unverified)
+        "by_path": by_path or {},
     }
 
 
@@ -461,7 +471,7 @@ def _symbols_read(
     got = graph_read(project, "query_graph", {"query": cy}, runner=runner, cache=cache)
     if got["state"] != "populated":
         return {f: _sym_entry(got["state"], got["why"], got["stamp"]) for f in files}
-    found: dict[str, tuple[set, dict]] = {f: (set(), {}) for f in files}
+    found: dict[str, tuple[set, dict, dict]] = {f: (set(), {}, {}) for f in files}
     for ln in got["rows"]:
         m = _ROW.match(ln)
         if not m or int(m[3]) > int(m[4]):
@@ -472,11 +482,13 @@ def _symbols_read(
         for f in files:
             if m[2] == f or m[2].endswith("/" + f):
                 found[f][0].add(m[2])
-                found[f][1].setdefault(m[1], []).append([int(m[3]), int(m[4])])
+                span = [int(m[3]), int(m[4])]
+                found[f][1].setdefault(m[1], []).append(span)
+                found[f][2].setdefault(m[2], {}).setdefault(m[1], []).append(span)
     out = {}
-    for f, (paths, names) in found.items():
+    for f, (paths, names, by_path) in found.items():
         if paths:
-            out[f] = _sym_entry("populated", "", got["stamp"], paths, names)
+            out[f] = _sym_entry("populated", "", got["stamp"], paths, names, by_path)
         else:
             out[f] = _sym_entry(
                 "empty", f"not in the graph at {_said(got['stamp'])}", got["stamp"]
@@ -509,5 +521,10 @@ def symbols_for(
     for c in qualified_cites(text):
         if c["file"] not in files:
             files.append(c["file"])
-    files = files[:MAX_FILES]
-    return _symbols_read(project, files, runner, cache) if files else {}
+    out: dict[str, dict] = {}
+    asked, over = files[:MAX_TOTAL], files[MAX_TOTAL:]
+    for i in range(0, len(asked), MAX_FILES):  # batches: every cite is asked
+        out.update(_symbols_read(project, asked[i : i + MAX_FILES], runner, cache))
+    for f in over:  # beyond any sentence a person wrote: struck, never "not asked"
+        out[f] = _sym_entry("overflow", "too many files cited", None)
+    return out

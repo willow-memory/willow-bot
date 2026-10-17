@@ -319,16 +319,85 @@ def test_a_cite_cannot_put_a_quote_into_the_query(repo):
     assert graph.qualified_cites('x.py:a" OR 1=1')[0]["ref"] == "a"
 
 
-def test_only_max_files_are_asked_the_rest_are_unchecked(repo):
+def test_item8_files_past_max_files_are_asked_in_batches_not_passed_unasked(repo):
     root, cache = repo
     text = " ".join(f"f{i}.py:x" for i in range(graph.MAX_FILES + 3))
+    asked = []
+
+    def spy(tool, args):
+        asked.append(tool)
+        raise graph.Unreachable("no")
+
+    got = graph.symbols_for(text, "p", runner=spy, cache=cache)
+    assert len(got) == graph.MAX_FILES + 3  # every cite has an entry, none "not asked"
+    assert asked.count("list_projects") == 2  # two batches
+    assert {v for _, v in verdicts(text, got)} == {"unchecked"}  # graph unreachable
+
+
+def test_item8_cites_beyond_the_total_cap_are_struck_too_many_files_cited(repo):
+    root, cache = repo
+    n = graph.MAX_TOTAL + 2
+    text = " ".join(f"f{i}.py:x" for i in range(n))
 
     def boom(tool, args):
         raise graph.Unreachable("no")
 
     got = graph.symbols_for(text, "p", runner=boom, cache=cache)
-    assert len(got) == graph.MAX_FILES
-    assert verdicts(text, got).count(("f10.py:x", "unchecked")) == 1
+    rows = gate.check_claims(text, {"symbols": got})
+    over = [r for r in rows if r["record"] == "too many files cited"]
+    assert [r["verdict"] for r in over] == ["unverified"] * 2
+
+
+def two_files(a_names, b_names):
+    return {
+        "state": "populated",
+        "why": "",
+        "stamp": {"head_sha": "abc123def4567"},
+        "paths": ["a/cli.py", "b/cli.py"],
+        "names": {**a_names, **b_names},
+        "by_path": {"a/cli.py": a_names, "b/cli.py": b_names},
+    }
+
+
+def test_item8_an_ambiguous_basename_is_checked_in_every_file_it_names():
+    one = two_files({"build": [[1, 9]]}, {"other": [[1, 9]]})
+    none = two_files({"build": [[1, 9]]}, {"other": [[1, 9]]})
+    both = two_files({"build": [[1, 9]]}, {"build": [[3, 4]]})
+    assert verdicts("cli.py:build", {"cli.py": one}) == [("cli.py:build", "verified")]
+    assert verdicts("cli.py:check_claims", {"cli.py": none}) == [
+        ("cli.py:check_claims", "unverified")
+    ]
+    assert verdicts("cli.py:build", {"cli.py": both}) == [("cli.py:build", "unchecked")]
+    (r,) = gate.check_claims("cli.py:check_claims", {"symbols": {"cli.py": none}})
+    assert "not in all 2 files named cli.py" in r["record"]
+    # a line: covered by one file's symbols only -> verified; by neither -> unchecked
+    assert verdicts(
+        "cli.py:5", {"cli.py": two_files({"x": [[1, 9]]}, {"y": [[20, 30]]})}
+    ) == [("cli.py:5", "verified")]
+    assert verdicts("cli.py:15", {"cli.py": one}) == [("cli.py:15", "unchecked")]
+
+
+def test_item12_no_binary_anywhere_is_unreachable_not_empty(monkeypatch):
+    monkeypatch.delenv("ONESCRIPT_CBM", raising=False)
+    monkeypatch.setenv("PATH", "/nonexistent-dir")
+    assert graph.cbm_path() == ""
+    r = graph.graph_read("p", "search_graph", {"name_pattern": "x"})
+    assert r["state"] == "unreachable" and "ONESCRIPT_CBM" in r["why"]
+    assert (
+        "tools/bin"
+        not in open(graph.__file__).read().split("def cbm_path")[1].split("def ")[0]
+    )
+
+
+def test_item12_cbm_is_found_on_path_when_the_variable_is_unset(monkeypatch, tmp_path):
+    exe = tmp_path / "cbm"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.delenv("ONESCRIPT_CBM", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert graph.cbm_path() == str(exe)
+    monkeypatch.setenv("ONESCRIPT_CBM", "/elsewhere/cbm")
+    assert graph.cbm_path() == "/elsewhere/cbm"
 
 
 # ── the real binary ───────────────────────────────────────────────────────────
