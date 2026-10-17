@@ -271,9 +271,14 @@ def reconcile(
     task_of=None,
     predictions=(),
     wagers_through: int | None = None,
+    held: set[str] | None = None,
 ) -> dict:
+    """`held` is the subjects the human's seal still holds over
+    (`serve.sealed_verified`, via `Run.held`). A seal row is only a claim, so
+    without `held` nothing counts as sealed and every door and proposal stays
+    listed."""
     items = three_way(box, pile, rows)
-    sealed_rows = {r["subject"] for r in rows if r["kind"] == "seal"}
+    sealed_rows = held if held is not None else set()
     awaiting = sorted(
         (
             r

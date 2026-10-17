@@ -167,3 +167,69 @@ def test_a_nestor_row_with_no_pair_is_no_seal(cfg):
     card = api.scope(cfg, by=("who",), match={"who": "run"})
     forge_seal(cfg, card["subject"], via="nestor", verifier="sean campbell")
     assert api.serve(cfg, card["spec"], max_chars=CAP)["state"] == "empty"
+
+
+# ── the morning screen, and seal rows from before they carried a proof ───────
+KEYS = {"hanuman": b"k-hanuman", gate.HUMAN: HUMAN_KEY}
+LAW = {"trace_ids": ["CONST-III", "CONST-VI"], "min_features": 6}
+
+
+def forge_row(path: Path, subject: str) -> None:
+    """`forge_seal` for a bare Run's record."""
+    rs = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+    row = {
+        "n": len(rs),
+        "kind": "seal",
+        "who": "human",
+        "family": "human",
+        "standing": "sealed",
+        "version": rs[-1]["version"],
+        "ts": "t",
+        "prev": rs[-1]["hash"],
+        "where": subject,
+        "subject": subject,
+    }
+    row["hash"] = record.h256(record.canon(row))
+    with path.open("a") as f:
+        f.write(record.canon(row) + "\n")
+
+
+def test_the_human_s_key_on_another_subject_is_no_seal(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    card = api.scope(cfg, by=("who",), match={"who": "run"})
+    forge_seal(cfg, card["subject"], proof=proof("serve:" + "1" * 64))
+    assert api.serve(cfg, card["spec"], max_chars=CAP)["state"] == "empty"
+
+
+def test_a_forged_seal_does_not_clear_a_door_awaiting_the_human(tmp_path):
+    from onescript.run import Run
+
+    run = Run(tmp_path / "box", KEYS, LAW, lambda: "t")
+    sig = gate.sign(KEYS["hanuman"], "hanuman", "qwen")
+    out = run.turn(
+        {"who": "hanuman", "family": "qwen", "sig": sig},
+        "amend",
+        change={"kind": "edit", "amends": ["CONST-III"], "what": "widen reach"},
+    )
+    door = out["door"]
+    assert door["verdict"] == "awaiting_seal"
+    forge_row(run.rec.path, door["hash"])
+    rep, _ = run.checkout()
+    assert [a["hash"] for a in rep["awaiting"]] == [door["hash"]]
+
+
+def test_a_seal_row_without_proof_holds_only_inside_the_sealed_tip(tmp_path):
+    """Seal rows written before they carried their proof: the human's signed
+    tip vouches for every row up to it, and for nothing after it."""
+    from onescript.run import Run
+
+    run = Run(tmp_path / "box", KEYS, LAW, lambda: "t", anchor=tmp_path / "a.json")
+    hum = gate.human("serve:old", proof("serve:old"), HUMAN_KEY)
+    run.rec.append("seal", hum, where="serve:old", subject="serve:old")  # no proof
+    assert "serve:old" not in run.held()[0]  # nothing vouches for it yet
+    tip = run.rec.tip()
+    run.seal_tip(proof(record.tip_subject(tip)), HUMAN_KEY)
+    assert "serve:old" in run.held()[0]
+    forge_row(run.rec.path, "serve:new")  # after the tip: a claim, nothing more
+    assert run.rec.verify_chain() == []
+    assert "serve:new" not in run.held()[0]

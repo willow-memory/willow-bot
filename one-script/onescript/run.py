@@ -201,6 +201,7 @@ class Run:
             human_key=self.keys.get(gate.HUMAN),
             keyring=self.keyring,
             nestor_db=self.nestor_db,
+            through=reverse.covered_through(self.rec, self.keys.get(gate.HUMAN)),
         )
 
     def held(self, rows: list[dict] | None = None) -> tuple[set[str], dict[str, str]]:
@@ -212,6 +213,7 @@ class Run:
             self.keys.get(gate.HUMAN),
             self.keyring,
             self.nestor_db,
+            reverse.covered_through(self.rec, self.keys.get(gate.HUMAN)),
         )
 
     # ── proposals: the model's Write is a row, and a seal is what writes it ──
@@ -585,6 +587,7 @@ class Run:
             task_of=task_of,
             predictions=self.graded,
             wagers_through=reverse.covered_through(self.rec, human_key),
+            held=self.held()[0],
         )
 
     def checkout(

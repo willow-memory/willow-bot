@@ -265,6 +265,7 @@ def sealed_verified(
     human_key: bytes | None = None,
     keyring: dict | str | os.PathLike | None = None,
     nestor_db: str | os.PathLike | None = None,
+    through: int | None = None,
 ) -> tuple[set[str], dict[str, str]]:
     """(held, unreachable): the subjects whose seal row carries a proof that
     checks out against that subject right now, and the subjects whose proof
@@ -275,7 +276,12 @@ def sealed_verified(
     seal carries the `pair` and is checked against the operator's keyring and
     Nestor's store as it stands now. A row with no proof, or one that does not
     verify, is in neither set: it was never a seal. With no key, keyring or
-    store to check by, the answer is `unreachable`, never a pass."""
+    store to check by, the answer is `unreachable`, never a pass.
+
+    A row with no proof at all, written before seal rows carried one, holds
+    only inside the tip the human sealed: `through` is the row number that tip
+    covers (`reverse.covered_through`), and the human's signature over it
+    vouches for every row up to it. After the tip it is a claim, nothing more."""
     held: set[str] = set()
     unreachable: dict[str, str] = {}
     ring: dict | None = keyring if isinstance(keyring, dict) else None
@@ -292,12 +298,21 @@ def sealed_verified(
         if not isinstance(subject, str) or subject in held:
             continue
         ok, why = _seal_proof(r, subject, human_key, ring, ring_why, nestor_db)
+        if not ok and why is None and _before_proofs(r, through):
+            ok = True
         if ok:
             held.add(subject)
             unreachable.pop(subject, None)
         elif why is not None:
             unreachable.setdefault(subject, why)
     return held, unreachable
+
+
+def _before_proofs(row: dict, through: int | None) -> bool:
+    """A seal row with no evidence on it, inside the human's sealed tip."""
+    if through is None or "proof" in row or "pair" in row or row.get("via"):
+        return False
+    return isinstance(row.get("n"), int) and row["n"] <= through
 
 
 def _seal_proof(row, subject, human_key, ring, ring_why, nestor_db):
@@ -340,6 +355,7 @@ def serve(
     human_key: bytes | None = None,
     keyring: dict | str | os.PathLike | None = None,
     nestor_db: str | os.PathLike | None = None,
+    through: int | None = None,
 ) -> dict:
     """Write the served file and record it. Returns the served document.
     The receipts and the scope stay in the record's row, never in the file.
@@ -349,7 +365,7 @@ def serve(
     not know the model. Over the cap the answer is `empty`, "narrow the stack",
     never a truncation. No cap is `empty` too: nothing is served uncapped."""
     try:
-        seals = sealed_verified(rec.rows(), human_key, keyring, nestor_db)
+        seals = sealed_verified(rec.rows(), human_key, keyring, nestor_db, through)
         doc = _serve(rec.rows(), tables, scope, serve_key, max_chars, seals)
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
