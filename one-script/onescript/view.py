@@ -45,8 +45,10 @@ def needs_you(
     needs += [f"{i['where']} · {i['why']}" for i in report["pile"]["failing"]]
     for a in report["awaiting"]:
         card = json.dumps(a.get("card", {}), sort_keys=True)
-        needs.append(f"{a['verdict']} · {a.get('reason', '')} · {card}")
-    needs += [f"proposal · {proposal_line(p)}" for p in report.get("proposals", [])]
+        needs.append(f"{a['verdict']} · {a.get('reason', '')} · {card}{_seal(a)}")
+    needs += [
+        f"proposal · {proposal_line(p)}{_seal(p)}" for p in report.get("proposals", [])
+    ]
     needs += [
         f"seen {o['seen']}x · {o['procedure']} · {o['offer']}" for o in report["offers"]
     ]
@@ -152,3 +154,10 @@ def morning(
             f" · egress: {', '.join(boot['egress']) or 'none'}"
         )
     return "\n".join(L) + "\n"
+
+
+def _seal(item: dict) -> str:
+    """A seal on record that can't be checked here: said, never dropped."""
+    if item.get("seal") != "unreachable":
+        return ""
+    return f" · seal unreachable: {item.get('seal_why', '')}"

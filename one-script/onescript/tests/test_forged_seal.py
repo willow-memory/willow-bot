@@ -93,7 +93,7 @@ def test_a_hand_appended_scope_seal_chains_and_still_serves_nothing(cfg):
     forge_seal(cfg, card["subject"])
     run, _ = api._open(cfg, "probe", ())
     assert run.rec.verify_chain() == []  # the forgery chains: the chain can't catch it
-    assert card["subject"] in serve.sealed(run.rec.rows())  # the row claims it
+    assert card["subject"] in serve.claimed_seals(run.rec.rows())  # the row claims it
     assert card["subject"] not in run.held()[0]  # the proof says no
     res = api.serve(cfg, card["spec"], max_chars=CAP)
     assert res["state"] == "empty" and res["doc"]["tables"] == []
@@ -303,3 +303,47 @@ def test_resume_skips_a_forged_seal_over_a_subject_the_human_really_sealed(cfg):
     got = api.resume(cfg)
     assert got["spec"] == card["spec"] and got["subject"] == card["subject"]
     assert got["sealed_at"] == real["ts"]
+
+
+def test_a_malformed_nestor_pair_is_no_seal_even_with_nothing_to_check_by(cfg):
+    """With no keyring, a row whose pair isn't shaped like a seal is no seal,
+    never `unreachable`: its shape is checked before the ring and store."""
+    assert api.checkin(cfg)["code"] == 0
+    card = api.scope(cfg, by=("who",), match={"who": "run"})
+    forge_seal(cfg, card["subject"], via="nestor", verifier="x", pair={"x": 1})
+    assert api.serve(cfg, card["spec"], max_chars=CAP)["state"] == "empty"
+    assert "state" not in api.resume(cfg)
+
+
+def test_an_unreachable_seal_stays_marked_on_the_morning_screen(tmp_path):
+    """A door or proposal whose seal can't be checked stays listed and says so,
+    never as plainly awaiting (empty and unreachable are not collapsed)."""
+    from onescript import reverse, view
+
+    rows_ = [
+        {"n": 0, "kind": "door", "hash": "h1", "ts": "t", "verdict": "awaiting_seal"},
+        {"n": 1, "kind": "proposal", "subject": "s1", "path": "p", "verdict": "pass"},
+        {"n": 2, "kind": "door", "hash": "h2", "ts": "t", "verdict": "awaiting_seal"},
+    ]
+    why = {"h1": "unreachable: no keyring", "s1": "unreachable: no store"}
+    rep = reverse.reconcile(tmp_path, {}, rows_, "v", held=set(), unreachable=why)
+    door1, door2 = rep["awaiting"]
+    assert door1["seal"] == "unreachable" and "seal" not in door2
+    assert rep["proposals"][0]["seal_why"] == "unreachable: no store"
+    lines = view.needs_you(rep, None, [], [])
+    assert sum("seal unreachable" in x for x in lines) == 2
+
+
+def test_held_checks_by_the_key_it_is_handed(tmp_path):
+    """`checkout` and `reconciled` hand a key over; `held` checks by that key
+    when the run's own keys hold no human key."""
+    from onescript.run import Run
+
+    keys = {"hanuman": b"k-hanuman"}  # no human key on the run
+    run = Run(tmp_path / "box", keys, LAW, lambda: "t", anchor=tmp_path / "a.json")
+    hum = gate.human("serve:x", proof("serve:x"), HUMAN_KEY)
+    run.rec.append(
+        "seal", hum, where="serve:x", subject="serve:x", proof=proof("serve:x")
+    )
+    assert "serve:x" in run.held()[1]  # nothing to check by: unreachable
+    assert "serve:x" in run.held(human_key=HUMAN_KEY)[0]

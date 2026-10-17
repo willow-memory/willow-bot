@@ -33,6 +33,8 @@ from . import (
 )
 from .record import h256
 
+_TIP = object()  # `held`: work out the sealed tip's reach here
+
 PKG = Path(__file__).resolve().parent
 
 
@@ -204,16 +206,26 @@ class Run:
             through=reverse.covered_through(self.rec, self.keys.get(gate.HUMAN)),
         )
 
-    def held(self, rows: list[dict] | None = None) -> tuple[set[str], dict[str, str]]:
+    def held(
+        self,
+        rows: list[dict] | None = None,
+        human_key: bytes | None = None,
+        through: int | None | object = _TIP,
+    ) -> tuple[set[str], dict[str, str]]:
         """(held, unreachable): the subjects whose seal proof re-checks against
         this run's key, keyring and store (`serve.sealed_verified`). A row that
-        only says `who == "human"` is in neither."""
+        only says `who == "human"` is in neither. `human_key` stands in for the
+        run's own when given, for the proofs and the tip alike; `through` is the
+        sealed tip's reach when the caller already worked it out."""
+        key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
+        if through is _TIP:
+            through = reverse.covered_through(self.rec, key)
         return serve.sealed_verified(
             self.rec.rows() if rows is None else rows,
-            self.keys.get(gate.HUMAN),
+            key,
             self.keyring,
             self.nestor_db,
-            reverse.covered_through(self.rec, self.keys.get(gate.HUMAN)),
+            through,  # type: ignore[arg-type]
         )
 
     def seal_rows(
@@ -604,19 +616,26 @@ class Run:
         human_key: bytes | None = None,
     ) -> dict:
         """The reverse report over the record as it stands: pure, it appends
-        nothing. `checkout` draws its screen from it; `api.needs` reads it."""
+        nothing. `checkout` draws its screen from it; `api.needs` reads it.
+        The record is read, and its tip checked, once."""
+        rows = self.rec.rows()
+        key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
+        through = reverse.covered_through(self.rec, key)
+        held, unreachable = self.held(rows, key, through)
         return reverse.reconcile(
             self.rec.box,
             self.rec.pile(),
-            self.rec.rows(),
+            rows,
             self.version,
             changed_law=changed_law,
             answers=self.answers,
             sealed=sealed,
             task_of=task_of,
             predictions=self.graded,
-            wagers_through=reverse.covered_through(self.rec, human_key),
-            held=self.held()[0],
+            # a wager outcome counts only when the caller handed the key over
+            wagers_through=through if human_key is not None else None,
+            held=held,
+            unreachable=unreachable,
         )
 
     def checkout(

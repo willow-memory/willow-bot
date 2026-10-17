@@ -253,7 +253,7 @@ def served_id(serve_key: bytes, tid: str) -> str:
     return gate.sign(serve_key, "served", tid)
 
 
-def sealed(rows: list[dict]) -> set[str]:
+def claimed_seals(rows: list[dict]) -> set[str]:
     """Every subject the record holds a row CLAIMING a human seal over. A claim
     only: anyone who can write the record can append such a row (A5). Nothing
     that grants authority reads this; it reads `sealed_verified`."""
@@ -321,8 +321,8 @@ def _seal_proof(row, subject, human_key, ring, ring_why, nestor_db):
     checked here; (False, None) when it is no seal at all."""
     if row.get("via") == "nestor":
         pair = row.get("pair")
-        if not isinstance(pair, dict):
-            return False, None
+        if nestor_seal.shape(pair, subject) or pair["verifier"] != row.get("verifier"):  # type: ignore[index]
+            return False, None  # malformed: no seal, whatever can be reached
         if ring is None:
             return False, ring_why or "unreachable: no operator keyring to check by"
         if nestor_db is None:
@@ -366,8 +366,9 @@ def serve(
     not know the model. Over the cap the answer is `empty`, "narrow the stack",
     never a truncation. No cap is `empty` too: nothing is served uncapped."""
     try:
-        seals = sealed_verified(rec.rows(), human_key, keyring, nestor_db, through)
-        doc = _serve(rec.rows(), tables, scope, serve_key, max_chars, seals)
+        rows = rec.rows()
+        seals = sealed_verified(rows, human_key, keyring, nestor_db, through)
+        doc = _serve(rows, tables, scope, serve_key, max_chars, seals)
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
     except Exception as e:  # serve that can't think clearly serves nothing

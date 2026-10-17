@@ -259,6 +259,12 @@ def reconcile_wagers(rows: list[dict], through: int | None = None) -> dict:
     }
 
 
+def _marked(item: dict, why: str | None) -> dict:
+    """`item` as it is, or a copy marked: its seal is on record but can't be
+    checked here."""
+    return item if why is None else {**item, "seal": "unreachable", "seal_why": why}
+
+
 def reconcile(
     box: Path,
     pile: dict,
@@ -272,16 +278,20 @@ def reconcile(
     predictions=(),
     wagers_through: int | None = None,
     held: set[str] | None = None,
+    unreachable: dict[str, str] | None = None,
 ) -> dict:
     """`held` is the subjects the human's seal still holds over
     (`serve.sealed_verified`, via `Run.held`). A seal row is only a claim, so
     without `held` nothing counts as sealed and every door and proposal stays
-    listed."""
+    listed. `unreachable` is the subjects whose seal could not be checked here,
+    with why: those stay listed too, each marked `seal: "unreachable"`, so a
+    seal that can't be checked never reads as no seal at all."""
     items = three_way(box, pile, rows)
     sealed_rows = held if held is not None else set()
+    unchecked = unreachable or {}
     awaiting = sorted(
         (
-            r
+            _marked(r, unchecked.get(r["hash"]))
             for r in rows
             if r["kind"] == "door"
             and r["hash"] not in sealed_rows
@@ -291,7 +301,14 @@ def reconcile(
     )
     # proposals nobody has sealed: shown with `own_idea` leading each row
     proposals = [
-        {k: r[k] for k in ("path", "line", "verdict", "reason", "own_idea") if k in r}
+        _marked(
+            {
+                k: r[k]
+                for k in ("path", "line", "verdict", "reason", "own_idea")
+                if k in r
+            },
+            unchecked.get(r.get("subject")),  # type: ignore[arg-type]
+        )
         for r in rows
         if r["kind"] == "proposal" and r.get("subject") not in sealed_rows
     ]
