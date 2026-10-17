@@ -3,6 +3,7 @@ grades: no outcome means escalate to the human, never to a model."""
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -251,7 +252,9 @@ def test_checkout_threads_the_human_key(run):
     w = run.wager("P1", DIST)
     seal(run, w, {"path_index": 0})
     anchor(run)
-    assert run.checkout()[0]["wagers"]["escalate"] == ["P1"]
+    # no key handed over: the seal is on record but can't be checked here,
+    # which is `unreachable`, never `escalate` (INVARIANTS §1, J1 re-audit)
+    assert list(run.checkout()[0]["wagers"]["unreachable"]) == ["P1"]
     assert run.checkout(human_key=HUMAN_KEY)[0]["wagers"]["reconciled"] == ["P1"]
 
 
@@ -325,3 +328,143 @@ def test_an_outcome_sealed_over_the_bare_wager_hash_is_no_outcome(run):
     )
     anchor(run)
     assert recon(run)["rows"][0]["state"] == "escalate"
+
+
+# ── the forecast lane (SPEC W1-forecast-lane, R3-R5): scored, never graded ──
+
+
+def committed(run, wid, dist, outcome, by="desk"):
+    """A forecast committed under a sealed tip, then its outcome sealed, then
+    a tip over the outcome: `wager.n <= tip.n < tip_seal.n < outcome.n` (R3)."""
+    w = run.wager(wid, dist, by=by, commit=reverse.COMMIT)
+    anchor(run)
+    seal(run, w, outcome)
+    anchor(run)
+    return w
+
+
+def recon_key(run, key=HUMAN_KEY):
+    return reverse.reconcile_wagers(
+        run.rec.rows(),
+        reverse.covered_through(run.rec, key),
+        run.held(human_key=key)[0],
+        key,
+    )
+
+
+def test_fold_keeps_brier_and_fills_bins(run):
+    """C2 / R5: a 0.12 forecast scores the same folded and unfolded, and the
+    bins hold it in [0.8, 0.9)."""
+    committed(run, "f", [{"path": "yes", "p": 0.12}, {"path": "no", "p": 0.88}],
+              {"path": "no"})  # fmt: skip
+    rep = recon_key(run)
+    row = rep["rows"][0]
+    assert math.isclose(row["brier"], 0.12**2)
+    cal = reverse.calibration_of(rep["rows"], run.rec.rows())
+    assert math.isclose(cal["all"]["brier"], 0.12**2)
+    hit = [b for b in cal["bins"] if b["n"]]
+    assert [(b["lo"], b["hi"], b["n"], b["hit_rate"]) for b in hit] == [
+        (0.8, 0.9, 1, 1.0)
+    ]
+
+
+def test_n_path_wagers_score_one_against_the_rest(run):
+    dist = [{"path": "a", "p": 0.5}, {"path": "b", "p": 0.3}, {"path": "c", "p": 0.2}]
+    committed(run, "n3", dist, {"path_index": 1})
+    row = recon_key(run)["rows"][0]
+    want = ((0.5 - 0) ** 2 + (0.3 - 1) ** 2 + (0.2 - 0) ** 2) / 3
+    assert math.isclose(row["brier"], want)
+    assert math.isclose(row["log_score"], -math.log(0.3))
+
+
+def test_unsealed_outcome_has_no_score(run):
+    run.wager("f", DIST_ONE, by="desk", commit=reverse.COMMIT)
+    anchor(run)
+    row = recon_key(run)["rows"][0]
+    assert row["state"] == "escalate" and "brier" not in row
+
+
+DIST_ONE = [{"path": "yes", "p": 0.6}, {"path": "no", "p": 0.4}]
+
+
+def test_an_outcome_seal_ordered_before_its_wager_escalates(run):
+    """Adversarial: the outcome seal's row number before the wager's. The
+    chain can't be written that way honestly (the seal names the wager's
+    hash), so the rows are put in that order by hand. Refused twice over:
+    the labels are out of place (`reverse.in_place`, B1) and R3's order."""
+    w = committed(run, "f", DIST_ONE, {"path_index": 0})
+    rows = run.rec.rows()
+    s = next(r for r in rows if r["kind"] == "seal" and r.get("wager"))
+    swapped = [
+        {**r, "n": s["n"]} if r is w or r["hash"] == w["hash"] else
+        ({**r, "n": w["n"]} if r is s else r)
+        for r in rows
+    ]  # fmt: skip
+    out = reverse.reconcile_wagers(
+        swapped,
+        reverse.covered_through(run.rec, HUMAN_KEY),
+        run.held(human_key=HUMAN_KEY)[0],
+        HUMAN_KEY,
+    )
+    assert out["rows"][0]["state"] == "escalate"
+    assert recon_key(run)["rows"][0]["state"] == "reconciled"  # control
+
+
+def test_a_forecast_needs_the_human_key_to_count_its_tip(run):
+    committed(run, "f", DIST_ONE, {"path_index": 0})
+    out = reverse.reconcile_wagers(
+        run.rec.rows(),
+        reverse.covered_through(run.rec, HUMAN_KEY),
+        run.held(human_key=HUMAN_KEY)[0],
+        None,  # the tip seals can't be re-checked row by row
+    )
+    assert out["rows"][0]["state"] == "escalate"
+
+
+def test_an_older_wager_row_keeps_its_old_rule(run):
+    """A wager row without `commit` is the shape from before the forecast
+    lane: lined up as before, and never scored."""
+    w = run.wager("P1", DIST)
+    seal(run, w, {"path_index": 0})
+    anchor(run)
+    row = recon_key(run)["rows"][0]
+    assert row["state"] == "reconciled" and "brier" not in row
+
+
+CHAPTER_EIGHT = [  # willow-mcp docs/story/chapter-08-the-table.md:184-207
+    ("dry", "dry", "rain, from the south"),
+    ("stay", "stay", "leave, to the north"),
+    ("fear", "fear", "the children were told a story"),
+    ("seed", "the seed is still there", "the seed is gone"),
+]
+
+
+def test_read_misses_clusters_chapter_eight(run):
+    """Four forecasts tagged `north`, one for four: three misses, one cluster
+    (chapter 8: "Cluster detected.")."""
+    for wid, said, other in CHAPTER_EIGHT:
+        dist = [
+            {"path": said, "p": 0.7, "tags": ["north"]},
+            {"path": other, "p": 0.3, "tags": ["north"]},
+        ]
+        w = run.wager(wid, dist, by="desk", commit=reverse.COMMIT)
+        anchor(run)
+        seal(run, w, {"path_index": 0 if wid == "seed" else 1})
+    anchor(run)
+    rep = recon_key(run)
+    got = reverse.read_misses(rep["rows"], run.rec.rows())
+    assert [m["id"] for m in got["misses"]] == ["dry", "stay", "fear"]
+    assert got["misses"][0]["forecast"] == "dry"
+    assert got["misses"][0]["happened"] == "rain, from the south"
+    assert got["clusters"] == [{"key": "tag:north", "ids": ["dry", "stay", "fear"]}]
+
+
+def test_the_morning_screen_shows_scores_beside_the_humans_grade(run):
+    committed(run, "f", DIST_ONE, {"path": "no"})
+    rep, screen = run.checkout(human_key=HUMAN_KEY)
+    assert rep["wagers"]["rows"][0]["graded_by"] is None
+    line = next(x for x in screen.splitlines() if "wager f reconciled" in x)
+    assert "brier 0.360 · log 0.92 · by desk (claimed)" in line
+    assert "· tip sealed " in line and line.endswith("grade is yours")
+    assert "calibration desk: n 1 · brier 0.36000" in screen
+    assert "misses: 1, clusters: 0" in screen

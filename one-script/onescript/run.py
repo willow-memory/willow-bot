@@ -60,6 +60,8 @@ class Run:
         # Config, never from a caller (api._open)
         self.keyring: Path | None = None
         self.nestor_db: Path | None = None
+        # the operator's drand reader, from Config (W4 break 1); None: offline
+        self.beacon = None
 
     def checkin(self, gate_cfg: dict | None = None) -> dict:
         report = boot.boot(self.rec, self.keys, self.law, gate_cfg)
@@ -245,6 +247,13 @@ class Run:
         except (ValueError, OSError):
             return None
 
+    def seal_rounds(self) -> dict[str, int]:
+        """The reader's newest round at each tip seal, by tip row, as the
+        anchor (outside the box) keeps them (R23a); {} when unreadable."""
+        a = self._anchor() or {}
+        got = a.get("rounds") if isinstance(a, dict) else None
+        return dict(got) if isinstance(got, dict) else {}
+
     _NOW = object()
 
     def pin(self, anchor: dict | None | object = _NOW) -> dict | None:
@@ -392,26 +401,52 @@ class Run:
                 continue
             card = {"own_idea": True, **d.card} if own else d.card
             rows.append(
-                self.rec.append(
-                    "proposal",
+                self.append_proposal(
                     who,
-                    where=p["path"],
-                    turn=n,
-                    line=got["line"],
-                    path=p["path"],
-                    sha=h256(p["data"]),
-                    data=p["data"],
-                    cites=p["cites"],
-                    claim=p["claim"],
-                    subject=proposals.subject(p),
+                    p,
                     verdict="link_fail" if lost else d.verdict,
                     reason="a cite is not in the served file" if lost else d.reason,
                     link_fail=lost,
                     own_idea=own,
                     card=card,
+                    turn=n,
+                    line=got["line"],
                 )
             )
         return rows
+
+    def append_proposal(
+        self,
+        who,
+        p: dict,
+        *,
+        verdict: str,
+        reason: str,
+        link_fail: list,
+        own_idea: bool,
+        card: dict,
+        **extra,
+    ) -> dict:
+        """One judged `proposal` row, the shape `find_proposal` and
+        `seal_proposal` read: the model's rows (`_take`) and the table's
+        decision beats (`table.propose_beat`) both go through here."""
+        return self.rec.append(
+            "proposal",
+            who,
+            where=p["path"],
+            path=p["path"],
+            sha=h256(p["data"]),
+            data=p["data"],
+            cites=p["cites"],
+            claim=p["claim"],
+            subject=proposals.subject(p),
+            verdict=verdict,
+            reason=reason,
+            link_fail=link_fail,
+            own_idea=own_idea,
+            card=card,
+            **extra,
+        )
 
     def find_proposal(self, subject: str) -> tuple[dict | None, str | None]:
         """The stored proposal row for `subject` that really is that proposal,
@@ -543,9 +578,15 @@ class Run:
                 subject=subject,
             )
 
-    def say(self, text: str, facts: dict) -> list[dict]:
+    def say(self, text: str, facts: dict, *, symbols=None) -> list[dict]:
         """Layer 5: the claims in an output, checked before the human reads it.
-        The text itself is never rewritten; the rows sit beside it."""
+        The text itself is never rewritten; the rows sit beside it.
+
+        `symbols` (T-cbm-1) is a callable `text -> {file: entry}` (see
+        `graph.symbols_for`) that turns on the `symbol` kind when the facts do
+        not already carry one. Left None, no symbol row is made."""
+        if symbols is not None and "symbols" not in facts:
+            facts = {**facts, "symbols": symbols(text)}
         rows = gate.check_claims(text, facts)
         self.claims += rows
         self.rec.append("claims", self.sys, text_hash=h256(text), claims=rows)
@@ -556,15 +597,35 @@ class Run:
         wid: str,
         distribution: list[dict] | None = None,
         scores: dict | None = None,
+        *,
+        by: str | None = None,
+        committed: dict | None = None,
+        commit: str | None = None,
+        table: dict | None = None,
+        beacon_latest: int | None = None,
     ) -> dict:
         """Record a declared wager. Its row hash is the subject a human seal
-        names to say what happened; nothing here grades it."""
+        names to say what happened; nothing here grades it.
+
+        `api.forecast` passes `by` (a role, `reverse.ROLES`), `committed` (a
+        foreign commitment, when the forecast was made outside the record) and
+        `commit=reverse.COMMIT`, which makes the outcome count only by chain
+        order under the human's sealed tip (SPEC R3). Left out, the row has the
+        older shape, byte for byte."""
+        extra: dict = {}
+        if commit is not None:
+            extra = {"by": by, "committed": committed, "commit": commit}
+        if table is not None:  # the world and sheets a table forecast is about
+            extra["table"] = table
+        if beacon_latest is not None:  # the reader's newest round then (R23a)
+            extra["beacon_latest"] = beacon_latest
         return self.rec.append(
             "wager",
             self.sys,
             id=wid,
             distribution=distribution or [],
             scores=scores,
+            **extra,
         )
 
     def seal(
@@ -603,10 +664,23 @@ class Run:
         pair: object,
         keyring: dict,
         verifiers: frozenset | None = None,
+        outcome: dict | None = None,
     ) -> dict:
         """The human's seal as a sealed Nestor pair whose conclusion is exactly
         `subject`: no terminal, no key typed. The row says whose pair it was,
-        and carries the pair's signed fields, so a reader can re-check it."""
+        and carries the pair's signed fields, so a reader can re-check it.
+
+        A wager seal passes the wager's row hash as `subject` and its
+        `outcome`, as `seal` does: the pair's conclusion must then be
+        `reverse.outcome_subject(wager, outcome)`, and the row keeps `wager`
+        and `outcome` beside the pair. Recorded gap (SPEC-documented C6): an
+        outcome sealed by pair still counts only under a tip sealed by the
+        human's key; `reverse.covered_through` does not take a Nestor-sealed
+        tip, and this does not change that."""
+        extra: dict = {}
+        if outcome is not None:
+            extra = {"wager": subject, "outcome": outcome}
+            subject = reverse.outcome_subject(subject, outcome)
         try:
             hum, who = gate.human_nestor(subject, pair, keyring, verifiers)
         except gate.Refused as e:
@@ -622,12 +696,43 @@ class Run:
             via="nestor",
             verifier=who,
             pair=signed,
+            **extra,
         )
 
-    def seal_tip(self, proof: str, human_key: bytes) -> dict:
+    def seal_tip(
+        self,
+        proof: str,
+        human_key: bytes,
+        tip: dict | None = None,
+        beacon_latest: int | None = None,
+    ) -> dict:
         """The human seals the record's tip; the anchor keeps it outside the box.
-        A broken chain is never anchored: sealing it would bless the break."""
-        tip, breaks = self.rec.tip(), self.rec.verify_chain()
+        A broken chain is never anchored: sealing it would bless the break.
+
+        `tip` ({n, hash}) names the row the human signed, for a seal made in a
+        later invocation than the row (the verb's own `invocation` row moves
+        the record's tip before the proof can arrive). It must still be that
+        row, and no older than the tip already anchored. Left out, the
+        record's tip as it stands now."""
+        breaks = self.rec.verify_chain()
+        if tip is None:
+            tip = self.rec.tip()
+        elif not breaks:
+            at = next((r for r in self.rec.rows() if r["n"] == tip.get("n")), None)
+            old = self._anchor()
+            why = None
+            if at is None or at["hash"] != tip.get("hash"):
+                why = f"row {tip.get('n')} is not on record with that hash"
+            elif old is not None and tip["n"] < old["n"]:
+                why = f"row {tip['n']} is older than the anchored tip, row {old['n']}"
+            if why is not None:
+                return self.rec.append(
+                    "refused",
+                    self.sys,
+                    at="seal_tip",
+                    reason=why,
+                    subject=record.tip_subject(tip),
+                )
         if tip is None or breaks:
             why = "nothing to seal" if tip is None else f"the chain is broken: {breaks}"
             return self.rec.append("refused", self.sys, at="seal_tip", reason=why)
@@ -639,8 +744,11 @@ class Run:
                 "refused", self.sys, at="seal_tip", reason=str(e), subject=subject
             )
         before = self._anchor()  # the tip a first pin keeps, read before it moves
-        self.rec.set_anchor(tip, proof)
-        row = self.rec.append("seal", hum, where=subject, subject=subject, proof=proof)
+        self.rec.set_anchor(tip, proof, beacon_latest)
+        extra = {} if beacon_latest is None else {"beacon_latest": beacon_latest}
+        row = self.rec.append(
+            "seal", hum, where=subject, subject=subject, proof=proof, **extra
+        )
         self.pin(before)
         return row
 
@@ -661,15 +769,51 @@ class Run:
         sealed=None,
         task_of=None,
         human_key: bytes | None = None,
+        basis=None,
+        read_head=None,
+        breaks: list[str] | None = None,
     ) -> dict:
         """The reverse report over the record as it stands: pure, it appends
         nothing. `checkout` draws its screen from it; `api.needs` reads it.
-        The record is read, and its tip checked, once."""
+        The record is read, and its tip checked, once.
+
+        `basis` is the R3 hook `reverse.reconcile_wagers` asks about each
+        sealed outcome (`table.basis`). Whenever the record holds table verdict
+        rows or a wager naming a table world it is bound HERE, to the
+        operator's beacon reader, and a caller's `basis` is ignored (R23a: the
+        reader is the operator's, never the caller's), so every report
+        (reconcile, needs, peek, checkout, the morning screen) goes through the
+        one door. A caller's `basis` is used only on a box with no table.
+
+        `breaks` are the chain and anchor breaks as read BEFORE this verb's
+        own rows were appended (`api._breaks_before`, W4 break 7): a record
+        cut after its sealed tip then reads "rows were cut", where the
+        invocation row landing at the cut would read as a rewrite.
+
+        `read_head` (R13) is the ai-game-master ledger reader `table.surface`
+        hands `table.check_agm_head`; it only matters for a table box, where
+        the report gains a `table` key (sessions and the agm_head check)."""
         rows = self.rec.rows()
+        if any(
+            (r["kind"] == "verdict" and r.get("who") == "table")
+            or (r["kind"] == "wager" and isinstance(r.get("table"), dict))
+            for r in rows
+        ):
+            from . import table  # table imports api, which imports this module
+
+            # R23a: on a table box the hook is the Run's, bound to the
+            # operator's reader (Config.beacon); a caller's `basis` is ignored
+            basis = table.basis(human_key, self.beacon, self.seal_rounds())
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))
-        return reverse.reconcile(
+        chain = (
+            breaks
+            if breaks is not None
+            else self.rec.verify_chain()
+            + (self.rec.verify_anchor(human_key) if human_key is not None else [])
+        )
+        report = reverse.reconcile(
             self.rec.box,
             self.rec.pile(),
             rows,
@@ -683,7 +827,24 @@ class Run:
             wagers_through=through if human_key is not None else None,
             held=held,
             unreachable=unreachable,
+            wagers_key=human_key,  # tip seals re-checked row by row (SPEC R3)
+            wagers_basis=basis,
+            # a broken record is said, never read as "no seal" (INVARIANTS §1)
+            wagers_breaks=chain if human_key is not None else None,
         )
+        from . import table  # table imports api, which imports this module
+
+        # a tip counts as covering only when the caller handed the key over
+        shown = table.surface(
+            rows,
+            covered_through=through if human_key is not None else None,
+            read_head=read_head,
+            key_given=human_key is not None,
+            breaks=chain,  # B1: a broken record shows the table unreachable
+        )
+        if shown is not None:
+            report["table"] = shown
+        return report
 
     def checkout(
         self,
@@ -693,14 +854,21 @@ class Run:
         task_of=None,
         boot_report: dict | None = None,
         human_key: bytes | None = None,
+        basis=None,
+        read_head=None,
+        breaks: list[str] | None = None,
     ) -> tuple[dict, str]:
         """`human_key` lets reverse check the sealed anchor tip; without it no
-        wager outcome counts (it cannot be shown to be covered)."""
+        wager outcome counts (it cannot be shown to be covered). `basis` as
+        `reconciled` takes it."""
         rep = self.reconciled(
             changed_law=changed_law,
             sealed=sealed,
             task_of=task_of,
             human_key=human_key,
+            basis=basis,
+            read_head=read_head,
+            breaks=breaks,
         )
         screen = view.morning(rep, boot_report, self.claims, self.acts)
         self.rec.append("reconcile", self.sys, report_hash=h256(screen))

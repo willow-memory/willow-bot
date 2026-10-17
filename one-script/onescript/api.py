@@ -10,6 +10,12 @@
     escalate(cfg, task)               # the deterministic chain on the served scope
     seal_proposal(cfg, subject, ...)  # the human's seal; a sealed pass is written
     needs(cfg)                        # the morning screen's NEEDS YOU lines, read-only
+    forecast(cfg, wid, dist, by=...)  # a wager row: the forecast, before the outcome
+    seal_outcome(cfg, wager, outcome, proof=...)  # the human's seal on what happened
+    seal_tip(cfg, "tip:n:hash", proof=...)        # the human seals a tip
+    seal_forecast(cfg, wager, proof=...)          # the human: this forecast is mine
+    reconcile(cfg, human_key=FILE)    # wagers lined up and scored, read-only
+    read_misses(cfg, human_key=FILE)  # the misses, clustered, read-only
     checkout(cfg)                     # reverse, then the morning screen
 
 `__main__` is a thin wrapper over these. Every function opens the box fresh,
@@ -42,7 +48,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import boot, gate, nestor_seal, record, view
+from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
 from . import serve as served
 from .run import PKG, Run
@@ -81,6 +87,12 @@ class Config:
     #: tool, venv or clone is missing defers on the phone and hard-closes on the
     #: box; a missing tool never makes a run a phone run.
     phone: bool = False
+    #: The operator's drand reader (`beacon.drand_reader`, or a stand-in):
+    #: round -> {"randomness", ...}. A table outcome counts only once the
+    #: session's randomness is the one this says its round is (W4 break 1).
+    #: Fixed here, never taken from a caller; None: offline, and no table
+    #: outcome can be proposed (`unreachable`, said).
+    beacon: Callable[[int], dict] | None = None
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -281,7 +293,9 @@ def _refused(why: str, code: int) -> dict:
     return {"refused": why, "code": code}
 
 
-def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]:
+def _open(
+    cfg: Config, cmd: str, argv: Iterable[str], *, write: bool = True
+) -> tuple[Run | None, dict]:
     """Open the box and write the `invocation` row: the argv, the root, the
     box, and the hash of every input read. Returns (run, info), or (None, a
     refusal) when there is no law, the keys sit in the box, or are exposed."""
@@ -308,6 +322,9 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
     run = Run(cfg.box, keys, law, clock, anchor=cfg.keys.parent / ANCHOR)
     run.serve_key = _load_serve_key(cfg)
     run.keyring, run.nestor_db = cfg.keyring, cfg.nestor_db
+    run.beacon = cfg.beacon
+    if not write:  # `peek`: a Run to read through; no invocation, no pin, no row
+        return run, {"ci_text": ci_text, "nested": False}
     run.rec.append(
         "invocation",
         run.sys,
@@ -399,31 +416,126 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
     }
 
 
-def checkout(cfg: Config, argv: Iterable[str] = ("checkout",)) -> dict:
+def _breaks_before(cfg: Config, key: bytes | None) -> list[str] | None:
+    """The chain's and the anchor's breaks as the record stands BEFORE a verb
+    appends its own rows (W4 break 7). Read through a reader with no write
+    token; None when there is no key to check the anchor with, or the keys
+    file sits where `_open` will refuse it anyway."""
+    if key is None or cfg.keys.resolve().is_relative_to(cfg.box.resolve()):
+        return None
+    try:
+        rec = record.Record(
+            cfg.box, lambda: "", "", object(), anchor=cfg.keys.parent / ANCHOR
+        )
+    except (PermissionError, OSError):
+        return None
+    return rec.verify_chain() + rec.verify_anchor(key)
+
+
+def checkout(
+    cfg: Config,
+    argv: Iterable[str] = ("checkout",),
+    *,
+    human_key: Path | None = None,
+    basis=None,
+    read_head=None,
+) -> dict:
+    """Reverse, then the morning screen. `human_key` is the human's key in a
+    file outside the box (0600, `read_human_key`): with it, wager outcomes the
+    sealed tip covers count, and GRADES shows their scores. `basis` is the R3
+    hook; on a box holding table rows or table wagers `Run.reconciled` binds
+    its own (`table.basis` on `Config.beacon`) and ignores this one (R23a).
+    `read_head` is the table's ledger reader
+    (`table.check_agm_head`); the screen's TABLE section shows its state."""
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
+    before = _breaks_before(cfg, key)
     run, info = _open(cfg, "checkout", argv)
     if run is None:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    rep, screen = run.checkout(boot_report=last)
+    rep, screen = run.checkout(
+        boot_report=last,
+        human_key=key,
+        basis=basis,
+        read_head=read_head,
+        breaks=before,
+    )
     return {"report": rep, "screen": screen, "code": 0}
 
 
-def needs(cfg: Config, argv: Iterable[str] = ("needs",)) -> dict:
+def needs(
+    cfg: Config,
+    argv: Iterable[str] = ("needs",),
+    *,
+    basis=None,
+    human_key: Path | None = None,
+    read_head=None,
+) -> dict:
     """What the morning screen's NEEDS YOU section would list right now, as
     data: `{"needs": [line, ...], "count": n}` (an empty list is the screen's
     "nothing"). The lines are `view.needs_you`, the same ones `checkout` prints,
     drawn from the record by the same reverse report. Read-only, like `pooled`
     and `resume`: it writes the `invocation` row every verb writes and nothing
     else, in particular no `reconcile` row, so it does not check the run out and
-    it needs no open box."""
+    it needs no open box.
+
+    SPEC R13: the lines also carry the wagers (`wager <id> <state> ...`: a
+    forecast waiting, an outcome waiting on a seal or its tip, a score code
+    made, an unreachable seal) and, on a table box, the table's (`table verdict
+    session ...`, `table agm_head <state> ...`; `view.table_lines`). `human_key`
+    is a file outside the box, as `checkout` takes it: with it a sealed tip is
+    checked and scores show; without, a wager reads as waiting and a session's
+    tip as not checked here. `read_head` is the ledger reader for the agm_head
+    check."""
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
+    before = _breaks_before(cfg, key)
     run, info = _open(cfg, "needs", argv)
     if run is None:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    lines = view.needs_you(run.reconciled(), last, run.claims, run.acts)
+    rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
+    lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
     return {"needs": lines, "count": len(lines), "code": 0}
+
+
+def peek(
+    cfg: Config,
+    *,
+    human_key: Path | None = None,
+    read_head=None,
+    basis=None,
+) -> dict:
+    """`needs` that writes NOTHING (Q1): no `invocation` row, no `pin`, no
+    directory, so the record is byte-identical after it and its tip does not move
+    under a human who is about to sign it. The same lines as `needs` (the wagers,
+    the table's sessions and agm_head, a broken chain as `table unreachable`),
+    for a second box a seat only watches. A box with no record is
+    `{"needs": [], "count": 0, "empty": True}`; a refusal is as `needs`'s. The
+    law, the keys file and the human key are checked as any verb checks them."""
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
+    if not (cfg.box / "record.jsonl").is_file():
+        return {"needs": [], "count": 0, "empty": True, "code": 0}
+    if not cfg.keys.is_file():
+        # R23a: `_keys` would mint a keys file; peek writes nothing, ever
+        why = f"unreachable: no keys file at {cfg.keys}; nothing was read or made"
+        return {"needs": [], "count": 0, "state": "unreachable", "why": why, "code": 1}
+    before = _breaks_before(cfg, key)
+    run, info = _open(cfg, "peek", ("peek",), write=False)
+    if run is None:
+        return info
+    last = _last_boot(run.rec.rows())
+    _from_record(run)
+    rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
+    lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
+    return {"needs": lines, "count": len(lines), "peek": True, "code": 0}
 
 
 # ── turn ────────────────────────────────────────────────────────────────────
@@ -501,19 +613,23 @@ def _seal(
     proof: str | None,
     pair: object,
     verifiers: Iterable[str] | None,
+    outcome: dict | None = None,
 ) -> dict:
     """One seal, by whichever means the caller brought. A row either way: the
-    seal, or the refusal and why.
+    seal, or the refusal and why. With `outcome`, `subject` is a wager's row
+    hash and what is sealed is `reverse.outcome_subject(subject, outcome)`.
 
     A Nestor seal is checked against the operator's keyring and Nestor's store,
     both fixed in `cfg`: the caller can hand over a pair to point at, never a
     keyring to check it by, and never a pair the store no longer holds as
     sealed."""
 
+    signed = subject if outcome is None else reverse.outcome_subject(subject, outcome)
+
     def refuse(why: str) -> dict:
         state = {"state": "unreachable"} if why.startswith("unreachable") else {}
         return run.rec.append(
-            "refused", run.sys, at="seal", reason=why, subject=subject, **state
+            "refused", run.sys, at="seal", reason=why, subject=signed, **state
         )
 
     if pair is not None or (proof is None and cfg.nestor_db is not None):
@@ -528,7 +644,7 @@ def _seal(
             return refuse(nestor_seal.NO_CRYPTO)
         try:
             ring = nestor_seal.load_keyring(cfg.keyring)
-            found = nestor_seal.current(cfg.nestor_db, subject, pair)
+            found = nestor_seal.current(cfg.nestor_db, signed, pair)
         except nestor_seal.Unverifiable as e:
             return refuse(f"unreachable: {e}")
         if not found:
@@ -539,15 +655,15 @@ def _seal(
             )
         allowed = frozenset(verifiers) if verifiers is not None else None
         good = next(
-            (p for p in found if nestor_seal.check(p, subject, ring, allowed)[0]),
+            (p for p in found if nestor_seal.check(p, signed, ring, allowed)[0]),
             found[0],  # none verifies: the refusal says why
         )
-        return run.seal_nestor(subject, good, ring, allowed)
+        return run.seal_nestor(subject, good, ring, allowed, outcome)
     if proof is not None:
         human_key = run.keys.get(gate.HUMAN)
         if human_key is None:
             return refuse("no human key on this box; seal with a Nestor pair")
-        return run.seal(subject, proof, human_key)
+        return run.seal(subject, proof, human_key, outcome)
     return refuse("no seal given: a proof or a Nestor pair")
 
 
@@ -635,6 +751,90 @@ def seal_proposal(
         "written": wrote if wrote["kind"] == "write" else None,
         "write": wrote,
         "code": 0 if wrote["kind"] == "write" else 1,
+    }
+
+
+def lore(cfg: Config, subject: str, argv: Iterable[str] = ("lore",)) -> dict:
+    """Turn a human-sealed `world/*.md` proposal into `lore` rows, one fact each
+    (SPEC R11; `lore.from_sealed`). Refused, recorded, when the proposal is not
+    sealed, not a pass, an own idea, or not under world/. Writes no seal and not
+    the file (`seal_proposal` does). Ends with the rescope step, as R14 does:
+    new rows move the piles they sit in, so a scope at the new tip serves empty
+    until the human seals it."""
+    from . import lore as lore_rows
+
+    run, info = _open(cfg, "lore", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "lore", subject=subject)) is not None:
+        return refusal
+    made = lore_rows.from_sealed(run, subject)
+    if made and made[0]["kind"] == "refused":
+        return {"refused": made[0]["reason"], "row": made[0], "code": 1}
+    if not made:  # nothing was written, so nothing moved
+        return {
+            "lore": [],
+            "count": 0,
+            "rescope": {
+                "why": "no new rows: every fact was already lore; no pile moved",
+                "steps": [],
+            },
+            "code": 0,
+        }
+    by = "what"
+    return {
+        "lore": [{"n": r["n"], "where": r["where"], "fact": r["fact"]} for r in made],
+        "count": len(made),
+        "rescope": {
+            "why": "the new lore rows moved the what=lore pile (and the author's "
+            "who pile): a scope drawn at the new tip serves empty until the "
+            "human seals it",
+            "steps": [
+                f"python3 -m onescript scope --by {by} --match what=lore",
+                "python3 -m onescript seal <the new subject> --proof P",
+                f"python3 -m onescript serve --by {by} --match what=lore"
+                " --upto <its upto> --max-chars N",
+            ],
+        },
+        "code": 0,
+    }
+
+
+def rules(cfg: Config, subject: str, argv: Iterable[str] = ("rules",)) -> dict:
+    """Turn a human-sealed `rules/*.md` `@markdownai` proposal into `rules` rows,
+    one `@phase` each (SPEC R15, T-mai-2; `rules.from_sealed`). Refused, recorded,
+    when the proposal is not sealed, not a pass, an own idea, not under rules/ or
+    not an `@markdownai` document. Writes no seal and not the file
+    (`seal_proposal` does). Ends with the rescope step, as `lore` does."""
+    from . import rules as rules_rows
+
+    run, info = _open(cfg, "rules", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "rules", subject=subject)) is not None:
+        return refusal
+    made = rules_rows.from_sealed(run, subject)
+    if made and made[0]["kind"] == "refused":
+        return {"refused": made[0]["reason"], "row": made[0], "code": 1}
+    steps = [
+        "python3 -m onescript scope --by what --match what=rules",
+        "python3 -m onescript seal <the new subject> --proof P",
+        "python3 -m onescript serve --by what --match what=rules"
+        " --upto <its upto> --max-chars N",
+    ]
+    prop, _ = run.find_proposal(subject)
+    return {
+        "rules": [{"n": r["n"], "phase": r["where"]} for r in made],
+        "dropped": rules_rows.dropped(prop["data"]) if prop else {},
+        "count": len(made),
+        "rescope": {
+            "why": "the new rules rows moved the what=rules pile: a scope drawn at "
+            "the new tip serves empty until the human seals it"
+            if made
+            else "no new rows: every phase was already rules; no pile moved",
+            "steps": steps if made else [],
+        },
+        "code": 0,
     }
 
 
@@ -756,6 +956,469 @@ def escalate(
     except esc.ChainUnavailable as e:
         return _refused(str(e), 2)
     return {**out, "code": 0}
+
+
+# ── the forecast lane (SPEC R1: forge-convergence.md:643-645, plus seal_tip
+# and reconcile, without which no outcome counts) ────────────────────────────
+OUTCOME_KEYS = ("path_index", "path", "winner")  # reverse._match_distribution
+COMMITTED_KEYS = {"sha256", "beacon_then", "target"}
+TABLE_KEYS = {"world", "sheets_sha"}  # a table forecast's world (SPEC W2 S2)
+#: ... and the drand round whose randomness seeds its session (W4 break 1)
+TABLE_FORECAST_KEYS = TABLE_KEYS | {"beacon_round"}
+
+
+def _future_round(rnd: object, run: Run) -> tuple[str | None, int | None]:
+    """(why `rnd` is not a drand round still ahead, None) or (None, the
+    reader's latest round). Ahead means the operator's reader can NOT read it
+    yet: `rnd` > the newest round it says it reads, AND `read(rnd)` does not
+    answer (R23a: a reader whose `latest` lags must not reopen grinding). No
+    box clock is asked: a clock set back (`--now`) would let a round already
+    out pass. A round already out is a seed anyone may know; with no reader,
+    nothing can be shown to be ahead, and the forecast is refused."""
+    if isinstance(rnd, bool) or not isinstance(rnd, int) or rnd < 1:
+        return "beacon_round is a drand round number", None
+    newest, why = beacon.latest(run.beacon)
+    if newest is None:
+        return f"{why}: no round can be shown to be still ahead", None
+    if rnd <= newest:
+        return (
+            f"beacon round {rnd} is out already (the reader reads up to {newest}): "
+            "its randomness may be known; name a round still ahead"
+        ), None
+    try:  # a reader whose `latest` lags may still serve the round: ask it
+        served = run.beacon(rnd)
+    except Exception:  # not served: not out, as far as this reader knows
+        served = None
+    if isinstance(served, dict) and beacon.is_randomness(served.get("randomness")):
+        return (
+            f"beacon round {rnd} is out already: the reader serves its randomness "
+            f"(though it says its latest is {newest}); name a round still ahead"
+        ), None
+    return None, newest
+
+
+def forecast(
+    cfg: Config,
+    wid: str,
+    distribution: list[dict],
+    *,
+    by: str = "desk",
+    committed: dict | None = None,
+    table: dict | None = None,
+    argv: Iterable[str] = ("forecast",),
+) -> dict:
+    """`forecast()` seals a prediction into the ledger before the outcome
+    (forge-convergence.md:643): one `wager` row, chained, whose hash is the
+    subject an outcome seal names. "Seals" means committed to the chain; it
+    counts only once a tip the human seals holds it before the outcome seal
+    (SPEC R3). Refused, with nothing appended but the refusal: a distribution
+    that does not stand (`reverse.check_distribution`), a `by` that is not a
+    role, a `committed` that is not {sha256, beacon_then, target}, or an id
+    already on record (a forecast stands, `play.py:254-256`). `table` names
+    what a table forecast is about, exactly {world, sheets_sha, beacon_round}:
+    the world and its odds' inputs (`peaks.world_key`), and a drand round
+    that has not fired yet by this box's clock, whose randomness must seed
+    the session that answers it (rival R1, H7; W4 break 1). A table session
+    on another world, other sheets or another seed can't supply its outcome
+    (`table.propose_outcome`)."""
+    run, info = _open(cfg, "forecast", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "forecast", id=wid)) is not None:
+        return refusal
+    why = None
+    if not isinstance(wid, str) or not wid.strip():
+        why = "a forecast needs an id"
+    elif by not in reverse.ROLES:
+        why = f"by is a role, one of {list(reverse.ROLES)}, never a name: {by!r}"
+    elif committed is not None and (
+        not isinstance(committed, dict) or set(committed) != COMMITTED_KEYS
+    ):
+        why = f"committed carries exactly {sorted(COMMITTED_KEYS)}"
+    elif table is not None and (
+        not isinstance(table, dict)
+        or set(table) != TABLE_FORECAST_KEYS
+        or not all(isinstance(table[k], str) and table[k] for k in TABLE_KEYS)
+    ):
+        why = (
+            f"table names exactly {sorted(TABLE_FORECAST_KEYS)}: world and "
+            "sheets_sha as text, beacon_round a future drand round"
+        )
+    elif table is not None and (
+        (got := _future_round(table["beacon_round"], run))[0] is not None
+    ):
+        why = got[0]
+    elif table is not None and any(
+        r["kind"] == "wager"
+        and (r.get("table") or {}).get("beacon_round") == table["beacon_round"]
+        for r in run.rec.rows()
+    ):
+        # R23a: one table forecast per round, or a hedge's loser is never graded
+        why = (
+            f"a table forecast already names beacon round {table['beacon_round']}: "
+            "one forecast per round"
+        )
+    elif any(r["kind"] == "wager" and r.get("id") == wid for r in run.rec.rows()):
+        why = f"a wager {wid!r} is already on record; a forecast stands"
+    else:
+        why = reverse.check_distribution(distribution)
+    if why is not None:
+        row = run.rec.append("refused", run.sys, at="forecast", reason=why, id=wid)
+        return {"refused": why, "row": row, "code": 1}
+    row = run.wager(
+        wid,
+        distribution,
+        by=by,
+        committed=committed,
+        commit=reverse.COMMIT,
+        table=table,
+        # R23a: the reader's newest round as the forecast was made, a fact
+        # the reader checked; the round named must be after it
+        beacon_latest=got[1] if table is not None else None,
+    )
+    return {
+        "row": row,
+        "subject": row["hash"],  # what seal_outcome names
+        "tip": record.tip_subject(row),  # what the human signs to commit it
+        "code": 0,
+    }
+
+
+def _rescope(run: Run) -> dict:
+    """The step after an outcome seal (SPEC R14): the seal is a new row in the
+    human's pile, so a scope drawn at the new tip has a new subject, and serving
+    it is `empty` until the human seals that one. Read from the last scope the
+    human sealed; nothing is proposed, sealed or served here."""
+    good, _ = run.seal_rows()
+    rows = run.rec.rows()
+    spec = None
+    for r in reversed(rows):
+        if r["kind"] == "seal" and r["n"] in good:
+            sub = str(r.get("subject") or "")
+            if sub.startswith("serve:"):
+                spec = next(
+                    (
+                        x["spec"]
+                        for x in reversed(rows)
+                        if x["kind"] == "scope"
+                        and x["n"] < r["n"]
+                        and x.get("where") == sub
+                    ),
+                    None,
+                )
+                break
+    by = ",".join(spec["by"]) if spec else "who"
+    match = "".join(
+        f" --match {k}={v}"
+        for k, v in sorted(((spec or {}).get("match") or {}).items())
+    )
+    return {
+        "why": "the outcome seal moved the human's pile: a scope at the new tip "
+        "serves empty until the human seals it"
+        + ("" if spec else " (no sealed scope on record yet)"),
+        "steps": [
+            f"python3 -m onescript scope --by {by}{match}",
+            "python3 -m onescript seal <the new subject> --proof P",
+            f"python3 -m onescript serve --by {by}{match} --upto <its upto>"
+            " --max-chars N",
+        ],
+    }
+
+
+def _wager_row(run: Run, wager: str) -> dict | None:
+    return next(
+        (r for r in run.rec.rows() if r["kind"] == "wager" and r["hash"] == wager),
+        None,
+    )
+
+
+def seal_outcome(
+    cfg: Config,
+    wager: str,
+    outcome: dict,
+    *,
+    proof: str | None = None,
+    pair: object = None,
+    verifiers: Iterable[str] | None = None,
+    argv: Iterable[str] = ("seal-outcome",),
+) -> dict:
+    """`seal_outcome()` is the operator's seal on what happened
+    (forge-convergence.md:644) over `reverse.outcome_subject(wager, outcome)`,
+    so the outcome is inside what was signed: by the human's proof
+    (`Run.seal`), or by a sealed Nestor pair whose conclusion is that subject
+    (`Run.seal_nestor`, checked against `cfg.keyring` and `cfg.nestor_db`,
+    never the caller's). Refused before any seal row is written: no wager row
+    with that hash, an outcome that is not one of path_index / path / winner,
+    or one naming no path the wager declared, or more than one. A proofless
+    seal is refused; code never writes a seal row. Ends with the rescope step
+    (SPEC R14) and the tip to seal next, without which the outcome is not
+    covered. Recorded gap (C6): the tip itself is sealed by the human's key;
+    a Nestor-sealed tip does not count in `reverse.covered_through`."""
+    run, info = _open(cfg, "seal-outcome", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal_outcome", subject=wager)) is not None:
+        return refusal
+    w = _wager_row(run, wager)
+    why = None
+    if w is None:
+        why = "no wager row on record has that hash"
+    elif (
+        not isinstance(outcome, dict)
+        or len(outcome) != 1
+        or next(iter(outcome)) not in OUTCOME_KEYS
+    ):
+        why = f"an outcome is one of {list(OUTCOME_KEYS)}"
+    elif w.get("distribution") and reverse._match_distribution(w, outcome)[1] is None:
+        why = "the outcome names no path the wager declared, or more than one"
+    elif proof is None and pair is None and cfg.nestor_db is None:
+        why = "no seal given: the human's proof or a Nestor pair over the outcome"
+    elif proof is not None and run.keys.get(gate.HUMAN) is None:
+        why = "no human key on this box to check the proof by"
+    if why is not None:
+        row = run.rec.append(
+            "refused", run.sys, at="seal_outcome", reason=why, subject=wager
+        )
+        return {"refused": why, "row": row, "sealed": False, "code": 1}
+    row = _seal(run, cfg, wager, proof, pair, verifiers, outcome)
+    if row["kind"] != "seal":
+        return {"row": row, "sealed": False, "code": 1}
+    out = {
+        "row": row,
+        "sealed": True,
+        "tip": record.tip_subject(row),  # seal it, or this outcome is not covered
+        "rescope": _rescope(run),
+        "code": 0,
+    }
+    if row.get("via") == "nestor":  # the C6 gap, said where it bites
+        out["counts_when"] = (
+            "sealed by Nestor pair: this outcome counts only once a tip sealed "
+            "by the human's key covers it (a Nestor-sealed tip does not count)"
+        )
+    return out
+
+
+def seal_forecast(
+    cfg: Config,
+    wager: str,
+    *,
+    proof: str | None = None,
+    argv: Iterable[str] = ("seal-forecast",),
+) -> dict:
+    """The human says a forecast is theirs: a proof over
+    `reverse.forecast_subject(wager)`. The vouch is authorship, not timing:
+    it says who made the forecast, never when; when is the chain order under
+    the human's sealed tip (SPEC R3), and a vouch sealed later changes none of it. `by` on a wager row is the run's claim
+    (`by_claimed`); a forecast claimed as the human's counts under "human" in
+    the calibration only with this seal, else under "human (claimed)"."""
+    run, info = _open(cfg, "seal-forecast", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal_forecast", subject=wager)) is not None:
+        return refusal
+    w = _wager_row(run, wager)
+    why = None
+    if w is None or w.get("commit") != reverse.COMMIT:
+        why = "no forecast row on record has that hash"
+    elif proof is None:
+        why = "no seal given: the human's proof over the forecast subject"
+    elif run.keys.get(gate.HUMAN) is None:
+        why = "no human key on this box to check the proof by"
+    if why is not None:
+        row = run.rec.append(
+            "refused", run.sys, at="seal_forecast", reason=why, subject=wager
+        )
+        return {"refused": why, "row": row, "sealed": False, "code": 1}
+    row = run.seal(reverse.forecast_subject(wager), proof, run.keys[gate.HUMAN])  # type: ignore[arg-type]
+    ok = row["kind"] == "seal"
+    return {"row": row, "sealed": ok, "code": 0 if ok else 1}
+
+
+def covers(rows: list[dict], after: int | None, upto: int) -> list[dict]:
+    """What a tip at row `upto` newly covers: the rows after the anchored tip
+    (`after`, None when nothing was sealed) and at or before `upto`. What the
+    human's signature on that tip vouches for, shown before they sign and
+    again after (SPEC S3): every forecast and outcome row; every table
+    verdict session, once, with its row count and the forecast it claims;
+    and every `agm_head` row with the ledger head it anchors (SPEC W2 S3), so
+    no table row is signed blind. A row's `who` is shown as the record holds
+    it: the `table` identity gates the write, it does not sign the row, so a
+    row hand-appended under that label shows up here too."""
+    wagers = {r["hash"]: r for r in rows if r["kind"] == "wager"}
+    out: list[dict] = []
+    sessions: dict[str, dict] = {}
+    for r in rows:
+        if not (after is None or r["n"] > after) or r["n"] > upto:
+            continue
+        if r["kind"] == "verdict" and r.get("what") == "agm_head":
+            out.append(
+                {
+                    "n": r["n"],
+                    "what": "agm_head",
+                    "who": r.get("who"),
+                    "ledger": r.get("ledger"),
+                    "ledger_n": r.get("ledger_n"),
+                    "head": r.get("head"),
+                    "ts": r.get("ts"),
+                }
+            )
+            continue
+        if r["kind"] == "verdict":
+            sid = str(r.get("session"))
+            got = sessions.get(sid)
+            if got is None:
+                got = sessions[sid] = {
+                    "n": r["n"],
+                    "what": "verdict session",
+                    "session": sid,
+                    "who": sorted({str(r.get("who"))}),
+                    "rows": 0,
+                    "forecast": None,
+                    "ts": r.get("ts"),
+                }
+                out.append(got)
+            got["rows"] += 1
+            got["who"] = sorted(set(got["who"]) | {str(r.get("who"))})
+            if r.get("forecast"):
+                f = wagers.get(r["forecast"])
+                got["forecast"] = f.get("id") if f else r["forecast"]
+                got["forecast_on_record"] = f is not None
+            continue
+        if r["kind"] == "wager":
+            w, what = r, "forecast"
+        elif r["kind"] == "seal" and r.get("wager") in wagers:
+            w, what = wagers[r["wager"]], "outcome"
+        else:
+            continue
+        out.append(
+            {
+                "n": r["n"],
+                "what": what,
+                "id": w.get("id"),
+                "by_claimed": w.get("by"),
+                "ts": r.get("ts"),
+            }
+        )
+    return out
+
+
+def seal_tip(
+    cfg: Config,
+    subject: str,
+    *,
+    proof: str | None = None,
+    argv: Iterable[str] = ("seal-tip",),
+) -> dict:
+    """The human seals a tip (`tip:<n>:<hash>`, as `forecast` and
+    `seal_outcome` hand it out) by `Run.seal_tip`; the anchor keeps it beside
+    the keys, outside the box. Without a sealed tip no outcome counts
+    (`reverse.covered_through`). Before and after: the answer lists the
+    forecast and outcome rows this tip newly covers (`covers`), so asking
+    without a proof shows what a signature would vouch for, writing no seal."""
+    run, info = _open(cfg, "seal-tip", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal_tip", subject=subject)) is not None:
+        return refusal
+    n, _, hsh = str(subject).removeprefix(record.TIP).partition(":")
+    why = None
+    newly: list[dict] = []
+    if not str(subject).startswith(record.TIP) or not n.isdigit() or not hsh:
+        why = "not a tip subject (tip:<n>:<hash>)"
+    else:
+        before = run._anchor()
+        newly = covers(run.rec.rows(), before["n"] if before else None, int(n))
+        if proof is None:
+            why = "no seal given: the human's proof over the tip"
+        elif run.keys.get(gate.HUMAN) is None:
+            why = "no human key on this box to check the proof by"
+    if why is not None:
+        row = run.rec.append(
+            "refused", run.sys, at="seal_tip", reason=why, subject=subject
+        )
+        return {"refused": why, "row": row, "sealed": False, "covers": newly, "code": 1}
+    # R23a: the reader's newest round as the human seals, so "the round fired
+    # after the tip seal" rests on the reader, never on this box's clock
+    newest, _ = beacon.latest(cfg.beacon)
+    row = run.seal_tip(
+        proof,
+        run.keys[gate.HUMAN],  # type: ignore[arg-type]
+        {"n": int(n), "hash": hsh},
+        beacon_latest=newest,
+    )
+    ok = row["kind"] == "seal"
+    return {"row": row, "sealed": ok, "covers": newly, "code": 0 if ok else 1}
+
+
+def read_human_key(path: Path | None, box: Path) -> tuple[bytes | None, str | None]:
+    """The human's key from a file outside the box (SPEC H4, C6): hex on one
+    line. (key, None), (None, None) with no file, or (None, why) refused: a
+    file inside the box, readable beyond its owner, or not a key."""
+    if path is None:
+        return None, None
+    if path.resolve().is_relative_to(box.resolve()):
+        return None, "the human key can't live inside the box"
+    try:
+        if path.stat().st_mode & 0o077:
+            return None, f"{path} is readable beyond its owner; chmod 600 it"
+        key = bytes.fromhex(path.read_text().strip())
+    except (OSError, ValueError) as e:
+        return None, f"the human key could not be read: {type(e).__name__}"
+    return (key, None) if key else (None, "the human key file is empty")
+
+
+def reconcile(
+    cfg: Config,
+    *,
+    human_key: Path | None = None,
+    argv: Iterable[str] = ("reconcile",),
+    basis=None,
+) -> dict:
+    """Every wager lined up against the human's sealed outcomes, scored, by
+    `Run.reconciled` with the human's key from `human_key` (a file outside the
+    box, 0600). Read-only, like `needs`: an `invocation` row and nothing else,
+    no `reconcile` row, so it checks nothing out. Without the key no outcome
+    counts, and the answer says so. `graded_by` stays None (SPEC R4). `basis`
+    as `checkout` takes it: on a table box the Run's own hook, never this
+    one (R23a)."""
+    # W4 break 7: the anchor as it stood before this verb's own rows
+    before = _breaks_before(cfg, read_human_key(human_key, cfg.box)[0])
+    run, info = _open(cfg, "reconcile", argv)
+    if run is None:
+        return info
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
+    rep = run.reconciled(human_key=key, basis=basis, breaks=before)
+    tip = run.rec.tip()
+    out = {
+        "wagers": rep["wagers"],
+        "calibration": rep["calibration"],
+        "misses": rep["misses"],
+        "tip": record.tip_subject(tip) if tip else None,
+        # INVARIANTS §1: a broken record and an unchecked seal are said apart
+        "record": {"breaks": rep["wagers"]["breaks"]},
+        "unreachable": rep["wagers"]["unreachable"],
+        "code": 0,
+    }
+    if key is None:
+        out["why"] = "no human key handed over: no outcome counts"
+    return out
+
+
+def read_misses(
+    cfg: Config,
+    *,
+    human_key: Path | None = None,
+    argv: Iterable[str] = ("read-misses",),
+) -> dict:
+    """`read_misses()` clusters the misses, not only counts them
+    (forge-convergence.md:645). The misses of `reconcile`, read-only the same
+    way."""
+    res = reconcile(cfg, human_key=human_key, argv=argv)
+    if "refused" in res:
+        return res
+    return {**res["misses"], "code": 0}
 
 
 def read_proposals(path: Path) -> list[str]:

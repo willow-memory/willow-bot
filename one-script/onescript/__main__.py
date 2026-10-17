@@ -11,7 +11,17 @@
     python3 -m onescript pooled             # unsealed pass proposals, JSON lines
     python3 -m onescript resume             # the last sealed scope's spec + subject, JSON
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
-    python3 -m onescript checkout           # reverse, then the morning screen
+    python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
+    python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
+    python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
+    python3 -m onescript rules proposal:HASH # a sealed rules/*.md becomes rules rows, one @phase each
+    python3 -m onescript seal-tip tip:N:HASH [--proof P] # what it covers; then seal
+    python3 -m onescript seal-forecast WAGER --proof P   # the human: this one is mine
+    python3 -m onescript reconcile [--human-key FILE]    # wagers scored, read-only
+    python3 -m onescript read-misses [--human-key FILE]  # misses clustered, read-only
+    python3 -m onescript checkout [--human-key FILE]  # reverse, then the morning screen
+    python3 -m onescript verdict --json FILE         # one table verdict row (J4)
+    python3 -m onescript ledger-head --n N --head H  # the agm_head row (J9, R9)
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
 The app calls the functions in `onescript.api`; this file only reads argv,
@@ -46,6 +56,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
+from . import beacon, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -139,7 +150,7 @@ def _bot_venv() -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="onescript")
+    p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
     p.add_argument("--box", type=Path, default=ROOT / ".flow" / "onescript")
     p.add_argument(
         "--keys", type=Path, default=ROOT / ".flow" / "onescript-keys" / "keys.json"
@@ -176,6 +187,13 @@ def main(argv: list[str] | None = None) -> int:
         default=api.default_nestor_db(),
         help="Nestor's store, read-only ($WILLOW_NESTOR_DB, else $NESTOR_DB): a "
         "pair seals only while it is sealed there",
+    )
+    p.add_argument(
+        "--drand",
+        action="store_true",
+        help="read table forecasts' beacon rounds from drand over HTTPS (BLS not "
+        "checked). Without it the box is offline and a table outcome is "
+        "`unreachable`, said (W4 break 1)",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
     ks = sub.add_parser("keys", help="the operator's keyring export (run off the box)")
@@ -226,7 +244,112 @@ def main(argv: list[str] | None = None) -> int:
         "needs",
         help="the NEEDS YOU lines the morning screen would list, as JSON; read-only",
     )
-    sub.add_parser("checkout")
+    co = sub.add_parser("checkout")
+    co.add_argument(
+        "--human-key",
+        type=Path,
+        help="the human's key, hex, in a file outside the box (0600): wager "
+        "outcomes then count and GRADES shows their scores",
+    )
+    # the forecast lane: names as forge-convergence.md:643-645 (SPEC R1)
+    fc = sub.add_parser(
+        "forecast", help="a wager row: the forecast, before the outcome"
+    )
+    fc.add_argument("id")
+    fc.add_argument(
+        "--dist",
+        type=Path,
+        required=True,
+        help="JSON list of {path, p, band?, tags?}; the ps sum to 1",
+    )
+    fc.add_argument("--by", default="desk", help="a role: human, desk, oracle, coin")
+    fc.add_argument(
+        "--committed",
+        type=Path,
+        help="JSON {sha256, beacon_then, target}: a commitment made outside the record",
+    )
+    fc.add_argument(
+        "--table",
+        type=Path,
+        help="JSON {world, sheets_sha}: the world a table forecast is about",
+    )
+    # the table's rows (SPEC-documented §9 J4, §12 J9; SPEC R9, R10)
+    vd = sub.add_parser(
+        "verdict", help="one code-written verdict row as the table identity"
+    )
+    vd.add_argument(
+        "--json",
+        type=Path,
+        required=True,
+        dest="row_json",
+        help="the row, as JSON; '-' reads stdin",
+    )
+    lh = sub.add_parser(
+        "ledger-head",
+        aliases=["ledger_head"],
+        help="the ai-game-master ledger head as one agm_head verdict row (R9)",
+    )
+    lh.add_argument("--ledger", default="ai-game-master")
+    lh.add_argument("--n", type=int, required=True, help="the ledger's row count")
+    lh.add_argument("--head", required=True, help="the ledger's last hash")
+    lh.add_argument("--db-sha", help="sha256 of campaign.db as anchored")
+    lh.add_argument("--db", help="where campaign.db was read")
+    so = sub.add_parser(
+        "seal-outcome",
+        aliases=["seal_outcome"],
+        help="the human's seal on what happened to one wager",
+    )
+    so.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    so.add_argument(
+        "--outcome",
+        required=True,
+        help='JSON: {"path_index": i}, {"path": p} or {"winner": w}',
+    )
+    so.add_argument("--proof", help="the human's HMAC proof over the outcome subject")
+    so.add_argument(
+        "--pair",
+        type=Path,
+        help="a sealed Nestor pair, as JSON, whose conclusion is the outcome subject",
+    )
+    so.add_argument(
+        "--verifier",
+        action="append",
+        help="take a pair signed by one of these names, for this seal only",
+    )
+    lo = sub.add_parser(
+        "lore", help="a sealed world/*.md proposal becomes lore rows (SPEC R11)"
+    )
+    lo.add_argument("subject", help="the proposal:<hash> the human sealed")
+    ru = sub.add_parser(
+        "rules",
+        help="a sealed rules/*.md @markdownai proposal becomes rules rows (T-mai-2)",
+    )
+    ru.add_argument("subject", help="the proposal:<hash> the human sealed")
+    sf = sub.add_parser(
+        "seal-forecast",
+        aliases=["seal_forecast"],
+        help="the human says a forecast is theirs (by: human counts only then)",
+    )
+    sf.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    sf.add_argument("--proof", help="the human's HMAC proof over forecast:<hash>")
+    st = sub.add_parser(
+        "seal-tip", aliases=["seal_tip"], help="the human seals a tip of the record"
+    )
+    st.add_argument(
+        "subject", help="tip:<n>:<hash>, as forecast or seal-outcome printed it"
+    )
+    st.add_argument("--proof", help="the human's HMAC proof over the tip subject")
+    for name, alias in (("reconcile", None), ("read-misses", "read_misses")):
+        rc = sub.add_parser(
+            name,
+            aliases=[alias] if alias else [],
+            help="read-only: the wagers lined up against the human's sealed outcomes",
+        )
+        rc.add_argument(
+            "--human-key",
+            type=Path,
+            help="the human's key, hex, in a file outside the box (0600)",
+        )
     for name in ("scope", "serve"):
         s = sub.add_parser(name)
         s.add_argument("--by", default="who", help="W's to group by, comma-separated")
@@ -284,12 +407,119 @@ def main(argv: list[str] | None = None) -> int:
         keyring=args.keyring,
         nestor_db=args.nestor_db,
         phone=args.phone,
+        beacon=beacon.drand_reader if args.drand else None,
     )
 
-    if args.cmd == "checkin":
+    args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
+    if args.cmd == "forecast":
+        try:
+            dist = json.loads(args.dist.read_text())
+            committed = (
+                json.loads(args.committed.read_text()) if args.committed else None
+            )
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        try:
+            tbl = json.loads(args.table.read_text()) if args.table else None
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        res = api.forecast(
+            cfg, args.id, dist, by=args.by, committed=committed, table=tbl, argv=raw
+        )
+        if "refused" not in res:
+            print(f"wager {res['subject']}")  # the subject an outcome seal names
+            print(f"tip {res['tip']}")  # sign it to commit the forecast
+            return 0
+    elif args.cmd == "seal-outcome":
+        try:
+            outcome = json.loads(args.outcome)
+        except ValueError as e:
+            print(f"refused: --outcome is not JSON: {e}")
+            return 2
+        pair = json.loads(args.pair.read_text()) if args.pair else None
+        res = api.seal_outcome(
+            cfg,
+            args.wager,
+            outcome,
+            proof=args.proof,
+            pair=pair,
+            verifiers=args.verifier,
+            argv=raw,
+        )
+        if res.get("sealed"):
+            print(f"sealed {res['row']['subject']}")
+            print(f"tip {res['tip']}")  # seal it, or this outcome is not covered
+            if "counts_when" in res:  # the C6 gap: a Nestor seal needs a key tip
+                print(f"counts when: {res['counts_when']}")
+            print(f"rescope: {res['rescope']['why']}")  # SPEC R14: the last step
+            for step in res["rescope"]["steps"]:
+                print(f"  {step}")
+            return 0
+    elif args.cmd == "verdict":
+        try:
+            text = (
+                sys.stdin.read()
+                if str(args.row_json) == "-"
+                else args.row_json.read_text()
+            )
+            row = json.loads(text)
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        res = table.verdict(cfg, row, argv=raw)
+        if res.get("code") == 0:
+            print(f"verdict row {res['row']['n']} {res['row']['hash']}")
+            return 0
+    elif args.cmd == "ledger-head":
+        res = table.agm_head(
+            cfg,
+            n=args.n,
+            head=args.head,
+            ledger=args.ledger,
+            db_sha=args.db_sha,
+            db=args.db,
+            argv=raw,
+        )
+        if res.get("code") == 0:
+            print(f"agm_head row {res['row']['n']}")
+            print(f"tip {res['tip']}")  # seal it: the human's tip covers the head
+            return 0
+    elif args.cmd == "lore":
+        res = api.lore(cfg, args.subject, argv=raw)
+        if "refused" not in res:
+            print(f"lore {res['count']} row(s)")
+            print(f"rescope: {res['rescope']['why']}")  # SPEC R14, as seal-outcome
+            for step in res["rescope"]["steps"]:
+                print(f"  {step}")
+            return 0
+    elif args.cmd == "rules":
+        res = api.rules(cfg, args.subject, argv=raw)
+        if "refused" not in res:
+            print(f"rules {res['count']} row(s)")
+            print(f"rescope: {res['rescope']['why']}")
+            for step in res["rescope"]["steps"]:
+                print(f"  {step}")
+            return 0
+    elif args.cmd == "seal-forecast":
+        res = api.seal_forecast(cfg, args.wager, proof=args.proof, argv=raw)
+    elif args.cmd == "seal-tip":
+        res = api.seal_tip(cfg, args.subject, proof=args.proof, argv=raw)
+        if "covers" in res:  # what the signature vouches for, before and after
+            print(f"{args.subject} newly covers {len(res['covers'])} row(s):")
+            for c in res["covers"]:
+                print(f"  {view.cover_line(c)}")
+            if res.get("sealed"):
+                print("sealed")
+                return 0
+    elif args.cmd in ("reconcile", "read-misses"):
+        verb = api.reconcile if args.cmd == "reconcile" else api.read_misses
+        res = verb(cfg, human_key=args.human_key, argv=raw)
+    elif args.cmd == "checkin":
         res = api.checkin(cfg, raw)
     elif args.cmd == "checkout":
-        res = api.checkout(cfg, raw)
+        res = api.checkout(cfg, raw, human_key=args.human_key)
     elif args.cmd == "pooled":
         res = api.pooled(cfg, raw)
         if "refused" in res:  # stdout stays parseable: the reason goes to stderr

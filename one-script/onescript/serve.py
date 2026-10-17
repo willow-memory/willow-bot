@@ -48,8 +48,9 @@ from __future__ import annotations
 import hmac
 import os
 import re
+import unicodedata
 
-from . import gate, nestor_seal
+from . import gate, lore, nestor_seal, rules
 from .record import Record, canon, h256
 
 OUT = "served.json"
@@ -58,7 +59,20 @@ SYSTEM = "run"  # gate.system()'s who: the run's rows about its own steps
 
 # The payload a served row may carry besides its W's. Anything not named here
 # is left out: a new field reaches the model only when someone adds it here.
-PAYLOAD = ("family", "standing", "turn", "verdict", "reason", "intent", "bite")
+PAYLOAD = (
+    "family",
+    "standing",
+    "turn",
+    "verdict",
+    "reason",
+    "intent",
+    "bite",
+    "fact",  # lore (R11): one fact, served only when `lore.servable`
+    "body",  # rules (T-mai-2): one `@phase` body, served only when `rules.servable`
+    "total",  # a table roll's 2d6+stat sum (R12): the D0 `table.roll` answer
+    "session",  # which table session a verdict row belongs to (W3b B4);
+    # `table.check_row` keeps it plain text, so it is safe on a card
+)
 
 # What each grouping can't hold, said to the model so absence isn't read as fact.
 CANNOT_HOLD = {
@@ -77,7 +91,8 @@ RETURN = (
     "marked as yours and read only alongside this file. Nothing else is read."
 )
 
-_HASH = re.compile(r"[0-9a-f]{64}")
+_ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
+_HASH = re.compile(r"[0-9a-f]{64}", re.IGNORECASE)
 WITHHELD = "[hash withheld]"
 
 
@@ -118,7 +133,28 @@ def view(row: dict) -> dict:
         "when": row.get("ts") or row.get("when"),
         "where": w_of(row, "where"),
     }
-    out.update({k: row[k] for k in PAYLOAD if k in row})
+    # `fact` is lore (R11): it rides only on a lore row, which `_serve` has
+    # already passed through `lore.servable`. On any other row it is not payload.
+    islore = (row.get("kind") or row.get("what")) == lore.KIND
+    # `total` and `session` are the table's (R12, N3): they ride only on a
+    # verdict row the `table` identity wrote.
+    istable = row.get("kind") == "verdict" and row.get("who") == "table"
+    isrules = (row.get("kind") or row.get("what")) == rules.KIND
+    only = {"fact": islore, "body": isrules, "total": istable, "session": istable}
+    out.update({k: row[k] for k in PAYLOAD if k in row and only.get(k, True)})
+    # `dice`: a table roll row's own dice, `roll.result` (W4 break 2), so a
+    # reader can see a `total` or `verdict` that disagrees with them. Only the
+    # sum: the roll record's seed id and counters stay off the card.
+    roll = row.get("roll") if istable else None
+    if isinstance(roll, dict) and isinstance(roll.get("result"), int):
+        out["dice"] = roll["result"]
+    # A hash in another form is still a hash: `fact` and a lore row's scene are
+    # rewritten to NFKC (so ligatures and fullwidth forms read as plain text; the
+    # served fact can differ from the sealed bytes in those forms only) and
+    # stripped of zero-width characters before the scrub looks for 64-hex.
+    for k in ("fact", "where") if islore else ():
+        if isinstance(out.get(k), str):
+            out[k] = _ZW.sub("", unicodedata.normalize("NFKC", out[k]))
     return _scrub(out)
 
 
@@ -377,6 +413,30 @@ def serve(
             rows, human_key, keyring, nestor_db, through, unpinned=unpinned
         )
         doc = _serve(rows, tables, scope, serve_key, max_chars, seals)
+        if doc["state"] == "populated" and _has_lore(doc, tables, scope):
+            # lore rests on the stored proposal bytes: a rewritten record serves none
+            broken = rec.verify_chain()
+            if broken:
+                what = (
+                    "rules"
+                    if any(
+                        r.get("kind") == rules.KIND
+                        for t in tables
+                        if table_id(t) in set(scope or ())
+                        for r in t["rows"]
+                    )
+                    and not any(
+                        r.get("kind") == lore.KIND
+                        for t in tables
+                        if table_id(t) in set(scope or ())
+                        for r in t["rows"]
+                    )
+                    else "lore"
+                )
+                doc = _nothing(
+                    "unreachable",
+                    f"the record's chain is broken ({broken[0]}); no {what} is served",
+                )
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
     except Exception as e:  # serve that can't think clearly serves nothing
@@ -400,6 +460,17 @@ def serve(
         sha=h256(data),
     )
     return doc
+
+
+def _has_lore(doc: dict, tables: list[dict], scope) -> bool:
+    """Whether any scoped row rests on stored proposal bytes (lore or rules)."""
+    ids = set(scope or ())
+    return any(
+        r.get("kind") in (lore.KIND, rules.KIND)
+        for t in tables
+        if table_id(t) in ids
+        for r in t["rows"]
+    )
 
 
 def _nothing(state: str, why: str) -> dict:
@@ -434,25 +505,49 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
     missing = set(scope) - set(by_id)
     if missing:  # in scope, so a count is no leak; the plain hashes are
         return _nothing("unreachable", f"{len(missing)} sealed table(s) not found")
+    ctx = rules.Index(rows)  # once per serve, not once per row; lore reads it too
     served = []
     for tid in sorted(set(scope)):
         t = by_id[tid]
         src = t["source"]
         group = src.get("group", {}) if isinstance(src, dict) else {}
-        served.append(
-            {
-                "id": served_id(serve_key, tid),
-                "trust": "human-sealed" if tid in seals else "untrusted",
-                "group": _scrub(group),
-                "cannot_hold": [CANNOT_HOLD[w] for w in group if w in CANNOT_HOLD],
-                # served == sealed: the seal binds the authored rows only, so a
-                # run row (`who == "run"`) is never served, let alone labelled
-                # human-sealed. `_receipt` above still chain-checks every row.
-                "rows": [view(r) for r in authored(t["rows"])],
-            }
-        )
+        stuck = lore.unchecked_seals(t["rows"], ctx, seals, unchecked)
+        stuck_rules = rules.unchecked_seals(t["rows"], ctx, seals, unchecked)
+        entry = {
+            "id": served_id(serve_key, tid),
+            "trust": "human-sealed" if tid in seals else "untrusted",
+            "group": _scrub(group),
+            "cannot_hold": [CANNOT_HOLD[w] for w in group if w in CANNOT_HOLD],
+            # served == sealed: the seal binds the authored rows only, so a
+            # run row (`who == "run"`) is never served, let alone labelled
+            # human-sealed. `_receipt` above still chain-checks every row.
+            "rows": [
+                view(r)
+                for r in authored(t["rows"])
+                if lore.servable(r, ctx, seals) and rules.servable(r, ctx, seals)
+            ],
+        }
+        if (
+            stuck or stuck_rules
+        ):  # said on the table, never shown as empty (INVARIANTS section 1)
+            entry["state"] = "unreachable"
+            kind = (
+                "lore"
+                if stuck and not stuck_rules
+                else ("rules" if stuck_rules and not stuck else "lore and rules")
+            )
+            both = {**stuck, **stuck_rules}
+            entry["why"] = (
+                f"{len(both)} {kind} proposal seal(s) can't be checked here "
+                f"({next(iter(both.values()))}); those {kind} rows are not served"
+            )
+        served.append(entry)
     served.sort(key=lambda t: t["id"])
     doc = {"state": "populated", "why": "", "return": RETURN, "tables": served}
+    if served and all(
+        t.get("state") == "unreachable" and not t["rows"] for t in served
+    ):
+        doc["state"], doc["why"] = "unreachable", served[0]["why"]
     if len(canon(doc)) > max_chars:
         return _nothing(
             "empty", "the scope is too large for this model; narrow the stack"

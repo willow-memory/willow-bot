@@ -19,7 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import nestor_seal
+from . import graph, nestor_seal
 from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
@@ -434,9 +434,127 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
+def _in(span: list, lo: int, hi: int) -> bool:
+    return span[0] <= lo and hi <= span[1]
+
+
+def _covered(spans: list, lo: int, hi: int) -> bool:
+    """Whether every line of lo..hi lies in the union of `spans` (adjacent spans
+    join: one ends on the line before the next begins)."""
+    reach = lo
+    for a, b in sorted(spans):
+        if a > reach:
+            break
+        reach = max(reach, b + 1)
+        if reach > hi:
+            return True
+    return False
+
+
+def _symbol_row(c: dict, entry: object) -> dict:
+    """One qualified cite against what the graph said about its file (T-cbm-1).
+    `verified`: the name is defined there, or the line falls inside a symbol.
+    `unverified` (struck): the graph is fresh and stamped and holds no such file
+    or no such name there. `unchecked`: the graph was stale, unreachable, not
+    asked, lacks the project (no stamp), the file name is ambiguous, or a line
+    or range falls outside every symbol (an import, a constant, past the end);
+    the record says which, and nothing is claimed either way."""
+    base = {"at": c["at"], "kind": "symbol", "claim": c["claim"]}
+    if not isinstance(entry, dict) or "state" not in entry:
+        return {**base, "verdict": "unchecked", "record": "the graph was not asked"}
+    state = entry["state"]
+    if state in ("stale", "unreachable"):
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": f"graph {state}: {entry.get('why', '')}".rstrip(": "),
+        }
+    if state == "empty" and not entry.get("stamp"):
+        # S1: no stamp means the project itself is not in the graph: nothing was
+        # looked at, so nothing is struck
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": "project not in the graph",
+        }
+    if state != "populated":  # empty and stamped: a fresh graph holds no symbol there
+        return {
+            **base,
+            "verdict": "unverified",
+            "record": entry.get("why") or "not in the graph",
+        }
+    if state == "overflow":  # more files cited than a sentence may: struck
+        return {
+            **base,
+            "verdict": "unverified",
+            "record": entry.get("why", "too many files cited"),
+        }
+    paths = entry.get("paths") or []
+    names, ref = entry.get("names") or {}, c["ref"]
+    at = (entry.get("stamp") or {}).get("head_sha", "")[:12]
+    per = entry.get("by_path") or ({paths[0]: names} if len(paths) == 1 else {})
+    if len(paths) != 1 and not per:
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": f"{c['file']} names {len(paths)} files in the graph: "
+            + ", ".join(paths[:3]),
+        }
+    if ref[0].isdigit():
+        lo, _, hi = ref.partition("-")
+        lo, hi = int(lo), int(hi or lo)
+        if lo > hi:
+            return {**base, "verdict": "unverified", "record": "a reversed range"}
+        # S2: a line is verified inside a symbol; a range only when the union of
+        # the symbols it crosses covers every line of it. A line outside every
+        # symbol is an import, a constant or past the end: the graph cannot say.
+        hit = [p for p, nm in per.items() if _covered(sum(nm.values(), []), lo, hi)]
+        if len(hit) == 1:
+            return {**base, "verdict": "verified", "record": f"{hit[0]} at {at}"}
+        if len(hit) > 1:
+            return _ambiguous(base, c, hit)
+        return {
+            **base,
+            "verdict": "unchecked",
+            "record": f"outside every symbol the graph holds in {c['file']} at {at}",
+        }
+
+    def defines(nm: dict) -> bool:
+        if "." in ref:  # Class.method: the method sits inside that class
+            cls, meth = ref.split(".", 1)
+            return any(
+                _in(k, m[0], m[1]) for k in nm.get(cls, []) for m in nm.get(meth, [])
+            )
+        return ref in nm
+
+    hit = [p for p, nm in per.items() if defines(nm)]
+    if len(hit) == 1:  # an ambiguous basename: exactly one file defines it
+        return {**base, "verdict": "verified", "record": f"{hit[0]} at {at}"}
+    if len(hit) > 1:
+        return _ambiguous(base, c, hit)
+    where = paths[0] if len(paths) == 1 else f"all {len(paths)} files named {c['file']}"
+    return {**base, "verdict": "unverified", "record": f"not in {where} at {at}"}
+
+
+def _ambiguous(base: dict, c: dict, hit: list[str]) -> dict:
+    """Two or more files named like the cite all define it: the cite does not say
+    which, and nothing is claimed either way."""
+    return {
+        **base,
+        "verdict": "unchecked",
+        "record": f"{c['file']} names {len(hit)} files that define it: "
+        + ", ".join(sorted(hit)[:3]),
+    }
+
+
 def check_claims(text: str, facts: dict) -> list[dict]:
     """Checkable claims only. A claim the record can't check isn't listed:
-    it stays agent-reported, and the stamp says so."""
+    it stays agent-reported, and the stamp says so.
+
+    `facts["symbols"]` ({file: `graph.symbols_of(...)`}, from `graph.symbols_for`)
+    turns on the `symbol` kind (T-cbm-1): each qualified `file.py:name` or
+    `file.py:line` cite is read against the code graph. Without that key no
+    symbol row is listed. Bare names are never read."""
     rows = []
     for noun, value in sorted(facts.get("counts", {}).items()):
         pat = re.compile(
@@ -507,4 +625,9 @@ def check_claims(text: str, facts: dict) -> list[dict]:
                     "record": "" if ok else "not in the human's turns",
                 }
             )
+    if "symbols" in facts:
+        got = facts["symbols"] if isinstance(facts["symbols"], dict) else {}
+        rows += [
+            _symbol_row(c, got.get(c["file"])) for c in graph.qualified_cites(text)
+        ]
     return sorted(rows, key=lambda r: (r["at"], r["kind"]))

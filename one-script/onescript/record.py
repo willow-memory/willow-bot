@@ -30,6 +30,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
+from . import mai_shape
+
 GENESIS = "0" * 64
 
 #: Every row carries these. A line without them is garbled, whatever it parses as.
@@ -142,14 +144,24 @@ class Record:
         return row
 
     def verify_chain(self) -> list[str]:
-        """Every break, by row number. Empty means the chain holds."""
+        """Every break, by row number. Empty means the chain holds.
+
+        A row's `n` is its 0-based place in the record, and is checked as
+        such: every reader orders by `n` (the sealed tip, the pin, a seal's
+        place before or after a tip, a forecast before its outcome), and the
+        hash chain alone only binds `n` to the bytes, not to the place. Rows
+        after the sealed tip can be rewritten and re-hashed; a row whose label
+        says it came earlier than it did would otherwise read as earlier."""
         rows, garbled = self._read()
         breaks = [f"line {i}: garbled, not a record row" for i in garbled]
         prev = GENESIS
-        for row in rows:
+        for i, row in enumerate(rows):
             body = {k: v for k, v in row.items() if k != "hash"}
             if row.get("prev") != prev or h256(canon(body)) != row.get("hash"):
                 breaks.append(f"row {row.get('n')}: chain broken")
+            n = row.get("n")
+            if isinstance(n, bool) or n != i:
+                breaks.append(f"row {n!r}: out of place, it is row {i} of the record")
             prev = row.get("hash")
         return breaks
 
@@ -168,12 +180,26 @@ class Record:
             raise ValueError("not an anchor")
         return a
 
-    def set_anchor(self, tip: dict, proof: str) -> None:
-        """Called only by Run.seal_tip, after the gate verified the proof."""
+    def set_anchor(
+        self, tip: dict, proof: str, beacon_latest: int | None = None
+    ) -> None:
+        """Called only by Run.seal_tip, after the gate verified the proof.
+        `beacon_latest` is the operator's beacon reader's newest round as the
+        human sealed this tip (R23a). It is kept HERE, outside the box, per tip
+        row (`rounds`, carried over from the anchor it replaces), never only on
+        the seal row, which the writer could rewrite until the next tip."""
         if self.anchor_path is None:
             raise PermissionError("record: no anchor path; a tip can't be sealed")
         self.anchor_path.parent.mkdir(parents=True, exist_ok=True)
         body = {"n": tip["n"], "hash": tip["hash"], "proof": proof}
+        try:
+            rounds = dict((self.anchor() or {}).get("rounds") or {})
+        except (ValueError, OSError):
+            rounds = {}
+        if beacon_latest is not None:
+            rounds[str(tip["n"])] = beacon_latest
+        if rounds:
+            body["rounds"] = rounds
         _atomic(self.anchor_path, (canon(body) + "\n").encode())
 
     def verify_anchor(self, human_key: bytes | None = None) -> list[str]:
@@ -261,6 +287,7 @@ class Record:
             raise PermissionError(
                 f"record: '{rel}' is temp; nothing kept is written to temp"
             )
+        lint = mai_shape.check(rel, data)  # T-mai-1: a malformed mai doc is refused
         _write_in_box(self.box, rel, data)
         ptr = {
             "where": rel,
@@ -275,8 +302,15 @@ class Record:
         pile = self.pile()
         pile["items"] = [i for i in pile["items"] if i["where"] != rel] + [ptr]
         self._save_pile(pile)
+        extra = {"lint": lint} if lint else {}
         return self.append(
-            "write", who, where=rel, path=rel, sha=ptr["sha"], cites=cites or []
+            "write",
+            who,
+            where=rel,
+            path=rel,
+            sha=ptr["sha"],
+            cites=cites or [],
+            **extra,
         )
 
 

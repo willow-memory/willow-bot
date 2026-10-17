@@ -54,12 +54,47 @@ Routing rule (gap 82897b2f507e):
   (answer is ``willow``, cites cover ``must_cite``), not against a frozen
   ``expected.to_app`` that predates the ruling, so ``resolved``
   precision stays a measurement against the fixture's own gold.
+
+The table act (box-build SPEC ruling R12; SPEC-documented §11 J6, C13):
+
+- A table act closes in code or escalates; a model never rolls, and no
+  resolver here draws a number. The classes are namespaced ``table.roll``,
+  ``table.rules`` and ``table.state`` (C13: never ``G6``; the operator may
+  add classes before a run, not after, and the flowering battery's scorer
+  never sees them). Their excerpts are served record rows, one JSON object
+  per line (``escalate.act_of`` canons each served row), so every answer
+  cites the served table id the row came from.
+- ``table.roll: turn N [session S]`` answers ``{"total", "verdict"}`` from
+  exactly one served ``verdict`` row for that (session, turn); none is
+  ``no_roll_on_record``, two that disagree are ``conflicting_field``, a total
+  off its band ``total_band_mismatch``, a brief with two turns or no
+  session over two served sessions ``ambiguous_brief`` / ``ambiguous_session``.
+- ``table.rules: <bucket>`` answers the band text a served LORE fact gives
+  for that bucket (``rule: weak 7-9 ...``, the fact read whole); absent is
+  ``no_rule_on_record``, two readings are ``conflicting_field``. The code's
+  own bands (``BANDS``, from ``story_session.py``'s strong 10+ / weak 7-9 /
+  miss 6-) name the buckets a brief may ask for; they are never the answer,
+  which always cites a row.
+- ``table.rules: @phase NAME`` (T-mai-2) answers a ``@phase`` of a SEALED
+  ``@markdownai`` rules document, ``verbatim``: the body of the served ``rules``
+  row whose ``where`` is NAME, byte for byte, citing the served table id. The
+  brief must be exactly ``@phase`` and one space and the name: a name that
+  differs by case or whitespace is ``phase_name_not_exact`` or
+  ``no_phase_on_record``, never a near match. A row is served only when its
+  proposal's human seal re-checks (``onescript/rules.py``), so an unsealed
+  document never answers; two served readings that differ are
+  ``conflicting_field``.
+- ``table.state: tally [session S]`` answers the tally and path of one
+  session's served roll rows in turn order; a gap is ``turns_missing``.
+- R20: when a table act's D0 escalates, ``escalate.run_escalate`` sends it
+  straight to the human card; no model rung ever sees a table act.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -93,6 +128,24 @@ _TERMINAL_PUNCTUATION = (".", "?", "!")
 _TOKEN_KEYS = ("dispatch_id", "to_app", "topic", "status", "asked_count", "id")
 # Text keys: "key: value" -- colon must sit directly against the key.
 _TEXT_KEYS = ("summary", "title", "source_ref", "question")
+
+# The table act (R12, C13): namespaced classes, never a G number. Its grammar
+# is its own (`_RULE_RE` over a lore fact, `_TURN_RE`/`_SESSION_RE` over the
+# brief) and never touches the closed G-class grammar above (B3).
+TABLE_PREFIX = "table."
+TABLE_CLASSES = ("table.roll", "table.rules", "table.state")
+#: The buckets a table brief may name, as story_session.py reads a 2d6+stat
+#: sum (strong 10+, weak 7-9, miss 6-). Names only: the answer to a rules act
+#: is always a served row's text, never this table.
+BANDS = {"strong": "10+", "weak": "7-9", "miss": "6-"}
+_TURN_RE = re.compile(r"\bturn\s+(\d+)\b", re.IGNORECASE)
+#: `session S` or, for an id with spaces (NIT-4), `session "S with spaces"`.
+WITHHELD_MARK = "[hash withheld]"  # serve.WITHHELD, as a served session reads
+_SESSION_RE = re.compile(r"\bsession\s+(?:\"([^\"]+)\"|([^\s.,;:()\[\]\"]+))", re.IGNORECASE)
+_ZW_RE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
+_RULE_RE = re.compile(
+    r"^\s*rule:\s*(strong|weak|miss)\b\s*(.*?)\s*$", re.IGNORECASE | re.DOTALL
+)
 
 _TOKEN_SEGMENT_RE = re.compile(
     r"^(?:" + "|".join(_TOKEN_KEYS) + r")\s+(\S+)$"
@@ -375,6 +428,292 @@ def _resolve_g5(fixture_id: str, excerpts: list) -> dict:
     )
 
 
+# ---------------------------------------------------------------------------
+# The table act (R12, C13): code reads served rows; it never rolls
+# ---------------------------------------------------------------------------
+#
+# The table path has its own grammar (W3b audit B3): it never widens the
+# closed G-class excerpt grammar above. It reads served rows only -- a JSON
+# object per excerpt line -- and takes from them only what code wrote:
+#   * a roll: kind `verdict`, `verdict` in BANDS, int `turn` (never a bool),
+#     int `total` on the row that agrees with the band (S6: nothing is parsed
+#     out of prose, ever), and a `session` string;
+#   * a rule: kind `lore`, a `fact` that is `rule: <bucket> <text>` whole
+#     (B2: `_RULE_RE` over the fact alone; model text in any other row --
+#     an escalate row's path, a claim -- never feeds a resolver).
+# Rows key on (session, turn) (B4): a brief may name `session <id>`; when it
+# does not and more than one session is served, the act is ambiguous.
+
+
+def norm_class(cls: object) -> str:
+    """A class name as code reads it (W3b NEW-3): zero-width characters
+    dropped, NFKC, casefolded, stripped, inner spaces around the dot gone.
+    ``G`` classes keep their upper case."""
+    if not isinstance(cls, str):
+        return ""
+    s = unicodedata.normalize("NFKC", _ZW_RE.sub("", cls)).casefold().strip()
+    s = re.sub(r"\s*\.\s*", ".", s)
+    return s.upper() if re.fullmatch(r"g[1-5]", s) else s
+
+
+def is_table_class(cls: object) -> bool:
+    """Anything that, normalised, starts with ``table`` is a table act: it
+    closes in code or goes to the human (R20), and never to a model rung."""
+    return norm_class(cls).startswith("table")
+
+
+def _served_rows(excerpts: list) -> list[tuple[str, dict]]:
+    """``(excerpt id, row)`` for every line of every excerpt that is a JSON
+    object: the shape ``escalate.act_of`` gives a served table (one canon row
+    per line). A line that is not one is skipped, never guessed at."""
+    out: list[tuple[str, dict]] = []
+    for ex in excerpts or []:
+        if not isinstance(ex, dict) or not isinstance(ex.get("text"), str):
+            continue
+        eid = ex.get("id", "") if isinstance(ex.get("id"), str) else ""
+        for line in ex["text"].split("\n"):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                out.append((eid, row))
+    return out
+
+
+def _is_int(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def bucket(total: int) -> str:
+    """story_session.py's read of a 2d6+stat sum: strong 10+, weak 7-9, miss 6-."""
+    return "strong" if total >= 10 else "weak" if total >= 7 else "miss"
+
+
+def _roll_rows(excerpts: list) -> tuple[list[tuple[str, dict]], list[tuple[str, dict, str]]]:
+    """The served rows that record a roll, and the bad ones beside them with
+    why (``no_turn_on_record``, ``no_total_on_record``,
+    ``total_band_mismatch``, ``total_dice_mismatch``: the row's own dice,
+    served as ``dice``, are not its total; a row served without ``dice`` is
+    read on its total alone). A roll row is code's, so a bad one is a defect:
+    any bad row for the asked (session, turn), or any bad row in a session
+    being tallied, escalates the act (NEW-4); a session with only bad rows
+    still counts as a session for ambiguity."""
+    rolls, bad = [], []
+    for eid, row in _served_rows(excerpts):
+        kind = row.get("what") or row.get("kind")
+        if kind != "verdict" or row.get("verdict") not in BANDS:
+            continue
+        total = row.get("total")
+        if not _is_int(row.get("turn")):
+            bad.append((eid, row, "no_turn_on_record"))
+        elif not _is_int(total):
+            bad.append((eid, row, "no_total_on_record"))
+        elif bucket(total) != row["verdict"]:
+            bad.append((eid, row, "total_band_mismatch"))
+        elif "dice" in row and row["dice"] != total:
+            # W4 break 2: the served row's own dice (`serve.view` carries
+            # roll.result as `dice`) disagree with its total
+            bad.append((eid, row, "total_dice_mismatch"))
+        else:
+            rolls.append((eid, row))
+    return rolls, bad
+
+
+def _session_of(row: dict) -> str:
+    s = row.get("session")
+    return s if isinstance(s, str) else ""
+
+
+def _pick_session(brief: str, served: set[str]) -> tuple[str | None, str | None]:
+    """The session the act is about: the one the brief names, else the only
+    one served. ``(session, reason)``; ``reason`` is set when none can be
+    picked (``ambiguous_session``, ``no_session_on_record``)."""
+    named = [q or w for q, w in _SESSION_RE.findall(brief or "")]
+    if len(named) > 1:
+        return None, "ambiguous_brief"
+    if any(WITHHELD_MARK in s for s in served):
+        # W4 break 4: a session id the serve withheld can't be told apart from
+        # another, or named by a brief; never pick one (check_row refuses such
+        # ids at the write; a hand-written row may still carry one)
+        return None, "ambiguous_session"
+    if named:
+        return (named[0], None) if named[0] in served else (None, "no_session_on_record")
+    if len(served) > 1:
+        return None, "ambiguous_session"
+    return (next(iter(served)), None) if served else (None, "no_session_on_record")
+
+
+def _resolve_table_roll(fixture_id: str, brief: str, excerpts: list) -> dict:
+    """``table.roll: turn N [session S]`` -> ``{"total", "verdict"}`` from the
+    one served verdict row for that (session, turn), citing its table id.
+    Never draws a number, never reads one out of prose. Any bad roll row for
+    that (session, turn), or one with no turn in that session, escalates."""
+    cls = "table.roll"
+    turns = _TURN_RE.findall(brief or "")
+    if len(turns) > 1:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "ambiguous_brief")
+    if not turns:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_turn_in_brief")
+    turn = int(turns[0])
+    rolls, bad = _roll_rows(excerpts)
+    sessions = {_session_of(r) for _, r in rolls} | {_session_of(r) for _, r, _ in bad}
+    if not sessions:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
+    session, why = _pick_session(brief, sessions)
+    if why is not None:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], why)
+    for _, r, reason in bad:  # a bad row with no turn may be the asked one
+        if _session_of(r) == session and (not _is_int(r.get("turn")) or r["turn"] == turn):
+            return _record(fixture_id, cls, STATUS_ESCALATE, None, [], reason)
+    found = [
+        (eid, r) for eid, r in rolls if r["turn"] == turn and _session_of(r) == session
+    ]
+    if not found:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
+    answers = {(r["total"], r["verdict"]) for _, r in found}
+    if len(answers) > 1:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
+    total, verdict = answers.pop()
+    cites = list(dict.fromkeys(eid for eid, _ in found if eid))
+    return _record(
+        fixture_id, cls, STATUS_RESOLVED, {"total": total, "verdict": verdict}, cites, None
+    )
+
+
+def _rule_readings(excerpts: list) -> list[tuple[str, str, str]]:
+    """``(excerpt id, bucket, band text)`` from served LORE facts only, each
+    fact read whole against ``_RULE_RE``. No other row, field or segment is a
+    rule (B2)."""
+    out = []
+    for eid, row in _served_rows(excerpts):
+        if (row.get("what") or row.get("kind")) != "lore":
+            continue
+        fact = row.get("fact")
+        if isinstance(fact, str) and (m := _RULE_RE.match(fact)):
+            out.append((eid, m.group(1).lower(), m.group(2)))
+    return out
+
+
+_PHASE_WORD_RE = re.compile(r"@phase\b", re.IGNORECASE)
+_PHASE_BRIEF_RE = re.compile(r"@phase (\S+)")
+
+
+def _resolve_table_phase(fixture_id: str, brief: str, excerpts: list) -> dict:
+    """``table.rules: @phase NAME`` -> the served ``rules`` row for NAME, verbatim.
+    The name is matched exactly (no case folding, no whitespace trimming inside
+    it); only served ``rules`` rows are read, no other row kind is a rule."""
+    cls = "table.rules"
+    m = _PHASE_BRIEF_RE.fullmatch(brief or "")
+    if m is None or len(_PHASE_WORD_RE.findall(brief)) != 1:
+        return _record(
+            fixture_id, cls, STATUS_ESCALATE, None, [], "phase_name_not_exact"
+        )
+    name = m.group(1)
+    found = [
+        (eid, row["body"])
+        for eid, row in _served_rows(excerpts)
+        if (row.get("what") or row.get("kind")) == "rules"
+        and row.get("where") == name
+        and isinstance(row.get("body"), str)
+        and row["body"]
+    ]
+    if not found:
+        return _record(
+            fixture_id, cls, STATUS_ESCALATE, None, [], "no_phase_on_record"
+        )
+    bodies = {b for _, b in found}
+    if len(bodies) > 1:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
+    cites = list(dict.fromkeys(eid for eid, _ in found if eid))
+    return _record(fixture_id, cls, STATUS_VERBATIM, bodies.pop(), cites, None)
+
+
+def _resolve_table_rules(fixture_id: str, brief: str, excerpts: list) -> dict:
+    """``table.rules: <bucket>`` -> the band text a served lore rule gives;
+    ``table.rules: @phase NAME`` -> that phase of a sealed rules document."""
+    cls = "table.rules"
+    if _PHASE_WORD_RE.search(brief or ""):
+        return _resolve_table_phase(fixture_id, brief, excerpts)
+    words = [w.lower().strip(".,:;?!") for w in (brief or "").split()]
+    buckets = list(dict.fromkeys(w for w in words if w in BANDS))
+    if len(buckets) > 1:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "ambiguous_brief")
+    if not buckets:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_bucket_in_brief")
+    found = [(eid, t) for eid, b, t in _rule_readings(excerpts) if b == buckets[0]]
+    if not found:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_rule_on_record")
+    texts = {" ".join(t.split()) for _, t in found}
+    if len(texts) > 1:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
+    cites = list(dict.fromkeys(eid for eid, _ in found if eid))
+    return _record(fixture_id, cls, STATUS_RESOLVED, texts.pop(), cites, None)
+
+
+def _resolve_table_state(fixture_id: str, brief: str, excerpts: list) -> dict:
+    """``table.state: tally [session S]`` -> the tally and path of one
+    session's served roll rows in turn order; a gap in the turns is
+    ``turns_missing``; any bad roll row in that session escalates."""
+    cls = "table.state"
+    rolls, bad = _roll_rows(excerpts)
+    sessions = {_session_of(r) for _, r in rolls} | {_session_of(r) for _, r, _ in bad}
+    if not sessions:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
+    session, why = _pick_session(brief, sessions)
+    if why is not None:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], why)
+    for _, r, reason in bad:
+        if _session_of(r) == session:
+            return _record(fixture_id, cls, STATUS_ESCALATE, None, [], reason)
+    by_turn: dict[int, set[tuple[int, str]]] = {}
+    cites: list[str] = []
+    for eid, r in rolls:
+        if _session_of(r) != session:
+            continue
+        by_turn.setdefault(r["turn"], set()).add((r["total"], r["verdict"]))
+        if eid:
+            cites.append(eid)
+    if not by_turn:
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "no_roll_on_record")
+    if any(len(v) > 1 for v in by_turn.values()):
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "conflicting_field")
+    turns = sorted(by_turn)
+    if turns != list(range(turns[0], turns[-1] + 1)):
+        return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "turns_missing")
+    tally = {b: 0 for b in BANDS}
+    path = []
+    for t in turns:
+        ((_, v),) = by_turn[t]
+        tally[v] += 1
+        path.append(v)
+    answer = {**tally, "turns": len(turns), "path": "-".join(path), "session": session}
+    return _record(
+        fixture_id, cls, STATUS_RESOLVED, answer, list(dict.fromkeys(cites)), None
+    )
+
+
+def resolve_table(fixture: dict) -> dict:
+    """Dispatch one ``table.*`` act (R12). An unknown ``table.`` class
+    escalates as ``unknown_class`` like any other; nothing here rolls."""
+    fixture_id = fixture.get("id", "")
+    cls = norm_class(fixture.get("class", ""))
+    brief = fixture.get("brief") if isinstance(fixture.get("brief"), str) else ""
+    excerpts = fixture.get("excerpts") or []
+    if not isinstance(excerpts, list):
+        excerpts = []
+    if cls == "table.roll":
+        return _resolve_table_roll(fixture_id, brief, excerpts)
+    if cls == "table.rules":
+        return _resolve_table_rules(fixture_id, brief, excerpts)
+    if cls == "table.state":
+        return _resolve_table_state(fixture_id, brief, excerpts)
+    return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "unknown_class")
+
+
 def resolve_fixture(fixture: dict) -> dict:
     """Resolve one fixture dict.
 
@@ -408,6 +747,8 @@ def resolve_fixture(fixture: dict) -> dict:
         return _resolve_g4(fixture_id, parsed)
     if cls == "G5":
         return _resolve_g5(fixture_id, excerpts)
+    if is_table_class(cls):  # R12 / C13: the table act, before unknown_class
+        return resolve_table(fixture)
     return _record(fixture_id, cls, STATUS_ESCALATE, None, [], "unknown_class")
 
 
@@ -507,6 +848,16 @@ def score_resolution(fixture: dict, resolution: dict) -> dict:
         must_cite = expected.get("must_cite") or []
         ok = bool(cites) and set(must_cite).issubset(set(cites))
         return {"scored": True, "correct": ok, "detail": "g5_must_cite"}
+
+    if is_table_class(cls):
+        # A table act is scored against its own gold (`expected.answer`) and
+        # cites; a fixture with no gold is not scored. It stays out of the
+        # flowering battery's G-class buckets (C13).
+        if "answer" not in expected:
+            return {"scored": False, "correct": None, "detail": "table_no_gold"}
+        must_cite = expected.get("must_cite") or []
+        ok = answer == expected["answer"] and set(must_cite).issubset(set(cites))
+        return {"scored": True, "correct": ok, "detail": "table_answer_and_cite"}
 
     return {"scored": False, "correct": None, "detail": "unknown_class"}
 

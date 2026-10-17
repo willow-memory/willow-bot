@@ -23,14 +23,108 @@ def proposal_line(row: dict) -> str:
     return f"{lead} · {where} · {row.get('verdict')}{why}"
 
 
+def cover_line(c: dict) -> str:
+    """One row a tip would newly cover, as `seal-tip` lists it before the human
+    signs (`api.covers`): a forecast or outcome, a table verdict session, or an
+    agm_head row. `who` is the record's label, never a signature."""
+    if c.get("what") == "agm_head":
+        return (
+            f"row {c['n']} · agm_head · {c.get('ledger')!r} n {c.get('ledger_n')!r}"
+            f" head {c.get('head')!r} · who {c.get('who')!r} · {c.get('ts')}"
+        )
+    if c.get("what") == "verdict session":
+        f = c.get("forecast")
+        if f is None:
+            fc = "none"
+        elif c.get("forecast_on_record") is False:
+            fc = f"{f!r} not on record"
+        else:
+            fc = repr(f)
+        return (
+            f"row {c['n']} · verdict session {c.get('session')!r}"
+            f" · {c.get('rows')} row(s) · forecast {fc}"
+            f" · who {', '.join(repr(w) for w in c.get('who') or [])} · {c.get('ts')}"
+        )
+    return (
+        f"row {c['n']} · {c['what']} · {c.get('id')}"
+        f" · by {c.get('by_claimed')} (claimed) · {c.get('ts')}"
+    )
+
+
+def wager_line(w: dict) -> str:
+    """One wager row of the reverse report as a line (no bullet): the line
+    `wager <id> <state> · ...` a seat's `item_box` reads (SPEC R13)."""
+    if w["state"] == "reconciled":
+        what = (
+            f"band {w['predicted_band']} p {w['predicted_p']}"
+            f" · happened: {w['actual_path']}"
+            if "actual_path" in w
+            else f"winner {w['winner']}"
+        )
+        if "brier" in w:  # code's score beside it; the grade stays the human's
+            what += f" · brier {w['brier']:.3f} · log {w['log_score']:.2f}"
+            who = w.get("by_claimed")
+            what += f" · by {who}" + (
+                "" if who == "human" and w.get("by_vouched") else " (claimed)"
+            )
+            what += f" · wager {w.get('wager_ts')} · tip sealed {w.get('tip_seal_ts')}"
+            if "beacon_then" in w:
+                what += f" · beacon then {w['beacon_then']}"
+        return f"wager {w['id']} reconciled · {what} · grade is yours"
+    if w["state"] == "unreachable":  # a seal on record, unchecked here
+        return f"wager {w['id']} seal unreachable · {w['why']}"
+    return f"wager {w['id']} escalate to human · {w['reason']}"
+
+
+def table_lines(report: dict) -> list[str]:
+    """The table's lines (SPEC R13), from `report["table"]` (`table.surface`):
+    one per verdict session and one for the `agm_head` check. Nothing when the
+    box holds no table rows."""
+    t = report.get("table")
+    if not t:
+        return []
+    if t.get("state") == "unreachable":  # B1: a broken record decides nothing
+        return [f"table unreachable · {t['why']}"]
+    out = []
+    for s in t["sessions"]:
+        seal = {
+            True: "covered by your sealed tip",
+            False: "waiting on your tip seal",
+            None: "tip seal not checked here (no human key)",
+            "none": "no sealed tip on record that checks out",
+        }[s["sealed"]]
+        out.append(
+            f"table verdict session {s['session']} · {s['rows']} rows"
+            f" · forecast {s['forecast'] or 'none'} · {seal}"
+        )
+    a = t["agm"]
+    out.append(
+        f"table agm_head {a['state']}"
+        + (f" · {a['why']}" if a.get("why") else "")
+        + (
+            f" · ledger n {a['anchored']['n']}"
+            f" · {'covered by your sealed tip' if a['covered'] else 'not covered by a sealed tip'}"
+            if a.get("anchored")
+            else ""
+        )
+    )
+    return out
+
+
 def needs_you(
     report: dict,
     boot: dict | None = None,
     claims: list | None = None,
     acts: list | None = None,
+    *,
+    surface: bool = False,
 ) -> list[str]:
     """The NEEDS YOU lines, one string each (no bullet), in the screen's order.
-    The morning screen prints them; `api.needs` hands them to a seat as data."""
+    The morning screen prints them; `api.needs` hands them to a seat as data.
+
+    `surface` (SPEC R13, what `api.needs` passes) adds the lines the morning
+    screen prints in its own GRADES and TABLE sections instead: one per wager
+    (`wager_line`) and the table's (`table_lines`)."""
     needs: list[str] = []
     if boot and boot["hard_close"]:
         needs += [f"HARD CLOSE · {x}" for x in boot["lines"]]
@@ -70,6 +164,9 @@ def needs_you(
         needs.insert(
             0, f"queue: {bp['open']} waiting on you, oldest since {bp['oldest']}"
         )
+    if surface:
+        needs += [wager_line(w) for w in report.get("wagers", {}).get("rows", [])]
+        needs += table_lines(report)
     if boot and boot.get("report", {}).get("state") == "never":
         needs.append("coverage: no reconcile on record; enforcement status unknown")
     return needs
@@ -119,19 +216,25 @@ def morning(
         for m, g in report["grades"].items()
     ]
     for w in report.get("wagers", {}).get("rows", []):
-        if w["state"] == "reconciled":
-            what = (
-                f"band {w['predicted_band']} p {w['predicted_p']}"
-                f" · happened: {w['actual_path']}"
-                if "actual_path" in w
-                else f"winner {w['winner']}"
-            )
-            L.append(f"  · wager {w['id']} reconciled · {what} · grade is yours")
-        else:
-            L.append(f"  · wager {w['id']} escalate to human · {w['reason']}")
+        L.append(f"  · {wager_line(w)}")
+    cal = report.get("calibration") or {}
+    for role, c in (cal.get("by") or {}).items():
+        L.append(
+            f"  · calibration {role}: n {c['n']} · brier {c['brier']:.5f}"
+            f" · log {c['log_score']:.3f}"
+        )
+    if (cal.get("all") or {}).get("n"):
+        m = report.get("misses") or {}
+        L.append(
+            f"  · misses: {len(m.get('misses', []))}, clusters: {len(m.get('clusters', []))}"
+        )
     if not report["predictions"] and not report["grades"]:
         if not report.get("wagers", {}).get("rows"):
             L.append("  · nothing graded yet")
+
+    if table_lines(report):
+        L.append("TABLE")
+        L += [f"  · {x}" for x in table_lines(report)]
 
     c = report["pile"]["counts"]
     L.append("QUIET")
@@ -146,7 +249,11 @@ def morning(
         L.append(f"  · gates {json.dumps(tally, sort_keys=True)}")
     if claims:
         ok = sum(c["verdict"] == "verified" for c in claims)
-        L.append(f"  · claims checked: {ok}/{len(claims)} verified")
+        gap = sum(c["verdict"] == "unchecked" for c in claims)
+        L.append(
+            f"  · claims checked: {ok}/{len(claims)} verified"
+            + (f" · {gap} unchecked" if gap else "")
+        )
     if boot:
         held = sum(p["held"] for p in boot["probes"])
         L.append(
