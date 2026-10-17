@@ -150,7 +150,7 @@ def _bot_venv() -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="onescript")
+    p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
     p.add_argument("--box", type=Path, default=ROOT / ".flow" / "onescript")
     p.add_argument(
         "--keys", type=Path, default=ROOT / ".flow" / "onescript-keys" / "keys.json"
