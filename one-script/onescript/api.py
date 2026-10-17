@@ -333,6 +333,7 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
         trace_ids=len(law["trace_ids"]),
         nested=nested,  # the tests gate is skipped, and says so
     )
+    run.pin()  # once per box: the first verb this code runs pins the old tip
     return run, {"ci_text": ci_text, "nested": nested}
 
 

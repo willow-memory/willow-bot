@@ -218,41 +218,49 @@ def test_a_forged_seal_does_not_clear_a_door_awaiting_the_human(tmp_path):
     assert [a["hash"] for a in rep["awaiting"]] == [door["hash"]]
 
 
-def test_a_seal_row_without_proof_holds_only_inside_the_sealed_tip(tmp_path):
-    """Seal rows written before they carried their proof: the human's signed
-    tip vouches for every row up to it, and for nothing after it."""
+def old_world(run, *seals: dict) -> None:
+    """A box the code before seal proofs wrote: seal rows with no proof (each
+    `seal` is the row's extra fields) and a tip the human sealed over them,
+    anchored the way that code anchored it, with no pin."""
+    for extra in seals:
+        subject = extra["subject"]
+        hum = gate.human(subject, proof(subject), HUMAN_KEY)
+        run.rec.append("seal", hum, where=subject, **extra)
+    tip = run.rec.tip()
+    run.rec.set_anchor(tip, proof(record.tip_subject(tip)))
+
+
+def bare_run(tmp_path):
     from onescript.run import Run
 
-    run = Run(tmp_path / "box", KEYS, LAW, lambda: "t", anchor=tmp_path / "a.json")
-    hum = gate.human("serve:old", proof("serve:old"), HUMAN_KEY)
-    run.rec.append("seal", hum, where="serve:old", subject="serve:old")  # no proof
-    assert "serve:old" not in run.held()[0]  # nothing vouches for it yet
-    tip = run.rec.tip()
-    run.seal_tip(proof(record.tip_subject(tip)), HUMAN_KEY)
+    return Run(tmp_path / "box", KEYS, LAW, lambda: "t", anchor=tmp_path / "a.json")
+
+
+def test_a_seal_row_without_proof_holds_only_up_to_the_pinned_tip(tmp_path):
+    """Seal rows written before they carried their proof: the tip the human
+    had sealed when this code first ran vouches for them, and nothing after."""
+    run = bare_run(tmp_path)
+    old_world(run, {"subject": "serve:old"})
+    assert "serve:old" in run.held()[1]  # no pin yet: said, never passed
+    assert "not pinned" in run.held()[1]["serve:old"]
+    run.pin()
     assert "serve:old" in run.held()[0]
-    forge_row(run.rec.path, "serve:new")  # after the tip: a claim, nothing more
+    forge_row(run.rec.path, "serve:new")  # after the pin: a claim, nothing more
+    run.seal_tip(proof(record.tip_subject(run.rec.tip())), HUMAN_KEY)
     assert run.rec.verify_chain() == []
-    assert "serve:new" not in run.held()[0]
+    assert "serve:new" not in run.held()[0] and "serve:new" not in run.held()[1]
+    assert "serve:old" in run.held()[0]
 
 
-def test_an_old_nestor_seal_row_holds_only_inside_the_sealed_tip(tmp_path):
+def test_an_old_nestor_seal_row_holds_only_up_to_the_pinned_tip(tmp_path):
     """Nestor seal rows from before they carried their pair (`via`, `verifier`,
-    no `pair`) hold inside the human's signed tip, like old HMAC rows."""
-    from onescript.run import Run
-
-    run = Run(tmp_path / "box", KEYS, LAW, lambda: "t", anchor=tmp_path / "a.json")
-    hum = gate.human("serve:old", proof("serve:old"), HUMAN_KEY)
-    run.rec.append(
-        "seal",
-        hum,
-        where="serve:old",
-        subject="serve:old",
-        via="nestor",
-        verifier="sean campbell",
-    )  # no pair
-    assert "serve:old" not in run.held()[0]
-    tip = run.rec.tip()
-    run.seal_tip(proof(record.tip_subject(tip)), HUMAN_KEY)
+    no `pair`) hold up to the pinned tip, like old HMAC rows."""
+    run = bare_run(tmp_path)
+    old_world(
+        run,
+        {"subject": "serve:old", "via": "nestor", "verifier": "sean campbell"},
+    )
+    run.pin()
     assert "serve:old" in run.held()[0]
 
 
@@ -347,3 +355,69 @@ def test_held_checks_by_the_key_it_is_handed(tmp_path):
     )
     assert "serve:x" in run.held()[1]  # nothing to check by: unreachable
     assert "serve:x" in run.held(human_key=HUMAN_KEY)[0]
+
+
+def test_a_forged_seal_before_the_next_tip_seal_is_not_vouched_for(tmp_path):
+    """The human's tip says the rows up to it don't change, not that the human
+    wrote each one: a proofless row slipped in before a later tip seal stays
+    a claim, because it comes after the pin."""
+    run = bare_run(tmp_path)
+    old_world(run, {"subject": "serve:old"})
+    run.pin()
+    forge_row(run.rec.path, "serve:forged")
+    run.seal_tip(proof(record.tip_subject(run.rec.tip())), HUMAN_KEY)
+    held, unchecked = run.held()
+    assert "serve:forged" not in held and "serve:forged" not in unchecked
+
+
+def test_seal_tip_pins_the_tip_it_replaces(tmp_path):
+    """With no pin yet, sealing a new tip pins the old one first, so the new
+    tip never becomes the cutoff."""
+    run = bare_run(tmp_path)
+    old_world(run, {"subject": "serve:old"})
+    forge_row(run.rec.path, "serve:forged")  # in the old world, after its tip
+    run.seal_tip(proof(record.tip_subject(run.rec.tip())), HUMAN_KEY)
+    pins = [r for r in run.rec.rows() if r["kind"] == "pin"]
+    assert len(pins) == 1 and pins[0]["tip_n"] == 0  # the old tip
+    held = run.held()[0]
+    assert "serve:old" in held and "serve:forged" not in held
+
+
+def test_only_the_first_pin_counts_and_it_must_verify(tmp_path):
+    run = bare_run(tmp_path)
+    old_world(run, {"subject": "serve:old"})
+    run.pin()
+    forge_row(run.rec.path, "serve:late")
+    tip = run.rec.tip()  # a real later tip, pinned by hand: changes nothing
+    run.rec.append(
+        "pin",
+        run.sys,
+        tip_n=tip["n"],
+        tip_hash=tip["hash"],
+        proof=proof(record.tip_subject(tip)),
+    )
+    run.seal_tip(proof(record.tip_subject(run.rec.tip())), HUMAN_KEY)
+    assert "serve:late" not in run.held()[0]
+
+    other = bare_run(tmp_path / "x")
+    old_world(other, {"subject": "serve:old"})
+    t = other.rec.tip()
+    other.rec.append("pin", other.sys, tip_n=t["n"], tip_hash=t["hash"], proof="00")
+    assert "serve:old" not in other.held()[0]  # a pin whose proof fails pins nothing
+
+
+def test_a_box_with_no_tip_at_first_run_vouches_for_no_proofless_row(tmp_path):
+    run = bare_run(tmp_path)
+    hum = gate.human("serve:old", proof("serve:old"), HUMAN_KEY)
+    run.rec.append("seal", hum, where="serve:old", subject="serve:old")
+    run.pin()  # no anchor yet: the pin names no tip
+    run.seal_tip(proof(record.tip_subject(run.rec.tip())), HUMAN_KEY)
+    held, unchecked = run.held()
+    assert "serve:old" not in held and "serve:old" not in unchecked
+
+
+def test_every_verb_pins_once(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    api.resume(cfg)
+    api.pooled(cfg)
+    assert [r["kind"] for r in rows(cfg)].count("pin") == 1

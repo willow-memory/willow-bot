@@ -33,7 +33,7 @@ from . import (
 )
 from .record import h256
 
-_TIP = object()  # `held`: work out the sealed tip's reach here
+_TIP = object()  # `held`: work out how far old seals reach here
 
 PKG = Path(__file__).resolve().parent
 
@@ -203,29 +203,65 @@ class Run:
             human_key=self.keys.get(gate.HUMAN),
             keyring=self.keyring,
             nestor_db=self.nestor_db,
-            through=reverse.covered_through(self.rec, self.keys.get(gate.HUMAN)),
+            **self.old_seals(self.keys.get(gate.HUMAN)),
         )
 
     def held(
         self,
         rows: list[dict] | None = None,
         human_key: bytes | None = None,
-        through: int | None | object = _TIP,
+        through: dict | object = _TIP,
     ) -> tuple[set[str], dict[str, str]]:
         """(held, unreachable): the subjects whose seal proof re-checks against
         this run's key, keyring and store (`serve.sealed_verified`). A row that
         only says `who == "human"` is in neither. `human_key` stands in for the
         run's own when given, for the proofs and the tip alike; `through` is the
-        sealed tip's reach when the caller already worked it out."""
+        `old_seals` answer when the caller already worked it out."""
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
-        if through is _TIP:
-            through = reverse.covered_through(self.rec, key)
+        old = self.old_seals(key) if through is _TIP else through
         return serve.sealed_verified(
             self.rec.rows() if rows is None else rows,
             key,
             self.keyring,
             self.nestor_db,
-            through,  # type: ignore[arg-type]
+            **old,  # type: ignore[arg-type]
+        )
+
+    def old_seals(self, human_key: bytes | None) -> dict:
+        """How far a seal row with no proof may count, as `sealed_verified`
+        takes it: `through`, the pinned tip while the sealed tip still covers
+        it, and `unpinned` when the box has no pin yet (`reverse.pinned`)."""
+        tip = reverse.covered_through(self.rec, human_key)
+        if tip is None:
+            return {"through": None, "unpinned": None}
+        pin, why = reverse.pinned(self.rec, human_key)
+        if why is not None:
+            return {"through": None, "unpinned": (tip, why)}
+        return {"through": None if pin is None else min(pin, tip), "unpinned": None}
+
+    def _anchor(self) -> dict | None:
+        try:
+            return self.rec.anchor()
+        except (ValueError, OSError):
+            return None
+
+    _NOW = object()
+
+    def pin(self, anchor: dict | None | object = _NOW) -> dict | None:
+        """Write the `pin` row, once: the tip the human had sealed when this
+        code first wrote to the box, so old seal rows with no proof count only
+        up to it (`reverse.pinned`). No anchor, or one that can't be read, pins
+        no tip, and then no proofless row counts. `api._open` calls it on every
+        verb, right after the `invocation` row; `seal_tip` hands over the anchor
+        as it was before the new tip replaced it. A pin already on record is left alone,
+        and None is returned."""
+        if any(r["kind"] == "pin" for r in self.rec.rows()):
+            return None
+        a = self._anchor() if anchor is Run._NOW else anchor
+        if not isinstance(a, dict):
+            return self.rec.append("pin", self.sys, tip_n=None)
+        return self.rec.append(
+            "pin", self.sys, tip_n=a["n"], tip_hash=a["hash"], proof=a["proof"]
         )
 
     def seal_rows(
@@ -238,7 +274,7 @@ class Run:
         this, since a forged row over a sealed subject is in `held` too."""
         rows = self.rec.rows() if rows is None else rows
         key = self.keys.get(gate.HUMAN)
-        through = reverse.covered_through(self.rec, key)
+        old = self.old_seals(key)
         ring = self.keyring
         if ring is not None and not isinstance(ring, dict):
             try:
@@ -250,7 +286,7 @@ class Run:
         for r in rows:
             if r.get("kind") != "seal" or not isinstance(r.get("n"), int):
                 continue
-            ok, why = serve.sealed_verified([r], key, ring, self.nestor_db, through)
+            ok, why = serve.sealed_verified([r], key, ring, self.nestor_db, **old)
             if ok:
                 good.add(r["n"])
             elif why:
@@ -594,8 +630,11 @@ class Run:
             return self.rec.append(
                 "refused", self.sys, at="seal_tip", reason=str(e), subject=subject
             )
+        before = self._anchor()  # the tip a first pin keeps, read before it moves
         self.rec.set_anchor(tip, proof)
-        return self.rec.append("seal", hum, where=subject, subject=subject, proof=proof)
+        row = self.rec.append("seal", hum, where=subject, subject=subject, proof=proof)
+        self.pin(before)
+        return row
 
     def night(self, questions, models, budget: resolve.Budget, present) -> str:
         got, how = resolve.night_pool(list(questions), list(models), budget, present)
@@ -621,7 +660,7 @@ class Run:
         rows = self.rec.rows()
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
-        held, unreachable = self.held(rows, key, through)
+        held, unreachable = self.held(rows, key, self.old_seals(key))
         return reverse.reconcile(
             self.rec.box,
             self.rec.pile(),

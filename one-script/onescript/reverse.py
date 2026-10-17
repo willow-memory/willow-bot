@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .record import h256
+from .gate import verify_seal
+from .record import h256, tip_subject
 
 KEEP_OUT = {"record.jsonl", "pile.json"}
 
@@ -181,6 +182,35 @@ def covered_through(rec, human_key: bytes | None) -> int | None:
     if rec.verify_chain() or rec.verify_anchor(human_key):
         return None
     return rec.anchor()["n"]
+
+
+def pinned(rec, human_key: bytes | None) -> tuple[int | None, str | None]:
+    """How far seal rows with no proof on them may count: (n, None) for the
+    row number of the tip the human had sealed when this code first wrote to
+    the box (its `pin` row), (None, None) when nothing may count, and
+    (None, why) when the box has no pin yet.
+
+    The human's tip says the rows up to it never change, not that the human
+    wrote each of them; a seal row with no proof could have been appended by
+    anyone before the tip was sealed. So only rows from before seal rows
+    carried proofs may lean on the tip, and the pin is where that stops. The
+    earliest `pin` row is the one: it was written before anything else this
+    code wrote, so a later one changes nothing. It holds only while its proof
+    re-checks with the human's key and the chain's row at its tip still has
+    its hash. A pin with no tip (no anchor at first run) lets nothing count."""
+    rows = rec.rows()
+    pin = next((r for r in rows if r["kind"] == "pin"), None)
+    if pin is None:
+        return None, "unreachable: old seals are not pinned yet; check in"
+    tn, th, pf = pin.get("tip_n"), pin.get("tip_hash"), pin.get("proof")
+    if human_key is None or not isinstance(tn, int) or tn >= pin["n"]:
+        return None, None
+    if not isinstance(th, str) or not isinstance(pf, str):
+        return None, None
+    if not verify_seal(tip_subject({"n": tn, "hash": th}), pf, human_key):
+        return None, None
+    at = next((r for r in rows if r["n"] == tn), None)
+    return (tn, None) if at is not None and at["hash"] == th else (None, None)
 
 
 def _outcome_of(

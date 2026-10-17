@@ -266,6 +266,7 @@ def sealed_verified(
     keyring: dict | str | os.PathLike | None = None,
     nestor_db: str | os.PathLike | None = None,
     through: int | None = None,
+    unpinned: tuple[int, str] | None = None,
 ) -> tuple[set[str], dict[str, str]]:
     """(held, unreachable): the subjects whose seal row carries a proof that
     checks out against that subject right now, and the subjects whose proof
@@ -279,9 +280,11 @@ def sealed_verified(
     store to check by, the answer is `unreachable`, never a pass.
 
     A row with no proof at all, written before seal rows carried one, holds
-    only inside the tip the human sealed: `through` is the row number that tip
-    covers (`reverse.covered_through`), and the human's signature over it
-    vouches for every row up to it. After the tip it is a claim, nothing more."""
+    only up to `through`: the tip the human had sealed when this code first
+    wrote to the box, while the sealed tip still covers it (`Run.old_seals`,
+    `reverse.pinned`). After it, the row is a claim, nothing more. When the box
+    has no pin yet, `unpinned` is (the sealed tip's row, why): a proofless row
+    inside that tip is `unreachable`, said, never passed."""
     held: set[str] = set()
     unreachable: dict[str, str] = {}
     ring: dict | None = keyring if isinstance(keyring, dict) else None
@@ -300,6 +303,8 @@ def sealed_verified(
         ok, why = _seal_proof(r, subject, human_key, ring, ring_why, nestor_db)
         if not ok and why is None and _before_proofs(r, through):
             ok = True
+        elif not ok and why is None and unpinned and _before_proofs(r, unpinned[0]):
+            why = unpinned[1]
         if ok:
             held.add(subject)
             unreachable.pop(subject, None)
@@ -309,7 +314,7 @@ def sealed_verified(
 
 
 def _before_proofs(row: dict, through: int | None) -> bool:
-    """A seal row with no evidence on it, inside the human's sealed tip. An old
+    """A seal row with no evidence on it, at or before row `through`. An old
     Nestor row (`via: nestor`, no `pair`) is one: rows carried no pair then."""
     if through is None or "proof" in row or "pair" in row:
         return False
@@ -357,6 +362,7 @@ def serve(
     keyring: dict | str | os.PathLike | None = None,
     nestor_db: str | os.PathLike | None = None,
     through: int | None = None,
+    unpinned: tuple[int, str] | None = None,
 ) -> dict:
     """Write the served file and record it. Returns the served document.
     The receipts and the scope stay in the record's row, never in the file.
@@ -367,7 +373,9 @@ def serve(
     never a truncation. No cap is `empty` too: nothing is served uncapped."""
     try:
         rows = rec.rows()
-        seals = sealed_verified(rows, human_key, keyring, nestor_db, through)
+        seals = sealed_verified(
+            rows, human_key, keyring, nestor_db, through, unpinned=unpinned
+        )
         doc = _serve(rows, tables, scope, serve_key, max_chars, seals)
     except gate.Refused as e:
         doc = _nothing("empty", str(e))
