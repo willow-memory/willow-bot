@@ -126,9 +126,22 @@ def morning(
                 if "actual_path" in w
                 else f"winner {w['winner']}"
             )
+            if "brier" in w:  # code's score beside it; the grade stays the human's
+                what += f" · brier {w['brier']:.3f} · log {w['log_score']:.2f}"
             L.append(f"  · wager {w['id']} reconciled · {what} · grade is yours")
         else:
             L.append(f"  · wager {w['id']} escalate to human · {w['reason']}")
+    cal = report.get("calibration") or {}
+    for role, c in (cal.get("by") or {}).items():
+        L.append(
+            f"  · calibration {role}: n {c['n']} · brier {c['brier']:.5f}"
+            f" · log {c['log_score']:.3f}"
+        )
+    if (cal.get("all") or {}).get("n"):
+        m = report.get("misses") or {}
+        L.append(
+            f"  · misses: {len(m.get('misses', []))}, clusters: {len(m.get('clusters', []))}"
+        )
     if not report["predictions"] and not report["grades"]:
         if not report.get("wagers", {}).get("rows"):
             L.append("  · nothing graded yet")

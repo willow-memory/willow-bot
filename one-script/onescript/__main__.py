@@ -11,6 +11,11 @@
     python3 -m onescript pooled             # unsealed pass proposals, JSON lines
     python3 -m onescript resume             # the last sealed scope's spec + subject, JSON
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
+    python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
+    python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' --proof P
+    python3 -m onescript seal-tip tip:N:HASH --proof P   # the human seals a tip
+    python3 -m onescript reconcile [--human-key FILE]    # wagers scored, read-only
+    python3 -m onescript read-misses [--human-key FILE]  # misses clustered, read-only
     python3 -m onescript checkout           # reverse, then the morning screen
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
@@ -227,6 +232,53 @@ def main(argv: list[str] | None = None) -> int:
         help="the NEEDS YOU lines the morning screen would list, as JSON; read-only",
     )
     sub.add_parser("checkout")
+    # the forecast lane: names as forge-convergence.md:643-645 (SPEC R1)
+    fc = sub.add_parser(
+        "forecast", help="a wager row: the forecast, before the outcome"
+    )
+    fc.add_argument("id")
+    fc.add_argument(
+        "--dist",
+        type=Path,
+        required=True,
+        help="JSON list of {path, p, band?, tags?}; the ps sum to 1",
+    )
+    fc.add_argument("--by", default="desk", help="a role: human, desk, oracle, coin")
+    fc.add_argument(
+        "--committed",
+        type=Path,
+        help="JSON {sha256, beacon_then, target}: a commitment made outside the record",
+    )
+    so = sub.add_parser(
+        "seal-outcome",
+        aliases=["seal_outcome"],
+        help="the human's seal on what happened to one wager",
+    )
+    so.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    so.add_argument(
+        "--outcome",
+        required=True,
+        help='JSON: {"path_index": i}, {"path": p} or {"winner": w}',
+    )
+    so.add_argument("--proof", help="the human's HMAC proof over the outcome subject")
+    st = sub.add_parser(
+        "seal-tip", aliases=["seal_tip"], help="the human seals a tip of the record"
+    )
+    st.add_argument(
+        "subject", help="tip:<n>:<hash>, as forecast or seal-outcome printed it"
+    )
+    st.add_argument("--proof", help="the human's HMAC proof over the tip subject")
+    for name, alias in (("reconcile", None), ("read-misses", "read_misses")):
+        rc = sub.add_parser(
+            name,
+            aliases=[alias] if alias else [],
+            help="read-only: the wagers lined up against the human's sealed outcomes",
+        )
+        rc.add_argument(
+            "--human-key",
+            type=Path,
+            help="the human's key, hex, in a file outside the box (0600)",
+        )
     for name in ("scope", "serve"):
         s = sub.add_parser(name)
         s.add_argument("--by", default="who", help="W's to group by, comma-separated")
@@ -286,7 +338,43 @@ def main(argv: list[str] | None = None) -> int:
         phone=args.phone,
     )
 
-    if args.cmd == "checkin":
+    args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
+    if args.cmd == "forecast":
+        try:
+            dist = json.loads(args.dist.read_text())
+            committed = (
+                json.loads(args.committed.read_text()) if args.committed else None
+            )
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        res = api.forecast(
+            cfg, args.id, dist, by=args.by, committed=committed, argv=raw
+        )
+        if "refused" not in res:
+            print(f"wager {res['subject']}")  # the subject an outcome seal names
+            print(f"tip {res['tip']}")  # sign it to commit the forecast
+            return 0
+    elif args.cmd == "seal-outcome":
+        try:
+            outcome = json.loads(args.outcome)
+        except ValueError as e:
+            print(f"refused: --outcome is not JSON: {e}")
+            return 2
+        res = api.seal_outcome(cfg, args.wager, outcome, proof=args.proof, argv=raw)
+        if res.get("sealed"):
+            print(f"sealed {res['row']['subject']}")
+            print(f"tip {res['tip']}")  # seal it, or this outcome is not covered
+            print(f"rescope: {res['rescope']['why']}")  # SPEC R14: the last step
+            for step in res["rescope"]["steps"]:
+                print(f"  {step}")
+            return 0
+    elif args.cmd == "seal-tip":
+        res = api.seal_tip(cfg, args.subject, proof=args.proof, argv=raw)
+    elif args.cmd in ("reconcile", "read-misses"):
+        verb = api.reconcile if args.cmd == "reconcile" else api.read_misses
+        res = verb(cfg, human_key=args.human_key, argv=raw)
+    elif args.cmd == "checkin":
         res = api.checkin(cfg, raw)
     elif args.cmd == "checkout":
         res = api.checkout(cfg, raw)

@@ -10,12 +10,23 @@ Everything here is computed. Same inputs, same report bytes.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
+from . import calibration
 from .gate import verify_seal
-from .record import canon, h256, tip_subject
+from .record import TIP, canon, h256, tip_subject
 
 WAGER = "wager:"
+
+#: A wager row written by `api.forecast` carries this as `commit`: its outcome
+#: counts only by chain order under the human's sealed tip (SPEC R3,
+#: `wager.n <= tip.n < tip_seal.n < outcome_seal.n`), never by a timestamp.
+#: A wager row without it is the older shape and is lined up as before.
+COMMIT = "chain-order/v1"
+
+#: Who a forecast is by: a role, never a person's name (SPEC-documented J1).
+ROLES = ("human", "desk", "oracle", "coin")
 
 KEEP_OUT = {"record.jsonl", "pile.json"}
 
@@ -221,14 +232,14 @@ def outcome_subject(wager: str, outcome: dict) -> str:
     return WAGER + h256(canon({"wager": wager, "outcome": outcome}))
 
 
-def _outcome_of(
+def _outcome_row(
     wager: dict,
     rows: list[dict],
     through: int | None = None,
     held: set[str] | None = None,
 ) -> dict | None:
-    """The outcome a human seal carries over this wager, or None. Only a
-    `seal` row whose subject is `outcome_subject` of this wager and the
+    """The human seal row that carries an outcome over this wager, or None.
+    Only a `seal` row whose subject is `outcome_subject` of this wager and the
     outcome on the row, whose proof re-checks (`held`, from
     `serve.sealed_verified`), and that the sealed anchor tip covers (row
     number <= `through`); the latest such seal wins. A row's `who` is a label,
@@ -245,11 +256,122 @@ def _outcome_of(
         and r["subject"] in held
         and r["n"] <= through
     ]
-    return got[-1]["outcome"] if got else None
+    return got[-1] if got else None
+
+
+def _outcome_of(
+    wager: dict,
+    rows: list[dict],
+    through: int | None = None,
+    held: set[str] | None = None,
+) -> dict | None:
+    """The outcome a human seal carries over this wager, or None (`_outcome_row`)."""
+    row = _outcome_row(wager, rows, through, held)
+    return row["outcome"] if row else None
+
+
+def check_distribution(dist: object) -> str | None:
+    """Why a forecast's distribution is refused, or None when it stands
+    (SPEC-documented J1 `api.forecast`): a non-empty list of {path, p, band?,
+    tags?}; every p a real number in [0, 1]; the ps sum to 1 within 1e-9; no
+    path twice."""
+    if not isinstance(dist, list) or not dist:
+        return "a forecast needs a non-empty distribution"
+    seen: set[str] = set()
+    total = 0.0
+    for i, e in enumerate(dist):
+        if not isinstance(e, dict):
+            return f"entry {i} is not an object"
+        extra = set(e) - {"path", "p", "band", "tags"}
+        if extra:
+            return f"entry {i} carries unknown keys {sorted(extra)}"
+        path = e.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return f"entry {i} has no path"
+        if path.strip().lower() in seen:
+            return f"path {path!r} is declared twice"
+        seen.add(path.strip().lower())
+        p = e.get("p")
+        if isinstance(p, bool) or not isinstance(p, (int, float)):
+            return f"entry {i} ({path!r}): p is not a number"
+        if not math.isfinite(p) or not 0 <= p <= 1:
+            return f"entry {i} ({path!r}): p {p!r} is outside [0, 1]"
+        if "band" in e and not isinstance(e["band"], str):
+            return f"entry {i} ({path!r}): band is not text"
+        tags = e.get("tags", [])
+        if not isinstance(tags, list) or not all(
+            isinstance(t, str) and t for t in tags
+        ):
+            return f"entry {i} ({path!r}): tags is not a list of names"
+        total += p
+    if abs(total - 1.0) > 1e-9:
+        return f"the ps sum to {total!r}, not 1"
+    return None
+
+
+def tip_seals(rows: list[dict], human_key: bytes | None) -> list[tuple[int, int]]:
+    """(seal row n, tip n) for every tip seal whose own proof re-checks against
+    the human's key and whose tip is still the row the human signed (row n
+    with that hash). Per row, never per subject: a proofless row over a subject
+    the human sealed later is no seal of its own."""
+    if human_key is None:
+        return []
+    by_n = {r["n"]: r for r in rows}
+    out = []
+    for r in rows:
+        sub = str(r.get("subject") or "")
+        if r.get("kind") != "seal" or not sub.startswith(TIP):
+            continue
+        proof = r.get("proof")
+        if not isinstance(proof, str) or not verify_seal(sub, proof, human_key):
+            continue
+        n, _, hsh = sub[len(TIP) :].partition(":")
+        if not n.isdigit() or by_n.get(int(n), {}).get("hash") != hsh:
+            continue
+        if int(n) < r["n"]:
+            out.append((r["n"], int(n)))
+    return out
+
+
+def committed_under(
+    wager: dict, seal_n: int, tips: list[tuple[int, int]]
+) -> tuple[int, int] | None:
+    """The first sealed tip that holds this wager before its outcome seal:
+    `wager.n <= tip.n < tip_seal.n < seal_n` (SPEC R3). None when no tip does."""
+    return next(
+        ((t, tn) for t, tn in sorted(tips) if wager["n"] <= tn and t < seal_n),
+        None,
+    )
+
+
+def wager_pairs(wager: dict, path_index: int) -> list[tuple[float, bool]]:
+    """(p, happened) pairs for a wager whose path `path_index` happened. Two
+    paths: one pair, (p of path 0, path 0 happened), as `play.py`'s Brier is.
+    Any other count: one pair per path, one against the rest, whose mean is
+    the multi-class Brier over n. Unfolded: `calibration.fold` is for bins."""
+    dist = wager.get("distribution") or []
+    ps = [float(e["p"]) for e in dist]
+    if len(ps) == 2:
+        return [(ps[0], path_index == 0)]
+    return [(p, i == path_index) for i, p in enumerate(ps)]
+
+
+def score(wager: dict, path_index: int) -> dict:
+    """Code's score of one reconciled wager: Brier (mean over its pairs) and
+    log score (of the p it gave what happened). A score, never a grade."""
+    pairs = wager_pairs(wager, path_index)
+    p_actual = float(wager["distribution"][path_index]["p"])
+    return {
+        "brier": sum(calibration.brier(p, o) for p, o in pairs) / len(pairs),
+        "log_score": calibration.log_score(p_actual, True),
+    }
 
 
 def reconcile_wagers(
-    rows: list[dict], through: int | None = None, held: set[str] | None = None
+    rows: list[dict],
+    through: int | None = None,
+    held: set[str] | None = None,
+    human_key: bytes | None = None,
 ) -> dict:
     """Line each declared wager up against the outcome a human sealed. Never
     grades: `graded_by` stays None. `through` is the row number the human's
@@ -258,17 +380,43 @@ def reconcile_wagers(
     seal proof re-checks (`Run.held`); an outcome seal outside it counts for
     nothing either. With no covered outcome, or one
     that names nothing the wager declared, the row escalates to the human,
-    never to a model."""
+    never to a model.
+
+    A forecast (`commit == COMMIT`) counts only by chain order under the
+    human's tip (SPEC R3): some tip seal whose proof re-checks against
+    `human_key` holds the wager row and comes before the outcome seal. Any
+    other order escalates. A reconciled forecast carries `brier` and
+    `log_score`, code's score; the grade stays the human's sealed outcome."""
+    tips = tip_seals(rows, human_key)
     out = []
     for w in (r for r in rows if r["kind"] == "wager"):
         row = {"id": w.get("id", "?"), "subject": w["hash"], "graded_by": None}
-        outcome = _outcome_of(w, rows, through, held)
+        forecast = w.get("commit") == COMMIT
+        if forecast:
+            row["by"] = w.get("by")
+        seal = _outcome_row(w, rows, through, held)
+        outcome = seal["outcome"] if seal else None
+        under = committed_under(w, seal["n"], tips) if seal and forecast else None
+        bad = check_distribution(w.get("distribution")) if forecast else None
         if outcome is None:
             row |= {
                 "state": "escalate",
                 "escalate_to": "human",
                 "reason": "no human seal covered by the sealed anchor tip names an "
                 "outcome; the grade is the human's",
+            }
+        elif forecast and bad is not None:
+            row |= {
+                "state": "escalate",
+                "escalate_to": "human",
+                "reason": f"the forecast's distribution does not stand: {bad}",
+            }
+        elif forecast and under is None:
+            row |= {
+                "state": "escalate",
+                "escalate_to": "human",
+                "reason": "no tip the human sealed holds this forecast before its "
+                "outcome seal (wager.n <= tip.n < tip_seal.n < outcome.n)",
             }
         elif w.get("distribution"):
             idx, entry = _match_distribution(w, outcome)
@@ -286,6 +434,9 @@ def reconcile_wagers(
                     "predicted_band": entry.get("band"),
                     "actual_path": entry.get("path"),
                 }
+                if forecast and under is not None:
+                    row |= score(w, idx)  # type: ignore[arg-type]
+                    row["committed_under"] = {"tip_seal": under[0], "tip": under[1]}
         elif w.get("scores") is not None and "winner" in outcome:
             row |= {
                 "state": "reconciled",
@@ -305,6 +456,80 @@ def reconcile_wagers(
         "escalate_to": "human" if any(r["state"] == "escalate" for r in out) else None,
         "rows": out,
     }
+
+
+def _scored(report_rows: list[dict]) -> list[dict]:
+    return [r for r in report_rows if r.get("state") == "reconciled" and "brier" in r]
+
+
+def _mean(xs: list[float]) -> float | None:
+    return sum(xs) / len(xs) if xs else None
+
+
+def calibration_of(report_rows: list[dict], rows: list[dict]) -> dict:
+    """Over the scored forecasts of a `reconcile_wagers` report: the mean
+    Brier and log score, overall and per role (`by`), and the reliability bins
+    over every pair restated to the believed side (SPEC R5: the fold is for
+    the bins only; Brier and log score are computed unfolded)."""
+    wagers = {r["hash"]: r for r in rows if r["kind"] == "wager"}
+    scored = _scored(report_rows)
+
+    def card(group: list[dict]) -> dict:
+        return {
+            "n": len(group),
+            "brier": _mean([r["brier"] for r in group]),
+            "log_score": _mean([r["log_score"] for r in group]),
+        }
+
+    by: dict[str, list[dict]] = {}
+    for r in scored:
+        by.setdefault(str(r.get("by") or "?"), []).append(r)
+    pairs = [
+        calibration.fold(pr)
+        for r in scored
+        for pr in wager_pairs(wagers[r["subject"]], r["path_index"])
+    ]
+    return {
+        "all": card(scored),
+        "by": {k: card(v) for k, v in sorted(by.items())},
+        "bins": calibration.bins(pairs),
+    }
+
+
+def read_misses(report_rows: list[dict], rows: list[dict]) -> dict:
+    """The misses among scored forecasts, clustered, not only counted
+    (chapter 8: "Read the misses. The misses are the map."). A miss: what
+    happened was not the path given the most p (a tie at the top is no miss;
+    two paths: p of what happened < 0.5). A cluster: two or more misses that
+    share a key, where a key is `forecast->happened` or a tag any entry of the
+    wager carries. Read-only: it grades nothing."""
+    wagers = {r["hash"]: r for r in rows if r["kind"] == "wager"}
+    misses = []
+    for r in _scored(report_rows):
+        w = wagers[r["subject"]]
+        dist = w["distribution"]
+        top = max(float(e["p"]) for e in dist)
+        p_hap = float(dist[r["path_index"]]["p"])
+        if p_hap >= top:
+            continue
+        said = next(e["path"] for e in dist if float(e["p"]) == top)
+        tags = sorted({t for e in dist for t in e.get("tags", [])})
+        misses.append(
+            {
+                "id": r["id"],
+                "forecast": said,
+                "happened": r["actual_path"],
+                "p_happened": p_hap,
+                "tags": tags,
+            }
+        )
+    keyed: dict[str, list[str]] = {}
+    for m in misses:
+        keyed.setdefault(f"{m['forecast']}->{m['happened']}", []).append(m["id"])
+        for t in m["tags"]:
+            keyed.setdefault(f"tag:{t}", []).append(m["id"])
+    clusters = [{"key": k, "ids": v} for k, v in sorted(keyed.items()) if len(v) >= 2]
+    return {"misses": misses, "clusters": clusters}
 
 
 def _marked(item: dict, why: str | None) -> dict:
@@ -327,6 +552,7 @@ def reconcile(
     wagers_through: int | None = None,
     held: set[str] | None = None,
     unreachable: dict[str, str] | None = None,
+    wagers_key: bytes | None = None,
 ) -> dict:
     """`held` is the subjects the human's seal still holds over
     (`serve.sealed_verified`, via `Run.held`). A seal row is only a claim, so
@@ -360,6 +586,7 @@ def reconcile(
         for r in rows
         if r["kind"] == "proposal" and r.get("subject") not in sealed_rows
     ]
+    wagers = reconcile_wagers(rows, wagers_through, held, wagers_key)
     counts: dict[str, int] = {}
     for i in items:
         counts[i["verdict"]] = counts.get(i["verdict"], 0) + 1
@@ -375,9 +602,9 @@ def reconcile(
         "witness": witnesses(list(answers)),
         "grades": grades(list(answers), sealed or {}, task_of or {}),
         "predictions": list(predictions),  # the mechanical bite grades, untouched
-        "wagers": reconcile_wagers(
-            rows, wagers_through, held
-        ),  # declared wagers vs human seals
+        "wagers": wagers,  # declared wagers vs human seals
+        "calibration": calibration_of(wagers["rows"], rows),
+        "misses": read_misses(wagers["rows"], rows),
         "awaiting": awaiting,
         "proposals": proposals,
         # Opus P3: the queue's depth and age are reported state. It authorizes

@@ -556,15 +556,29 @@ class Run:
         wid: str,
         distribution: list[dict] | None = None,
         scores: dict | None = None,
+        *,
+        by: str | None = None,
+        committed: dict | None = None,
+        commit: str | None = None,
     ) -> dict:
         """Record a declared wager. Its row hash is the subject a human seal
-        names to say what happened; nothing here grades it."""
+        names to say what happened; nothing here grades it.
+
+        `api.forecast` passes `by` (a role, `reverse.ROLES`), `committed` (a
+        foreign commitment, when the forecast was made outside the record) and
+        `commit=reverse.COMMIT`, which makes the outcome count only by chain
+        order under the human's sealed tip (SPEC R3). Left out, the row has the
+        older shape, byte for byte."""
+        extra: dict = {}
+        if commit is not None:
+            extra = {"by": by, "committed": committed, "commit": commit}
         return self.rec.append(
             "wager",
             self.sys,
             id=wid,
             distribution=distribution or [],
             scores=scores,
+            **extra,
         )
 
     def seal(
@@ -624,10 +638,34 @@ class Run:
             pair=signed,
         )
 
-    def seal_tip(self, proof: str, human_key: bytes) -> dict:
+    def seal_tip(self, proof: str, human_key: bytes, tip: dict | None = None) -> dict:
         """The human seals the record's tip; the anchor keeps it outside the box.
-        A broken chain is never anchored: sealing it would bless the break."""
-        tip, breaks = self.rec.tip(), self.rec.verify_chain()
+        A broken chain is never anchored: sealing it would bless the break.
+
+        `tip` ({n, hash}) names the row the human signed, for a seal made in a
+        later invocation than the row (the verb's own `invocation` row moves
+        the record's tip before the proof can arrive). It must still be that
+        row, and no older than the tip already anchored. Left out, the
+        record's tip as it stands now."""
+        breaks = self.rec.verify_chain()
+        if tip is None:
+            tip = self.rec.tip()
+        elif not breaks:
+            at = next((r for r in self.rec.rows() if r["n"] == tip.get("n")), None)
+            old = self._anchor()
+            why = None
+            if at is None or at["hash"] != tip.get("hash"):
+                why = f"row {tip.get('n')} is not on record with that hash"
+            elif old is not None and tip["n"] < old["n"]:
+                why = f"row {tip['n']} is older than the anchored tip, row {old['n']}"
+            if why is not None:
+                return self.rec.append(
+                    "refused",
+                    self.sys,
+                    at="seal_tip",
+                    reason=why,
+                    subject=record.tip_subject(tip),
+                )
         if tip is None or breaks:
             why = "nothing to seal" if tip is None else f"the chain is broken: {breaks}"
             return self.rec.append("refused", self.sys, at="seal_tip", reason=why)
@@ -683,6 +721,7 @@ class Run:
             wagers_through=through if human_key is not None else None,
             held=held,
             unreachable=unreachable,
+            wagers_key=human_key,  # tip seals re-checked row by row (SPEC R3)
         )
 
     def checkout(
