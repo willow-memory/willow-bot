@@ -660,13 +660,16 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     row without a `ts` leaves the key out. Read-only, like `pooled`: it writes an `invocation` row and
     nothing else, needs no open box, and never seals, serves or mints. With no
     human seal over a scope, or no scope row behind it, the answer is
-    {"resume": None}."""
+    {"resume": None}. A newer seal row that can't be checked here does not hide
+    an older verified one: the older one is resumed and the newer one rides
+    along as `newer` ({subject, state: "unreachable", why}). Only when no seal
+    verifies is the answer {"resume": None, "state": "unreachable"}."""
     run, info = _open(cfg, "resume", argv)
     if run is None:
         return info
     rows = run.rec.rows()
     held, unchecked = run.held(rows)
-    seal = None
+    seal = newer = None
     for r in reversed(rows):
         subject = str(r.get("subject", ""))
         if r["kind"] != "seal" or not subject.startswith("serve:"):
@@ -674,14 +677,20 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
         if subject in held:
             seal = r
             break
-        if subject in unchecked:  # can't be checked here: said, not guessed
+        if subject in unchecked and newer is None:  # said, not guessed
+            newer = {
+                "subject": subject,
+                "state": "unreachable",
+                "why": unchecked[subject],
+            }
+    if seal is None:
+        if newer is not None:
             return {
                 "resume": None,
                 "state": "unreachable",
-                "why": unchecked[subject],
+                "why": newer["why"],
                 "code": 0,
             }
-    if seal is None:
         return {"resume": None, "code": 0}
     scoped = next(
         (
@@ -698,6 +707,8 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     found = {"spec": scoped["spec"], "subject": seal["subject"], "code": 0}
     if seal.get("ts"):
         found["sealed_at"] = seal["ts"]
+    if newer is not None:  # a newer seal it could not check: shown, not dropped
+        found["newer"] = newer
     return found
 
 

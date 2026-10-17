@@ -254,3 +254,24 @@ def test_an_old_nestor_seal_row_holds_only_inside_the_sealed_tip(tmp_path):
     tip = run.rec.tip()
     run.seal_tip(proof(record.tip_subject(tip)), HUMAN_KEY)
     assert "serve:old" in run.held()[0]
+
+
+def test_an_unreachable_newer_seal_does_not_hide_a_verified_older_one(cfg):
+    """One seal row that can't be checked here (no keyring) is shown beside
+    the verified seal, never in place of it."""
+    assert api.checkin(cfg)["code"] == 0
+    card = api.scope(cfg, by=("who",), match={"who": "run"})
+    assert api.seal_scope(cfg, card["subject"], proof=proof(card["subject"]))["sealed"]
+    other = {"subject": "serve:" + "2" * 64}  # any scope; it never verifies
+    pair = {
+        "source_norm": "x",
+        "target_text": other["subject"],
+        "verifier": "sean campbell",
+        "seal_sig": "00" * 64,
+        "status": "sealed",
+    }
+    forge_seal(cfg, other["subject"], via="nestor", verifier="sean campbell", pair=pair)
+    got = api.resume(cfg)
+    assert got["subject"] == card["subject"] and got["spec"] == card["spec"]
+    assert got["newer"]["subject"] == other["subject"]
+    assert got["newer"]["state"] == "unreachable"
