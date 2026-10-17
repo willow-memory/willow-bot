@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented here.
 
+## [1.11.0](https://github.com/willow-memory/willow-bot/compare/v1.10.1...v1.11.0) (2026-10-17)
+
+
+### Added
+
+* **deterministic, onescript:** the table act at D0 (W3b, R12, C13) ([5e34de4](https://github.com/willow-memory/willow-bot/commit/5e34de472dc38e05f193137714a81d3eb9c60e75))
+* **onescript, deterministic:** symbol cites and rules by exact phase (W4, R15, T-cbm-1, T-mai-2) ([6917183](https://github.com/willow-memory/willow-bot/commit/69171836598d87302209f527cc6d81bb19c49de6))
+* **onescript:** box build — forecast lane, table verdict rows, lore, and the code-first table act ([6a6d9d9](https://github.com/willow-memory/willow-bot/commit/6a6d9d9a1ab6c36f82a27ea304a4fbd5817cee2a))
+* **onescript:** J1 revision — exact path match, T6 times, tip coverage, by_claimed, Nestor outcome seals ([f993563](https://github.com/willow-memory/willow-bot/commit/f993563452b292a41f6686cf89de24ec3209db40))
+* **onescript:** table verdict rows (J4) and the agm_head anchor (J9) ([c706b0d](https://github.com/willow-memory/willow-bot/commit/c706b0d5ce4557e7ae42c7001b36f7a05ad45e0f))
+* **onescript:** the forecast lane — forecast, seal_outcome, seal_tip, reconcile, read_misses ([63f85ff](https://github.com/willow-memory/willow-bot/commit/63f85ff0b8f37a83f57e19779c1b8cf46a9dfb0a))
+* **onescript:** the table's wagers, sessions and agm_head as NEEDS YOU lines (W4, R13) ([ae77b01](https://github.com/willow-memory/willow-bot/commit/ae77b012eb2817c5e354f5e19add9fd580acde5d))
+* **onescript:** vendor Brier/log score/bins from the Forge, with a drift test ([a25969c](https://github.com/willow-memory/willow-bot/commit/a25969cf5ebcaa7f1a26ca029be49d784aa6a2c8))
+* **onescript:** W3a - lore rows (J5/R11), mai shape gate (T-mai-1), graph stamp (T-cbm-4) ([28f5236](https://github.com/willow-memory/willow-bot/commit/28f5236c1b997106224bf40e2ac30253fa0a46b3))
+
+
+### Fixed
+
+* **deterministic, onescript:** W3b revision — the table act after the audit (R20, B1-B4, S6, N4) ([8a734ba](https://github.com/willow-memory/willow-bot/commit/8a734ba3823fbb18d7405b806af57d86fab067c9))
+* **deterministic, onescript:** W3b round 3 — NEW-3, NEW-4, NIT-4, NIT-5, N3 ([129d219](https://github.com/willow-memory/willow-bot/commit/129d2197c7720c917dc53e96574e3643d947ee6a))
+* **onescript, deterministic:** W4 break — table forecasts wait for a beacon; dice re-read ([863b394](https://github.com/willow-memory/willow-bot/commit/863b3949ea58da0e9d3b2e5898188a7801b7af02))
+* **onescript:** HTML comments across newlines are not lore; the f1 wager test waits for its table ([279f125](https://github.com/willow-memory/willow-bot/commit/279f12535766a2a4330b06eed27d41137dfe19d9))
+* **onescript:** J1 re-audit — unreachable and broken said apart, NFKC paths, C6 said at the seal ([8f41aff](https://github.com/willow-memory/willow-bot/commit/8f41afff5667d8aed46a09b9f22bcf6a97fa2105))
+* **onescript:** the CLI takes no option abbreviations, so `ledger-head --n` parses on 3.10/3.11 ([da0b3a9](https://github.com/willow-memory/willow-bot/commit/da0b3a9a62bfb4c04d46eecc20c24b9fd98d387a))
+* **onescript:** verify_chain checks each row's n is its place in the record ([ebad679](https://github.com/willow-memory/willow-bot/commit/ebad67930c2709f309dffcbcfba819a9316e40fc))
+* **onescript:** W2 revision — R3 through the one door, beats named, table rows listed ([bdafcb9](https://github.com/willow-memory/willow-bot/commit/bdafcb9ea2e24c8ecc89007c1a965345d6f70654))
+* **onescript:** W2 round 3 — R3 hook edges (table wagers, notes, plain ids, beat worlds) ([8c1324d](https://github.com/willow-memory/willow-bot/commit/8c1324dc847260b88d2c15ecb83880cb454fc9f1))
+* **onescript:** W3a N-A - any failing cbm exit or stderr is unreachable; zero-width stripped in facts_of ([d2beb97](https://github.com/willow-memory/willow-bot/commit/d2beb9792f1ae89e565f4a9b1aa0e9608daa690a))
+* **onescript:** W3a revision - lore fact channel, logical facts, mai detection, graph freshness and tool parsers ([1c00907](https://github.com/willow-memory/willow-bot/commit/1c009077deedd50e2d744ecf9dae15e6c40904f9))
+* **onescript:** W3a round 3 - stale on removed/renamed paths, silent-miss rule, per-table unreachable lore, nested items ([34f06c0](https://github.com/willow-memory/willow-bot/commit/34f06c04918e221653972208ac3f9e9d82eb1dbd))
+* **onescript:** W4 break 2 — symbol cites ride unchecked to a pass (item 8); cbm path (item 12) ([b6c01f6](https://github.com/willow-memory/willow-bot/commit/b6c01f6eb4886d226b4fc963a626d29a44d287d0))
+* **onescript:** W4 break pass 2 (R23a) — the reader, not the clock; dice replayed ([cd4541a](https://github.com/willow-memory/willow-bot/commit/cd4541ad455e5293ed68f0e2ec6f72c319982967))
+* **onescript:** W4 break pass 3 (R23a) — modifiers from the sheet; lagging reader; anchored seal round ([af7ce1e](https://github.com/willow-memory/willow-bot/commit/af7ce1e8ee0a192286abc7c502aa4a67c6894994))
+* **onescript:** W4 break pass 4 (R22, R23a) — off a set piece the stat is the beat's ([0aeb1a7](https://github.com/willow-memory/willow-bot/commit/0aeb1a7dbde3102055fc27fee1618b4b23c77d34))
+* **onescript:** W4 revision 1 — S1, S2, S3, N1, N2, N4 (symbol cites and rules) ([47de2e3](https://github.com/willow-memory/willow-bot/commit/47de2e3c6eaabb2741caca36eb8981ab3f76a885))
+* **onescript:** W4 revision 2 — B1 a broken chain shows the table unreachable; Q1 api.peek ([68d91bb](https://github.com/willow-memory/willow-bot/commit/68d91bb0e477f2d1d9d392417ad5eea38856825d))
+
 ## [1.10.1](https://github.com/willow-memory/willow-bot/compare/v1.10.0...v1.10.1) (2026-10-17)
 
 
