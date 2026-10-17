@@ -309,8 +309,9 @@ def sealed_verified(
 
 
 def _before_proofs(row: dict, through: int | None) -> bool:
-    """A seal row with no evidence on it, inside the human's sealed tip."""
-    if through is None or "proof" in row or "pair" in row or row.get("via"):
+    """A seal row with no evidence on it, inside the human's sealed tip. An old
+    Nestor row (`via: nestor`, no `pair`) is one: rows carried no pair then."""
+    if through is None or "proof" in row or "pair" in row:
         return False
     return isinstance(row.get("n"), int) and row["n"] <= through
 

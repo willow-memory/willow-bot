@@ -233,3 +233,24 @@ def test_a_seal_row_without_proof_holds_only_inside_the_sealed_tip(tmp_path):
     forge_row(run.rec.path, "serve:new")  # after the tip: a claim, nothing more
     assert run.rec.verify_chain() == []
     assert "serve:new" not in run.held()[0]
+
+
+def test_an_old_nestor_seal_row_holds_only_inside_the_sealed_tip(tmp_path):
+    """Nestor seal rows from before they carried their pair (`via`, `verifier`,
+    no `pair`) hold inside the human's signed tip, like old HMAC rows."""
+    from onescript.run import Run
+
+    run = Run(tmp_path / "box", KEYS, LAW, lambda: "t", anchor=tmp_path / "a.json")
+    hum = gate.human("serve:old", proof("serve:old"), HUMAN_KEY)
+    run.rec.append(
+        "seal",
+        hum,
+        where="serve:old",
+        subject="serve:old",
+        via="nestor",
+        verifier="sean campbell",
+    )  # no pair
+    assert "serve:old" not in run.held()[0]
+    tip = run.rec.tip()
+    run.seal_tip(proof(record.tip_subject(tip)), HUMAN_KEY)
+    assert "serve:old" in run.held()[0]
