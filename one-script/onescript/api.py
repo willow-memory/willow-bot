@@ -1051,6 +1051,7 @@ def covers(rows: list[dict], after: int | None, upto: int) -> list[dict]:
             if r.get("forecast"):
                 f = wagers.get(r["forecast"])
                 got["forecast"] = f.get("id") if f else r["forecast"]
+                got["forecast_on_record"] = f is not None
             continue
         if r["kind"] == "wager":
             w, what = r, "forecast"

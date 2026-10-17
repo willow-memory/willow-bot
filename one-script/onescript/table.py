@@ -50,6 +50,7 @@ depends on one-script state.
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -122,8 +123,12 @@ def check_row(row: object) -> str | None:
         return f"a verdict is never a seal (R10): it can't carry {seal}"
     if row.get("what") not in WHATS:
         return f"what is one of {list(WHATS)}"
-    if not isinstance(row.get("session"), str) or not row["session"]:
+    sid = row.get("session")
+    if not isinstance(sid, str) or not sid:
         return "a verdict row names its session"
+    if any(unicodedata.category(c)[0] in "CZ" and c != " " for c in sid):
+        # proposals.path_problem's rule: a card can't show it as what it is
+        return "session is plain text: no control, format or separator character"
     try:
         canon(row).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError) as e:
@@ -198,12 +203,9 @@ def agm_head(
 
 
 def beat_path(pending: dict) -> str:
-    """Where a decision beat's fact is written once sealed: under its world
-    when the beat names one, so two worlds' `s1::b3` are two paths (B2)."""
-    world = pending.get("world")
-    if world:
-        return f"world/{world}/{pending['fact_id']}.md"
-    return f"world/{pending['fact_id']}.md"
+    """Where a decision beat's fact is written once sealed: under its world,
+    so two worlds' `s1::b3` are two paths (B2). A beat names its world."""
+    return f"world/{pending['world']}/{pending['fact_id']}.md"
 
 
 def propose_beat(
@@ -235,6 +237,10 @@ def propose_beat(
     if why is None:
         if not isinstance(pending, dict) or not {"fact_id", "fact"} <= set(pending):
             why = "a pending beat carries fact_id and fact"
+        elif not isinstance(pending.get("world"), str) or not pending["world"]:
+            why = (
+                "a pending beat names its world (N5): its path is world/<world>/<fact>"
+            )
         else:
             p, why = proposals.check(
                 {
@@ -487,23 +493,26 @@ def outcome_from_verdicts(
     return {**out, "code": 0 if out["state"] == "proposed" else 1}
 
 
-def basis(human_key: bytes | None) -> Callable[[dict, list[dict], dict], str | None]:
-    """The R3 hook for `reverse.reconcile_wagers` (B1): for a wager a table
-    session claims, why its sealed outcome does not stand as the table's, or
-    None. A wager no session claims is not the table's business (None). A
-    claimed wager that declares no paths can't line up with verdict rows (N1).
-    Otherwise the outcome must be the one `propose_outcome` reads from the
-    verdict rows written after the forecast's tip seal."""
+def basis(
+    human_key: bytes | None,
+) -> Callable[[dict, list[dict], dict], str | dict | None]:
+    """The R3 hook for `reverse.reconcile_wagers` (B1). A table forecast (its
+    wager names a `table` world) counts only with an outcome `propose_outcome`
+    reads from verdict rows written after its tip seal: unclaimed, or claimed
+    by rows that say another path, it escalates with why. A wager naming no
+    table world is not the table's: a session's claim on it is a note, and its
+    score stands (round 3 N4). Returns why (str), a note (dict) or None."""
 
-    def check(wager: dict, rows: list[dict], outcome: dict) -> str | None:
-        if not claimed_by(rows, wager["hash"]):
+    def check(wager: dict, rows: list[dict], outcome: dict) -> str | dict | None:
+        claimed = bool(claimed_by(rows, wager["hash"]))
+        if not isinstance(wager.get("table"), dict):
+            # not a table forecast: a session's claim is noted, never counted,
+            # and the score stands (N4)
+            if claimed:
+                return {"note": "a table session claims a non-table forecast; ignored"}
             return None
-        if not wager.get("distribution"):
-            return (
-                "a table session claims this wager, but it declares no paths "
-                "for verdict rows to line up with (scores-only wagers are not "
-                "the table's) (N1)"
-            )
+        if not claimed:
+            return "no table session on record plays for this forecast"
         got = propose_outcome(rows, wager["hash"], human_key)
         if got["state"] != "proposed":
             return str(got.get("reason", got["state"]))

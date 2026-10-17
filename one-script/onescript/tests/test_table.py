@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import __main__ as cli  # noqa: E402
-from onescript import api, gate, record, reverse, table  # noqa: E402
+from onescript import api, gate, record, reverse, table, view  # noqa: E402
 
 HUMAN_KEY = b"a-throwaway-human-key-for-tests"
 TABLE_KEY = "bb" * 32
@@ -483,28 +483,48 @@ def test_the_hook_is_bound_only_on_a_box_with_table_rows(cfg, key_file):
     rep = run.reconciled(
         human_key=HUMAN_KEY, basis=lambda w, r, o: called.append(w["id"]) or None
     )
-    assert called == ["f1"] and rep["wagers"]["rows"][0]["state"] == "reconciled"
+    assert called == ["f1"]  # asked once per wager, never twice
+    assert rep["wagers"]["rows"][0]["state"] == "reconciled"
 
 
-def test_a_forecast_no_session_claims_is_left_alone(cfg, key_file):
+def test_round3_N1_a_table_forecast_no_session_claims_escalates(cfg, key_file):
+    """The hook is on with no table row at all: a `table` wager on record binds
+    it, and a table forecast no session plays for gets no table outcome."""
     f = forecast_sealed(cfg)
     _seal_and_tip(cfg, f["subject"], {"path": "weak-weak"})
+    assert not any(r["kind"] == "verdict" for r in rows(cfg))
     w = api.reconcile(cfg, human_key=key_file)["wagers"]["rows"][0]
-    assert w["state"] == "reconciled"
+    assert w["state"] == "escalate"
+    assert "no table session on record plays for this forecast" in w["reason"]
+
+
+def test_a_non_table_forecast_no_session_claims_is_left_alone(cfg, key_file):
+    f = api.forecast(cfg, "f1", DIST, by="oracle")
+    assert seal_tip(cfg, f["tip"])["sealed"]
+    play(cfg)  # table rows on record: the hook is on
+    _seal_and_tip(cfg, f["subject"], {"path": "weak-weak"})
+    w = api.reconcile(cfg, human_key=key_file)["wagers"]["rows"][0]
+    assert w["state"] == "reconciled" and "brier" in w and "basis_note" not in w
 
 
 # ── decision beats: a proposal the human seals (R10, C10) ──────────────────
-PENDING = {"fact_id": "s1::b3", "fact": "The bridge is out.", "proposed_by": "world"}
+PENDING = {
+    "fact_id": "s1::b3",
+    "fact": "The bridge is out.",
+    "proposed_by": "world",
+    "world": "hasbeen-late-shift",
+}
+BEAT_PATH = "world/hasbeen-late-shift/s1::b3.md"
 
 
 def test_a_beat_is_proposed_as_table_and_sealed_only_by_a_proof(cfg):
     cite = play(cfg)[-1]["row"]["hash"]
     p = table.propose_beat(cfg, PENDING, [cite])
     assert p["code"] == 0 and p["subject"].startswith("proposal:")
-    assert p["row"]["who"] == "table" and p["row"]["path"] == "world/s1::b3.md"
+    assert p["row"]["who"] == "table" and p["row"]["path"] == BEAT_PATH
     assert table.beat_seal(cfg, p["subject"])["state"] == "unsealed"
     done = api.seal_proposal(cfg, p["subject"], proof=proof(p["subject"]))
-    assert done["sealed"] and done["written"]["path"] == "world/s1::b3.md"
+    assert done["sealed"] and done["written"]["path"] == BEAT_PATH
     got = table.beat_seal(cfg, p["subject"])
     assert got["state"] == "sealed" and got["by"] == "human"
 
@@ -646,17 +666,31 @@ def test_a_hand_written_agm_head_row_not_by_table_is_not_the_anchor(cfg):
 
 
 # ── N1, N3, S2: what a session may answer for ───────────────────────────────
-def test_N1_a_scores_wager_a_session_claims_escalates_with_a_reason(cfg, key_file):
-    run, _ = api._open(cfg, "probe", ("probe",))
-    w = run.wager("s9", scores={"a": 1, "b": 0})
-    assert seal_tip(cfg, tip_now(cfg))["sealed"]
-    play(cfg, forecast=w["hash"])
-    sub = reverse.outcome_subject(w["hash"], {"winner": "a"})
-    so = api.seal_outcome(cfg, w["hash"], {"winner": "a"}, proof=proof(sub))
+@pytest.mark.parametrize("kind", ["scores", "forecast"])
+def test_round3_N4_a_claim_on_a_non_table_wager_is_a_note_and_the_score_stands(
+    cfg, key_file, kind
+):
+    """A table session claiming a wager that names no table world is noted,
+    never counted: the row reconciles as it would have (round 3 N4)."""
+    if kind == "scores":
+        run, _ = api._open(cfg, "probe", ("probe",))
+        w = run.wager("s9", scores={"a": 1, "b": 0})
+        outcome, wid = {"winner": "a"}, w["hash"]
+        assert seal_tip(cfg, tip_now(cfg))["sealed"]
+    else:
+        f = api.forecast(cfg, "f1", DIST, by="oracle")
+        assert seal_tip(cfg, f["tip"])["sealed"]
+        outcome, wid = {"path": "weak-weak"}, f["subject"]
+    play(cfg, forecast=wid)
+    sub = reverse.outcome_subject(wid, outcome)
+    so = api.seal_outcome(cfg, wid, outcome, proof=proof(sub))
     assert so["sealed"], so
     assert seal_tip(cfg, so["tip"])["sealed"]
     got = api.reconcile(cfg, human_key=key_file)["wagers"]["rows"][0]
-    assert got["state"] == "escalate" and "N1" in got["reason"]
+    assert got["state"] == "reconciled"
+    assert got["basis_note"] == "a table session claims a non-table forecast; ignored"
+    if kind == "forecast":
+        assert "brier" in got
 
 
 def test_N3_a_reused_session_id_escalates_and_says_so(cfg, key_file):
@@ -766,8 +800,8 @@ def test_S3_the_cli_prints_the_table_rows_it_would_cover(cfg, capsys, monkeypatc
     cli.main([*base, "seal-tip", tip_now(cfg)])
     out = capsys.readouterr().out
     assert (
-        "verdict session s1 · 4 row(s)" in out
-        and f"agm_head · ai-game-master n 3 head {HEAD}" in out
+        "verdict session 's1' · 4 row(s) · forecast none" in out
+        and f"agm_head · 'ai-game-master' n 3 head '{HEAD}'" in out
     )
 
 
@@ -823,3 +857,30 @@ def test_cli_verdict_and_ledger_head(cfg, tmp_path, capsys, monkeypatch):
     assert rc == 0 and "agm_head row" in out and "tip tip:" in out
     last = [r for r in rows(cfg) if r.get("what") == "agm_head"][-1]
     assert (last["ledger_n"], last["head"], last["db"]) == (3, HEAD, "/x/c.db")
+
+
+# ── round 3: N3 plain-text ids, N5 a beat names its world ──────────────────
+@pytest.mark.parametrize("sid", ["s1\nf1 reconciled", "s\u202e1", "s\u20281", "s\t1"])
+def test_round3_N3_a_session_id_with_control_or_separator_is_refused(cfg, sid):
+    res = table.verdict(cfg, {"what": "open", "session": sid})
+    assert res["code"] == 1 and "plain text" in res["refused"]
+
+
+def test_round3_N3_cover_line_reprs_ids_and_says_an_unknown_forecast(cfg):
+    table.verdict(cfg, {"what": "open", "session": "s 1", "forecast": "ab" * 32})
+    c = next(
+        c
+        for c in api.seal_tip(cfg, tip_now(cfg))["covers"]
+        if c["what"] == "verdict session"
+    )
+    line = view.cover_line(c)
+    assert "verdict session 's 1'" in line
+    assert f"forecast '{'ab' * 32}' not on record" in line
+
+
+def test_round3_N5_a_beat_with_no_world_is_refused(cfg):
+    cite = play(cfg)[-1]["row"]["hash"]
+    bare = {k: v for k, v in PENDING.items() if k != "world"}
+    res = table.propose_beat(cfg, bare, [cite])
+    assert res["code"] == 1 and "names its world" in res["refused"]
+    assert not any(r["kind"] == "proposal" for r in rows(cfg))

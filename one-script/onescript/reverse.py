@@ -417,7 +417,7 @@ def reconcile_wagers(
     human_key: bytes | None = None,
     unreachable: dict[str, str] | None = None,
     breaks: list[str] | None = None,
-    basis: Callable[[dict, list[dict], dict], str | None] | None = None,
+    basis: Callable[[dict, list[dict], dict], str | dict | None] | None = None,
 ) -> dict:
     """Line each declared wager up against the outcome a human sealed. Never
     grades: `graded_by` stays None. `through` is the row number the human's
@@ -444,7 +444,9 @@ def reconcile_wagers(
     outcome came from (SPEC R3 for table verdict rows: `table.basis`). It is
     asked only once an outcome is sealed, covered and in chain order; a reason
     back makes the row `escalate` with no score, no predicted p and no path,
-    so calibration and misses never see it. None means it has nothing to say."""
+    so calibration and misses never see it. A `{"note": text}` back leaves
+    the row as it would be and carries the note beside it (`basis_note`).
+    None means it has nothing to say."""
     if not in_place(rows):  # order is read from `n`: a label out of place
         through, held, human_key = None, None, None  # lets nothing count
         breaks = [*(breaks or []), "a row's n is not its place in these rows"]
@@ -461,6 +463,17 @@ def reconcile_wagers(
             row["by_vouched"] = bool(held) and forecast_subject(w["hash"]) in held
         seal = _outcome_row(w, rows, through, held)
         outcome = seal["outcome"] if seal else None
+        asked: list = []
+
+        def ask(w=w, outcome=outcome, asked=asked):
+            """The basis hook, asked at most once per wager, only once an
+            outcome is sealed, covered and in chain order."""
+            if basis is None or outcome is None:
+                return None
+            if not asked:
+                asked.append(basis(w, rows, outcome))
+            return asked[0]
+
         under = committed_under(w, seal["n"], tips) if seal and forecast else None
         bad = check_distribution(w.get("distribution")) if forecast else None
         cant = next(
@@ -503,8 +516,12 @@ def reconcile_wagers(
                 "reason": "no tip the human sealed holds this forecast before its "
                 "outcome seal (wager.n <= tip.n < tip_seal.n < outcome.n)",
             }
-        elif basis is not None and (why := basis(w, rows, outcome)) is not None:
-            row |= {"state": "escalate", "escalate_to": "human", "reason": f"R3: {why}"}
+        elif isinstance(said := ask(), str):
+            row |= {
+                "state": "escalate",
+                "escalate_to": "human",
+                "reason": f"R3: {said}",
+            }
         elif w.get("distribution"):
             idx, entry = _match_distribution(w, outcome)
             if entry is None:
@@ -543,6 +560,9 @@ def reconcile_wagers(
                 "escalate_to": "human",
                 "reason": "the wager declares no distribution or scores to line up",
             }
+        if row["state"] == "reconciled" and isinstance(said := ask(), dict):
+            if said.get("note"):
+                row["basis_note"] = said["note"]
         out.append(row)
     return {
         "reconciled": [r["id"] for r in out if r["state"] == "reconciled"],
@@ -661,7 +681,7 @@ def reconcile(
     unreachable: dict[str, str] | None = None,
     wagers_key: bytes | None = None,
     wagers_breaks: list[str] | None = None,
-    wagers_basis: Callable[[dict, list[dict], dict], str | None] | None = None,
+    wagers_basis: Callable[[dict, list[dict], dict], str | dict | None] | None = None,
 ) -> dict:
     """`held` is the subjects the human's seal still holds over
     (`serve.sealed_verified`, via `Run.held`). A seal row is only a claim, so

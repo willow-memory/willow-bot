@@ -750,11 +750,14 @@ class Run:
 
         `basis` is the R3 hook `reverse.reconcile_wagers` asks about each
         sealed outcome (`table.basis`). Left None, it is bound here whenever
-        the record holds table verdict rows, so every report (reconcile,
-        needs, checkout, the morning screen) goes through the one door."""
+        the record holds table verdict rows or a wager naming a table world,
+        so every report (reconcile, needs, checkout, the morning screen) goes
+        through the one door."""
         rows = self.rec.rows()
         if basis is None and any(
-            r["kind"] == "verdict" and r.get("who") == "table" for r in rows
+            (r["kind"] == "verdict" and r.get("who") == "table")
+            or (r["kind"] == "wager" and isinstance(r.get("table"), dict))
+            for r in rows
         ):
             from . import table  # table imports api, which imports this module
 
