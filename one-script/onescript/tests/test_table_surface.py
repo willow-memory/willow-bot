@@ -230,3 +230,112 @@ def test_the_lines_carry_no_key_and_no_seed(cfg, key_file):
 
 def test_view_table_lines_are_pure_over_the_report():
     assert view.table_lines({}) == [] and view.table_lines({"table": None}) == []
+
+
+# ── B1: a broken chain decides and satisfies nothing ─────────────────────────────
+def _sealed_table(cfg, key_file):
+    api.checkin(cfg)
+    f = api.forecast(cfg, "f1", YES_NO)
+    seal_tip(cfg, f["tip"])
+    roll(cfg, 0, 9, f["subject"])
+    table.agm_head(cfg, n=3, head="abc123")
+    seal_tip(cfg, _tip(cfg))
+    return f
+
+
+def _forge_session(cfg):
+    path = cfg.box / "record.jsonl"
+    out = []
+    for ln in path.read_text().splitlines():
+        r = json.loads(ln)
+        if r["kind"] == "verdict" and r.get("who") == "table" and r.get("session"):
+            r["session"] = "FORGED"
+            ln = json.dumps(r, separators=(",", ":"))
+            out.append(ln)
+            continue
+        out.append(ln)
+    path.write_text("\n".join(out) + "\n")
+
+
+def test_B1_a_broken_chain_shows_the_table_unreachable_and_nothing_decided(
+    cfg, key_file
+):
+    _sealed_table(cfg, key_file)
+    ok = lines(cfg, key_file, head_reader())
+    assert any("covered by your sealed tip" in x for x in ok)
+    assert any(x.startswith("table agm_head satisfied") for x in ok)
+    _forge_session(cfg)
+    for key in (key_file, None):
+        ls = lines(cfg, key, head_reader())
+        (t,) = pick(ls, "table ")
+        assert t.startswith("table unreachable · chain broken at row ")
+        assert not pick(ls, "table verdict session") and not pick(ls, "table agm_head")
+        assert not any(
+            "satisfied" in x or "covered by your sealed tip" in x for x in ls
+        )
+    out = api.checkout(cfg, human_key=key_file, read_head=head_reader())["screen"]
+    assert "table unreachable · chain broken at row" in out
+    assert "agm_head satisfied" not in out
+
+
+def test_B1_the_session_line_never_blames_a_missing_key_when_the_key_was_given(
+    cfg, key_file
+):
+    api.checkin(cfg)
+    roll(cfg, 0, 9)  # a session, and no tip was ever sealed
+    (given,) = pick(lines(cfg, key_file), "table verdict session")
+    assert given.endswith("no sealed tip on record that checks out")
+    assert "no human key" not in given
+    (blind,) = pick(lines(cfg), "table verdict session")
+    assert blind.endswith("tip seal not checked here (no human key)")
+
+
+# ── Q1: peek writes nothing ───────────────────────────────────────────────────────
+def _snapshot(cfg):
+    return {
+        str(p.relative_to(cfg.box.parent)): p.read_bytes()
+        for p in sorted(cfg.box.parent.rglob("*"))
+        if p.is_file()
+    }
+
+
+def test_Q1_a_peek_leaves_every_byte_of_the_box_and_its_keys_unchanged(cfg, key_file):
+    _sealed_table(cfg, key_file)
+    before = _snapshot(cfg)
+    got = api.peek(cfg, human_key=key_file, read_head=head_reader())
+    assert got["code"] == 0 and got["peek"] is True
+    assert _snapshot(cfg) == before
+
+
+def test_Q1_a_peek_reads_what_needs_reads(cfg, key_file):
+    _sealed_table(cfg, key_file)
+    peeked = api.peek(cfg, human_key=key_file, read_head=head_reader())["needs"]
+    needed = lines(cfg, key_file, head_reader())
+    assert peeked == needed
+    assert pick(peeked, "wager f1") and pick(peeked, "table agm_head satisfied")
+
+
+def test_Q1_a_peek_of_a_broken_record_is_unreachable_and_still_writes_nothing(
+    cfg, key_file
+):
+    _sealed_table(cfg, key_file)
+    _forge_session(cfg)
+    before = _snapshot(cfg)
+    got = api.peek(cfg, human_key=key_file)
+    assert pick(got["needs"], "table unreachable · chain broken at row")
+    assert _snapshot(cfg) == before
+
+
+def test_Q1_a_peek_of_a_box_with_no_record_makes_nothing(cfg, tmp_path):
+    ghost = dataclasses.replace(cfg, box=tmp_path / "nowhere" / "box")
+    got = api.peek(ghost)
+    assert got == {"needs": [], "count": 0, "empty": True, "code": 0}
+    assert not (tmp_path / "nowhere").exists()
+
+
+def test_Q1_a_peek_refuses_a_key_inside_the_box(cfg):
+    api.checkin(cfg)
+    inside = cfg.box / "key.hex"
+    inside.write_text("aa")
+    inside.chmod(0o600)
+    assert api.peek(cfg, human_key=inside)["code"] == 2

@@ -293,7 +293,9 @@ def _refused(why: str, code: int) -> dict:
     return {"refused": why, "code": code}
 
 
-def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]:
+def _open(
+    cfg: Config, cmd: str, argv: Iterable[str], *, write: bool = True
+) -> tuple[Run | None, dict]:
     """Open the box and write the `invocation` row: the argv, the root, the
     box, and the hash of every input read. Returns (run, info), or (None, a
     refusal) when there is no law, the keys sit in the box, or are exposed."""
@@ -321,6 +323,8 @@ def _open(cfg: Config, cmd: str, argv: Iterable[str]) -> tuple[Run | None, dict]
     run.serve_key = _load_serve_key(cfg)
     run.keyring, run.nestor_db = cfg.keyring, cfg.nestor_db
     run.beacon = cfg.beacon
+    if not write:  # `peek`: a Run to read through; no invocation, no pin, no row
+        return run, {"ci_text": ci_text, "nested": False}
     run.rec.append(
         "invocation",
         run.sys,
@@ -488,14 +492,45 @@ def needs(
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
         return _refused(why, 2)
+    before = _breaks_before(cfg, key)
     run, info = _open(cfg, "needs", argv)
     if run is None:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    rep = run.reconciled(basis=basis, human_key=key, read_head=read_head)
+    rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
     lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
     return {"needs": lines, "count": len(lines), "code": 0}
+
+
+def peek(
+    cfg: Config,
+    *,
+    human_key: Path | None = None,
+    read_head=None,
+    basis=None,
+) -> dict:
+    """`needs` that writes NOTHING (Q1): no `invocation` row, no `pin`, no
+    directory, so the record is byte-identical after it and its tip does not move
+    under a human who is about to sign it. The same lines as `needs` (the wagers,
+    the table's sessions and agm_head, a broken chain as `table unreachable`),
+    for a second box a seat only watches. A box with no record is
+    `{"needs": [], "count": 0, "empty": True}`; a refusal is as `needs`'s. The
+    law, the keys file and the human key are checked as any verb checks them."""
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
+    if not (cfg.box / "record.jsonl").is_file():
+        return {"needs": [], "count": 0, "empty": True, "code": 0}
+    before = _breaks_before(cfg, key)
+    run, info = _open(cfg, "peek", ("peek",), write=False)
+    if run is None:
+        return info
+    last = _last_boot(run.rec.rows())
+    _from_record(run)
+    rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
+    lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
+    return {"needs": lines, "count": len(lines), "peek": True, "code": 0}
 
 
 # ── turn ────────────────────────────────────────────────────────────────────

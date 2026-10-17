@@ -784,6 +784,12 @@ class Run:
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))
+        chain = (
+            breaks
+            if breaks is not None
+            else self.rec.verify_chain()
+            + (self.rec.verify_anchor(human_key) if human_key is not None else [])
+        )
         report = reverse.reconcile(
             self.rec.box,
             self.rec.pile(),
@@ -801,15 +807,7 @@ class Run:
             wagers_key=human_key,  # tip seals re-checked row by row (SPEC R3)
             wagers_basis=basis,
             # a broken record is said, never read as "no seal" (INVARIANTS §1)
-            wagers_breaks=(
-                (
-                    breaks
-                    if breaks is not None
-                    else self.rec.verify_chain() + self.rec.verify_anchor(human_key)
-                )
-                if human_key is not None
-                else None
-            ),
+            wagers_breaks=chain if human_key is not None else None,
         )
         from . import table  # table imports api, which imports this module
 
@@ -818,6 +816,8 @@ class Run:
             rows,
             covered_through=through if human_key is not None else None,
             read_head=read_head,
+            key_given=human_key is not None,
+            breaks=chain,  # B1: a broken record shows the table unreachable
         )
         if shown is not None:
             report["table"] = shown

@@ -83,12 +83,15 @@ def table_lines(report: dict) -> list[str]:
     t = report.get("table")
     if not t:
         return []
+    if t.get("state") == "unreachable":  # B1: a broken record decides nothing
+        return [f"table unreachable · {t['why']}"]
     out = []
     for s in t["sessions"]:
         seal = {
             True: "covered by your sealed tip",
             False: "waiting on your tip seal",
             None: "tip seal not checked here (no human key)",
+            "none": "no sealed tip on record that checks out",
         }[s["sealed"]]
         out.append(
             f"table verdict session {s['session']} · {s['rows']} rows"

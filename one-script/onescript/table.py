@@ -840,17 +840,34 @@ def surface(
     *,
     covered_through: int | None = None,
     read_head: Callable[[], dict] | None = None,
+    key_given: bool = False,
+    breaks: list[str] | None = None,
 ) -> dict | None:
     """The table's part of the reverse report, for `view.table_lines` (SPEC R13;
     nothing but a read of rows): one entry per verdict session (rows, the
-    forecast it claims, whether a sealed tip covers all of it: True, False, or
-    None when no human key was handed over) and the `agm_head` check. None when
-    the record holds no table verdict row, so a box that is not a table's shows
-    nothing new. The agm check states are the documented ones plus `unanchored`;
-    with an anchor on record and no `read_head`, it is `unreachable`, said."""
+    forecast it claims, whether a sealed tip covers all of it) and the
+    `agm_head` check. None when the record holds no table verdict row, so a box
+    that is not a table's shows nothing new. The agm check states are the
+    documented ones plus `unanchored`; with an anchor on record and no
+    `read_head`, it is `unreachable`, said.
+
+    A session's `sealed` has four states, never collapsed: True (a sealed tip
+    covers all of it), False (one does not), None (no human key was handed over,
+    so no tip could be checked) and "none" (the key WAS given and no sealed tip
+    on record checks out, so none can be said to cover it).
+
+    B1: with `breaks` (the chain's, and the anchor's when a key was given) the
+    answer is only {"state": "unreachable", "why": "chain broken at row N"}: a
+    record that does not verify decides and satisfies nothing, so no session
+    and no agm_head line is made from it."""
     mine = [r for r in rows if r["kind"] == "verdict" and r.get("who") == TABLE[0]]
     if not mine:
         return None
+    if breaks:
+        first = str(breaks[0])
+        row = first[4:].split(":", 1)[0] if first.startswith("row ") else None
+        why = f"chain broken at row {row}" if row else f"the record is broken: {first}"
+        return {"state": "unreachable", "why": why}
     wagers = {r["hash"]: r.get("id") for r in rows if r["kind"] == "wager"}
     sessions: dict[str, dict] = {}
     for r in mine:
@@ -866,8 +883,10 @@ def surface(
             got["forecast"] = wagers.get(r["forecast"], str(r["forecast"])[:12])
     for got in sessions.values():
         got["sealed"] = (
-            None if covered_through is None else got["last"] <= covered_through
+            ("none" if key_given else None)
+            if covered_through is None
+            else got["last"] <= covered_through
         )
     agm = check_agm_head(rows, read_head or _no_reader, covered_through=covered_through)
     agm.pop("read", None)  # the ledger's own reading stays with the checker
-    return {"sessions": list(sessions.values()), "agm": agm}
+    return {"state": "populated", "sessions": list(sessions.values()), "agm": agm}
