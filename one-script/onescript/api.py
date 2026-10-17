@@ -13,6 +13,7 @@
     forecast(cfg, wid, dist, by=...)  # a wager row: the forecast, before the outcome
     seal_outcome(cfg, wager, outcome, proof=...)  # the human's seal on what happened
     seal_tip(cfg, "tip:n:hash", proof=...)        # the human seals a tip
+    seal_forecast(cfg, wager, proof=...)          # the human: this forecast is mine
     reconcile(cfg, human_key=FILE)    # wagers lined up and scored, read-only
     read_misses(cfg, human_key=FILE)  # the misses, clustered, read-only
     checkout(cfg)                     # reverse, then the morning screen
@@ -404,13 +405,24 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
     }
 
 
-def checkout(cfg: Config, argv: Iterable[str] = ("checkout",)) -> dict:
+def checkout(
+    cfg: Config,
+    argv: Iterable[str] = ("checkout",),
+    *,
+    human_key: Path | None = None,
+) -> dict:
+    """Reverse, then the morning screen. `human_key` is the human's key in a
+    file outside the box (0600, `read_human_key`): with it, wager outcomes the
+    sealed tip covers count, and GRADES shows their scores."""
+    key, why = read_human_key(human_key, cfg.box)
+    if why is not None:
+        return _refused(why, 2)
     run, info = _open(cfg, "checkout", argv)
     if run is None:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    rep, screen = run.checkout(boot_report=last)
+    rep, screen = run.checkout(boot_report=last, human_key=key)
     return {"report": rep, "screen": screen, "code": 0}
 
 
@@ -506,19 +518,23 @@ def _seal(
     proof: str | None,
     pair: object,
     verifiers: Iterable[str] | None,
+    outcome: dict | None = None,
 ) -> dict:
     """One seal, by whichever means the caller brought. A row either way: the
-    seal, or the refusal and why.
+    seal, or the refusal and why. With `outcome`, `subject` is a wager's row
+    hash and what is sealed is `reverse.outcome_subject(subject, outcome)`.
 
     A Nestor seal is checked against the operator's keyring and Nestor's store,
     both fixed in `cfg`: the caller can hand over a pair to point at, never a
     keyring to check it by, and never a pair the store no longer holds as
     sealed."""
 
+    signed = subject if outcome is None else reverse.outcome_subject(subject, outcome)
+
     def refuse(why: str) -> dict:
         state = {"state": "unreachable"} if why.startswith("unreachable") else {}
         return run.rec.append(
-            "refused", run.sys, at="seal", reason=why, subject=subject, **state
+            "refused", run.sys, at="seal", reason=why, subject=signed, **state
         )
 
     if pair is not None or (proof is None and cfg.nestor_db is not None):
@@ -533,7 +549,7 @@ def _seal(
             return refuse(nestor_seal.NO_CRYPTO)
         try:
             ring = nestor_seal.load_keyring(cfg.keyring)
-            found = nestor_seal.current(cfg.nestor_db, subject, pair)
+            found = nestor_seal.current(cfg.nestor_db, signed, pair)
         except nestor_seal.Unverifiable as e:
             return refuse(f"unreachable: {e}")
         if not found:
@@ -544,15 +560,15 @@ def _seal(
             )
         allowed = frozenset(verifiers) if verifiers is not None else None
         good = next(
-            (p for p in found if nestor_seal.check(p, subject, ring, allowed)[0]),
+            (p for p in found if nestor_seal.check(p, signed, ring, allowed)[0]),
             found[0],  # none verifies: the refusal says why
         )
-        return run.seal_nestor(subject, good, ring, allowed)
+        return run.seal_nestor(subject, good, ring, allowed, outcome)
     if proof is not None:
         human_key = run.keys.get(gate.HUMAN)
         if human_key is None:
             return refuse("no human key on this box; seal with a Nestor pair")
-        return run.seal(subject, proof, human_key)
+        return run.seal(subject, proof, human_key, outcome)
     return refuse("no seal given: a proof or a Nestor pair")
 
 
@@ -859,31 +875,41 @@ def _rescope(run: Run) -> dict:
     }
 
 
+def _wager_row(run: Run, wager: str) -> dict | None:
+    return next(
+        (r for r in run.rec.rows() if r["kind"] == "wager" and r["hash"] == wager),
+        None,
+    )
+
+
 def seal_outcome(
     cfg: Config,
     wager: str,
     outcome: dict,
     *,
     proof: str | None = None,
+    pair: object = None,
+    verifiers: Iterable[str] | None = None,
     argv: Iterable[str] = ("seal-outcome",),
 ) -> dict:
     """`seal_outcome()` is the operator's seal on what happened
-    (forge-convergence.md:644): the human's proof over
-    `reverse.outcome_subject(wager, outcome)`, so the outcome is inside what
-    was signed. Refused before any seal row is written: no wager row with that
-    hash, an outcome that is not one of path_index / path / winner, or one
-    naming no path the wager declared. A proofless seal is refused; code never
-    writes a seal row. Ends with the rescope step (SPEC R14) and the tip to
-    seal next, without which the outcome is not covered."""
+    (forge-convergence.md:644) over `reverse.outcome_subject(wager, outcome)`,
+    so the outcome is inside what was signed: by the human's proof
+    (`Run.seal`), or by a sealed Nestor pair whose conclusion is that subject
+    (`Run.seal_nestor`, checked against `cfg.keyring` and `cfg.nestor_db`,
+    never the caller's). Refused before any seal row is written: no wager row
+    with that hash, an outcome that is not one of path_index / path / winner,
+    or one naming no path the wager declared, or more than one. A proofless
+    seal is refused; code never writes a seal row. Ends with the rescope step
+    (SPEC R14) and the tip to seal next, without which the outcome is not
+    covered. Recorded gap (C6): the tip itself is sealed by the human's key;
+    a Nestor-sealed tip does not count in `reverse.covered_through`."""
     run, info = _open(cfg, "seal-outcome", argv)
     if run is None:
         return info
     if (refusal := _need_open(run, "seal_outcome", subject=wager)) is not None:
         return refusal
-    w = next(
-        (r for r in run.rec.rows() if r["kind"] == "wager" and r["hash"] == wager),
-        None,
-    )
+    w = _wager_row(run, wager)
     why = None
     if w is None:
         why = "no wager row on record has that hash"
@@ -894,17 +920,17 @@ def seal_outcome(
     ):
         why = f"an outcome is one of {list(OUTCOME_KEYS)}"
     elif w.get("distribution") and reverse._match_distribution(w, outcome)[1] is None:
-        why = "the outcome names no path the wager declared"
-    elif proof is None:
-        why = "no seal given: the human's proof over the outcome subject"
-    elif run.keys.get(gate.HUMAN) is None:
+        why = "the outcome names no path the wager declared, or more than one"
+    elif proof is None and pair is None and cfg.nestor_db is None:
+        why = "no seal given: the human's proof or a Nestor pair over the outcome"
+    elif proof is not None and run.keys.get(gate.HUMAN) is None:
         why = "no human key on this box to check the proof by"
     if why is not None:
         row = run.rec.append(
             "refused", run.sys, at="seal_outcome", reason=why, subject=wager
         )
         return {"refused": why, "row": row, "sealed": False, "code": 1}
-    row = run.seal(wager, proof, run.keys[gate.HUMAN], outcome)  # type: ignore[arg-type]
+    row = _seal(run, cfg, wager, proof, pair, verifiers, outcome)
     if row["kind"] != "seal":
         return {"row": row, "sealed": False, "code": 1}
     return {
@@ -914,6 +940,68 @@ def seal_outcome(
         "rescope": _rescope(run),
         "code": 0,
     }
+
+
+def seal_forecast(
+    cfg: Config,
+    wager: str,
+    *,
+    proof: str | None = None,
+    argv: Iterable[str] = ("seal-forecast",),
+) -> dict:
+    """The human says a forecast is theirs: a proof over
+    `reverse.forecast_subject(wager)`. `by` on a wager row is the run's claim
+    (`by_claimed`); a forecast claimed as the human's counts under "human" in
+    the calibration only with this seal, else under "human (claimed)"."""
+    run, info = _open(cfg, "seal-forecast", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal_forecast", subject=wager)) is not None:
+        return refusal
+    w = _wager_row(run, wager)
+    why = None
+    if w is None or w.get("commit") != reverse.COMMIT:
+        why = "no forecast row on record has that hash"
+    elif proof is None:
+        why = "no seal given: the human's proof over the forecast subject"
+    elif run.keys.get(gate.HUMAN) is None:
+        why = "no human key on this box to check the proof by"
+    if why is not None:
+        row = run.rec.append(
+            "refused", run.sys, at="seal_forecast", reason=why, subject=wager
+        )
+        return {"refused": why, "row": row, "sealed": False, "code": 1}
+    row = run.seal(reverse.forecast_subject(wager), proof, run.keys[gate.HUMAN])  # type: ignore[arg-type]
+    ok = row["kind"] == "seal"
+    return {"row": row, "sealed": ok, "code": 0 if ok else 1}
+
+
+def covers(rows: list[dict], after: int | None, upto: int) -> list[dict]:
+    """The forecast and outcome rows a tip at row `upto` newly covers: those
+    after the anchored tip (`after`, None when nothing was sealed) and at or
+    before `upto`. What the human's signature on that tip vouches for, shown
+    before they sign and again after (SPEC S3)."""
+    wagers = {r["hash"]: r for r in rows if r["kind"] == "wager"}
+    out = []
+    for r in rows:
+        if not (after is None or r["n"] > after) or r["n"] > upto:
+            continue
+        if r["kind"] == "wager":
+            w, what = r, "forecast"
+        elif r["kind"] == "seal" and r.get("wager") in wagers:
+            w, what = wagers[r["wager"]], "outcome"
+        else:
+            continue
+        out.append(
+            {
+                "n": r["n"],
+                "what": what,
+                "id": w.get("id"),
+                "by_claimed": w.get("by"),
+                "ts": r.get("ts"),
+            }
+        )
+    return out
 
 
 def seal_tip(
@@ -926,7 +1014,9 @@ def seal_tip(
     """The human seals a tip (`tip:<n>:<hash>`, as `forecast` and
     `seal_outcome` hand it out) by `Run.seal_tip`; the anchor keeps it beside
     the keys, outside the box. Without a sealed tip no outcome counts
-    (`reverse.covered_through`)."""
+    (`reverse.covered_through`). Before and after: the answer lists the
+    forecast and outcome rows this tip newly covers (`covers`), so asking
+    without a proof shows what a signature would vouch for, writing no seal."""
     run, info = _open(cfg, "seal-tip", argv)
     if run is None:
         return info
@@ -934,20 +1024,24 @@ def seal_tip(
         return refusal
     n, _, hsh = str(subject).removeprefix(record.TIP).partition(":")
     why = None
+    newly: list[dict] = []
     if not str(subject).startswith(record.TIP) or not n.isdigit() or not hsh:
         why = "not a tip subject (tip:<n>:<hash>)"
-    elif proof is None:
-        why = "no seal given: the human's proof over the tip"
-    elif run.keys.get(gate.HUMAN) is None:
-        why = "no human key on this box to check the proof by"
+    else:
+        before = run._anchor()
+        newly = covers(run.rec.rows(), before["n"] if before else None, int(n))
+        if proof is None:
+            why = "no seal given: the human's proof over the tip"
+        elif run.keys.get(gate.HUMAN) is None:
+            why = "no human key on this box to check the proof by"
     if why is not None:
         row = run.rec.append(
             "refused", run.sys, at="seal_tip", reason=why, subject=subject
         )
-        return {"refused": why, "row": row, "sealed": False, "code": 1}
+        return {"refused": why, "row": row, "sealed": False, "covers": newly, "code": 1}
     row = run.seal_tip(proof, run.keys[gate.HUMAN], {"n": int(n), "hash": hsh})  # type: ignore[arg-type]
     ok = row["kind"] == "seal"
-    return {"row": row, "sealed": ok, "code": 0 if ok else 1}
+    return {"row": row, "sealed": ok, "covers": newly, "code": 0 if ok else 1}
 
 
 def read_human_key(path: Path | None, box: Path) -> tuple[bytes | None, str | None]:

@@ -617,10 +617,23 @@ class Run:
         pair: object,
         keyring: dict,
         verifiers: frozenset | None = None,
+        outcome: dict | None = None,
     ) -> dict:
         """The human's seal as a sealed Nestor pair whose conclusion is exactly
         `subject`: no terminal, no key typed. The row says whose pair it was,
-        and carries the pair's signed fields, so a reader can re-check it."""
+        and carries the pair's signed fields, so a reader can re-check it.
+
+        A wager seal passes the wager's row hash as `subject` and its
+        `outcome`, as `seal` does: the pair's conclusion must then be
+        `reverse.outcome_subject(wager, outcome)`, and the row keeps `wager`
+        and `outcome` beside the pair. Recorded gap (SPEC-documented C6): an
+        outcome sealed by pair still counts only under a tip sealed by the
+        human's key; `reverse.covered_through` does not take a Nestor-sealed
+        tip, and this does not change that."""
+        extra: dict = {}
+        if outcome is not None:
+            extra = {"wager": subject, "outcome": outcome}
+            subject = reverse.outcome_subject(subject, outcome)
         try:
             hum, who = gate.human_nestor(subject, pair, keyring, verifiers)
         except gate.Refused as e:
@@ -636,6 +649,7 @@ class Run:
             via="nestor",
             verifier=who,
             pair=signed,
+            **extra,
         )
 
     def seal_tip(self, proof: str, human_key: bytes, tip: dict | None = None) -> dict:

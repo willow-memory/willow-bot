@@ -82,3 +82,40 @@ def test_fold_keeps_brier_and_log_score():
             assert math.isclose(
                 calibration.log_score(q, k), calibration.log_score(p, o), abs_tol=1e-9
             )
+
+
+# ── N1: a fingerprint that never skips ───────────────────────────────────────
+#: sha256 of each function's source as it stands in Forge/forge/calibration.py
+#: (box build J1, 2026-10-17). onescript vendors the first three; `summary`
+#: is not vendored and is pinned so a change on the Forge's side shows too.
+FORGE_SOURCES = {
+    "brier": "71aff868508156cd3ce17a3263ffca986828251fcbe9eba2cc58abcdcfec3a8d",
+    "log_score": "11934d8d0dd289729affedb4557d5ed08c6e9c4a534334f871ed02864f2e1ada",
+    "bins": "d8977a7a5798487deeb52586d838fa401beb6286ae043f70858bea18b425db52",
+    "summary": "727dab89e8cf4686b0574c37df4350eea8f23298357207be127027348246cf04",
+}
+VENDORED = ("brier", "log_score", "bins")
+
+
+def _source_sha(fn) -> str:
+    import hashlib
+    import inspect
+
+    return hashlib.sha256(inspect.getsource(fn).encode()).hexdigest()
+
+
+def test_the_vendored_sources_are_the_pinned_forge_sources():
+    """Runs with or without the Forge: the copy is the Forge's text, byte for
+    byte, as pinned; the constants beside it too."""
+    for name in VENDORED:
+        assert _source_sha(getattr(calibration, name)) == FORGE_SOURCES[name], name
+    assert calibration.BIN_EDGES == (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+    assert calibration._EPS == 1e-9
+
+
+@needs_forge
+def test_the_forges_sources_are_still_the_pinned_ones():
+    """If this fails the Forge moved: diff, reconcile the copy, re-pin."""
+    for name, sha in FORGE_SOURCES.items():
+        assert _source_sha(getattr(forge, name)) == sha, name
+    assert forge.BIN_EDGES == calibration.BIN_EDGES and forge._EPS == calibration._EPS

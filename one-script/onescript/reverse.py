@@ -164,20 +164,38 @@ def grades(
     return out
 
 
+def _norm(path: object) -> str:
+    return str(path or "").strip().casefold()
+
+
 def _match_distribution(wager: dict, outcome: dict) -> tuple[int | None, dict | None]:
-    """The distribution entry a sealed outcome names: by `path_index`, else by a
-    case-insensitive substring of `path`. (None, None) when it names none."""
+    """The distribution entry a sealed outcome names: by `path_index`; else by
+    `path`, an exact match (stripped, casefolded) first, then a substring only
+    when exactly one entry holds it. (None, None) when it names none, or more
+    than one: "rain" names "rain", never "no rain"."""
     dist = wager.get("distribution") or []
     if "path_index" in outcome:
         i = outcome["path_index"]
         if isinstance(i, int) and not isinstance(i, bool) and 0 <= i < len(dist):
             return i, dist[i]
         return None, None
-    needle = str(outcome.get("path") or "").strip().lower()
-    if needle:
-        for i, entry in enumerate(dist):
-            if needle in str(entry.get("path") or "").lower():
-                return i, entry
+    needle = _norm(outcome.get("path"))
+    if not needle:
+        return None, None
+    for exact in (True, False):
+        hits = [
+            (i, e)
+            for i, e in enumerate(dist)
+            if (
+                _norm(e.get("path")) == needle
+                if exact
+                else needle in _norm(e.get("path"))
+            )
+        ]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            return None, None  # ambiguous: named by more than one entry
     return None, None
 
 
@@ -224,6 +242,12 @@ def pinned(rec, human_key: bytes | None) -> tuple[int | None, str | None]:
         return None, None
     at = next((r for r in rows if r["n"] == tn), None)
     return (tn, None) if at is not None and at["hash"] == th else (None, None)
+
+
+def forecast_subject(wager: str) -> str:
+    """What the human signs to say a forecast is theirs (`api.seal_forecast`):
+    the wager's row hash under its own prefix, so it is never an outcome."""
+    return "forecast:" + wager
 
 
 def outcome_subject(wager: str, outcome: dict) -> str:
@@ -288,9 +312,11 @@ def check_distribution(dist: object) -> str | None:
         path = e.get("path")
         if not isinstance(path, str) or not path.strip():
             return f"entry {i} has no path"
-        if path.strip().lower() in seen:
+        if any(c in path for c in "\n\r"):
+            return f"entry {i}: a path is one line"
+        if _norm(path) in seen:
             return f"path {path!r} is declared twice"
-        seen.add(path.strip().lower())
+        seen.add(_norm(path))
         p = e.get("p")
         if isinstance(p, bool) or not isinstance(p, (int, float)):
             return f"entry {i} ({path!r}): p is not a number"
@@ -303,10 +329,22 @@ def check_distribution(dist: object) -> str | None:
             isinstance(t, str) and t for t in tags
         ):
             return f"entry {i} ({path!r}): tags is not a list of names"
+        if len({t.casefold() for t in tags}) != len(tags):
+            return f"entry {i} ({path!r}): a tag is given twice"
         total += p
     if abs(total - 1.0) > 1e-9:
         return f"the ps sum to {total!r}, not 1"
     return None
+
+
+def in_place(rows: list[dict]) -> bool:
+    """Every row's `n` is its place in `rows` (`Record.verify_chain` checks the
+    same on the file). A reader handed rows directly checks it again, since
+    every order here is read from `n`."""
+    return all(
+        isinstance(r.get("n"), int) and not isinstance(r["n"], bool) and r["n"] == i
+        for i, r in enumerate(rows)
+    )
 
 
 def tip_seals(rows: list[dict], human_key: bytes | None) -> list[tuple[int, int]]:
@@ -363,7 +401,8 @@ def score(wager: dict, path_index: int) -> dict:
     p_actual = float(wager["distribution"][path_index]["p"])
     return {
         "brier": sum(calibration.brier(p, o) for p, o in pairs) / len(pairs),
-        "log_score": calibration.log_score(p_actual, True),
+        # + 0.0: a sure thing that happened scores 0.0, not -0.0
+        "log_score": calibration.log_score(p_actual, True) + 0.0,
     }
 
 
@@ -387,13 +426,18 @@ def reconcile_wagers(
     `human_key` holds the wager row and comes before the outcome seal. Any
     other order escalates. A reconciled forecast carries `brier` and
     `log_score`, code's score; the grade stays the human's sealed outcome."""
+    if not in_place(rows):  # order is read from `n`: a label out of place
+        through, held, human_key = None, None, None  # lets nothing count
     tips = tip_seals(rows, human_key)
     out = []
     for w in (r for r in rows if r["kind"] == "wager"):
         row = {"id": w.get("id", "?"), "subject": w["hash"], "graded_by": None}
         forecast = w.get("commit") == COMMIT
         if forecast:
-            row["by"] = w.get("by")
+            # `by` is what the run wrote, a claim; "human" stands only when the
+            # human's own seal over `forecast_subject` vouches for it (SPEC S4)
+            row["by_claimed"] = w.get("by")
+            row["by_vouched"] = bool(held) and forecast_subject(w["hash"]) in held
         seal = _outcome_row(w, rows, through, held)
         outcome = seal["outcome"] if seal else None
         under = committed_under(w, seal["n"], tips) if seal and forecast else None
@@ -437,6 +481,13 @@ def reconcile_wagers(
                 if forecast and under is not None:
                     row |= score(w, idx)  # type: ignore[arg-type]
                     row["committed_under"] = {"tip_seal": under[0], "tip": under[1]}
+                    # rival T6: a tip the human sealed late still commits; the
+                    # times are shown beside it so a late wager is visible
+                    row["wager_ts"] = w.get("ts")
+                    row["tip_seal_ts"] = rows[under[0]].get("ts")
+                    c = w.get("committed")
+                    if isinstance(c, dict) and "beacon_then" in c:
+                        row["beacon_then"] = c["beacon_then"]
         elif w.get("scores") is not None and "winner" in outcome:
             row |= {
                 "state": "reconciled",
@@ -458,6 +509,17 @@ def reconcile_wagers(
     }
 
 
+def role_of(report_row: dict) -> str:
+    """The group a scored forecast counts under. `by_claimed` is the run's
+    word; a forecast claimed as the human's counts as "human" only when the
+    human sealed `forecast_subject` over it, else "human (claimed)". The other
+    roles are code's or the desk's and are shown as claimed."""
+    claimed = str(report_row.get("by_claimed") or "?")
+    if claimed == "human" and not report_row.get("by_vouched"):
+        return "human (claimed)"
+    return claimed
+
+
 def _scored(report_rows: list[dict]) -> list[dict]:
     return [r for r in report_rows if r.get("state") == "reconciled" and "brier" in r]
 
@@ -468,7 +530,7 @@ def _mean(xs: list[float]) -> float | None:
 
 def calibration_of(report_rows: list[dict], rows: list[dict]) -> dict:
     """Over the scored forecasts of a `reconcile_wagers` report: the mean
-    Brier and log score, overall and per role (`by`), and the reliability bins
+    Brier and log score, overall and per role (`role_of`), and the reliability bins
     over every pair restated to the believed side (SPEC R5: the fold is for
     the bins only; Brier and log score are computed unfolded)."""
     wagers = {r["hash"]: r for r in rows if r["kind"] == "wager"}
@@ -483,7 +545,7 @@ def calibration_of(report_rows: list[dict], rows: list[dict]) -> dict:
 
     by: dict[str, list[dict]] = {}
     for r in scored:
-        by.setdefault(str(r.get("by") or "?"), []).append(r)
+        by.setdefault(role_of(r), []).append(r)
     pairs = [
         calibration.fold(pr)
         for r in scored

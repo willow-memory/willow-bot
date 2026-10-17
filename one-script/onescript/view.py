@@ -128,6 +128,15 @@ def morning(
             )
             if "brier" in w:  # code's score beside it; the grade stays the human's
                 what += f" · brier {w['brier']:.3f} · log {w['log_score']:.2f}"
+                who = w.get("by_claimed")
+                what += f" · by {who}" + (
+                    "" if who == "human" and w.get("by_vouched") else " (claimed)"
+                )
+                what += (
+                    f" · wager {w.get('wager_ts')} · tip sealed {w.get('tip_seal_ts')}"
+                )
+                if "beacon_then" in w:
+                    what += f" · beacon then {w['beacon_then']}"
             L.append(f"  · wager {w['id']} reconciled · {what} · grade is yours")
         else:
             L.append(f"  · wager {w['id']} escalate to human · {w['reason']}")

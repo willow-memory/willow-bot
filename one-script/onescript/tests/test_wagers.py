@@ -388,7 +388,8 @@ DIST_ONE = [{"path": "yes", "p": 0.6}, {"path": "no", "p": 0.4}]
 def test_an_outcome_seal_ordered_before_its_wager_escalates(run):
     """Adversarial: the outcome seal's row number before the wager's. The
     chain can't be written that way honestly (the seal names the wager's
-    hash), so the rows are put in that order by hand: R3 still refuses it."""
+    hash), so the rows are put in that order by hand. Refused twice over:
+    the labels are out of place (`reverse.in_place`, B1) and R3's order."""
     w = committed(run, "f", DIST_ONE, {"path_index": 0})
     rows = run.rec.rows()
     s = next(r for r in rows if r["kind"] == "seal" and r.get("wager"))
@@ -460,6 +461,8 @@ def test_the_morning_screen_shows_scores_beside_the_humans_grade(run):
     committed(run, "f", DIST_ONE, {"path": "no"})
     rep, screen = run.checkout(human_key=HUMAN_KEY)
     assert rep["wagers"]["rows"][0]["graded_by"] is None
-    assert "brier 0.360 · log 0.92 · grade is yours" in screen
+    line = next(x for x in screen.splitlines() if "wager f reconciled" in x)
+    assert "brier 0.360 · log 0.92 · by desk (claimed)" in line
+    assert "· tip sealed " in line and line.endswith("grade is yours")
     assert "calibration desk: n 1 · brier 0.36000" in screen
     assert "misses: 1, clusters: 0" in screen

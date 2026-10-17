@@ -12,11 +12,12 @@
     python3 -m onescript resume             # the last sealed scope's spec + subject, JSON
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
     python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
-    python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' --proof P
-    python3 -m onescript seal-tip tip:N:HASH --proof P   # the human seals a tip
+    python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
+    python3 -m onescript seal-tip tip:N:HASH [--proof P] # what it covers; then seal
+    python3 -m onescript seal-forecast WAGER --proof P   # the human: this one is mine
     python3 -m onescript reconcile [--human-key FILE]    # wagers scored, read-only
     python3 -m onescript read-misses [--human-key FILE]  # misses clustered, read-only
-    python3 -m onescript checkout           # reverse, then the morning screen
+    python3 -m onescript checkout [--human-key FILE]  # reverse, then the morning screen
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
 The app calls the functions in `onescript.api`; this file only reads argv,
@@ -231,7 +232,13 @@ def main(argv: list[str] | None = None) -> int:
         "needs",
         help="the NEEDS YOU lines the morning screen would list, as JSON; read-only",
     )
-    sub.add_parser("checkout")
+    co = sub.add_parser("checkout")
+    co.add_argument(
+        "--human-key",
+        type=Path,
+        help="the human's key, hex, in a file outside the box (0600): wager "
+        "outcomes then count and GRADES shows their scores",
+    )
     # the forecast lane: names as forge-convergence.md:643-645 (SPEC R1)
     fc = sub.add_parser(
         "forecast", help="a wager row: the forecast, before the outcome"
@@ -261,6 +268,23 @@ def main(argv: list[str] | None = None) -> int:
         help='JSON: {"path_index": i}, {"path": p} or {"winner": w}',
     )
     so.add_argument("--proof", help="the human's HMAC proof over the outcome subject")
+    so.add_argument(
+        "--pair",
+        type=Path,
+        help="a sealed Nestor pair, as JSON, whose conclusion is the outcome subject",
+    )
+    so.add_argument(
+        "--verifier",
+        action="append",
+        help="take a pair signed by one of these names, for this seal only",
+    )
+    sf = sub.add_parser(
+        "seal-forecast",
+        aliases=["seal_forecast"],
+        help="the human says a forecast is theirs (by: human counts only then)",
+    )
+    sf.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    sf.add_argument("--proof", help="the human's HMAC proof over forecast:<hash>")
     st = sub.add_parser(
         "seal-tip", aliases=["seal_tip"], help="the human seals a tip of the record"
     )
@@ -361,7 +385,16 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"refused: --outcome is not JSON: {e}")
             return 2
-        res = api.seal_outcome(cfg, args.wager, outcome, proof=args.proof, argv=raw)
+        pair = json.loads(args.pair.read_text()) if args.pair else None
+        res = api.seal_outcome(
+            cfg,
+            args.wager,
+            outcome,
+            proof=args.proof,
+            pair=pair,
+            verifiers=args.verifier,
+            argv=raw,
+        )
         if res.get("sealed"):
             print(f"sealed {res['row']['subject']}")
             print(f"tip {res['tip']}")  # seal it, or this outcome is not covered
@@ -369,15 +402,27 @@ def main(argv: list[str] | None = None) -> int:
             for step in res["rescope"]["steps"]:
                 print(f"  {step}")
             return 0
+    elif args.cmd == "seal-forecast":
+        res = api.seal_forecast(cfg, args.wager, proof=args.proof, argv=raw)
     elif args.cmd == "seal-tip":
         res = api.seal_tip(cfg, args.subject, proof=args.proof, argv=raw)
+        if "covers" in res:  # what the signature vouches for, before and after
+            print(f"{args.subject} newly covers {len(res['covers'])} row(s):")
+            for c in res["covers"]:
+                print(
+                    f"  row {c['n']} · {c['what']} · {c['id']}"
+                    f" · by {c['by_claimed']} (claimed) · {c['ts']}"
+                )
+            if res.get("sealed"):
+                print("sealed")
+                return 0
     elif args.cmd in ("reconcile", "read-misses"):
         verb = api.reconcile if args.cmd == "reconcile" else api.read_misses
         res = verb(cfg, human_key=args.human_key, argv=raw)
     elif args.cmd == "checkin":
         res = api.checkin(cfg, raw)
     elif args.cmd == "checkout":
-        res = api.checkout(cfg, raw)
+        res = api.checkout(cfg, raw, human_key=args.human_key)
     elif args.cmd == "pooled":
         res = api.pooled(cfg, raw)
         if "refused" in res:  # stdout stays parseable: the reason goes to stderr
