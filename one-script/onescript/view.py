@@ -23,6 +23,34 @@ def proposal_line(row: dict) -> str:
     return f"{lead} · {where} · {row.get('verdict')}{why}"
 
 
+def cover_line(c: dict) -> str:
+    """One row a tip would newly cover, as `seal-tip` lists it before the human
+    signs (`api.covers`): a forecast or outcome, a table verdict session, or an
+    agm_head row. `who` is the record's label, never a signature."""
+    if c.get("what") == "agm_head":
+        return (
+            f"row {c['n']} · agm_head · {c.get('ledger')!r} n {c.get('ledger_n')!r}"
+            f" head {c.get('head')!r} · who {c.get('who')!r} · {c.get('ts')}"
+        )
+    if c.get("what") == "verdict session":
+        f = c.get("forecast")
+        if f is None:
+            fc = "none"
+        elif c.get("forecast_on_record") is False:
+            fc = f"{f!r} not on record"
+        else:
+            fc = repr(f)
+        return (
+            f"row {c['n']} · verdict session {c.get('session')!r}"
+            f" · {c.get('rows')} row(s) · forecast {fc}"
+            f" · who {', '.join(repr(w) for w in c.get('who') or [])} · {c.get('ts')}"
+        )
+    return (
+        f"row {c['n']} · {c['what']} · {c.get('id')}"
+        f" · by {c.get('by_claimed')} (claimed) · {c.get('ts')}"
+    )
+
+
 def needs_you(
     report: dict,
     boot: dict | None = None,

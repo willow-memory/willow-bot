@@ -410,10 +410,13 @@ def checkout(
     argv: Iterable[str] = ("checkout",),
     *,
     human_key: Path | None = None,
+    basis=None,
 ) -> dict:
     """Reverse, then the morning screen. `human_key` is the human's key in a
     file outside the box (0600, `read_human_key`): with it, wager outcomes the
-    sealed tip covers count, and GRADES shows their scores."""
+    sealed tip covers count, and GRADES shows their scores. `basis` is the R3
+    hook (`table.basis`); left None, `Run.reconciled` binds it whenever the
+    box holds table verdict rows."""
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
         return _refused(why, 2)
@@ -422,11 +425,11 @@ def checkout(
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    rep, screen = run.checkout(boot_report=last, human_key=key)
+    rep, screen = run.checkout(boot_report=last, human_key=key, basis=basis)
     return {"report": rep, "screen": screen, "code": 0}
 
 
-def needs(cfg: Config, argv: Iterable[str] = ("needs",)) -> dict:
+def needs(cfg: Config, argv: Iterable[str] = ("needs",), *, basis=None) -> dict:
     """What the morning screen's NEEDS YOU section would list right now, as
     data: `{"needs": [line, ...], "count": n}` (an empty list is the screen's
     "nothing"). The lines are `view.needs_you`, the same ones `checkout` prints,
@@ -439,7 +442,7 @@ def needs(cfg: Config, argv: Iterable[str] = ("needs",)) -> dict:
         return info
     last = _last_boot(run.rec.rows())
     _from_record(run)
-    lines = view.needs_you(run.reconciled(), last, run.claims, run.acts)
+    lines = view.needs_you(run.reconciled(basis=basis), last, run.claims, run.acts)
     return {"needs": lines, "count": len(lines), "code": 0}
 
 
@@ -783,6 +786,7 @@ def escalate(
 # and reconcile, without which no outcome counts) ────────────────────────────
 OUTCOME_KEYS = ("path_index", "path", "winner")  # reverse._match_distribution
 COMMITTED_KEYS = {"sha256", "beacon_then", "target"}
+TABLE_KEYS = {"world", "sheets_sha"}  # a table forecast's world (SPEC W2 S2)
 
 
 def forecast(
@@ -792,6 +796,7 @@ def forecast(
     *,
     by: str = "desk",
     committed: dict | None = None,
+    table: dict | None = None,
     argv: Iterable[str] = ("forecast",),
 ) -> dict:
     """`forecast()` seals a prediction into the ledger before the outcome
@@ -801,7 +806,10 @@ def forecast(
     (SPEC R3). Refused, with nothing appended but the refusal: a distribution
     that does not stand (`reverse.check_distribution`), a `by` that is not a
     role, a `committed` that is not {sha256, beacon_then, target}, or an id
-    already on record (a forecast stands, `play.py:254-256`)."""
+    already on record (a forecast stands, `play.py:254-256`). `table` names
+    the world and the stat sheets a table forecast is about, exactly
+    {world, sheets_sha} (`peaks.world_key`); a table session that played
+    another world or other sheets can't supply its outcome (`table.basis`)."""
     run, info = _open(cfg, "forecast", argv)
     if run is None:
         return info
@@ -816,6 +824,12 @@ def forecast(
         not isinstance(committed, dict) or set(committed) != COMMITTED_KEYS
     ):
         why = f"committed carries exactly {sorted(COMMITTED_KEYS)}"
+    elif table is not None and (
+        not isinstance(table, dict)
+        or set(table) != TABLE_KEYS
+        or not all(isinstance(v, str) and v for v in table.values())
+    ):
+        why = f"table names exactly {sorted(TABLE_KEYS)}, as text"
     elif any(r["kind"] == "wager" and r.get("id") == wid for r in run.rec.rows()):
         why = f"a wager {wid!r} is already on record; a forecast stands"
     else:
@@ -824,7 +838,12 @@ def forecast(
         row = run.rec.append("refused", run.sys, at="forecast", reason=why, id=wid)
         return {"refused": why, "row": row, "code": 1}
     row = run.wager(
-        wid, distribution, by=by, committed=committed, commit=reverse.COMMIT
+        wid,
+        distribution,
+        by=by,
+        committed=committed,
+        commit=reverse.COMMIT,
+        table=table,
     )
     return {
         "row": row,
@@ -985,14 +1004,54 @@ def seal_forecast(
 
 
 def covers(rows: list[dict], after: int | None, upto: int) -> list[dict]:
-    """The forecast and outcome rows a tip at row `upto` newly covers: those
-    after the anchored tip (`after`, None when nothing was sealed) and at or
-    before `upto`. What the human's signature on that tip vouches for, shown
-    before they sign and again after (SPEC S3)."""
+    """What a tip at row `upto` newly covers: the rows after the anchored tip
+    (`after`, None when nothing was sealed) and at or before `upto`. What the
+    human's signature on that tip vouches for, shown before they sign and
+    again after (SPEC S3): every forecast and outcome row; every table
+    verdict session, once, with its row count and the forecast it claims;
+    and every `agm_head` row with the ledger head it anchors (SPEC W2 S3), so
+    no table row is signed blind. A row's `who` is shown as the record holds
+    it: the `table` identity gates the write, it does not sign the row, so a
+    row hand-appended under that label shows up here too."""
     wagers = {r["hash"]: r for r in rows if r["kind"] == "wager"}
-    out = []
+    out: list[dict] = []
+    sessions: dict[str, dict] = {}
     for r in rows:
         if not (after is None or r["n"] > after) or r["n"] > upto:
+            continue
+        if r["kind"] == "verdict" and r.get("what") == "agm_head":
+            out.append(
+                {
+                    "n": r["n"],
+                    "what": "agm_head",
+                    "who": r.get("who"),
+                    "ledger": r.get("ledger"),
+                    "ledger_n": r.get("ledger_n"),
+                    "head": r.get("head"),
+                    "ts": r.get("ts"),
+                }
+            )
+            continue
+        if r["kind"] == "verdict":
+            sid = str(r.get("session"))
+            got = sessions.get(sid)
+            if got is None:
+                got = sessions[sid] = {
+                    "n": r["n"],
+                    "what": "verdict session",
+                    "session": sid,
+                    "who": sorted({str(r.get("who"))}),
+                    "rows": 0,
+                    "forecast": None,
+                    "ts": r.get("ts"),
+                }
+                out.append(got)
+            got["rows"] += 1
+            got["who"] = sorted(set(got["who"]) | {str(r.get("who"))})
+            if r.get("forecast"):
+                f = wagers.get(r["forecast"])
+                got["forecast"] = f.get("id") if f else r["forecast"]
+                got["forecast_on_record"] = f is not None
             continue
         if r["kind"] == "wager":
             w, what = r, "forecast"
@@ -1074,19 +1133,21 @@ def reconcile(
     *,
     human_key: Path | None = None,
     argv: Iterable[str] = ("reconcile",),
+    basis=None,
 ) -> dict:
     """Every wager lined up against the human's sealed outcomes, scored, by
     `Run.reconciled` with the human's key from `human_key` (a file outside the
     box, 0600). Read-only, like `needs`: an `invocation` row and nothing else,
     no `reconcile` row, so it checks nothing out. Without the key no outcome
-    counts, and the answer says so. `graded_by` stays None (SPEC R4)."""
+    counts, and the answer says so. `graded_by` stays None (SPEC R4). `basis`
+    as `checkout` takes it: a table box goes through R3 here too."""
     run, info = _open(cfg, "reconcile", argv)
     if run is None:
         return info
     key, why = read_human_key(human_key, cfg.box)
     if why is not None:
         return _refused(why, 2)
-    rep = run.reconciled(human_key=key)
+    rep = run.reconciled(human_key=key, basis=basis)
     tip = run.rec.tip()
     out = {
         "wagers": rep["wagers"],

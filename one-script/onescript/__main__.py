@@ -18,6 +18,8 @@
     python3 -m onescript reconcile [--human-key FILE]    # wagers scored, read-only
     python3 -m onescript read-misses [--human-key FILE]  # misses clustered, read-only
     python3 -m onescript checkout [--human-key FILE]  # reverse, then the morning screen
+    python3 -m onescript verdict --json FILE         # one table verdict row (J4)
+    python3 -m onescript ledger-head --n N --head H  # the agm_head row (J9, R9)
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
 
 The app calls the functions in `onescript.api`; this file only reads argv,
@@ -52,6 +54,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
+from . import table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -256,6 +259,32 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="JSON {sha256, beacon_then, target}: a commitment made outside the record",
     )
+    fc.add_argument(
+        "--table",
+        type=Path,
+        help="JSON {world, sheets_sha}: the world a table forecast is about",
+    )
+    # the table's rows (SPEC-documented §9 J4, §12 J9; SPEC R9, R10)
+    vd = sub.add_parser(
+        "verdict", help="one code-written verdict row as the table identity"
+    )
+    vd.add_argument(
+        "--json",
+        type=Path,
+        required=True,
+        dest="row_json",
+        help="the row, as JSON; '-' reads stdin",
+    )
+    lh = sub.add_parser(
+        "ledger-head",
+        aliases=["ledger_head"],
+        help="the ai-game-master ledger head as one agm_head verdict row (R9)",
+    )
+    lh.add_argument("--ledger", default="ai-game-master")
+    lh.add_argument("--n", type=int, required=True, help="the ledger's row count")
+    lh.add_argument("--head", required=True, help="the ledger's last hash")
+    lh.add_argument("--db-sha", help="sha256 of campaign.db as anchored")
+    lh.add_argument("--db", help="where campaign.db was read")
     so = sub.add_parser(
         "seal-outcome",
         aliases=["seal_outcome"],
@@ -372,8 +401,13 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
+        try:
+            tbl = json.loads(args.table.read_text()) if args.table else None
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
         res = api.forecast(
-            cfg, args.id, dist, by=args.by, committed=committed, argv=raw
+            cfg, args.id, dist, by=args.by, committed=committed, table=tbl, argv=raw
         )
         if "refused" not in res:
             print(f"wager {res['subject']}")  # the subject an outcome seal names
@@ -404,6 +438,35 @@ def main(argv: list[str] | None = None) -> int:
             for step in res["rescope"]["steps"]:
                 print(f"  {step}")
             return 0
+    elif args.cmd == "verdict":
+        try:
+            text = (
+                sys.stdin.read()
+                if str(args.row_json) == "-"
+                else args.row_json.read_text()
+            )
+            row = json.loads(text)
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        res = table.verdict(cfg, row, argv=raw)
+        if res.get("code") == 0:
+            print(f"verdict row {res['row']['n']} {res['row']['hash']}")
+            return 0
+    elif args.cmd == "ledger-head":
+        res = table.agm_head(
+            cfg,
+            n=args.n,
+            head=args.head,
+            ledger=args.ledger,
+            db_sha=args.db_sha,
+            db=args.db,
+            argv=raw,
+        )
+        if res.get("code") == 0:
+            print(f"agm_head row {res['row']['n']}")
+            print(f"tip {res['tip']}")  # seal it: the human's tip covers the head
+            return 0
     elif args.cmd == "seal-forecast":
         res = api.seal_forecast(cfg, args.wager, proof=args.proof, argv=raw)
     elif args.cmd == "seal-tip":
@@ -411,10 +474,7 @@ def main(argv: list[str] | None = None) -> int:
         if "covers" in res:  # what the signature vouches for, before and after
             print(f"{args.subject} newly covers {len(res['covers'])} row(s):")
             for c in res["covers"]:
-                print(
-                    f"  row {c['n']} · {c['what']} · {c['id']}"
-                    f" · by {c['by_claimed']} (claimed) · {c['ts']}"
-                )
+                print(f"  {view.cover_line(c)}")
             if res.get("sealed"):
                 print("sealed")
                 return 0
