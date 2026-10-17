@@ -275,3 +275,31 @@ def test_an_unreachable_newer_seal_does_not_hide_a_verified_older_one(cfg):
     assert got["subject"] == card["subject"] and got["spec"] == card["spec"]
     assert got["newer"]["subject"] == other["subject"]
     assert got["newer"]["state"] == "unreachable"
+
+
+def test_resume_skips_a_forged_seal_over_a_subject_the_human_really_sealed(cfg):
+    """A sealed subject vouches for its own seal row, not for every row that
+    names it: a forged scope and seal after the real one change nothing."""
+    assert api.checkin(cfg)["code"] == 0
+    card = api.scope(cfg, by=("who",), match={"who": "run"})
+    real = api.seal_scope(cfg, card["subject"], proof=proof(card["subject"]))["row"]
+    rs = rows(cfg)
+    bad = {
+        "n": len(rs),
+        "kind": "scope",
+        "who": "desk",
+        "family": "system",
+        "standing": "system",
+        "version": rs[-1]["version"],
+        "ts": "2026-10-08T00:00:00Z",
+        "prev": rs[-1]["hash"],
+        "where": card["subject"],
+        "spec": {"by": ["who"], "match": {"who": "anyone"}, "upto": 0},
+    }
+    bad["hash"] = record.h256(record.canon(bad))
+    with (cfg.box / "record.jsonl").open("a") as f:
+        f.write(record.canon(bad) + "\n")
+    forge_seal(cfg, card["subject"], ts="2099-01-01T00:00:00Z")  # no proof
+    got = api.resume(cfg)
+    assert got["spec"] == card["spec"] and got["subject"] == card["subject"]
+    assert got["sealed_at"] == real["ts"]

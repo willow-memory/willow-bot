@@ -216,6 +216,35 @@ class Run:
             reverse.covered_through(self.rec, self.keys.get(gate.HUMAN)),
         )
 
+    def seal_rows(
+        self, rows: list[dict] | None = None
+    ) -> tuple[set[int], dict[int, str]]:
+        """Per row, not per subject: the `n` of every seal row whose own proof
+        re-checks, and of every one that can't be checked here, with why.
+        `held` answers whether a subject is sealed; a reader that takes
+        anything else from the seal row (a spec beside it, its stamp) needs
+        this, since a forged row over a sealed subject is in `held` too."""
+        rows = self.rec.rows() if rows is None else rows
+        key = self.keys.get(gate.HUMAN)
+        through = reverse.covered_through(self.rec, key)
+        ring = self.keyring
+        if ring is not None and not isinstance(ring, dict):
+            try:
+                ring = nestor_seal.load_keyring(ring)
+            except nestor_seal.Unverifiable:
+                pass  # sealed_verified says why, row by row
+        good: set[int] = set()
+        unchecked: dict[int, str] = {}
+        for r in rows:
+            if r.get("kind") != "seal" or not isinstance(r.get("n"), int):
+                continue
+            ok, why = serve.sealed_verified([r], key, ring, self.nestor_db, through)
+            if ok:
+                good.add(r["n"])
+            elif why:
+                unchecked[r["n"]] = next(iter(why.values()))
+        return good, unchecked
+
     # ── proposals: the model's Write is a row, and a seal is what writes it ──
     def _current_serve(self) -> tuple[dict, bytes] | None:
         """This check-in's last `serve` row and the served file's bytes, only

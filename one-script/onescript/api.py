@@ -668,20 +668,20 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
     if run is None:
         return info
     rows = run.rec.rows()
-    held, unchecked = run.held(rows)
+    good, unchecked = run.seal_rows(rows)  # the row itself, not its subject
     seal = newer = None
     for r in reversed(rows):
         subject = str(r.get("subject", ""))
         if r["kind"] != "seal" or not subject.startswith("serve:"):
             continue
-        if subject in held:
+        if r["n"] in good:
             seal = r
             break
-        if subject in unchecked and newer is None:  # said, not guessed
+        if r["n"] in unchecked and newer is None:  # said, not guessed
             newer = {
                 "subject": subject,
                 "state": "unreachable",
-                "why": unchecked[subject],
+                "why": unchecked[r["n"]],
             }
     if seal is None:
         if newer is not None:
