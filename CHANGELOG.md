@@ -2,6 +2,32 @@
 
 All notable changes to this project are documented here.
 
+## [1.12.0](https://github.com/willow-memory/willow-bot/compare/v1.11.0...v1.12.0) (2026-10-18)
+
+
+### Added
+
+* **onescript:** chunks keep short blocks as titles and split long lines ([ebd8885](https://github.com/willow-memory/willow-bot/commit/ebd8885ba955ce8913cd95bc7ad86bc05bffaf71))
+* **onescript:** lookup — sessions' stores merged by hash, a view rebuilt on demand ([d8101f8](https://github.com/willow-memory/willow-bot/commit/d8101f81b2c9b165ee27b5fae8af2a15afc69f60))
+* **onescript:** phrase_rank — a bite's words and short phrases against the pile ([2a4fd55](https://github.com/willow-memory/willow-bot/commit/2a4fd55c8ad09b8ed69a0a95187b6444e118125a))
+* **onescript:** phrase_rank — prior art in: NPMI pairs, BM25F questions, gated -ies/-es, RRF, sweep ([5cee8b1](https://github.com/willow-memory/willow-bot/commit/5cee8b100fe5db9488a6e8272b15bceaa3b7cd49))
+* **onescript:** phrase_rank — the pile hashed once: a cache of hashes, and sentence lookups ([46bd7e5](https://github.com/willow-memory/willow-bot/commit/46bd7e55153eefe3e49f29bb065d804bbd0f72d4))
+* **onescript:** PileBox — the willow side of the Forge's BoxLookup seam ([162d95b](https://github.com/willow-memory/willow-bot/commit/162d95bd61b7d227d1912e4d529e81096926c834))
+* **onescript:** rung 2 in the pile — typos repaired one edit away, over hashes ([39ed815](https://github.com/willow-memory/willow-bot/commit/39ed815c2244669e0ca477c045df1e1bb2499625))
+* **onescript:** seed — the first bite's words, scanned against the box ([f4aa2ca](https://github.com/willow-memory/willow-bot/commit/f4aa2ca2b16d424aa2b77f02e8b788203a23464b))
+* **onescript:** the bite ladder, chunk tombstones, chunk sizes on the scope card ([66612c5](https://github.com/willow-memory/willow-bot/commit/66612c5c4451ddbe02a080f06ee029a2c1638730))
+* **onescript:** the decisions batch: D5 C, D6 C, D9 A, D12, D14 B ([3211201](https://github.com/willow-memory/willow-bot/commit/32112011107c146ae1cdd51c118609ee29eb2b14))
+* **onescript:** the first bite seeds the session — the pile, its store, the ladder, the Forge's box ([c76df51](https://github.com/willow-memory/willow-bot/commit/c76df51ec856f0d5be107534783192dcc90efb65))
+* **onescript:** the session's store — attached at check-in, seeding the bite, served from the blob ([675c80e](https://github.com/willow-memory/willow-bot/commit/675c80ea405b3ad7aba501fb8f5c85dec2593deb))
+* **onescript:** the store builds in the background; the README names the pair's middle ([803a20a](https://github.com/willow-memory/willow-bot/commit/803a20acbc86df59afc8c3f9013bc7fabe996b0b))
+* **onescript:** writeback — every escalation writes back, a miss log of hashes ([b05988c](https://github.com/willow-memory/willow-bot/commit/b05988cb9e8fc539092b0d3faa53698a0ff681c0))
+
+
+### Fixed
+
+* **onescript:** the record holds keyed hashes of your words, never the words ([a47e590](https://github.com/willow-memory/willow-bot/commit/a47e590aa07949d5a397d8ec67e557d0eab8a5e8))
+* **onescript:** the store hardened — keyed hashes, one reader, one opener, seed receipts ([5dbaf3c](https://github.com/willow-memory/willow-bot/commit/5dbaf3c6c9bec0746da3fc743f0a0d2be373eff1))
+
 ## [1.11.0](https://github.com/willow-memory/willow-bot/compare/v1.10.1...v1.11.0) (2026-10-17)
 
 
