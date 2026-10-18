@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import collections
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -15,11 +14,7 @@ sys.path.insert(0, str(ROOT))
 from onescript import xref  # noqa: E402
 from onescript.tests.test_xref import make  # noqa: E402
 
-_spec = importlib.util.spec_from_file_location(
-    "phrase_rank", ROOT / "scripts" / "scan" / "phrase_rank.py"
-)
-pr = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(pr)
+from onescript import pile as pr  # noqa: E402
 
 
 def pile(tmp_path, files: dict) -> tuple[dict, dict]:

@@ -50,6 +50,7 @@ from typing import Callable, Iterable
 
 from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import pile as pile_mod
 from . import seed as seed_mod
 from . import serve as served
 from .run import PKG, Run
@@ -94,6 +95,11 @@ class Config:
     #: Fixed here, never taken from a caller; None: offline, and no table
     #: outcome can be proposed (`unreachable`, said).
     beacon: Callable[[int], dict] | None = None
+    #: Where an indexed repo is read from, by name; any it leaves out are looked
+    #: for beside willow-bot. The session's store and serve read through it.
+    repos: dict | None = None
+    #: Attach the session's store (the pile hashed once, `pile.py`) at check-in.
+    store: bool = True
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -410,11 +416,76 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
         _save_serve_key(cfg, None)  # no key: serve fails closed
         return {"wont_open": str(e), "code": 3}
     _save_serve_key(cfg, run.serve_key)
+    if cfg.store and not rep["hard_close"]:
+        rep["store"] = _attach_store(cfg, run)
     return {
         "report": rep,
         "nested": info["nested"],
         "code": 1 if rep["hard_close"] else 0,
     }
+
+
+def _repos(cfg: Config, index: dict) -> dict:
+    where = {n: cfg.root.parent / n for n in index.get("arrival", {})}
+    where.update({n: Path(p) for n, p in (cfg.repos or {}).items()})
+    return where
+
+
+def _attach_store(cfg: Config, run: Run) -> dict:
+    """B1: this session's store, attached at check-in. The pile hashed once
+    (`pile.py`), for the xref index the record vouches for; built when it
+    isn't there or was built for another index. One `store` row says which,
+    with the store file's own SHA-256, so a later verb uses it only while it
+    still hashes to that. No index is `unreachable`, said, and the box opens."""
+    index, why = seed_mod.read_index(run.rec)
+    if index is None:
+        row = {"state": "unreachable", "why": why}
+    else:
+        sha = next(
+            i["sha"] for i in run.rec.pile()["items"] if i["where"] == seed_mod.INDEX
+        )
+        path = pile_mod.store_path(cfg.box)
+        try:
+            db, how = pile_mod.open_cache(index, _repos(cfg, index), path, sha)
+            db.close()
+            row = {
+                "state": "attached",
+                "how": how,
+                "index_sha256": sha,
+                "store": path.name,
+                "store_sha256": pile_mod.file_sha256(path),
+            }
+        except Exception as e:  # noqa: BLE001 — a store that can't be built is a state
+            row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
+    run.rec.append("store", run.sys, where=row.get("store"), **row)
+    return row
+
+
+def _store(cfg: Config, run: Run):
+    """(Cached, index, None) for this check-in's store while it still hashes
+    to its row, else (None, None, why)."""
+    att = next(
+        (
+            r
+            for r in reversed(seed_mod.since_boot(run.rec.rows()))
+            if r["kind"] == "store"
+        ),
+        None,
+    )
+    if att is None:
+        return None, None, "no store attached at this check-in"
+    if att.get("state") != "attached":
+        return None, None, att.get("why") or "the store is unreachable"
+    path = pile_mod.store_path(cfg.box)
+    if not path.exists() or pile_mod.file_sha256(path) != att["store_sha256"]:
+        return None, None, "the store doesn't hash to its row; check in again"
+    index, why = seed_mod.read_index(run.rec)
+    if index is None:
+        return None, None, why
+    import sqlite3
+
+    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    return pile_mod.Cached(db), index, None
 
 
 def _breaks_before(cfg: Config, key: bytes | None) -> list[str] | None:
@@ -539,6 +610,31 @@ def peek(
     return {"needs": lines, "count": len(lines), "peek": True, "code": 0}
 
 
+SEED_TOP = 12  # the ranked chunks a seed row keeps; scope draws from these
+
+
+def _seed_from_store(cfg: Config, run: Run, bite: str) -> dict:
+    """The store's half of a seed: the ranked chunks (by their own SHA-256,
+    never their text), the kept pairs, and the bite's sentences said before."""
+    c, _, why = _store(cfg, run)
+    if c is None:
+        return {"store": why}
+    try:
+        r = c.rank(bite)
+        return {
+            "store": "attached",
+            "rank_state": r["state"],
+            "rank": [
+                {k: h[k] for k in ("repo", "path", "line", "chunk", "score")}
+                for h in r["hits"][:SEED_TOP]
+            ],
+            "pairs": r.get("pairs", {}),
+            "quotes": c.quotes(bite),
+        }
+    finally:
+        c.db.close()
+
+
 # ── seed ────────────────────────────────────────────────────────────────────
 def seed(
     cfg: Config,
@@ -573,11 +669,13 @@ def seed(
     else:
         names = index.get("arrival", {})
         where = {n: cfg.root.parent / n for n in names}
+        where.update({n: Path(p) for n, p in (cfg.repos or {}).items()})
         where.update({n: Path(p) for n, p in (repos or {}).items()})
         out = seed_mod.scan(index, where, ws)
         out["index_sha256"] = next(
             i["sha"] for i in run.rec.pile()["items"] if i["where"] == seed_mod.INDEX
         )
+        out.update(_seed_from_store(cfg, run, bite))
     row = run.rec.append(
         "seed",
         run.sys,
@@ -623,9 +721,33 @@ def take_proposals(
 def _spec_tables(run: Run, spec: dict) -> tuple[list[dict], dict]:
     """The stack a spec names, over the record up to `upto` (so rows added since
     can't move a table id) and the card for it."""
-    by, match, upto = spec["by"], spec.get("match", {}), spec["upto"]
-    stack = served.piles(run.rec.rows()[: upto + 1], *by)
-    return served.choose(stack, **match), served.propose(stack, **match)
+    by, match, upto = spec.get("by") or [], spec.get("match", {}), spec["upto"]
+    rows = run.rec.rows()[: upto + 1]
+    seed = spec.get("seed")
+    if not by and not seed:
+        raise ValueError("name a stack: W's to group by, or the seed's top chunks")
+    tables, card = [], {"subject": None, "ids": [], "stack": [], "joins": {}}
+    if by:
+        stack = served.piles(rows, *by)
+        tables, card = served.choose(stack, **match), served.propose(stack, **match)
+    if seed:
+        n = seed["row"]
+        if not (0 <= n < len(rows)) or rows[n]["kind"] != "seed":
+            raise ValueError(f"row {n} is not a seed row at or before row {upto}")
+        chunks = served.chunk_tables(rows[n], seed["top"])
+        more = served.propose_chunks(chunks)
+        tables = tables + chunks
+        card = {
+            **card,
+            "ids": card["ids"] + more["ids"],
+            "stack": card["stack"] + more["stack"],
+            "joins": {
+                **card["joins"],
+                **({"file": more["joins"]} if more["joins"] else {}),
+            },
+        }
+        card["subject"] = served.scope_subject(card["ids"]) if card["ids"] else None
+    return tables, card
 
 
 def scope(
@@ -634,10 +756,12 @@ def scope(
     match: dict | None = None,
     upto: int | None = None,
     argv: Iterable[str] = ("scope",),
+    seed_top: int | None = None,
 ) -> dict:
     """Code proposes the stack. Returns the card for the human and the exact
     `subject` whose seal makes it a scope, plus the `spec` that names the stack:
-    hand it back to `serve` unchanged."""
+    hand it back to `serve` unchanged. With `seed_top`, the stack also holds
+    this check-in's seed's top chunks of the repos (by=() for those alone)."""
     run, info = _open(cfg, "scope", argv)
     if run is None:
         return info
@@ -649,6 +773,11 @@ def scope(
         "match": dict(match or {}),
         "upto": rows[-1]["n"] if upto is None else upto,
     }
+    if seed_top is not None:
+        sd = next((r for r in seed_mod.since_boot(rows) if r["kind"] == "seed"), None)
+        if sd is None:
+            return _refused("no seed in this check-in; the first bite seeds", 1)
+        spec["seed"] = {"row": sd["n"], "top": seed_top}
     try:
         _, card = _spec_tables(run, spec)
     except ValueError as e:
@@ -767,7 +896,16 @@ def serve(
         tables, card = _spec_tables(run, spec)
     except (ValueError, KeyError, TypeError) as e:
         return _refused(f"bad spec: {type(e).__name__}: {e}", 1)
-    doc = run.serve(tables, card["ids"], max_chars=max_chars)
+    reader = None
+    if any(served.is_chunk(t) for t in tables):
+        index, _ = seed_mod.read_index(run.rec)
+        if index is not None:
+            repos = _repos(cfg, index)
+
+            def reader(ch):
+                return pile_mod.read_chunk(index, repos, ch)
+
+    doc = run.serve(tables, card["ids"], max_chars=max_chars, read_chunk=reader)
     return {"doc": doc, "state": doc["state"], "why": doc["why"], "code": 0}
 
 
