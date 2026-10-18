@@ -12,6 +12,7 @@
     python3 -m onescript pooled             # unsealed pass proposals, JSON lines
     python3 -m onescript resume             # the last sealed scope's spec + subject, JSON
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
+    python3 -m onescript decline KEY        # the human's No to an offer, recorded
     python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
@@ -257,6 +258,10 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument(
         "--other", action="append", default=[], type=Path, help="another session's box"
     )
+    dc = sub.add_parser(
+        "decline", help="the human's No to an offer: not offered again for that key"
+    )
+    dc.add_argument("key", help="the offer's key, as NEEDS YOU lists it")
     t = sub.add_parser("turn")
     t.add_argument("bite")
     t.add_argument(
@@ -409,10 +414,12 @@ def main(argv: list[str] | None = None) -> int:
             type=int,
             help="also stack the seed's top N chunks of the repos (--by '' for those alone)",
         )
+        s.add_argument(
+            "--max-chars",
+            type=int,
+            help="the cap on served text; over it, empty (scope: says if it fits)",
+        )
         if name == "serve":
-            s.add_argument(
-                "--max-chars", type=int, help="the cap on served text; over it, empty"
-            )
             s.add_argument("--seed-row", type=int, help="the seed row scope named")
     sl = sub.add_parser("seal")
     sl.add_argument("subject", help="serve:<hash> (a scope) or proposal:<hash>")
@@ -621,7 +628,10 @@ def main(argv: list[str] | None = None) -> int:
             upto=args.upto,
             argv=raw,
             seed_top=args.seed_top,
+            max_chars=args.max_chars,
         )
+    elif args.cmd == "decline":
+        res = api.decline_offer(cfg, args.key, argv=raw)
     elif args.cmd == "serve":
         spec = _spec(args)
         if spec["upto"] is None:

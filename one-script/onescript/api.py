@@ -52,6 +52,7 @@ from typing import Callable, Iterable
 
 from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import ladder
 from . import pile as pile_mod
 from . import seed as seed_mod
 from . import serve as served
@@ -720,6 +721,7 @@ def seed(
         out = seed_mod.scan(index, where, ws)
         out["index_sha256"] = sha
         out.update(_seed_from_store(cfg, run, bite))
+    rung = ladder.step(run.rec.rows(), ladder.bite_key(bite))
     row = run.rec.append(
         "seed",
         run.sys,
@@ -727,8 +729,42 @@ def seed(
         bite_hash=record.h256(bite),
         words=ws,
         **out,
+        **rung,
     )
-    return {**out, "row": row["n"], "code": 0}
+    if rung["ladder"] == "offer":  # offered, never applied (§0.3)
+        rung["offer_row"] = _offer(run, rung, row["n"])["n"]
+    return {**out, **rung, "row": row["n"], "code": 0}
+
+
+def _offer(run: Run, rung: dict, seed_row: int) -> dict:
+    """The third ask's `offer` row: the key and the count, never the bite."""
+    return run.rec.append(
+        "offer",
+        run.sys,
+        key=rung["bite_key"],
+        asked=rung["asked"],
+        seed_row=seed_row,
+        offer=ladder.OFFER,
+    )
+
+
+def decline_offer(cfg: Config, key: str, argv: Iterable[str] = ("decline",)) -> dict:
+    """The human's No to an offer: one `offer_declined` row with its key, so the
+    offer is not made again for that key. Only a key the record has offered."""
+    run, info = _open(cfg, "decline", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "decline", key=key)) is not None:
+        return refusal
+    rows = run.rec.rows()
+    if not any(r["kind"] == "offer" and r.get("key") == key for r in rows):
+        why = "no offer with that key on record"
+        run.rec.append("refused", run.sys, at="decline", reason=why, key=key)
+        return _refused(why, 1)
+    if ladder.declined(rows, key):
+        return {"declined": key, "already": True, "code": 0}
+    row = run.rec.append("offer_declined", run.sys, key=key, said="no")
+    return {"declined": key, "row": row["n"], "code": 0}
 
 
 # ── lookup: across sessions, merged by hash ─────────────────────────────────
@@ -872,11 +908,15 @@ def scope(
     upto: int | None = None,
     argv: Iterable[str] = ("scope",),
     seed_top: int | None = None,
+    max_chars: int | None = None,
 ) -> dict:
     """Code proposes the stack. Returns the card for the human and the exact
     `subject` whose seal makes it a scope, plus the `spec` that names the stack:
     hand it back to `serve` unchanged. With `seed_top`, the stack also holds
-    this check-in's seed's top chunks of the repos (by=() for those alone)."""
+    this check-in's seed's top chunks of the repos (by=() for those alone).
+    The card gives each chunk's size in characters, read at its blob (never
+    its text), and the total; with `max_chars`, whether the stack fits
+    (`_sizes`)."""
     run, info = _open(cfg, "scope", argv)
     if run is None:
         return info
@@ -894,11 +934,71 @@ def scope(
             return _refused("no seed in this check-in; the first bite seeds", 1)
         spec["seed"] = {"row": sd["n"], "top": seed_top}
     try:
-        _, card = _spec_tables(run, spec)
+        tables, card = _spec_tables(run, spec)
     except ValueError as e:
         return _refused(str(e), 1)
+    if max_chars is not None or any(served.is_chunk(t) for t in tables):
+        card = _sizes(cfg, run, tables, card, max_chars)
     run.rec.append("scope", run.sys, where=card["subject"], spec=spec, card=card)
     return {"spec": spec, **card, "code": 0}
+
+
+def _sizes(cfg: Config, run: Run, tables: list[dict], card: dict, max_chars) -> dict:
+    """The card, with each chunk's `chars` read at its blob (or `unreadable`
+    and why) and a `size`: the chunks' total, and `served_chars`, the length
+    of the document serve would write for this stack once the scope is sealed,
+    measured by serve's own builder (no file, no row). With `max_chars`, `fits`
+    says whether that is within the cap; serve over the cap is `empty`."""
+    reads: dict[str, tuple] = {}
+    index, _ = seed_mod.read_index(run.rec)
+    repos = _repos(cfg, index) if index is not None else {}
+
+    def reader(ch):
+        k = served.table_id({"rows": [], "source": {"chunk": ch}})
+        if k not in reads:
+            reads[k] = (
+                pile_mod.read_chunk(index, repos, ch)
+                if index is not None
+                else (None, "no xref index to read chunks by")
+            )
+        return reads[k]
+
+    stack = []
+    for entry in card["stack"]:
+        t = next((t for t in tables if served.table_id(t) == entry["id"]), None)
+        if t is not None and served.is_chunk(t):
+            text, why = reader(t["source"]["chunk"])
+            entry = {**entry, "chars": None if text is None else len(text)}
+            if text is None:
+                entry["unreadable"] = why
+        stack.append(entry)
+    size: dict = {
+        "chunk_chars": sum(e.get("chars") or 0 for e in stack),
+        "unreadable": sum(1 for e in stack if "unreadable" in e),
+        "max_chars": max_chars,
+    }
+    try:
+        held, unchecked = run.held()
+        subj = card["subject"]
+        doc = served._serve(
+            run.rec.rows(),
+            tables,
+            card["ids"],
+            run.serve_key,
+            sys.maxsize,
+            ({*held, subj}, {k: v for k, v in unchecked.items() if k != subj}),
+            reader,
+        )
+        if doc["state"] != "populated":
+            raise gate.Refused(doc["why"])
+        size["served_chars"] = len(record.canon(doc))
+    except Exception as e:  # noqa: BLE001 — a size that can't be measured is said
+        size["served_chars"] = None
+        size["why"] = f"not measured: {str(e)[:120] or type(e).__name__}"
+    if max_chars is not None:
+        n = size["served_chars"]
+        size["fits"] = None if n is None else n <= max_chars
+    return {**card, "stack": stack, "size": size}
 
 
 def _seal(
@@ -1012,16 +1112,76 @@ def serve(
     except (ValueError, KeyError, TypeError) as e:
         return _refused(f"bad spec: {type(e).__name__}: {e}", 1)
     reader = None
+    failed: list[tuple[dict, str]] = []
     if any(served.is_chunk(t) for t in tables):
         index, _, _ = seed_mod.read_index(run.rec)
         if index is not None:
             repos = _repos(cfg, index)
 
             def reader(ch):
-                return pile_mod.read_chunk(index, repos, ch)
+                text, why = pile_mod.read_chunk(index, repos, ch)
+                if text is None:
+                    failed.append((ch, why))
+                return text, why
 
     doc = run.serve(tables, card["ids"], max_chars=max_chars, read_chunk=reader)
+    if failed:
+        _tombstones(cfg, run, index, repos, failed)
     return {"doc": doc, "state": doc["state"], "why": doc["why"], "code": 0}
+
+
+def _tombstones(cfg: Config, run: Run, index: dict, repos: dict, failed) -> None:
+    """A `tombstone` row for each chunk serve found gone (`ladder.reason`),
+    once per chunk per check-in, with where the same SHA-256 sits now
+    (`forward`) when this check-in's store holds it and it reads back there."""
+    store, looked = None, None
+    for ch, why in failed:
+        sha = ch.get("sha256")
+        root = repos.get(ch.get("repo"))
+        blob = next(
+            (
+                f.get("git_blob")
+                for f in index.get("arrival", {})
+                .get(ch.get("repo"), {})
+                .get("files", [])
+                if f.get("path") == ch.get("path")
+            ),
+            None,
+        )
+
+        def blob_there(root=root, blob=blob):
+            try:
+                return blob in seed_mod._blobs(Path(root), [blob])
+            except (seed_mod.GitError, OSError, TypeError):
+                return None
+
+        r = ladder.reason(why, blob_there)
+        if r is None or ladder.tombstoned(run.rec.rows(), sha):
+            continue
+        if looked is None:
+            store, _, looked = _store(cfg, run)
+            looked = looked or "store"
+        fwd = None
+        if store is not None:
+            fwd = ladder.forward(
+                ch,
+                store.where.values(),
+                lambda c: pile_mod.read_chunk(index, repos, c),
+            )
+        run.rec.append(
+            "tombstone",
+            run.sys,
+            where=f"{ch.get('repo')}:{ch.get('path')}:{ch.get('line')}",
+            chunk=sha,
+            repo=ch.get("repo"),
+            path=ch.get("path"),
+            line=ch.get("line"),
+            reason=r,
+            forward=fwd,
+            looked=looked,
+        )
+    if store is not None:
+        store.db.close()
 
 
 def seal_proposal(

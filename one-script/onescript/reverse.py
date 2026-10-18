@@ -15,7 +15,7 @@ import unicodedata
 from pathlib import Path
 from typing import Callable
 
-from . import calibration
+from . import calibration, ladder
 from .gate import verify_seal
 from .record import TIP, canon, h256, tip_subject
 
@@ -741,6 +741,7 @@ def reconcile(
         },
         "open_turns": open_turns(rows),
         "offers": repetitions(rows),
+        "bite_offers": ladder.open_offers(rows),  # the bites' ladder (§2c)
         "surfaced": surfaced(rows, set(changed_law), version),
         "witness": witnesses(list(answers)),
         "grades": grades(list(answers), sealed or {}, task_of or {}),
