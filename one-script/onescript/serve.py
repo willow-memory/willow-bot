@@ -258,9 +258,12 @@ def chunk_name(table: dict) -> str:
 
 def chunk_tables(seed_row: dict, top: int) -> list[dict]:
     """The seed's top chunks, each a table: no rows, and a source that names
-    the chunk by repo, path, line and its own SHA-256. Its id is that content,
-    so a seal over it binds exactly those bytes; the text is read at serve."""
+    the chunk by repo, path, line and its own SHA-256, with its receipt: the
+    seed row's number and hash, chain-checked at serve (`_seed_receipt`). Its
+    id is that content, so a seal over it binds exactly those bytes; the text
+    is read at serve."""
     out = []
+    receipt = [seed_row.get("n"), seed_row.get("hash")]
     for h in (seed_row.get("rank") or [])[: max(top, 0)]:
         ch = {
             "repo": h["repo"],
@@ -268,7 +271,7 @@ def chunk_tables(seed_row: dict, top: int) -> list[dict]:
             "line": h["line"],
             "sha256": h["chunk"],
         }
-        out.append({"rows": [], "source": {"chunk": ch}})
+        out.append({"rows": [], "source": {"chunk": ch, "seed": receipt}})
     return out
 
 
@@ -550,7 +553,9 @@ def _serve(
         )
     by_id = {}
     for t in tables:
-        if not is_chunk(t):  # a chunk's receipt is its blob, checked at the read
+        if is_chunk(t):  # its seed row on the chain here; its blob at the read
+            _seed_receipt(t, rows)
+        else:
             _receipt(t, rows)
         by_id[table_id(t)] = t
     missing = set(scope) - set(by_id)
@@ -649,6 +654,40 @@ def _receipt(table: dict, rows: list[dict]) -> None:
         or cited != table["rows"]
     ):
         raise gate.Refused("a pile's receipt doesn't match the record; nothing served")
+
+
+def _seed_receipt(table: dict, rows: list[dict]) -> None:
+    """A chunk's receipt is its seed row, checked against the chain like a
+    pile's: the row at that number is a seed row, carries that hash, hashes to
+    it, and ranks this very chunk. A chunk without one is never served."""
+    src, ch = table["source"], table["source"]["chunk"]
+    rc = src.get("seed")
+    if not (
+        isinstance(rc, list)
+        and len(rc) == 2
+        and isinstance(rc[0], int)
+        and not isinstance(rc[0], bool)
+    ):
+        raise gate.Refused("a chunk without a seed receipt is never served")
+    n, h = rc
+    row = rows[n] if 0 <= n < len(rows) else None
+    body = {k: v for k, v in (row or {}).items() if k != "hash"}
+    if (
+        row is None
+        or row.get("n") != n
+        or row.get("kind") != "seed"
+        or row.get("hash") != h
+        or h256(canon(body)) != h
+        or not any(
+            isinstance(r, dict)
+            and [r.get("repo"), r.get("path"), r.get("line"), r.get("chunk")]
+            == [ch.get("repo"), ch.get("path"), ch.get("line"), ch.get("sha256")]
+            for r in row.get("rank") or []
+        )
+    ):
+        raise gate.Refused(
+            "a chunk's seed receipt doesn't match the record; nothing served"
+        )
 
 
 def check_cites(doc: dict, cited: list[str]) -> list[dict]:

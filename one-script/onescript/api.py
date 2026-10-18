@@ -24,9 +24,10 @@ the app can serialise it. A refusal comes back as {"refused": why, "code": n}
 and is never an exception: the box wasn't opened, or the state doesn't allow it.
 
 The record is the only state between calls. The serve key, which makes the
-session's ids, is the one thing the record must not hold; it is kept beside the
+session's ids, is a thing the record must not hold; it is kept beside the
 keys (`serve.key`, 0600), made fresh at each check-in, and is never the seal
-key.
+key. So is each box's store key (`pile.key_name`, 0600), made once, which keys
+the hashes in that box's store.
 
 Seals without a terminal: a seal is either the human's HMAC proof over the
 subject (needs a key in the keys file) or a sealed Nestor pair whose conclusion
@@ -38,6 +39,7 @@ public keys only), both fixed in `Config` and never taken from the caller.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -431,29 +433,53 @@ def _repos(cfg: Config, index: dict) -> dict:
     return where
 
 
+def _store_key(cfg: Config, box: Path, make: bool = False):
+    """(key, None) for a box's store key, or (None, why). The key lives in
+    the operator's keys dir (`pile.key_name`, 0600), never in a box or beside
+    its store, so the keyed hashes in a store are no dictionary to whoever
+    holds the store alone. Made at check-in when absent, like `serve.key`;
+    another box's key is only ever read, never made."""
+    path = cfg.keys.parent / pile_mod.key_name(box)
+    for inside in (box, pile_mod.store_path(box).parent):
+        if path.resolve().is_relative_to(Path(inside).resolve()):
+            return None, "the store key can't live inside a box or its store"
+    if make:
+        try:
+            pile_mod.make_key(path)
+        except OSError as e:
+            return None, f"the store key can't be made: {type(e).__name__}"
+    return pile_mod.read_key(path)
+
+
 def _attach_store(cfg: Config, run: Run) -> dict:
     """B1: this session's store, attached at check-in. The pile hashed once
-    (`pile.py`), for the xref index the record vouches for; built when it
-    isn't there or was built for another index. One `store` row says which,
-    with the store file's own SHA-256, so a later verb uses it only while it
-    still hashes to that. No index is `unreachable`, said, and the box opens."""
-    index, why = seed_mod.read_index(run.rec)
-    if index is None:
-        row = {"state": "unreachable", "why": why}
+    (`pile.py`), keyed with this box's store key, for the xref index the
+    record vouches for; built when it isn't there or was built for another
+    index, key or set of repos. One `store` row says which, with the store
+    file's own SHA-256, so a later verb uses it only while it still hashes to
+    that, and what the build reached: the repos read, the files, the skips by
+    reason and each unreachable repo. No index or no key is `unreachable`,
+    said, and the box opens."""
+    index, sha, why = seed_mod.read_index(run.rec)
+    key, kwhy = _store_key(cfg, cfg.box, make=True)
+    if index is None or key is None:
+        row = {"state": "unreachable", "why": why or kwhy}
     else:
-        sha = next(
-            i["sha"] for i in run.rec.pile()["items"] if i["where"] == seed_mod.INDEX
-        )
         path = pile_mod.store_path(cfg.box)
         try:
-            db, how = pile_mod.open_cache(index, _repos(cfg, index), path, sha)
-            db.close()
+            db, how = pile_mod.open_cache(index, _repos(cfg, index), path, sha, key)
+            try:
+                tally = pile_mod.Cached(db, key).tally()
+            finally:
+                db.close()
             row = {
                 "state": "attached",
+                "why": "",
                 "how": how,
                 "index_sha256": sha,
                 "store": path.name,
                 "store_sha256": pile_mod.file_sha256(path),
+                **tally,
             }
         except Exception as e:  # noqa: BLE001 — a store that can't be built is a state
             row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
@@ -461,31 +487,49 @@ def _attach_store(cfg: Config, run: Run) -> dict:
     return row
 
 
-def _store(cfg: Config, run: Run):
-    """(Cached, index, None) for this check-in's store while it still hashes
-    to its row, else (None, None, why)."""
-    att = next(
-        (
-            r
-            for r in reversed(seed_mod.since_boot(run.rec.rows()))
-            if r["kind"] == "store"
-        ),
-        None,
-    )
-    if att is None:
-        return None, None, "no store attached at this check-in"
-    if att.get("state") != "attached":
-        return None, None, att.get("why") or "the store is unreachable"
-    path = pile_mod.store_path(cfg.box)
-    if not path.exists() or pile_mod.file_sha256(path) != att["store_sha256"]:
-        return None, None, "the store doesn't hash to its row; check in again"
-    index, why = seed_mod.read_index(run.rec)
-    if index is None:
-        return None, None, why
-    import sqlite3
+def _open_store(cfg: Config, box: Path, run: Run | None = None):
+    """The one store opener, for this check-in's store (`run`) or another
+    box's: (Cached, None), or (None, why), never an exception.
 
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    return pile_mod.Cached(db), index, None
+    The store counts only while its box's last `store` row says `attached`,
+    the row's `index_sha256` is the box's pile pointer now and the store's own
+    meta says the same, and the file hashes to the row (`pile.open_store`:
+    read once, read-only, capped). Another box is read through a record that
+    can't write, and is trusted only when its chain verifies; what comes back
+    of it is a fixed reason, never its own `why`. Its store key must be in
+    this operator's keys dir, or it is `unreachable`, said. Nothing in
+    another box is written or created."""
+    box = Path(box)
+    if run is not None:
+        rec = run.rec
+        rows = seed_mod.since_boot(rec.rows())
+    else:
+        if not (box / "record.jsonl").is_file():
+            return None, "no record in that box"
+        rec = record.Record(box, lambda: "", "", object())
+        if rec.verify_chain():
+            return None, "its record's chain doesn't verify"
+        rows = rec.rows()
+    att = next((r for r in reversed(rows) if r.get("kind") == "store"), None)
+    if att is None:
+        if run is not None:
+            return None, "no store attached at this check-in"
+        return None, "that session attached no store"
+    if att.get("state") != "attached":
+        if run is not None:
+            return None, att.get("why") or "the store is unreachable"
+        return None, "that session's store is unreachable"
+    index, sha, why = seed_mod.read_index(rec)
+    if index is None:
+        return None, why if run is not None else "its index isn't vouched for"
+    if att.get("index_sha256") != sha:
+        return None, "the store was built for another index; check in again"
+    key, why = _store_key(cfg, box)
+    if key is None:
+        return None, why
+    return pile_mod.open_store(
+        pile_mod.store_path(box), att.get("store_sha256"), key, sha
+    )
 
 
 def _breaks_before(cfg: Config, key: bytes | None) -> list[str] | None:
@@ -614,25 +658,29 @@ SEED_TOP = 12  # the ranked chunks a seed row keeps; scope draws from these
 
 
 def _seed_from_store(cfg: Config, run: Run, bite: str) -> dict:
-    """The store's half of a seed: the ranked chunks (by their own SHA-256,
-    never their text), the kept pairs, and the bite's sentences said before."""
-    c, _, why = _store(cfg, run)
+    """The store's half of a seed: the ranked chunks (by their own SHA-256;
+    the store holds keyed word hashes, never a chunk's text), the kept pairs,
+    and the bite's sentences said before. `store` is `{state, why}`."""
+    c, why = _open_store(cfg, cfg.box, run)
     if c is None:
-        return {"store": why}
+        return {"store": {"state": "unreachable", "why": why}}
     try:
-        r = c.rank(bite)
-        return {
-            "store": "attached",
-            "rank_state": r["state"],
-            "rank": [
-                {k: h[k] for k in ("repo", "path", "line", "chunk", "score")}
-                for h in r["hits"][:SEED_TOP]
-            ],
-            "pairs": r.get("pairs", {}),
-            "quotes": c.quotes(bite),
-        }
+        r, q = c.rank(bite), c.quotes(bite)
     finally:
         c.db.close()
+    if "unreachable" in (r["state"], q["state"]):
+        bad = r if r["state"] == "unreachable" else q
+        return {"store": {"state": "unreachable", "why": bad["why"]}}
+    return {
+        "store": {"state": "attached", "why": ""},
+        "rank_state": r["state"],
+        "rank": [
+            {k: h[k] for k in ("repo", "path", "line", "chunk", "score")}
+            for h in r["hits"][:SEED_TOP]
+        ],
+        "pairs": r.get("pairs", {}),
+        "quotes": q["quotes"],
+    }
 
 
 # ── seed ────────────────────────────────────────────────────────────────────
@@ -663,18 +711,14 @@ def seed(
     if not ws:
         run.rec.append("refused", run.sys, at="seed", reason="no words in the bite")
         return _refused("a bite with no words seeds nothing", 1)
-    index, why = seed_mod.read_index(run.rec)
+    index, sha, why = seed_mod.read_index(run.rec)
     if index is None:
         out = {"state": "unreachable", "why": why, "keys": [], "missed": ws}
     else:
-        names = index.get("arrival", {})
-        where = {n: cfg.root.parent / n for n in names}
-        where.update({n: Path(p) for n, p in (cfg.repos or {}).items()})
+        where = _repos(cfg, index)
         where.update({n: Path(p) for n, p in (repos or {}).items()})
         out = seed_mod.scan(index, where, ws)
-        out["index_sha256"] = next(
-            i["sha"] for i in run.rec.pile()["items"] if i["where"] == seed_mod.INDEX
-        )
+        out["index_sha256"] = sha
         out.update(_seed_from_store(cfg, run, bite))
     row = run.rec.append(
         "seed",
@@ -688,22 +732,14 @@ def seed(
 
 
 # ── lookup: across sessions, merged by hash ─────────────────────────────────
-def _store_of(box: Path):
-    """(Cached, None) for another session's store while it hashes to that
-    box's own last `store` row, read through a record that can't write; else
-    (None, why). Nothing in that box is written or created."""
-    import sqlite3
+STATE_WORDS = ("ranked", "escalated:cold_start", "empty", "unreachable")
 
-    if not (box / "record.jsonl").is_file():
-        return None, "no record in that box"
-    rec = record.Record(box, lambda: "", "", object())
-    att = next((r for r in reversed(rec.rows()) if r["kind"] == "store"), None)
-    if att is None or att.get("state") != "attached":
-        return None, (att or {}).get("why") or "that session attached no store"
-    path = pile_mod.store_path(box)
-    if not path.exists() or pile_mod.file_sha256(path) != att["store_sha256"]:
-        return None, "its store doesn't hash to its own row"
-    return pile_mod.Cached(sqlite3.connect(f"file:{path}?mode=ro", uri=True)), None
+
+def _session_tag(key: bytes, box: Path) -> str:
+    """A session's name in this box's `lookup` row: a short keyed hash of its
+    box's path, so the row never holds another box's absolute path."""
+    h = hashlib.blake2b(str(Path(box).resolve()).encode(), digest_size=6, key=key)
+    return "box-" + h.hexdigest()
 
 
 def lookup(
@@ -714,25 +750,30 @@ def lookup(
 ) -> dict:
     """The bite against this session's store and other sessions' stores,
     merged by chunk hash (`pile.merge`): a view, rebuilt each time, never a
-    shared store. Each other store counts only while it hashes to its own
-    box's row; one that doesn't is said, and the rest still answer. One
-    `lookup` row here: the bite's hash, each session's state, the top chunks."""
+    shared store. Each other store counts only through `_open_store` (its
+    chain verified, its row, its index, its key here); one that doesn't is
+    `unreachable`, said, and the rest still answer. Each session is
+    `{state, why}`. One `lookup` row here: the bite's hash, each session's
+    state word only (another box's `why` is never written here), sessions
+    named by a keyed hash of their box, and the top chunks."""
     run, info = _open(cfg, "lookup", argv)
     if run is None:
         return info
     if (refusal := _need_open(run, "lookup")) is not None:
         return refusal
-    stores, states = {}, {}
-    mine, _, why = _store(cfg, run)
+    stores, states, tags = {}, {}, {"this": "this"}
+    mine, why = _open_store(cfg, cfg.box, run)
     if mine is None:
-        states["this"] = f"unreachable: {why}"
+        states["this"] = {"state": "unreachable", "why": why}
     else:
         stores["this"] = mine
-    for box in boxes:
+    tag_key = pile_mod.read_key(cfg.keys.parent / pile_mod.key_name(cfg.box))[0]
+    for i, box in enumerate(boxes):
         name = str(Path(box))
-        c, why = _store_of(Path(box))
+        tags[name] = _session_tag(tag_key, box) if tag_key else f"box-{i}"
+        c, why = _open_store(cfg, Path(box))
         if c is None:
-            states[name] = f"unreachable: {why}"
+            states[name] = {"state": "unreachable", "why": why}
         else:
             stores[name] = c
     try:
@@ -746,7 +787,10 @@ def lookup(
         "lookup",
         run.sys,
         bite_hash=record.h256(bite),
-        sessions=out["sessions"],
+        sessions={
+            tags[n]: s["state"] if s["state"] in STATE_WORDS else "unreachable"
+            for n, s in out["sessions"].items()
+        },
         top=[[h["chunk"], h["seen_in"]] for h in out["hits"]],
     )
     return {**out, "code": 0}
@@ -797,7 +841,13 @@ def _spec_tables(run: Run, spec: dict) -> tuple[list[dict], dict]:
         tables, card = served.choose(stack, **match), served.propose(stack, **match)
     if seed:
         n = seed["row"]
-        if not (0 <= n < len(rows)) or rows[n]["kind"] != "seed":
+        if (
+            isinstance(n, bool)
+            or not isinstance(n, int)
+            or not (0 <= n < len(rows))
+            or rows[n].get("n") != n
+            or rows[n].get("kind") != "seed"
+        ):
             raise ValueError(f"row {n} is not a seed row at or before row {upto}")
         chunks = served.chunk_tables(rows[n], seed["top"])
         more = served.propose_chunks(chunks)
@@ -963,7 +1013,7 @@ def serve(
         return _refused(f"bad spec: {type(e).__name__}: {e}", 1)
     reader = None
     if any(served.is_chunk(t) for t in tables):
-        index, _ = seed_mod.read_index(run.rec)
+        index, _, _ = seed_mod.read_index(run.rec)
         if index is not None:
             repos = _repos(cfg, index)
 
