@@ -303,7 +303,9 @@ def test_an_unseen_word_is_a_miss_row_of_hashes_never_words(box):
     got = api.seed(box, f"the {UNSEEN} ad breaks")
     assert got["miss"]["count"] == 1
     (m,) = [r for r in rows(box) if r["kind"] == "miss"]
-    assert m["missing"] == [record.h256(UNSEEN)] and m["count"] == 1
+    key, _ = api._store_key(box, box.box)
+    assert m["missing"] == [wb.word_hash(UNSEEN, key)] and m["count"] == 1
+    assert record.h256(UNSEEN) not in json.dumps(m)  # keyed, never the plain hash
     assert m["bite_hash"] == record.h256(f"the {UNSEEN} ad breaks")
     assert m["seed_row"] == got["row"]
     assert UNSEEN not in json.dumps(m) and "breaks" not in json.dumps(m)

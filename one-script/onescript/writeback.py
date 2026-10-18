@@ -39,6 +39,7 @@ here (`unreachable`, with why). An unchecked seal is never a hit.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Callable, Iterable
 
 from . import pile as pile_mod
@@ -321,8 +322,12 @@ def state_of(run, subj: str) -> dict:
 
 
 # ── the miss log ────────────────────────────────────────────────────────────
-def word_hash(w: str) -> str:
-    return h256(w)
+def word_hash(w: str, key: bytes) -> str:
+    """A missing word, keyed with the box's store key: a plain hash of one
+    word is a dictionary entry ("a plain hash of a child's name is itself a
+    rainbow-table entry", next-pile.md). So miss rows compare within a box,
+    never across boxes."""
+    return hashlib.blake2b(w.encode(), digest_size=16, key=key).hexdigest()
 
 
 def missing(cached, words: Iterable[str]) -> list[str]:
@@ -335,9 +340,10 @@ def missing(cached, words: Iterable[str]) -> list[str]:
 
 
 def log_miss(run, seed_row: dict, lost: list[str]) -> dict:
-    """One `miss` row: the bite's hash, the SHA-256 of each missing word, the
-    count, and the check-in. Never a word."""
-    hashes = sorted({word_hash(w) for w in lost})
+    """One `miss` row: the bite's hash, each missing word keyed (`word_hash`,
+    hashed while the store was open, so no word reaches here), the count, and
+    the check-in. Never a word."""
+    hashes = sorted(set(lost))
     boot = next((r for r in reversed(run.rec.rows()) if r["kind"] == "boot"), None)
     row = run.rec.append(
         MISS,
@@ -376,7 +382,7 @@ def at_seed(run, bite: str, words: list[str], open_store: Callable) -> dict:
         return {"state": NONE}
     if quoted:
         return {"state": NONE, "quoted": True}
-    return {"state": MISS, "lost": lost}
+    return {"state": MISS, "lost": sorted({word_hash(w, c.key) for w in lost})}
 
 
 def needs(rows: list[dict], held: set[str]) -> dict:

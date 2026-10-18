@@ -692,6 +692,46 @@ def _seed_from_store(cfg: Config, run: Run, bite: str) -> dict:
     }
 
 
+def _hidden(cfg: Config, ws: list[str], out: dict) -> dict:
+    """The seed row's half of `out`: every word of the bite keyed with the
+    box's store key (`writeback.word_hash`), never written as itself ("a
+    baseline holds hashes only, never content"; "the plaintext is never
+    written", next-pile.md). The caller still gets its words back in the
+    answer; only the record is hashed. With no store key the words are left
+    out of the row, and the row says so."""
+    key, _ = _store_key(cfg, cfg.box)
+    if key is None:
+        h = None
+    else:
+
+        def h(w: str) -> str:
+            return wb_mod.word_hash(w, key)
+
+    row = dict(out)
+    if h is None:
+        row.update(words=[], hidden="no store key: the bite's words are left out")
+        for k in ("keys", "missed", "pairs"):
+            row.pop(k, None)
+        if "repair" in row:
+            row["repair"] = {"state": row["repair"]["state"], "repairs": []}
+        return row
+    row["words"] = sorted(h(w) for w in ws)
+    if "keys" in row:
+        row["keys"] = [{**k, "word": h(k["word"])} for k in row["keys"]]
+    if "missed" in row:
+        row["missed"] = sorted(h(w) for w in row["missed"])
+    if "pairs" in row:
+        row["pairs"] = {
+            " ".join(h(t) for t in p.split(" ")): v for p, v in row["pairs"].items()
+        }
+    if "repair" in row:
+        row["repair"] = {
+            "state": row["repair"]["state"],
+            "repairs": [[h(a), h(b), d] for a, b, d in row["repair"]["repairs"]],
+        }
+    return row
+
+
 # ── seed ────────────────────────────────────────────────────────────────────
 def seed(
     cfg: Config,
@@ -746,8 +786,7 @@ def seed(
         run.sys,
         where=seed_mod.INDEX,
         bite_hash=bite_hash,
-        words=ws,
-        **out,
+        **_hidden(cfg, ws, out),
         **rung,
     )
     if lost["state"] == wb_mod.MISS:

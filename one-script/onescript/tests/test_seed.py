@@ -73,7 +73,11 @@ def test_the_row_holds_the_bite_as_a_hash_and_points_at_the_index(box):
     row = rows(box["cfg"])[res["row"]]
     assert row["kind"] == "seed" and row["where"] == seed.INDEX
     assert row["bite_hash"] == api.record.h256("the forge")
-    assert "bite" not in row and row["words"] == ["forge", "the"]
+    assert "bite" not in row and len(row["words"]) == 2  # keyed, never the words
+    assert not {"forge", "the"} & set(
+        json.dumps(row["words"]).strip('[]"').split('", "')
+    )
+    assert '"forge"' not in json.dumps(row) and '"the"' not in json.dumps(row)
     pile = {
         i["where"]: i["sha"]
         for i in json.loads((box["cfg"].box / "pile.json").read_text())["items"]
@@ -168,3 +172,14 @@ def test_the_cli_wants_name_equals_path(box, capsys):
     with pytest.raises(SystemExit):
         cli.main(["--box", str(box["cfg"].box), "seed", "forge", "--repo", "nopath"])
     assert "NAME=PATH" in capsys.readouterr().err
+
+
+def test_without_a_store_key_the_row_leaves_the_words_out(box):
+    from dataclasses import replace
+
+    nokey = replace(box["cfg"], keys=box["cfg"].keys.parent / "elsewhere" / "keys.json")
+    res = api._hidden(
+        nokey, ["forge", "the"], {"keys": [{"word": "forge"}], "missed": ["x"]}
+    )
+    assert res["words"] == [] and "keys" not in res and "missed" not in res
+    assert "no store key" in res["hidden"]
