@@ -1,0 +1,33 @@
+{
+ "note": "The chunk-size sweep's fixed query set. Drafted by the desk 2026-10-18, unratified: each bite is a paraphrase, not a quote, and each target is the file a reader would want. A query whose target moves is re-pointed here, never dropped.",
+ "queries": [
+  {
+   "bite": "I was playing some stupid games, to distract myself from life for a bit, and one game in particular had 4 min of ads, for 30 sec of game play, for my pattern matching skills.",
+   "targets": ["safe-app-store:apps/playgate/docs/NOBODY_COUNTS_THE_AD_BREAKS.md"]
+  },
+  {
+   "bite": "where does the forge ask the maker what to build first and map the words to a kind of project",
+   "targets": ["forge:docs/design/the-forge-shape.md", "willows-grove:docs/design/the-forge-shape.md"]
+  },
+  {
+   "bite": "how does the human seal something when there is no terminal, only the phone",
+   "targets": ["willow-bot:one-script/README.md"]
+  },
+  {
+   "bite": "which embedder makes the knowledge base vectors in postgres",
+   "targets": ["willow-mcp:src/willow_mcp/knowledge_embed.py"]
+  },
+  {
+   "bite": "one store per craft, python node rust go, a provision house and not a shop",
+   "targets": ["safe-app-store:stores/README.md"]
+  },
+  {
+   "bite": "guardianship ends by setting a date, never by deleting the row",
+   "targets": ["terpsi-music:docs/ARCHITECTURE.md", "terpsi-music:CLAUDE.md"]
+  },
+  {
+   "bite": "the stop hook kept firing on the word complete",
+   "targets": ["willows-grove:docs/design/one-script/next-pile.md"]
+  }
+ ]
+}
