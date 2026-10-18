@@ -156,7 +156,8 @@ def sealed_scope(cfg, top=1):  # noqa: F811
 def move_first_paragraph(repo):
     """The chunk moves to line 3 of the same file, its bytes unchanged."""
     (repo / "ads.md").write_text(
-        "A new opening paragraph, first now.\n\n" + DOCS["ads.md"]
+        # at least MIN long, so it stands alone and isn't the next chunk's title
+        "A new opening paragraph, first now, long enough to stand.\n\n" + DOCS["ads.md"]
     )
     sh(repo, "commit", "-qam", "two")
 

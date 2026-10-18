@@ -12,15 +12,15 @@ its indexed blob and counted only when its bytes hash to the index.
 
 | Step | Rule | Prior art |
 |---|---|---|
-| chunks | blank-line paragraphs; one over MAX is split at line breaks; one under MIN characters is left out of the pile | passage retrieval; chunk size measured by `--sweep` |
+| chunks | blank-line paragraphs; one over MAX is split at line breaks, and a single line over MAX into pieces of at most MAX (at whitespace where it can); a piece under MIN rides on the next chunk as its title, or on the last one when nothing follows. Nothing is dropped | passage retrieval; chunk size measured by `--sweep` |
 | dedupe | identical chunks count once (SHA-256), with their copy count | exact-duplicate removal |
 | fold | -ies -> -y, -s, -es, each only when the stem is attested: df(stem) * ATTEST >= df(w) | a corpus-gated light stemmer (S-stemmer family) |
 | pairs | adjacent words within a clause, kept when df >= PAIR_MIN and NPMI > 0 | Bouma 2009 (NPMI) |
-| fields | a line ending in `?` is a question field, weighted QUESTION before saturation | BM25F, Robertson et al. 2004 |
+| fields | a title line (a piece under MIN) is a title field, weighted TITLE; any other line ending in `?` (past trailing quote or emphasis marks) is a question field, weighted QUESTION; both before saturation | BM25F, Robertson et al. 2004 |
 | rank | BM25 over the kept words and pairs, at its standard constants | Robertson & Zaragoza |
 | fuse | with `--embed`, a static embedder ranks the same candidates and the two ranks fuse by 1/(RRF_K + rank) | RRF, Cormack et al. 2009 |
 
-ATTEST, PAIR_MIN, QUESTION and MAX are placeholders for the operator's numbers.
+ATTEST, PAIR_MIN, QUESTION, TITLE and MAX are placeholders for the operator's numbers.
 Writes nothing but stdout, except with `--cache`, which writes the keyed store
 (`build_cache`) into that dir. Same box, same repos, same bite: same output.
 """
@@ -51,6 +51,7 @@ RRF_K = 60  # Cormack, Clarke & Büttcher 2009
 ATTEST = 10  # placeholder
 PAIR_MIN = 2  # placeholder
 QUESTION = 2.0  # placeholder
+TITLE = 2.0  # placeholder: the operator's number
 MAX, MIN = 500, 40  # chunk characters; MAX is a placeholder
 EMBED_CHARS = 2000  # the most of one chunk the embedder reads
 SUFFIXES = (("ies", "y"), ("s", ""), ("es", ""))  # tried in this order
@@ -65,19 +66,55 @@ def raw_grams(text: str) -> list[str]:
 
 
 def is_question(line: str) -> bool:
-    return line.strip().rstrip(" \",'`").endswith("?")
+    """A line ending in `?`, past trailing quotes and markdown emphasis
+    (`> **What's the first bite?**` is a question)."""
+    return line.strip().rstrip(" \"'`*_~>").endswith("?")
 
 
-def chunks(text: str, limit: int = MAX):
-    """(line, chunk) pairs; a block over `limit` is split at line breaks."""
+def field(i: int, line: str, titles) -> int:
+    """A chunk line's BM25F field: 0 body, 1 question, 2 title (title first)."""
+    return 2 if i in titles else 1 if is_question(line) else 0
+
+
+def hard_split(s: str, limit: int) -> list[str]:
+    """One line over `limit` as pieces of at most `limit` characters, cut at
+    whitespace where it can be and hard where it can't. The cuts are spread
+    evenly, so no piece is a sliver."""
+    out = []
+    while len(s) > limit:
+        width = -(-len(s) // -(-len(s) // limit))  # ceil(len / ceil(len / limit))
+        cut = max(s.rfind(" ", 0, width + 1), s.rfind("\t", 0, width + 1))
+        if cut <= width // 2:
+            cut = width
+        out.append(s[:cut].rstrip())
+        s = s[cut:].lstrip()
+    return out + ([s] if s else [])
+
+
+def pieces(text: str, limit: int = MAX):
+    """(line, piece) pairs: a block over `limit` is split at line breaks, and
+    one line over it by `hard_split`. A piece is at most `limit` characters
+    not counting the line breaks inside it (the split sums the lines only)."""
     line = 1
     for block in re.split(r"(\n\s*\n)", text):
         s = block.strip()
         if s and len(s) <= limit:
-            yield line, s
+            yield line + block[: len(block) - len(block.lstrip())].count("\n"), s
         elif s:
             buf, start, n = [], line, line
             for ln in block.split("\n"):
+                if not buf and not ln.strip():
+                    n += 1
+                    start = n
+                    continue
+                if len(ln.strip()) > limit:
+                    if buf:
+                        yield start, "\n".join(buf).strip()
+                    for part in hard_split(ln.strip(), limit):
+                        yield n, part
+                    buf, start = [], n + 1
+                    n += 1
+                    continue
                 if buf and sum(map(len, buf)) + len(ln) > limit:
                     yield start, "\n".join(buf).strip()
                     buf, start = [], n
@@ -86,6 +123,57 @@ def chunks(text: str, limit: int = MAX):
             if buf:
                 yield start, "\n".join(buf).strip()
         line += block.count("\n")
+
+
+def chunks(text: str, limit: int = MAX):
+    """(line, chunk, titles): `titles` is the set of the chunk's line indexes
+    that are title lines. A piece under MIN is never dropped: it rides on the
+    next chunk as a title (and the chunk's line is then the title's), or, with
+    nothing after it, on the last chunk. A run of short pieces longer than
+    `limit` stands as its own chunk, all title. A chunk's body is at most
+    `limit`; the title lines it carries sit on top of that."""
+    prev, held = None, []
+    for line, s in pieces(text, limit):
+        if len(s) < MIN:
+            if held and sum(len(x) + 1 for _, x in held) + len(s) > limit:
+                if prev:
+                    yield prev
+                prev, held = _chunk(held, len(held)), []
+            held.append((line, s))
+            continue
+        cur = _chunk(held + [(line, s)], len(held))
+        held = []
+        if prev:
+            yield prev
+        prev = cur
+    if held:
+        if prev:
+            n = prev[1].count("\n") + 1
+            tail = _chunk(held, len(held))
+            prev = (
+                prev[0],
+                prev[1] + "\n\n" + tail[1],
+                frozenset(prev[2] | {n + 1 + i for i in tail[2]}),
+            )
+        else:
+            prev = _chunk(held, len(held))
+    if prev:
+        yield prev
+
+
+def _chunk(parts: list, n_title: int) -> tuple:
+    """(line, text, titles) from pieces, the first `n_title` of them titles.
+    Pieces join at a blank line, as they stood, so a title is a piece under
+    MIN in the chunk's own text, and one text always has the same fields."""
+    lines, titles = [], set()
+    for i, (_, s) in enumerate(parts):
+        if lines:
+            lines.append("")
+        for x in s.split("\n"):
+            if i < n_title:
+                titles.add(len(lines))
+            lines.append(x)
+    return parts[0][0], "\n".join(lines), frozenset(titles)
 
 
 def stems(w: str) -> set[str]:
@@ -136,27 +224,25 @@ def rrf(*rankings: list) -> list:
 
 
 def read_pile(index: dict, repos: dict, want: set, limit: int = MAX, keep_text=False):
-    """Every unique chunk: (where, body tf, question tf, length[, text]), with
+    """Every unique chunk: (where, body, question, title tf, length[, text]), with
     the `seed.Texts` read that reached them (its repos, skips, unreachable)."""
     paras, df_raw, copies = [], collections.Counter(), collections.Counter()
     texts = seed.Texts(index, repos)
     for name, f, text in texts:
-        for line, s in chunks(text, limit):
-            if len(s) < MIN:
-                continue
+        for line, s, titles in chunks(text, limit):
             h = hashlib.sha256(s.encode()).hexdigest()
             copies[h] += 1
             if copies[h] > 1:
                 continue
-            body, quest, n = collections.Counter(), collections.Counter(), 0
-            for ln in s.split("\n"):
+            fields = tuple(collections.Counter() for _ in range(3))
+            n = 0
+            for i, ln in enumerate(s.split("\n")):
                 g = raw_grams(ln)
                 n += len(g)
-                into = quest if is_question(ln) else body
-                into.update(x for x in g if x in want)
-            for x in set(body) | set(quest):
+                fields[field(i, ln, titles)].update(x for x in g if x in want)
+            for x in set().union(*fields):
                 df_raw[x] += 1
-            row = ((name, f["path"], line, h), body, quest, n)
+            row = ((name, f["path"], line, h), *fields, n)
             paras.append(row + ((s,) if keep_text else ()))
     return paras, df_raw, copies, texts.tally()
 
@@ -196,15 +282,15 @@ def rank(
     if not paras:
         return nothing(tally)
     n_all = len(paras)
-    avg = sum(p[3] for p in paras) / n_all
-    cands = [p for p in paras if p[1] or p[2]]
+    avg = sum(p[4] for p in paras) / n_all
+    cands = [p for p in paras if p[1] or p[2] or p[3]]
     extra = sum(copies.values()) - n_all
     return score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed)
 
 
 def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
     """Rung 1 over the chunks that hold any of the bite's grams. A row is
-    (where, body tf, question tf, length[, text]); `n_all` and `avg` are over
+    (where, body tf, question tf, title tf, length[, text]); `n_all` and `avg` are over
     every chunk in the pile; `words` is the caller's `wanted(bite)[0]`. The
     direct read and the cache both end here."""
     fold = folder(df_raw)
@@ -220,7 +306,9 @@ def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> 
             tf[fg(x)] += k
         for x, k in row[2].items():
             tf[fg(x)] += QUESTION * k  # BM25F: weighted before saturation
-        folded.append((row[0], tf, row[3]) + row[4:])
+        for x, k in row[3].items():
+            tf[fg(x)] += TITLE * k
+        folded.append((row[0], tf, row[4]) + row[5:])
     df = collections.Counter(x for _, tf, *_ in folded for x in tf)
     bite_grams = sorted({fg(g) for g in raw_grams(bite)})
 
@@ -285,7 +373,7 @@ def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> 
 # by and sessions merge on), which confirms a guess of a whole chunk's exact
 # text but names no word. Rebuilt whole when the xref index, the key, MAX, MIN,
 # the repos read or this version changes.
-CACHE_VERSION = 2
+CACHE_VERSION = 3  # 3: a posting carries its field (body, question, title)
 SENT = re.compile(r"[.!?]+")
 GAP = 1  # positions skipped at a clause or line break, so no pair spans one
 KEY_BYTES = 32
@@ -391,17 +479,15 @@ def build_cache(
     chunks_out, copies, ids = [], collections.Counter(), {}
     texts = seed.Texts(index, repos)
     for name, f, text in texts:
-        for line, s in chunks(text, limit):
-            if len(s) < MIN:
-                continue
+        for line, s, titles in chunks(text, limit):
             h = hashlib.sha256(s.encode()).hexdigest()
             copies[h] += 1
             if h in ids:
                 continue
             cid = ids[h] = len(chunks_out)
             pos, n = 0, 0
-            for ln in s.split("\n"):
-                q = 1 if is_question(ln) else 0
+            for i, ln in enumerate(s.split("\n")):
+                q = field(i, ln, titles)
                 for clause in CLAUSE.split(ln.lower()):
                     ws = WORD.findall(clause)
                     n += len(ws) + max(len(ws) - 1, 0)
@@ -410,7 +496,7 @@ def build_cache(
                         if slot is None:
                             slot = post[t] = (array.array("I"), array.array("I"))
                         slot[0].append(cid)
-                        slot[1].append(pos << 1 | q)
+                        slot[1].append(pos << 2 | q)
                         pos += 1
                     pos += GAP
                 pos += GAP
@@ -612,7 +698,7 @@ class Cached:
         return a
 
     def postings(self, w: str) -> list:
-        """(cid, position, question) for every occurrence of `w`."""
+        """(cid, position, field) for every occurrence of `w`."""
         if w not in self._memo:
             row = self.db.execute(
                 "SELECT cids, pos FROM post WHERE term = ?", (term(w, self.key),)
@@ -623,7 +709,9 @@ class Cached:
                 a, b = self._inflate(row[0]), self._inflate(row[1])
                 if len(a) != len(b) or any(c not in self.n for c in a):
                     raise ValueError("a posting that names no chunk")
-                self._memo[w] = [(c, p >> 1, p & 1) for c, p in zip(a, b)]
+                if any(p & 3 == 3 for p in b):
+                    raise ValueError("a posting in no field")
+                self._memo[w] = [(c, p >> 2, p & 3) for c, p in zip(a, b)]
         return self._memo[w]
 
     def rank(self, bite: str, embed=None) -> dict:
@@ -637,13 +725,14 @@ class Cached:
         if not self.n_all:
             return nothing(self.tally())
         words, pairs = wanted(bite)
-        body: dict = collections.defaultdict(collections.Counter)
-        quest: dict = collections.defaultdict(collections.Counter)
+        fields: tuple = tuple(
+            collections.defaultdict(collections.Counter) for _ in range(3)
+        )
         df_raw = collections.Counter()
         for w in sorted(words):
             seen = set()
             for c, _, q in self.postings(w):
-                (quest if q else body)[c][w] += 1
+                fields[q][c][w] += 1
                 seen.add(c)
             df_raw[w] = len(seen)
         for p in sorted(pairs):
@@ -652,18 +741,17 @@ class Cached:
             seen = set()
             for c, pos, q in self.postings(a):
                 if (c, pos + 1) in nxt:
-                    (quest if q else body)[c][p] += 1
+                    fields[q][c][p] += 1
                     seen.add(c)
             if seen:
                 df_raw[p] = len(seen)
         cands = [
             (
                 self.where[c],
-                body.get(c, collections.Counter()),
-                quest.get(c, collections.Counter()),
+                *(f.get(c, collections.Counter()) for f in fields),
                 self.n[c],
             )
-            for c in sorted(set(body) | set(quest))
+            for c in sorted(set().union(*fields))
         ]
         return score(
             bite,
@@ -730,7 +818,7 @@ def read_chunk(index: dict, repos: dict, chunk: dict, limit: int = MAX):
         return None, "not in the index"
     texts = seed.Texts(index, repos, only=(name, path))
     for _, _, text in texts:
-        for line, s in chunks(text, limit):
+        for line, s, _ in chunks(text, limit):
             if line == chunk.get("line") and hashlib.sha256(
                 s.encode()
             ).hexdigest() == chunk.get("sha256"):
@@ -792,8 +880,8 @@ def wordllama_embed(cache: Path):
         q = wl.embed([bite], norm=True)[0]
         new = [(w[3], t) for w, t in cands if w[3] not in vecs]
         if new:
-            # a line over MAX is kept whole for the word rank; the embedder
-            # pads a batch to its longest text, so it reads only the head
+            # a chunk's title lines may carry it past MAX; the embedder pads
+            # a batch to its longest text, so it reads only the head
             v = wl.embed([t[:EMBED_CHARS] for _, t in new], norm=True, batch_size=256)
             vecs.update(zip((h for h, _ in new), v))
         s = [float(vecs[w[3]] @ q) for w, _ in cands]

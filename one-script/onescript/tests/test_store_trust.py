@@ -186,7 +186,7 @@ def test_one_reader_for_seed_pile_store_and_chunk():
 
 
 # ── 3. three states ─────────────────────────────────────────────────────────
-SHORT = {"a.md": "tiny\n", "b.md": "short\n"}  # every chunk under MIN
+SHORT = {"a.md": "\n", "b.md": "  \n\n"}  # read, and no text to chunk
 
 
 def test_an_empty_pile_is_empty_not_unreachable(tmp_path):
@@ -212,6 +212,26 @@ def broken_copy(tmp_path, sql: str):
 def test_a_broken_posting_is_unreachable_never_an_exception(tmp_path):
     c = broken_copy(tmp_path, "UPDATE post SET cids = x'00ff', pos = x'00ff'")
     r = c.rank("harbour boats")
+    assert r["state"] == "unreachable" and r["hits"] == [] and r["why"]
+
+
+def test_a_posting_in_no_field_is_unreachable_never_an_exception(tmp_path):
+    import array
+    import zlib
+
+    def no_field(blob):
+        a = array.array("I")
+        a.frombytes(zlib.decompress(blob))
+        return zlib.compress(array.array("I", (p | 3 for p in a)).tobytes())
+
+    _, _, path, db = built(tmp_path)
+    db.close()
+    w = sqlite3.connect(path)
+    w.create_function("no_field", 1, no_field)
+    w.execute("UPDATE post SET pos = no_field(pos)")
+    w.commit()
+    w.close()
+    r = pile.Cached(pile.connect_ro(path), KEY).rank("harbour boats")
     assert r["state"] == "unreachable" and r["hits"] == [] and r["why"]
 
 

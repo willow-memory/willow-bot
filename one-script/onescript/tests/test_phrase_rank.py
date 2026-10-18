@@ -1,4 +1,4 @@
-"""phrase_rank: long chunks split not dropped, dedupe, gated folds, pairs, fields,
+"""phrase_rank: no text dropped from a chunk, dedupe, gated folds, pairs, fields,
 fusion, and the keyed cache."""
 
 from __future__ import annotations
@@ -26,14 +26,83 @@ def pile(tmp_path, files: dict) -> tuple[dict, dict]:
 def test_a_long_block_is_split_at_line_breaks_and_nothing_is_dropped():
     text = "\n".join(f"line {i} " + "x" * 50 for i in range(30))
     parts = list(pr.chunks(text, 200))
-    assert len(parts) > 1 and all(len(s) <= 200 for _, s in parts)
-    assert "\n".join(s for _, s in parts) == text.strip()
-    assert [ln for ln, _ in parts][0] == 1
+    assert len(parts) > 1 and all(len(s) <= 200 for _, s, _ in parts)
+    assert "\n".join(s for _, s, _ in parts) == text.strip()
+    assert [ln for ln, _, _ in parts][0] == 1
 
 
-def test_a_single_line_over_the_limit_is_kept_whole():
+def test_a_single_line_over_the_limit_is_split_hard_when_it_has_no_space():
     text = "y" * 900
-    assert list(pr.chunks(text, 200)) == [(1, text)]
+    parts = list(pr.chunks(text, 200))
+    assert len(parts) == 5 and all(len(s) <= 200 for _, s, _ in parts)
+    assert "".join(s for _, s, _ in parts) == text
+    assert {ln for ln, _, _ in parts} == {1} and all(not t for *_, t in parts)
+
+
+def test_a_single_line_over_the_limit_is_split_at_whitespace():
+    words = [f"w{i}" for i in range(300)]
+    line = " ".join(words)  # 1,389 characters, words of uneven length
+    parts = list(
+        pr.chunks("intro paragraph long enough to stand alone\n\n" + line, 200)
+    )
+    body = parts[1:]
+    assert len(body) == 7 and all(len(s) <= 200 for _, s, _ in body)
+    assert [w for _, s, _ in body for w in s.split(" ")] == words  # cut at spaces
+    assert {ln for ln, _, _ in body} == {3}
+
+
+def test_a_split_line_is_spread_evenly_with_no_sliver():
+    line = " ".join(f"w{i:03d}" for i in range(210))  # 1,049 characters
+    body = list(pr.chunks(line, 200))
+    assert len(body) == 6 and min(len(s) for _, s, _ in body) >= 150
+
+
+def test_a_short_block_rides_on_the_next_chunk_as_its_title():
+    text = (
+        "An opening paragraph that is long enough to stand.\n\n"
+        "> **What's the first bite?**\n\n"
+        "The forge asks the maker what to build, and maps it.\n"
+    )
+    assert list(pr.chunks(text, 500)) == [
+        (1, "An opening paragraph that is long enough to stand.", frozenset()),
+        (
+            3,  # the title's line, not the body's
+            "> **What's the first bite?**\n\n"
+            "The forge asks the maker what to build, and maps it.",
+            frozenset({0}),
+        ),
+    ]
+
+
+def test_a_short_block_with_nothing_after_rides_on_the_last_chunk():
+    text = "A paragraph long enough to be a chunk on its own.\n\nshort tail\n"
+    assert list(pr.chunks(text, 500)) == [
+        (1, "A paragraph long enough to be a chunk on its own.\n\nshort tail", {2})
+    ]
+    assert list(pr.chunks("tiny\n\nfile\n", 500)) == [(1, "tiny\n\nfile", {0, 2})]
+
+
+def test_a_run_of_short_blocks_past_the_limit_stands_as_its_own_chunk():
+    text = "\n\n".join(f"item {i:02d}" for i in range(12)) + "\n\n" + "z " * 25
+    (l1, s1, t1), (l2, s2, t2) = pr.chunks(text, 60)
+    assert (l1, l2) == (1, 15)  # items 00-06 alone; 07-11 ride on the z line
+    assert t1 == {i for i, x in enumerate(s1.split("\n")) if x}  # all title
+    assert len(t2) == 5 and s2.endswith("z")
+
+
+def test_no_line_of_text_is_ever_dropped():
+    text = (
+        "\n# Title\n\nok\n\n" + "word " * 250 + "\n\n- one\n- two\n\n"
+        "A closing paragraph of a fair length, enough to stand.\n\n?\n"
+    )
+    long_first = "\n" + "\n".join(f"line {i} " + "x" * 50 for i in range(4))
+    assert [ln for ln, _, _ in pr.chunks(long_first, 128)] == [2, 4]
+    for limit in (40, 128, 500):
+        got = "".join("".join(s.split()) for _, s, _ in pr.chunks(text, limit))
+        assert got == "".join(text.split()), limit
+        lines = text.split("\n")
+        for ln, s, _ in pr.chunks(text, limit):  # the line is the first line's
+            assert s.split("\n")[0].split()[0] in lines[ln - 1], (limit, ln)
 
 
 def test_identical_chunks_count_once_with_their_copies(tmp_path):
@@ -161,12 +230,27 @@ CACHE_FILES = {
     "e.md": "one long line " + "word " * 300 + "\n",
     "f.md": "the ad\nbreaks are split across a line here, for the test\n",
     "h.md": "the ad breaks again, said in a plain body line here\n",
+    "g.md": (
+        "> **What's the first bite?**\n\n"
+        "The forge asks the maker what to build and maps it to a kind.\n\n"
+        "Is the tail kept?\n"
+    ),
+    "k.md": "Kid stories\n\nA paragraph about nothing in particular, padded out.\n",
+    "s.md": "split " + "lines " * 120 + "\nand a pattern matching skills ending\n",
     **{
         f"x{i}.md": f"a filler file, number {i}, of plain unrelated words\n"
         for i in range(6)
     },
 }
-BITES = ["ad breaks", "kids games and stories", "pattern matching skills", "word"]
+BITES = [
+    "ad breaks",
+    "kids games and stories",
+    "pattern matching skills",
+    "word",
+    "what's the first bite",
+    "is the tail kept",
+    "split lines",
+]
 
 
 KEY = bytes(range(32))
@@ -225,3 +309,60 @@ def test_a_sentence_said_before_comes_back_with_its_count(tmp_path):
     ]
     none = c.quotes("Nothing like this was ever said.")
     assert none["state"] == "empty" and none["quotes"] == []
+
+
+def test_a_short_question_is_a_quote_and_a_rank_hit(tmp_path):
+    """The old failure: a one-line question under MIN never became a chunk."""
+    idx, repos, c, _ = cached(tmp_path, CACHE_FILES)
+    q = c.quotes("What's the first bite?")
+    assert q["state"] == "populated"
+    assert q["quotes"] == [
+        {"words": 5, "count": 1, "repo": "docs", "path": "g.md", "line": 1}
+    ]
+    tail = c.quotes("Is the tail kept?")["quotes"]
+    assert tail[0]["line"] == 1  # rides on the last chunk
+    for out in (c.rank("first bite"), pr.rank(idx, repos, "first bite")):
+        top = out["hits"][0]
+        assert (top["path"], top["line"]) == ("g.md", 1)
+
+
+def test_a_title_line_outweighs_the_same_words_in_the_body(tmp_path):
+    files = {
+        "t.md": "the ad breaks\n\nfiller words here to pad it out, and some more\n",
+        "b.md": "the ad breaks\nfiller words here to pad it out, and some more\n",
+        "z.md": "nothing relevant in this file at all, just words\n",
+    }
+    idx, repos, c, _ = cached(tmp_path, files)
+    for out in (c.rank("ad breaks"), pr.rank(idx, repos, "ad breaks")):
+        hits = out["hits"]
+        assert [h["path"] for h in hits][:2] == ["t.md", "b.md"]
+        assert hits[0]["score"] > hits[1]["score"]
+
+
+def test_a_split_line_is_read_back_at_its_line(tmp_path):
+    idx, repos, c, _ = cached(tmp_path, CACHE_FILES)
+    hits = [h for h in c.rank("split lines")["hits"] if h["path"] == "s.md"]
+    assert len(hits) >= 2 and {h["line"] for h in hits} == {1}
+    for h in hits:
+        ch = {**h, "sha256": h["chunk"]}
+        text, why = pr.read_chunk(idx, repos, ch)
+        assert why is None and len(text) <= pr.MAX
+
+
+def test_a_question_past_markdown_emphasis_is_a_question():
+    assert pr.is_question("> **What's the first bite?**")
+    assert pr.is_question("_is it?_") and pr.is_question('"Is it?"')
+    assert not pr.is_question("> **The first bite.**")
+    assert not pr.is_question("What? No, a statement.")
+
+
+def test_an_emphasised_question_line_in_a_body_is_a_question_field(tmp_path):
+    files = {
+        "q.md": "filler words here to pad\n> **What counts the ad breaks?**\n",
+        "b.md": "filler words here to pad\n> **What counts the ad breaks.**\n",
+        "z.md": "nothing relevant in this file at all\n",
+    }
+    idx, repos, c, _ = cached(tmp_path, files)
+    for out in (c.rank("ad breaks"), pr.rank(idx, repos, "ad breaks")):
+        assert [h["path"] for h in out["hits"]][:2] == ["q.md", "b.md"]
+        assert out["hits"][0]["score"] > out["hits"][1]["score"]
