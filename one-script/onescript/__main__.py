@@ -253,6 +253,20 @@ def main(argv: list[str] | None = None) -> int:
         metavar="NAME=PATH",
         help="where an indexed repo is read from (default: beside willow-bot)",
     )
+    sd.add_argument(
+        "--exact",
+        action="store_true",
+        help="count exact files and lines by the scan (default: the store's chunks)",
+    )
+    fb = sub.add_parser(
+        "forge", help="the Forge's first bite, this session's pile as its box"
+    )
+    fb.add_argument("bite")
+    fb.add_argument("--project", default="one-script", help="the Forge project id")
+    fb.add_argument("--builder", default="willow", help="the Forge builder id")
+    fb.add_argument(
+        "--root", type=Path, help="the Forge's checkpoint root (default: its own)"
+    )
     lk = sub.add_parser(
         "lookup", help="the bite across sessions' stores, merged by hash; a view"
     )
@@ -264,6 +278,9 @@ def main(argv: list[str] | None = None) -> int:
         "decline", help="the human's No to an offer: not offered again for that key"
     )
     dc.add_argument("key", help="the offer's key, as NEEDS YOU lists it")
+    dc.add_argument(
+        "--proof", help="the human's HMAC proof over decline:<key>, to seal the No"
+    )
     t = sub.add_parser("turn")
     t.add_argument("bite")
     t.add_argument(
@@ -607,7 +624,18 @@ def main(argv: list[str] | None = None) -> int:
             _print_json({k: v for k, v in res.items() if k != "code"})
         return res["code"]
     elif args.cmd == "seed":
-        res = api.seed(cfg, args.bite, repos=dict(args.repo), argv=raw)
+        res = api.seed(
+            cfg, args.bite, repos=dict(args.repo), argv=raw, exact=args.exact
+        )
+    elif args.cmd == "forge":
+        res = api.forge_bite(
+            cfg,
+            args.bite,
+            project_id=args.project,
+            builder_id=args.builder,
+            root=args.root,
+            argv=raw,
+        )
     elif args.cmd == "lookup":
         res = api.lookup(cfg, args.bite, args.other, argv=raw)
     elif args.cmd == "turn":
@@ -634,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
             max_chars=args.max_chars,
         )
     elif args.cmd == "decline":
-        res = api.decline_offer(cfg, args.key, argv=raw)
+        res = api.decline_offer(cfg, args.key, argv=raw, proof=args.proof)
     elif args.cmd == "serve":
         spec = _spec(args)
         if spec["upto"] is None:

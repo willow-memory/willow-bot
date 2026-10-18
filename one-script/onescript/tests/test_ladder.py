@@ -145,6 +145,78 @@ def test_a_no_needs_an_open_box(box):  # noqa: F811
     assert len(offer_lines(cfg)) == 1
 
 
+def offered(cfg):  # noqa: F811
+    api.seed(cfg, BITE)
+    ask(cfg, BITE)
+    ask(cfg, BITE)
+    return ladder.bite_key(BITE)
+
+
+def unsealed_lines(cfg):  # noqa: F811
+    return [x for x in api.needs(cfg)["needs"] if "said by the caller" in x]
+
+
+def test_an_unsigned_no_is_said_by_the_caller_and_counted(box):  # noqa: F811
+    cfg = box["cfg"]  # noqa: F811
+    key = offered(cfg)
+    res = api.decline_offer(cfg, key)
+    assert res["sealed"] is False
+    [row] = of(cfg, "offer_declined")
+    assert row["said_by"] == "caller" and row["sealed"] is False
+    assert "proof" not in row
+    [line] = unsealed_lines(cfg)
+    assert "1 offer No(s)" in line and key in line
+    assert offer_lines(cfg) == []  # unsealed, it still narrows
+
+
+def test_a_sealed_no_stands_over_the_unsealed_one(box):  # noqa: F811
+    cfg = box["cfg"]  # noqa: F811
+    key = offered(cfg)
+    api.decline_offer(cfg, key)
+    res = api.decline_offer(cfg, key, proof=proof(ladder.decline_subject(key)))
+    assert res["sealed"] is True and "already" not in res
+    assert [r["said_by"] for r in of(cfg, "offer_declined")] == ["caller", "human"]
+    assert unsealed_lines(cfg) == []
+    again = api.decline_offer(cfg, key, proof=proof(ladder.decline_subject(key)))
+    assert again["already"] and len(of(cfg, "offer_declined")) == 2
+
+
+def test_a_sealed_no_first_needs_no_second(box):  # noqa: F811
+    cfg = box["cfg"]  # noqa: F811
+    key = offered(cfg)
+    assert api.decline_offer(cfg, key, proof=proof(ladder.decline_subject(key)))[
+        "sealed"
+    ]
+    assert api.decline_offer(cfg, key)["already"]
+    assert unsealed_lines(cfg) == [] and len(of(cfg, "offer_declined")) == 1
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "0" * 64,  # not the human's
+        "seal-of-another-subject",
+    ],
+)
+def test_a_proof_that_does_not_seal_this_no_is_refused(box, bad):  # noqa: F811
+    cfg = box["cfg"]  # noqa: F811
+    key = offered(cfg)
+    res = api.decline_offer(cfg, key, proof=bad)
+    assert res["code"] == 1 and "doesn't seal" in res["refused"]
+    assert of(cfg, "offer_declined") == []
+    wrong = proof(ladder.decline_subject("ab" * 32))  # sealed, for another key
+    assert api.decline_offer(cfg, key, proof=wrong)["code"] == 1
+    assert len(offer_lines(cfg)) == 1
+
+
+def test_without_the_human_key_a_proof_is_refused(box):  # noqa: F811
+    cfg = box["cfg"]  # noqa: F811
+    key = offered(cfg)
+    cfg.keys.write_text(json.dumps({"desk": "aa" * 32}))
+    res = api.decline_offer(cfg, key, proof=proof(ladder.decline_subject(key)))
+    assert res["code"] == 1 and of(cfg, "offer_declined") == []
+
+
 # ── 2. tombstones ─────────────────────────────────────────────────────────
 def sealed_scope(cfg, top=1):  # noqa: F811
     api.seed(cfg, BITE)
@@ -292,6 +364,7 @@ def test_a_stack_without_chunks_has_no_size_unless_asked(box):  # noqa: F811
     [
         (["scope", "--max-chars", "900"], "scope", {"max_chars": 900}),
         (["decline", "ab" * 32], "decline_offer", {"key": "ab" * 32}),
+        (["decline", "ab" * 32, "--proof", "pp"], "decline_offer", {"proof": "pp"}),
     ],
 )
 def test_the_cli_passes_the_new_arguments(tmp_path, monkeypatch, argv, verb, want):

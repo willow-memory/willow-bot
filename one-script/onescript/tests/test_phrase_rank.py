@@ -209,6 +209,33 @@ def test_the_sweep_scores_each_query_by_its_target(tmp_path):
     assert out[200]["rr"] == [1.0, 0.0] and out[200]["mrr"] == 0.5
 
 
+def test_the_sweep_takes_a_prefix_target_and_keeps_controls_apart(tmp_path):
+    files = {
+        "d/t.md": "the ad breaks paper with many words in it today\n",
+        "o.md": "other games text that is long enough to count\n",
+    }
+    idx, repos = pile(tmp_path, files)
+    qs = [
+        {"bite": "ad breaks", "targets": ["docs:d/"]},
+        {"bite": "games", "targets": []},
+        {"bite": "zebra", "targets": []},
+    ]
+    out = pr.sweep(idx, repos, qs, [200])[200]
+    assert out["rr"] == [1.0] and out["mrr"] == 1.0
+    assert out["controls"][0] >= 1 and out["controls"][1] == 0
+
+
+def test_the_eval_set_is_a_draft_awaiting_the_operators_bites():
+    import json
+
+    p = Path(__file__).resolve().parents[2] / "scripts/scan/phrase_rank_queries.json"
+    d = json.loads(p.read_text())
+    assert d["status"] == "draft" and "D14 B" in d["awaiting"]
+    assert len(d["queries"]) == 26 and d["baseline"]["queries"] == 25
+    assert sum(1 for q in d["queries"] if not q["targets"]) == 1
+    assert all({"bite", "targets", "group"} <= q.keys() for q in d["queries"])
+
+
 def test_a_double_s_is_never_folded_even_with_a_stem_on_record():
     fold = pr.folder(collections.Counter({"glass": 5, "glas": 9}))
     assert fold("glass") == "glass"

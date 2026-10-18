@@ -114,11 +114,12 @@ exception. Nothing moves before a check-in or after a check-out.
 | Function | What it does |
 |---|---|
 | `checkin(cfg)` | Boot: record, probes, the four gates. Makes this session's serve key |
-| `seed(cfg, bite, repos)` | The first bite's words against the box (`seed.py`): the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index. Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in. A held write-back for this exact bite answers it first (`answered_by`), and unseen words are a `miss` row of hashes |
+| `seed(cfg, bite, repos, exact=False)` | The first bite's words against the box. Counted from the session's store by default (`Cached.counts`: chunks and files per word, `counted_by: store`); `exact` scans for whole files and lines (`seed.py`: the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index), and so does a seed with no store attached, saying why (`counted_why`). D6, the operator: "C". Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in. A held write-back for this exact bite answers it first (`answered_by`), and unseen words are a `miss` row of hashes |
 | `scope(cfg, by, match, upto, max_chars=None)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack. Each chunk's size in characters, read at its blob (no text), the total, and the served document's length; with `max_chars`, whether it `fits` |
 | `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
 | `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped. A chunk found gone (not in the index, blob gone, hash mismatch, not at its line) gets one `tombstone` row per check-in, with `forward` where the same SHA-256 reads now |
-| `decline_offer(cfg, key)` | The human's No to a ladder offer (`ladder.py`: asked 1 does, 2 notices, 3 offers, again every 3rd ask); an `offer_declined` row stops it for that key |
+| `decline_offer(cfg, key, proof=None)` | A No to a ladder offer (`ladder.py`: asked 1 does, 2 notices, 3 offers, again every 3rd ask); an `offer_declined` row stops it for that key. D5, the operator: "C". A No only narrows, so it takes effect unsigned, marked `said_by: caller`, `sealed: false`, and NEEDS YOU counts the unsealed ones; with the human's proof over `decline:<key>` it is `said_by: human`, sealed, and stands over them |
+| `forge_bite(cfg, bite, project_id, builder_id, root)` | The Forge's `open_bite` with `PileBox` over this session's store as tier 2 (D9, the operator: "A"; live here only, the Forge never imports willow). The Forge not importable, or its own refusal (Nestor absent), is `unreachable`, said. A choice or confirm for the maker comes back `needs_you` with the card; the responder never answers, so nothing is sealed. Else `populated` or `empty`; one `forge_bite` row of hashes and state words |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
 | `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
 | `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below). Each answered piece is proposed as a write-back |
@@ -262,9 +263,11 @@ the score, or the stores it was seen in when merged).
 | `empty` | the store answered, nothing ranked; or no keyword | `willow pile (empty: why)` |
 | `unreachable` | no store, a store with no chunks, or the read failed | `willow pile (unreachable: why)` |
 
-`last_why` holds the reason. Wiring it into `open_bite(..., box=PileBox(...))`
-is the host's call; `onescript/tests/test_box_lookup.py` runs that end to end
-when `forge.entry` and `nestor` are importable, and skips otherwise.
+`last_why` holds the reason. `api.forge_bite` is the live wiring (D9 A):
+`open_bite(..., box=PileBox(<this session's store>))` with a responder that
+never answers for the maker. `onescript/tests/test_box_lookup.py` and
+`test_forge_bite.py` run it end to end when `forge.entry` and `nestor` are
+importable, and skip otherwise.
 
 ## Gates on the phone
 
@@ -286,7 +289,9 @@ leave a `differently` row on the tests gate saying it was skipped and why.
 ```bash
 cd one-script
 python3 -m onescript checkin                       # boot: record, probes, the four gates
-python3 -m onescript seed "the first bite"         # its words against the box, once per check-in
+python3 -m onescript seed "the first bite"         # its words against the box, once per check-in (--exact: files and lines)
+python3 -m onescript forge "the first bite"        # the Forge's entry, this session's pile as its box
+python3 -m onescript decline <key> --proof <p>     # a No to an offer; --proof seals it as the human's
 python3 -m onescript scope --by who --match who=run   # card, subject, spec (JSON)
 python3 -m onescript seal serve:<hash> --pair p.json   # keyring/store: $WILLOW_KEYRING, $WILLOW_NESTOR_DB
 python3 -m onescript serve --by who --match who=run --upto <n> --max-chars 20000

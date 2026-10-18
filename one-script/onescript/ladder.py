@@ -28,8 +28,8 @@ import hashlib
 
 from . import seed
 
-NOTICE_AT = 2  # the operator's number (workflow.md §2c)
-OFFER_AT = 3  # the operator's number (workflow.md §2c)
+NOTICE_AT = 2  # the operator's number (workflow.md §2c); baseline (D12)
+OFFER_AT = 3  # the operator's number (workflow.md §2c); baseline (D12), per box
 OFFER = "make it standing?"
 
 
@@ -45,6 +45,38 @@ def bite_key(bite: str) -> str | None:
 
 def declined(rows: list[dict], key: str) -> bool:
     return any(r["kind"] == "offer_declined" and r.get("key") == key for r in rows)
+
+
+def decline_subject(key: str) -> str:
+    """What the human seals to make a No their own (D5)."""
+    return f"decline:{key}"
+
+
+def sealed_no(rows: list[dict], key: str) -> bool:
+    return any(
+        r["kind"] == "offer_declined" and r.get("key") == key and r.get("sealed")
+        for r in rows
+    )
+
+
+def unsealed_nos(rows: list[dict]) -> list[str]:
+    """The keys a No stands on only the caller's word for (D5: shown, never
+    silent). A sealed No for the key stands over it."""
+    keys = sorted(
+        {
+            r.get("key")
+            for r in rows
+            if r["kind"] == "offer_declined" and not r.get("sealed")
+        }
+    )
+    return [k for k in keys if not sealed_no(rows, k)]
+
+
+def unsealed_line(keys: list[str]) -> str:
+    return (
+        f"no · {len(keys)} offer No(s) said by the caller, unsealed · "
+        f"seal one with `decline KEY --proof P` · keys {', '.join(keys)}"
+    )
 
 
 def step(rows: list[dict], key: str) -> dict:

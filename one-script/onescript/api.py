@@ -731,25 +731,30 @@ def peek(
     return {"needs": lines, "count": len(lines), "peek": True, "code": 0}
 
 
-SEED_TOP = 12  # the ranked chunks a seed row keeps; scope draws from these
+SEED_TOP = (
+    12  # baseline (D12): the ranked chunks a seed row keeps; scope draws from these
+)
 
 
-def _seed_from_store(cfg: Config, run: Run, bite: str) -> dict:
-    """The store's half of a seed: the ranked chunks (by their own SHA-256;
-    the store holds keyed word hashes, never a chunk's text), the kept pairs,
-    and the bite's sentences said before. `store` is `{state, why}`."""
+def _seed_from_store(cfg: Config, run: Run, bite: str, ws: list[str]) -> dict:
+    """The store's half of a seed: the words' counts (D6), the ranked chunks
+    (by their own SHA-256; the store holds keyed word hashes, never a chunk's
+    text), the kept pairs, and the bite's sentences said before. `store` is
+    `{state, why}`; `counts` is `Cached.counts`, read only while attached."""
     c, why = _open_store(cfg, cfg.box, run)
     if c is None:
         return {"store": {"state": "unreachable", "why": why}}
     try:
         fix = c.repair(bite)  # rung 2 first: the rank reads the repaired bite
         r, q = c.rank(fix["bite"]), c.quotes(bite)  # quotes are your words, exact
+        n = c.counts(ws)
     finally:
         c.db.close()
-    if "unreachable" in (r["state"], q["state"], fix["state"]):
-        bad = next(x for x in (fix, r, q) if x["state"] == "unreachable")
-        return {"store": {"state": "unreachable", "why": bad["why"]}}
+    if "unreachable" in (r["state"], q["state"], fix["state"], n["state"]):
+        bad = next(x for x in (fix, r, q, n) if x["state"] == "unreachable")
+        return {"store": {"state": "unreachable", "why": bad.get("why", "")}}
     return {
+        "counts": n,
         "store": {"state": "attached", "why": ""},
         "repair": {"state": fix["state"], "repairs": fix["repairs"]},
         "rank_state": r["state"],
@@ -808,12 +813,19 @@ def seed(
     bite: str,
     repos: dict[str, Path] | None = None,
     argv: Iterable[str] = ("seed",),
+    *,
+    exact: bool = False,
 ) -> dict:
-    """The first bite's words, scanned against the box (`seed.py`). Once per
-    check-in: the first input seeds, and a second is refused with the first's
-    row. `repos` names where an indexed repo is read from; any it leaves out
-    are looked for beside willow-bot. Writes one `seed` row, the bite as its
-    hash and its words; reads the box and writes nothing else."""
+    """The first bite's words against the box. Once per check-in: the first
+    input seeds, and a second is refused with the first's row. `repos` names
+    where an indexed repo is read from; any it leaves out are looked for
+    beside willow-bot. Writes one `seed` row, the bite as its hash and its
+    words; reads the box and writes nothing else.
+
+    D6 (the operator, 2026-10-18: "C"): the counts come from the session's
+    store (chunks and files per word, `counted_by: store`). The exact files
+    and lines are the scan (`seed.py`), read only on request (`exact`) or
+    when no store is attached, and then `counted_by: scan` says why."""
     run, info = _open(cfg, "seed", argv)
     if run is None:
         return info
@@ -837,11 +849,17 @@ def seed(
     if index is None:
         out = {"state": "unreachable", "why": why, "keys": [], "missed": ws}
     else:
-        where = _repos(cfg, index)
-        where.update({n: Path(p) for n, p in (repos or {}).items()})
-        out = seed_mod.scan(index, where, ws)
+        out = _seed_from_store(cfg, run, bite, ws)
+        counts = out.pop("counts", None)
+        if counts is not None and not exact:
+            out.update(counts, counted_by="store")
+        else:
+            where = _repos(cfg, index)
+            where.update({n: Path(p) for n, p in (repos or {}).items()})
+            out.update(seed_mod.scan(index, where, ws), counted_by="scan")
+            if not exact:
+                out["counted_why"] = f"no store attached: {out['store']['why']}"
         out["index_sha256"] = sha
-        out.update(_seed_from_store(cfg, run, bite))
     rung = ladder.step(run.rec.rows(), ladder.bite_key(bite))
     out["writeback"] = back
     if back["state"] == wb_mod.HELD:
@@ -878,9 +896,21 @@ def _offer(run: Run, rung: dict, seed_row: int) -> dict:
     )
 
 
-def decline_offer(cfg: Config, key: str, argv: Iterable[str] = ("decline",)) -> dict:
-    """The human's No to an offer: one `offer_declined` row with its key, so the
-    offer is not made again for that key. Only a key the record has offered."""
+def decline_offer(
+    cfg: Config,
+    key: str,
+    argv: Iterable[str] = ("decline",),
+    *,
+    proof: str | None = None,
+) -> dict:
+    """A No to an offer: one `offer_declined` row with its key, so the offer is
+    not made again for that key. Only a key the record has offered.
+
+    D5 (the operator, 2026-10-18: "C"): a No only narrows, so it takes effect
+    unsigned, but it says who said it. Without a proof it is `said_by: caller`,
+    unsealed, and the morning screen counts it; with the human's proof over
+    `decline:<key>` it is `said_by: human`, sealed, and it stands over an
+    unsealed No for the same key."""
     run, info = _open(cfg, "decline", argv)
     if run is None:
         return info
@@ -891,10 +921,26 @@ def decline_offer(cfg: Config, key: str, argv: Iterable[str] = ("decline",)) -> 
         why = "no offer with that key on record"
         run.rec.append("refused", run.sys, at="decline", reason=why, key=key)
         return _refused(why, 1)
-    if ladder.declined(rows, key):
+    sealed = False
+    if proof is not None:
+        human = run.keys.get(gate.HUMAN)
+        if not human or not gate.verify_seal(ladder.decline_subject(key), proof, human):
+            why = "the proof doesn't seal this No (decline:<key>, the human's key)"
+            run.rec.append("refused", run.sys, at="decline", reason=why, key=key)
+            return _refused(why, 1)
+        sealed = True
+    if ladder.declined(rows, key) and not (sealed and not ladder.sealed_no(rows, key)):
         return {"declined": key, "already": True, "code": 0}
-    row = run.rec.append("offer_declined", run.sys, key=key, said="no")
-    return {"declined": key, "row": row["n"], "code": 0}
+    row = run.rec.append(
+        "offer_declined",
+        run.sys,
+        key=key,
+        said="no",
+        said_by="human" if sealed else "caller",
+        sealed=sealed,
+        **({"proof": proof} if sealed else {}),
+    )
+    return {"declined": key, "row": row["n"], "sealed": sealed, "code": 0}
 
 
 # ── lookup: across sessions, merged by hash ─────────────────────────────────
@@ -958,6 +1004,106 @@ def lookup(
             for n, s in out["sessions"].items()
         },
         top=[[h["chunk"], h["seen_in"]] for h in out["hits"]],
+    )
+    return {**out, "code": 0}
+
+
+# ── forge_bite: the Forge's first bite, with this session's pile as its box ──
+class _NeedsYou(Exception):
+    """The Forge asked something only the maker answers."""
+
+    def __init__(self, card: dict):
+        super().__init__(card.get("surface", ""))
+        self.card = card
+
+
+class _CardResponder:
+    """The Forge's `Responder`, never answering for the maker: a choice or a
+    confirm comes back as a card, before anything is sealed (the Forge's
+    `_full_socratic` asks the responder first and seals only what it returns).
+    No positional default (forge docs/design/the-positional-default.md)."""
+
+    def confirm(self, prompt: str) -> bool:
+        raise _NeedsYou({"ask": "confirm", "surface": prompt, "options": []})
+
+    def choose(self, decision):
+        raise _NeedsYou(
+            {
+                "ask": "choose",
+                "surface": decision.surface,
+                "options": [
+                    {"label": o.label, "tradeoff": o.tradeoff} for o in decision.options
+                ],
+            }
+        )
+
+
+def forge_bite(
+    cfg: Config,
+    bite: str,
+    *,
+    project_id: str = "one-script",
+    builder_id: str = "willow",
+    root: Path | None = None,
+    argv: Iterable[str] = ("forge",),
+) -> dict:
+    """The Forge's `open_bite` with `PileBox` over this session's store as its
+    tier 2 (D9, the operator, 2026-10-18: "A": live in willow-bot only; the
+    Forge never imports willow). The Forge is imported here, softly: not
+    importable is `unreachable`, said, and so is its own refusal (Nestor
+    absent). A question for the maker is `needs_you` with the card; the
+    responder never chooses. `root` is the Forge's checkpoint root (default:
+    the Forge's own). One `forge_bite` row: the bite's hash, the state, the
+    major, and the box's state word."""
+    run, info = _open(cfg, "forge", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "forge")) is not None:
+        return refusal
+    from .box_lookup import PileBox
+
+    out: dict = {}
+    box = None
+    try:
+        from forge import entry  # type: ignore[import-not-found]
+    except ImportError as e:
+        out = {"state": "unreachable", "why": f"the Forge isn't importable: {e}"}
+    else:
+        c, why = _open_store(cfg, cfg.box, run)
+        box, store_why = PileBox(c), why
+        kw = {} if root is None else {"root": Path(root)}
+        try:
+            e = entry.open_bite(
+                bite,
+                project_id=project_id,
+                builder_id=builder_id,
+                responder=_CardResponder(),
+                box=box,
+                **kw,
+            )
+        except _NeedsYou as n:
+            out = {"state": "needs_you", "card": n.card}
+        except entry.EntryError as err:
+            out = {"state": "unreachable", "why": f"the Forge refused: {err}"}
+        else:
+            d = e.to_dict()
+            found = e.major or e.answer or e.candidates
+            out = {"state": "populated" if found else "empty", "entry": d}
+        finally:
+            if c is not None:
+                c.db.close()
+    if box is not None:
+        out["box"] = {"state": box.last_state, "why": box.last_why}
+        if store_why and box.last_state == "unreachable":
+            out["box"]["why"] = f"no store attached: {store_why}"
+    major = (out.get("entry") or {}).get("major")
+    run.rec.append(
+        "forge_bite",
+        run.sys,
+        bite_hash=record.h256(bite),
+        state=out["state"],
+        major=major,
+        box=(out.get("box") or {}).get("state", "unreachable"),
     )
     return {**out, "code": 0}
 

@@ -20,7 +20,8 @@ its indexed blob and counted only when its bytes hash to the index.
 | rank | BM25 over the kept words and pairs, at its standard constants | Robertson & Zaragoza |
 | fuse | with `--embed`, a static embedder ranks the same candidates and the two ranks fuse by 1/(RRF_K + rank) | RRF, Cormack et al. 2009 |
 
-ATTEST, PAIR_MIN, QUESTION, TITLE and MAX are placeholders for the operator's numbers.
+Every number here is a baseline the operator set on 2026-10-18 (D12: "as suggested
+but marked as baseline"): kept as measured or suggested, the operator's to move.
 Writes nothing but stdout, except with `--cache`, which writes the keyed store
 (`build_cache`) into that dir. Same box, same repos, same bite: same output.
 """
@@ -48,18 +49,18 @@ WORD = seed.WORD  # one word, for seed and the pile alike
 CLAUSE = re.compile(r"[,.;:!?()\[\]{}|\"]+")
 K1, B = 1.2, 0.75  # BM25's standard constants
 RRF_K = 60  # Cormack, Clarke & Büttcher 2009
-ATTEST = 10  # placeholder
-PAIR_MIN = 2  # placeholder
-QUESTION = 2.0  # placeholder
-TITLE = 2.0  # placeholder: the operator's number
-REPAIR_MIN = 4  # placeholder: the shortest word rung 2 repairs
+ATTEST = 10  # baseline (D12)
+PAIR_MIN = 2  # baseline (D12)
+QUESTION = 2.0  # baseline (D12)
+TITLE = 2.0  # baseline (D12)
+REPAIR_MIN = 4  # baseline (D12): the shortest word rung 2 repairs
 #: Off. Keep a pair only if its rarer word sits in at most this share of chunks.
 #: Measured 2026-10-18 on 25 bites: 0.003 gave MRR 0.5439 against 0.5235 off,
 #: fixing one miss (50 -> 2) and costing two (1 -> 2, 13 -> 36); 0.001 was worse,
-#: 0.01 and up changed nothing. The operator's number, if any.
+#: 0.01 and up changed nothing. Off is the baseline (D12).
 PAIR_BASIN = None
 ALPHABET = "abcdefghijklmnopqrstuvwxyz"
-MAX, MIN = 500, 40  # chunk characters; MAX is a placeholder
+MAX, MIN = 500, 40  # chunk characters; baseline (D12) (MAX measured best of 4)
 EMBED_CHARS = 2000  # the most of one chunk the embedder reads
 SUFFIXES = (("ies", "y"), ("s", ""), ("es", ""))  # tried in this order
 
@@ -447,8 +448,8 @@ SENT = re.compile(r"[.!?]+")
 GAP = 1  # positions skipped at a clause or line break, so no pair spans one
 KEY_BYTES = 32
 FINGERPRINT = b"onescript store key fingerprint"  # a fixed label, keyed
-MAX_STORE = 1 << 30  # placeholder: the most a store file may weigh to be opened
-MAX_POSTING = 1 << 26  # placeholder: the most one posting may decompress to
+MAX_STORE = 1 << 30  # baseline (D12): the most a store file may weigh to be opened
+MAX_POSTING = 1 << 26  # baseline (D12): the most one posting may decompress to
 PATH_CAP = 512  # the most of a repo or path name a store hands back
 CORE = ("version", "index_sha256", "max", "min", "byteorder", "key")
 #: What a broken store raises when read; every reader turns it into a state.
@@ -871,6 +872,48 @@ class Cached:
         """How many chunks hold `w`."""
         return len({c for c, _, _ in self.postings(w)})
 
+    def counts(self, words: list[str]) -> dict:
+        """Seed's counts from the store (D6, the operator, 2026-10-18: "C"):
+        per word, exactly as written, the chunks and files that hold it and
+        the first `seed.ANCHORS` chunks' starts, rarest first. Chunks, not
+        lines: the store keeps positions per chunk. The same three states as
+        `seed.scan`; `unreachable` when the store can't be read."""
+        keys, missed = [], []
+        try:
+            for w in words:
+                at = sorted({self.where[c][:3] for c, _, _ in self.postings(w)})
+                if not at:
+                    missed.append(w)
+                    continue
+                keys.append(
+                    {
+                        "word": w,
+                        "files": len({(r, p) for r, p, _ in at}),
+                        "chunks": len(at),
+                        "anchors": [list(a) for a in at[: seed.ANCHORS]],
+                    }
+                )
+        except BROKEN as e:
+            why = f"the store can't be read: {type(e).__name__}"
+            return {"state": "unreachable", "why": why, "keys": [], "missed": words}
+        keys.sort(key=lambda k: (k["files"], k["chunks"], k["word"]))
+        t = self.tally()
+        state = (
+            "unreachable"
+            if not self.n_all
+            else "seeded"
+            if keys
+            else "escalated:cold_start"
+        )
+        return {
+            "state": state,
+            "keys": keys,
+            "missed": missed,
+            "files_read": t["files_read"],
+            "skipped": t["skipped"] or {},
+            "unreachable": t["unreachable"] or {},
+        }
+
     def repair(self, bite: str) -> dict:
         """Rung 2, over hashes: a word of the bite the store holds in no form
         is tried at every spelling one edit away (`edits1`), each hashed with
@@ -1089,8 +1132,12 @@ def wordllama_embed(cache: Path):
 
 
 def sweep(index: dict, repos: dict, queries: list, limits: list, cache=None) -> dict:
-    """Mean reciprocal rank of each query's target, at each chunk size.
-    `cache` is (dir, index_sha, key): each size reads its own keyed cache."""
+    """Mean reciprocal rank of each query's target, at each chunk size. A
+    target is `repo:path` or a prefix of one (a directory, or `repo:`). A
+    query with no target is a control: it is left out of the MRR, and
+    `controls` counts the hits each one drew (the scored baseline,
+    `phrase_rank_queries.json`, is read the same way). `cache` is
+    (dir, index_sha, key): each size reads its own keyed cache."""
     out = {}
     want = set()
     for q in queries:
@@ -1113,18 +1160,22 @@ def sweep(index: dict, repos: dict, queries: list, limits: list, cache=None) -> 
             def ranker(b, pile=pile, limit=limit):
                 return rank(index, repos, b, limit, pile=pile)
 
-        rr = []
+        rr, controls = [], []
         for q in queries:
             hits = ranker(q["bite"])["hits"]
+            if not q["targets"]:
+                controls.append(len(hits))
+                continue
             ranks = [
                 i
                 for i, h in enumerate(hits, 1)
-                if f"{h['repo']}:{h['path']}" in q["targets"]
+                if any(f"{h['repo']}:{h['path']}".startswith(t) for t in q["targets"])
             ]
             rr.append(1 / ranks[0] if ranks else 0.0)
         out[limit] = {
-            "mrr": round(sum(rr) / len(rr), 4),
+            "mrr": round(sum(rr) / len(rr), 4) if rr else 0.0,
             "rr": [round(x, 4) for x in rr],
+            "controls": controls,
         }
     return out
 

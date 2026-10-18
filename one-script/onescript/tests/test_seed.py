@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import __main__ as cli  # noqa: E402
-from onescript import api, seed, xref  # noqa: E402
+from onescript import api, pile, seed, xref  # noqa: E402
 from onescript.tests.test_api import cfg, rows  # noqa: E402,F401
 from onescript.tests.test_xref import make, sh  # noqa: E402
 
@@ -53,7 +53,8 @@ def test_words_are_distinct_lowercased_and_sorted():
 
 
 def test_the_first_bite_seeds_rarest_first_with_whole_counts(box):
-    res = api.seed(box["cfg"], "the Forge first bite")
+    res = api.seed(box["cfg"], "the Forge first bite", exact=True)
+    assert res["counted_by"] == "scan" and "counted_why" not in res
     assert res["code"] == 0 and res["state"] == "seeded"
     keys = {k["word"]: k for k in res["keys"]}
     assert [k["word"] for k in res["keys"]] == ["first", "bite", "forge", "the"]
@@ -148,7 +149,7 @@ def test_bytes_that_dont_hash_to_the_index_are_skipped(cfg, tmp_path):  # noqa: 
 def test_a_repo_with_no_checkout_is_said(box, tmp_path):
     moved = tmp_path / "elsewhere"
     box["bot"].rename(moved)
-    res = api.seed(box["cfg"], "scanned forge")
+    res = api.seed(box["cfg"], "scanned forge", exact=True)
     assert res["unreachable"] == {"bot": "no checkout to read it from"}
     assert res["missed"] == ["scanned"]
     assert box["cfg"].box.exists()
@@ -183,3 +184,57 @@ def test_without_a_store_key_the_row_leaves_the_words_out(box):
     )
     assert res["words"] == [] and "keys" not in res and "missed" not in res
     assert "no store key" in res["hidden"]
+
+
+# ── D6: the counts come from the store; the scan only when asked ──────────
+def test_by_default_the_store_counts_chunks_and_files(box):
+    res = api.seed(box["cfg"], "the Forge first bite")
+    assert res["counted_by"] == "store" and res["state"] == "seeded"
+    keys = {k["word"]: k for k in res["keys"]}
+    assert set(keys["first"]) == {"word", "files", "chunks", "anchors"}
+    assert keys["first"]["files"] == 1 and keys["first"]["chunks"] >= 1
+    assert keys["first"]["anchors"][0][:2] == ["docs", "forge.md"]
+    assert keys["the"]["files"] == 3  # nothing dropped as too common, here too
+    assert [k["word"] for k in res["keys"]][0] == "first"  # rarest first
+    assert res["missed"] == []
+
+
+def test_the_store_and_the_scan_agree_on_what_is_missed_and_where(box):
+    bite = "zebra forge first"
+    store = api.seed(box["cfg"], bite)
+    assert api.checkin(box["cfg"])["code"] == 0
+    scan = api.seed(box["cfg"], bite, exact=True)
+    assert store["missed"] == scan["missed"] == ["zebra"]
+    files = {k["word"]: k["files"] for k in scan["keys"]}
+    assert {k["word"]: k["files"] for k in store["keys"]} == files
+
+
+def test_with_no_store_the_scan_counts_and_says_why(box):
+    path = pile.store_path(box["cfg"].box)
+    with open(path, "ab") as f:
+        f.write(b"\0")
+    res = api.seed(box["cfg"], "forge first")
+    assert res["counted_by"] == "scan" and "lines" in res["keys"][0]
+    assert res["counted_why"].startswith("no store attached: ")
+    assert "doesn't hash to its row" in res["counted_why"]
+
+
+def test_the_seed_row_hashes_store_counted_words_too(box):
+    res = api.seed(box["cfg"], "the forge")
+    row = rows(box["cfg"])[res["row"]]
+    assert row["counted_by"] == "store"
+    assert '"forge"' not in json.dumps(row) and '"the"' not in json.dumps(row)
+
+
+def test_the_cli_passes_exact(box, monkeypatch):
+    got = {}
+
+    def fake(cfg, bite, **kw):  # noqa: F811
+        got.update(kw)
+        return {"code": 0}
+
+    monkeypatch.setattr(api, "seed", fake)
+    cli.main(["--box", str(box["cfg"].box), "seed", "forge", "--exact"])
+    assert got["exact"] is True
+    cli.main(["--box", str(box["cfg"].box), "seed", "forge"])
+    assert got["exact"] is False

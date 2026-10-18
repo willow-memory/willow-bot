@@ -149,6 +149,8 @@ def needs_you(
         f"seen {o['seen']}x · {o['procedure']} · {o['offer']}" for o in report["offers"]
     ]
     needs += [ladder.offer_line(o) for o in report.get("bite_offers", [])]
+    if report.get("unsealed_nos"):
+        needs.append(ladder.unsealed_line(report["unsealed_nos"]))
     needs += [
         f"re-check row {s['row']} ({s['kind']}) · {s['why']}"
         for s in report["surfaced"]
