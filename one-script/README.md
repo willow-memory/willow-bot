@@ -169,6 +169,30 @@ bounds the served document's text. Over it, `empty` and "narrow the stack".
 `prompt.py` takes the same number as `ONESCRIPT_MAX_CHARS`, counted over the
 whole injected text.
 
+### The Forge's box: `PileBox`
+
+`onescript/box_lookup.py` is the willow side of the Forge's `BoxLookup` seam
+(`forge/entry.py`, tier 2: "the real lookup ... plugs in from the willow
+side"). It duck-types the Protocol (`name`, `lookup(hits)`) and imports
+nothing from the Forge, so willow-bot never requires forge-play.
+
+`PileBox(stores, top=5)` takes a `pile.Cached`, a `{name: Cached}` dict, or a
+list (several are merged by chunk hash, `pile.merge`), or `rank=` a callable
+`bite -> rank result` in their place. `lookup(hits)` joins the hits' `source`
+keywords into a bite, ranks it, and returns the top chunks as `Candidate`
+(`name` = `repo:path`, `where` = `repo:path:line`, `why` = the keywords and
+the score, or the stores it was seen in when merged).
+
+| `last_state` | When | `name` (what `tiers["box"]` prints before `: nothing`) |
+|---|---|---|
+| `populated` | a chunk ranked | `willow pile` (`: N candidate(s)`) |
+| `empty` | the store answered, nothing ranked; or no keyword | `willow pile (empty: why)` |
+| `unreachable` | no store, a store with no chunks, or the read failed | `willow pile (unreachable: why)` |
+
+`last_why` holds the reason. Wiring it into `open_bite(..., box=PileBox(...))`
+is the host's call; `onescript/tests/test_box_lookup.py` runs that end to end
+when `forge.entry` and `nestor` are importable, and skips otherwise.
+
 ## Gates on the phone
 
 The gates that shell out (toolchain/ruff, tests/pytest, repos/git) report
