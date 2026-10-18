@@ -191,7 +191,18 @@ def rank(
     paras, df_raw, copies = pile
     if not paras:
         return {"state": "unreachable", "fused": False, "hits": []}
+    n_all = len(paras)
+    avg = sum(p[3] for p in paras) / n_all
+    cands = [p for p in paras if p[1] or p[2]]
+    extra = sum(copies.values()) - n_all
+    return score(bite, cands, df_raw, n_all, avg, copies, extra, embed)
 
+
+def score(bite, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
+    """Rung 1 over the chunks that hold any of the bite's grams. A row is
+    (where, body tf, question tf, length[, text]); `n_all` and `avg` are over
+    every chunk in the pile. The direct read and the cache both end here."""
+    words, _ = wanted(bite)
     fold = folder(df_raw)
     fmap = {w: fold(w) for w in words}
 
@@ -199,15 +210,13 @@ def rank(
         return " ".join(fmap.get(t, t) for t in x.split(" "))
 
     folded = []
-    for row in paras:
+    for row in cands:
         tf = collections.Counter()
         for x, k in row[1].items():
             tf[fg(x)] += k
         for x, k in row[2].items():
             tf[fg(x)] += QUESTION * k  # BM25F: weighted before saturation
         folded.append((row[0], tf, row[3]) + row[4:])
-    n_all = len(folded)
-    avg = sum(p[2] for p in folded) / n_all
     df = collections.Counter(x for _, tf, *_ in folded for x in tf)
     bite_grams = sorted({fg(g) for g in raw_grams(bite)})
 
@@ -234,12 +243,12 @@ def rank(
     out = {
         "state": "ranked" if scored else "escalated:cold_start",
         "chunks": n_all,
-        "copies": sum(copies.values()) - n_all,
+        "copies": extra,
         "folds": {w: f for w, f in sorted(fmap.items()) if w != f and df_raw[w]},
         "pairs": {g: round(pair_score(g), 3) for g in kept if " " in g},
         "fused": False,
     }
-    if embed is not None and scored:
+    if embed is not None and scored and all(len(row) > 3 for _, row in scored):
         emb_order = embed(bite, [(row[0], row[3]) for _, row in scored])
         if emb_order is not None:
             order = rrf(order, emb_order)
@@ -255,6 +264,242 @@ def rank(
         for w in order
     ]
     return out
+
+
+# ── the cache: the pile hashed once, words as hashes, never text ──────────
+# "A baseline holds hashes only, never content" (one-script README); "once the
+# box is hashed, the hash is a lookup that returns a hash and a count"
+# (next-pile.md). Every word is an 8-byte BLAKE2b with its chunk and position;
+# every sentence of three or more words is one hash with a count. Rebuilt
+# whole when the xref index, MAX, MIN or this version changes.
+CACHE_VERSION = 1
+SENT = re.compile(r"[.!?]+")
+GAP = 1  # positions skipped at a clause or line break, so no pair spans one
+
+
+def term(w: str) -> int:
+    """A word (or a normalized sentence) as a signed 8-byte BLAKE2b."""
+    d = hashlib.blake2b(w.encode(), digest_size=8).digest()
+    return int.from_bytes(d, "big", signed=True)
+
+
+def sentences(line: str) -> list[str]:
+    out = []
+    for part in SENT.split(line.lower()):
+        ws = WORD.findall(part)
+        if len(ws) >= 3:
+            out.append(" ".join(ws))
+    return out
+
+
+def _meta(index_sha: str, limit: int) -> dict:
+    return {
+        "version": str(CACHE_VERSION),
+        "index_sha256": index_sha,
+        "max": str(limit),
+        "min": str(MIN),
+        "byteorder": sys.byteorder,
+    }
+
+
+def build_cache(index: dict, repos: dict, path: Path, index_sha: str, limit: int = MAX):
+    """Read the pile once and write the hashed cache atomically."""
+    import array
+    import os
+    import sqlite3
+    import zlib
+
+    post: dict = {}
+    sent: dict = {}
+    chunks_out, copies, ids = [], collections.Counter(), {}
+    for name, arr in sorted(index.get("arrival", {}).items()):
+        root = repos.get(name)
+        if root is None or not Path(root).is_dir():
+            continue
+        files = [
+            f
+            for f in arr.get("files", [])
+            if f.get("state") == "present" and f.get("blob_match")
+        ]
+        blobs = seed._blobs(Path(root), sorted({f["git_blob"] for f in files}))
+        for f in files:
+            d = blobs.get(f["git_blob"])
+            if d is None or hashlib.sha256(d).hexdigest() != f["sha256"] or b"\0" in d:
+                continue
+            try:
+                text = d.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            for line, s in chunks(text, limit):
+                if len(s) < MIN:
+                    continue
+                h = hashlib.sha256(s.encode()).hexdigest()
+                copies[h] += 1
+                if h in ids:
+                    continue
+                cid = ids[h] = len(chunks_out)
+                pos, n = 0, 0
+                for ln in s.split("\n"):
+                    q = 1 if is_question(ln) else 0
+                    for clause in CLAUSE.split(ln.lower()):
+                        ws = WORD.findall(clause)
+                        n += len(ws) + max(len(ws) - 1, 0)
+                        for w in ws:
+                            slot = post.get(t := term(w))
+                            if slot is None:
+                                slot = post[t] = (array.array("I"), array.array("I"))
+                            slot[0].append(cid)
+                            slot[1].append(pos << 1 | q)
+                            pos += 1
+                        pos += GAP
+                    pos += GAP
+                    for sn in sentences(ln):
+                        e = sent.get(t := term(sn))
+                        if e is None:
+                            sent[t] = [1, cid]
+                        else:
+                            e[0] += 1
+                chunks_out.append((cid, h, n, name, f["path"], line))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.unlink(missing_ok=True)
+    db = sqlite3.connect(tmp)
+    db.executescript(
+        "CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);"
+        "CREATE TABLE chunk(id INTEGER PRIMARY KEY, sha TEXT, n INTEGER,"
+        " copies INTEGER, repo TEXT, path TEXT, line INTEGER);"
+        "CREATE TABLE post(term INTEGER PRIMARY KEY, cids BLOB, pos BLOB);"
+        "CREATE TABLE sent(h INTEGER PRIMARY KEY, count INTEGER, cid INTEGER);"
+    )
+    db.executemany("INSERT INTO meta VALUES (?, ?)", _meta(index_sha, limit).items())
+    db.executemany(
+        "INSERT INTO chunk VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ((c, h, n, copies[h], r, p, ln) for c, h, n, r, p, ln in chunks_out),
+    )
+    db.executemany(
+        "INSERT INTO post VALUES (?, ?, ?)",
+        (
+            (t, zlib.compress(a.tobytes()), zlib.compress(b.tobytes()))
+            for t, (a, b) in post.items()
+        ),
+    )
+    db.executemany(
+        "INSERT INTO sent VALUES (?, ?, ?)", ((t, c, i) for t, (c, i) in sent.items())
+    )
+    db.commit()
+    db.close()
+    os.replace(tmp, path)
+
+
+def open_cache(index: dict, repos: dict, path: Path, index_sha: str, limit: int = MAX):
+    """The cache for this index and limit, built (or rebuilt) when it isn't."""
+    import sqlite3
+
+    want = _meta(index_sha, limit)
+    if path.exists():
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            have = dict(db.execute("SELECT k, v FROM meta"))
+        except sqlite3.DatabaseError:
+            have = {}
+        if have == want:
+            return db, "warm"
+        db.close()
+    build_cache(index, repos, path, index_sha, limit)
+    return sqlite3.connect(f"file:{path}?mode=ro", uri=True), "built"
+
+
+class Cached:
+    """Rung 1's statistics from the cache, for `score`."""
+
+    def __init__(self, db):
+        import array
+        import zlib
+
+        self.db, self._array, self._zlib = db, array, zlib
+        rows = db.execute("SELECT id, sha, n, copies, repo, path, line FROM chunk")
+        self.where, self.n, self.copies = {}, {}, {}
+        total = 0
+        for cid, sha, n, cp, repo, path, line in rows:
+            self.where[cid] = (repo, path, line, sha)
+            self.n[cid] = n
+            self.copies[sha] = cp
+            total += cp
+        self.n_all = len(self.n)
+        self.avg = sum(self.n.values()) / self.n_all if self.n_all else 0.0
+        self.extra = total - self.n_all
+        self._memo: dict = {}
+
+    def postings(self, w: str) -> list:
+        """(cid, position, question) for every occurrence of `w`."""
+        if w not in self._memo:
+            row = self.db.execute(
+                "SELECT cids, pos FROM post WHERE term = ?", (term(w),)
+            ).fetchone()
+            if row is None:
+                self._memo[w] = []
+            else:
+                a, b = self._array.array("I"), self._array.array("I")
+                a.frombytes(self._zlib.decompress(row[0]))
+                b.frombytes(self._zlib.decompress(row[1]))
+                self._memo[w] = [(c, p >> 1, p & 1) for c, p in zip(a, b)]
+        return self._memo[w]
+
+    def rank(self, bite: str, embed=None) -> dict:
+        if not self.n_all:
+            return {"state": "unreachable", "fused": False, "hits": []}
+        words, pairs = wanted(bite)
+        body: dict = collections.defaultdict(collections.Counter)
+        quest: dict = collections.defaultdict(collections.Counter)
+        df_raw = collections.Counter()
+        for w in sorted(words):
+            seen = set()
+            for c, _, q in self.postings(w):
+                (quest if q else body)[c][w] += 1
+                seen.add(c)
+            df_raw[w] = len(seen)
+        for p in sorted(pairs):
+            a, b = p.split(" ")
+            nxt = {(c, pos) for c, pos, _ in self.postings(b)}
+            seen = set()
+            for c, pos, q in self.postings(a):
+                if (c, pos + 1) in nxt:
+                    (quest if q else body)[c][p] += 1
+                    seen.add(c)
+            if seen:
+                df_raw[p] = len(seen)
+        cands = [
+            (
+                self.where[c],
+                body.get(c, collections.Counter()),
+                quest.get(c, collections.Counter()),
+                self.n[c],
+            )
+            for c in sorted(set(body) | set(quest))
+        ]
+        return score(
+            bite, cands, df_raw, self.n_all, self.avg, self.copies, self.extra, embed
+        )
+
+    def quotes(self, bite: str) -> list:
+        """The bite's sentences said before, by hash: a count and where first."""
+        out = []
+        for sn in dict.fromkeys(sentences(bite)):
+            row = self.db.execute(
+                "SELECT count, cid FROM sent WHERE h = ?", (term(sn),)
+            ).fetchone()
+            if row:
+                r, p, ln, _ = self.where[row[1]]
+                out.append(
+                    {
+                        "words": len(sn.split()),
+                        "count": row[0],
+                        "repo": r,
+                        "path": p,
+                        "line": ln,
+                    }
+                )
+        return out
 
 
 def wordllama_embed(cache: Path):
@@ -287,17 +532,29 @@ def wordllama_embed(cache: Path):
     return order
 
 
-def sweep(index: dict, repos: dict, queries: list, limits: list) -> dict:
-    """Mean reciprocal rank of each query's target, at each chunk size."""
+def sweep(index: dict, repos: dict, queries: list, limits: list, cache=None) -> dict:
+    """Mean reciprocal rank of each query's target, at each chunk size.
+    `cache` is (dir, index_sha): each size reads its own hashed cache."""
     out = {}
     want = set()
     for q in queries:
         want |= set().union(*wanted(q["bite"]))
     for limit in limits:
-        pile = read_pile(index, repos, want, limit)
+        if cache:
+            db, _ = open_cache(
+                index, repos, cache[0] / f"pile-{limit}.sqlite", cache[1], limit
+            )
+            c = Cached(db)
+            ranker = c.rank
+        else:
+            pile = read_pile(index, repos, want, limit)
+
+            def ranker(b, pile=pile, limit=limit):
+                return rank(index, repos, b, limit, pile=pile)
+
         rr = []
         for q in queries:
-            hits = rank(index, repos, q["bite"], limit, pile=pile)["hits"]
+            hits = ranker(q["bite"])["hits"]
             ranks = [
                 i
                 for i, h in enumerate(hits, 1)
@@ -311,13 +568,14 @@ def sweep(index: dict, repos: dict, queries: list, limits: list) -> dict:
     return out
 
 
-def load_index(box: Path) -> dict | None:
+def load_index(box: Path, with_sha: bool = False):
+    """The box's xref index, only while it hashes to its pile pointer."""
     items = json.loads((box / "pile.json").read_text())["items"]
     ptr = next((i for i in items if i["where"] == seed.INDEX), None)
     data = (box / seed.INDEX).read_bytes() if ptr else b""
     if ptr is None or hashlib.sha256(data).hexdigest() != ptr["sha"]:
-        return None
-    return json.loads(data)
+        return (None, None) if with_sha else None
+    return (json.loads(data), ptr["sha"]) if with_sha else json.loads(data)
 
 
 def main(argv=None) -> int:
@@ -333,8 +591,15 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--sweep", type=Path, help="queries JSON: MRR at each --max-values")
     ap.add_argument("--max-values", default="128,250,500")
+    ap.add_argument(
+        "--cache",
+        type=Path,
+        help="dir for the hashed pile cache (built once per index and --max)",
+    )
     a = ap.parse_args(argv)
-    index = load_index(a.box)
+    if a.cache and a.embed:
+        ap.error("--embed reads chunk text, and the cache holds hashes only")
+    index, index_sha = load_index(a.box, with_sha=True)
     if index is None:
         print(
             json.dumps({"state": "unreachable", "why": "no index the pile vouches for"})
@@ -347,12 +612,22 @@ def main(argv=None) -> int:
     if a.sweep:
         queries = json.loads(a.sweep.read_text())["queries"]
         limits = [int(x) for x in a.max_values.split(",")]
-        print(json.dumps(sweep(index, repos, queries, limits), indent=1))
+        cache = (a.cache, index_sha) if a.cache else None
+        print(json.dumps(sweep(index, repos, queries, limits, cache), indent=1))
         return 0
     if not a.bite:
         ap.error("a bite, or --sweep")
-    embed = wordllama_embed(a.embed) if a.embed else None
-    out = rank(index, repos, a.bite, a.max, embed)
+    if a.cache:
+        db, state = open_cache(
+            index, repos, a.cache / f"pile-{a.max}.sqlite", index_sha, a.max
+        )
+        c = Cached(db)
+        out = c.rank(a.bite)
+        out["cache"] = state
+        out["quotes"] = c.quotes(a.bite)
+    else:
+        embed = wordllama_embed(a.embed) if a.embed else None
+        out = rank(index, repos, a.bite, a.max, embed)
     out["hits"] = out["hits"][: a.top]
     print(json.dumps(out, indent=1))
     return 0

@@ -152,3 +152,72 @@ def test_a_double_s_is_never_folded_even_with_a_stem_on_record():
 def test_the_rrf_constant_lets_agreement_beat_one_first_place():
     # b is second in two lists, a and c first in one each: with k=60, b leads
     assert pr.rrf(["a", "b"], ["c", "b"]) == ["b", "a", "c"]
+
+
+CACHE_FILES = {
+    "a.md": (
+        "Nobody counts the ad breaks in kids games, not even once.\n\n"
+        "What counts the ad breaks in a game for kids today?\n"
+    ),
+    "b.md": "Games with ads, and stories about games, and more stories here.\n",
+    "c.md": "Nobody counts the ad breaks in kids games, not even once.\n",  # a copy
+    "d.md": "pattern matching skills, for the box; pattern matching again\n" * 3,
+    "e.md": "one long line " + "word " * 300 + "\n",
+    "f.md": "the ad\nbreaks are split across a line here, for the test\n",
+    "h.md": "the ad breaks again, said in a plain body line here\n",
+    **{
+        f"x{i}.md": f"a filler file, number {i}, of plain unrelated words\n"
+        for i in range(6)
+    },
+}
+BITES = ["ad breaks", "kids games and stories", "pattern matching skills", "word"]
+
+
+def cached(tmp_path, files):
+    idx, repos = pile(tmp_path, files)
+    db, state = pr.open_cache(idx, repos, tmp_path / "c" / "p.sqlite", "sha-1")
+    return idx, repos, pr.Cached(db), state
+
+
+def test_the_cache_ranks_exactly_as_the_direct_read(tmp_path):
+    idx, repos, c, state = cached(tmp_path, CACHE_FILES)
+    assert state == "built"
+    for b in BITES:
+        assert c.rank(b) == pr.rank(idx, repos, b), b
+    # the pair and the question field are really in play, not equal by absence
+    out = c.rank("ad breaks")
+    assert "ad breaks" in out["pairs"]
+    top = out["hits"][0]
+    assert (top["path"], top["line"]) == ("a.md", 3)  # the question outranks
+
+
+def test_the_cache_holds_hashes_never_text(tmp_path):
+    _, _, c, _ = cached(
+        tmp_path, {"a.md": "zanzibarquokka appears here once only, in this one file\n"}
+    )
+    raw = (tmp_path / "c" / "p.sqlite").read_bytes()
+    assert b"zanzibarquokka" not in raw and b"appears here" not in raw
+    assert c.rank("zanzibarquokka")["hits"][0]["path"] == "a.md"
+
+
+def test_the_cache_is_warm_for_the_same_index_and_rebuilt_for_another(tmp_path):
+    idx, repos, _, _ = cached(tmp_path, {"a.md": "the first version of a file\n"})
+    p = tmp_path / "c" / "p.sqlite"
+    assert pr.open_cache(idx, repos, p, "sha-1")[1] == "warm"
+    assert pr.open_cache(idx, repos, p, "sha-2")[1] == "built"
+    assert pr.open_cache(idx, repos, p, "sha-2", limit=128)[1] == "built"
+
+
+def test_a_pair_never_spans_a_line_break(tmp_path):
+    _, _, c, _ = cached(tmp_path, {"f.md": CACHE_FILES["f.md"], **{"g.md": "x" * 50}})
+    assert "ad breaks" not in c.rank("ad breaks")["pairs"]
+
+
+def test_a_sentence_said_before_comes_back_with_its_count(tmp_path):
+    _, _, c, _ = cached(tmp_path, CACHE_FILES)
+    q = c.quotes(
+        "Nobody counts the ad breaks in kids games, not even once. Something new."
+    )
+    # c.md's copy dedupes into a.md's chunk, so the sentence counts once
+    assert q == [{"words": 11, "count": 1, "repo": "docs", "path": "a.md", "line": 1}]
+    assert c.quotes("Nothing like this was ever said.") == []
