@@ -114,6 +114,7 @@ exception. Nothing moves before a check-in or after a check-out.
 | Function | What it does |
 |---|---|
 | `checkin(cfg)` | Boot: record, probes, the four gates. Makes this session's serve key |
+| `seed(cfg, bite, repos)` | The first bite's words against the box (`seed.py`): the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index. Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in |
 | `scope(cfg, by, match, upto)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack |
 | `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
 | `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped |
@@ -184,6 +185,7 @@ leave a `differently` row on the tests gate saying it was skipped and why.
 ```bash
 cd one-script
 python3 -m onescript checkin                       # boot: record, probes, the four gates
+python3 -m onescript seed "the first bite"         # its words against the box, once per check-in
 python3 -m onescript scope --by who --match who=run   # card, subject, spec (JSON)
 python3 -m onescript seal serve:<hash> --pair p.json   # keyring/store: $WILLOW_KEYRING, $WILLOW_NESTOR_DB
 python3 -m onescript serve --by who --match who=run --upto <n> --max-chars 20000

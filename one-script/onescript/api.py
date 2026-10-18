@@ -50,6 +50,7 @@ from typing import Callable, Iterable
 
 from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import seed as seed_mod
 from . import serve as served
 from .run import PKG, Run
 
@@ -536,6 +537,56 @@ def peek(
     rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
     lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
     return {"needs": lines, "count": len(lines), "peek": True, "code": 0}
+
+
+# ── seed ────────────────────────────────────────────────────────────────────
+def seed(
+    cfg: Config,
+    bite: str,
+    repos: dict[str, Path] | None = None,
+    argv: Iterable[str] = ("seed",),
+) -> dict:
+    """The first bite's words, scanned against the box (`seed.py`). Once per
+    check-in: the first input seeds, and a second is refused with the first's
+    row. `repos` names where an indexed repo is read from; any it leaves out
+    are looked for beside willow-bot. Writes one `seed` row, the bite as its
+    hash and its words; reads the box and writes nothing else."""
+    run, info = _open(cfg, "seed", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seed")) is not None:
+        return refusal
+    first = next(
+        (r for r in seed_mod.since_boot(run.rec.rows()) if r["kind"] == "seed"), None
+    )
+    if first is not None:
+        why = f"this check-in is already seeded (row {first['n']}); the first bite seeds once"
+        run.rec.append("refused", run.sys, at="seed", reason=why)
+        return _refused(why, 1)
+    ws = seed_mod.words(bite)
+    if not ws:
+        run.rec.append("refused", run.sys, at="seed", reason="no words in the bite")
+        return _refused("a bite with no words seeds nothing", 1)
+    index, why = seed_mod.read_index(run.rec)
+    if index is None:
+        out = {"state": "unreachable", "why": why, "keys": [], "missed": ws}
+    else:
+        names = index.get("arrival", {})
+        where = {n: cfg.root.parent / n for n in names}
+        where.update({n: Path(p) for n, p in (repos or {}).items()})
+        out = seed_mod.scan(index, where, ws)
+        out["index_sha256"] = next(
+            i["sha"] for i in run.rec.pile()["items"] if i["where"] == seed_mod.INDEX
+        )
+    row = run.rec.append(
+        "seed",
+        run.sys,
+        where=seed_mod.INDEX,
+        bite_hash=record.h256(bite),
+        words=ws,
+        **out,
+    )
+    return {**out, "row": row["n"], "code": 0}
 
 
 # ── turn ────────────────────────────────────────────────────────────────────

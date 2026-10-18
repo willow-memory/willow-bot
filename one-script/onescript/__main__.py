@@ -2,6 +2,7 @@
 
     cd one-script                           # in willow-bot
     python3 -m onescript checkin            # boot: record, probes, the four gates
+    python3 -m onescript seed "the first bite"   # its words against the box, once
     python3 -m onescript scope --by who     # code proposes a stack: card + subject
     python3 -m onescript seal SUBJECT ...   # the human's seal over that subject
     python3 -m onescript serve --by who     # write the one file the model reads
@@ -139,6 +140,13 @@ def _print_json(obj) -> None:
     print(json.dumps(obj, indent=1, sort_keys=True, default=str))
 
 
+def _name_path(spec: str) -> tuple[str, Path]:
+    name, sep, path = spec.partition("=")
+    if not (sep and name and path):
+        raise argparse.ArgumentTypeError(f"want NAME=PATH, got {spec!r}")
+    return name, Path(path)
+
+
 def _bot_venv() -> Path:
     """The bot's venv: ``$WILLOW_HOME/willow-bot/venvs/willow-bot`` (D2: the
     venvs live in the bot), or the old ``$WILLOW_HOME/venvs/willow-bot`` while
@@ -210,6 +218,18 @@ def main(argv: list[str] | None = None) -> int:
         help="default: the box's keyring path (verifiers.public.json)",
     )
     sub.add_parser("checkin")
+    sd = sub.add_parser(
+        "seed", help="the first bite's words against the box; once per check-in"
+    )
+    sd.add_argument("bite")
+    sd.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        type=_name_path,
+        metavar="NAME=PATH",
+        help="where an indexed repo is read from (default: beside willow-bot)",
+    )
     t = sub.add_parser("turn")
     t.add_argument("bite")
     t.add_argument(
@@ -542,6 +562,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             _print_json({k: v for k, v in res.items() if k != "code"})
         return res["code"]
+    elif args.cmd == "seed":
+        res = api.seed(cfg, args.bite, repos=dict(args.repo), argv=raw)
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)
