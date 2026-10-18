@@ -1,0 +1,203 @@
+{
+ "note": "The pile's eval set: the chunk-size sweep's 7 paraphrases, 13 made-up first bites, 5 of them again with typos, and 1 control that should rank nothing. Drafted by the desk 2026-10-18, unratified: each bite is a paraphrase or made up, not a quote, and each target is the file a reader would want (a target ending in ':' or naming a directory matches anything under it). A query whose target moves is re-pointed here, never dropped.",
+ "status": "draft",
+ "awaiting": "D14 B (the operator, 2026-10-18: \"B\"): the operator adds their own bites; until then this set is the desk's, and a score on it is a baseline, not a verdict.",
+ "baseline": {
+  "date": "2026-10-18",
+  "queries": 25,
+  "mrr": 0.5235,
+  "hits_at_1": 10,
+  "hits_at_3": 15,
+  "how": "pile.Cached: repair, then rank, over the session's store; MAX 500, PAIR_BASIN off; the control is left out of the MRR"
+ },
+ "queries": [
+  {
+   "bite": "I was playing some stupid games, to distract myself from life for a bit, and one game in particular had 4 min of ads, for 30 sec of game play, for my pattern matching skills.",
+   "targets": [
+    "safe-app-store:apps/playgate/docs/NOBODY_COUNTS_THE_AD_BREAKS.md"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "where does the forge ask the maker what to build first and map the words to a kind of project",
+   "targets": [
+    "forge:docs/design/the-forge-shape.md",
+    "willows-grove:docs/design/the-forge-shape.md"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "how does the human seal something when there is no terminal, only the phone",
+   "targets": [
+    "willow-bot:one-script/README.md"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "which embedder makes the knowledge base vectors in postgres",
+   "targets": [
+    "willow-mcp:src/willow_mcp/knowledge_embed.py"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "one store per craft, python node rust go, a provision house and not a shop",
+   "targets": [
+    "safe-app-store:stores/README.md"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "guardianship ends by setting a date, never by deleting the row",
+   "targets": [
+    "terpsi-music:docs/ARCHITECTURE.md",
+    "terpsi-music:CLAUDE.md"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "the stop hook kept firing on the word complete",
+   "targets": [
+    "willows-grove:docs/design/one-script/next-pile.md"
+   ],
+   "group": "sweep"
+  },
+  {
+   "bite": "i need summit to tell me which rally pics aint got a date on em",
+   "targets": [
+    "forge:demo/the_first_bite.py"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "my scooter club photos have no dates on them, can something sort them out",
+   "targets": [
+    "forge:demo/the_first_bite.py",
+    "safe-app-store:apps/nasa-archive"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "the kids keep getting ads in their games, i want to choose what they can install",
+   "targets": [
+    "safe-app-store:apps/playgate"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "where can i keep my recipes so they stay on my own laptop",
+   "targets": [
+    "safe-app-store:apps/kitchen-pudding"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "i want to set my worries down at night and pick one thing up in the morning",
+   "targets": [
+    "safe-app-store:apps/the-nightstand"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "tell me the story where the gardener plants the seed",
+   "targets": [
+    "willow-mcp:docs/story"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "whats girth and why did it get won't fix",
+   "targets": [
+    "willow-mcp:docs/story/chapter-03"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "i wanna build a terminal app in rust",
+   "targets": [
+    "safe-app-store:stores/rust",
+    "safe-app-store:stores/README"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "a plugin for my obsidian vault notes",
+   "targets": [
+    "safe-app-store:stores/obsidian"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "rehearsal schedule for the drumline before the band competition",
+   "targets": [
+    "safe-app-store:apps/marching-arts",
+    "terpsi-music:"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "the guardian has to sign the medical form before the trip",
+   "targets": [
+    "terpsi-music:"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "run a tabletop game for me where the dice rolls are fair",
+   "targets": [
+    "safe-app-store:apps/the-table",
+    "safe-app-store:apps/ai-game-master"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "seal it from my phone when there is no terminal",
+   "targets": [
+    "willow-bot:one-script/README.md"
+   ],
+   "group": "made_up"
+  },
+  {
+   "bite": "nombic embeder for the knowlege base",
+   "targets": [
+    "willow-mcp:src/willow_mcp/knowledge_embed.py",
+    "willow-mcp:src/willow_mcp/nest/embed.py"
+   ],
+   "group": "typo"
+  },
+  {
+   "bite": "whta is the forgr frist bite",
+   "targets": [
+    "forge:docs/design/the-forge-shape.md"
+   ],
+   "group": "typo"
+  },
+  {
+   "bite": "the kidz keep gettin adds in there gamez",
+   "targets": [
+    "safe-app-store:apps/playgate"
+   ],
+   "group": "typo"
+  },
+  {
+   "bite": "recipies that stay on my laptpo",
+   "targets": [
+    "safe-app-store:apps/kitchen-pudding"
+   ],
+   "group": "typo"
+  },
+  {
+   "bite": "rehersal schedual for the drumlien",
+   "targets": [
+    "safe-app-store:apps/marching-arts",
+    "terpsi-music:"
+   ],
+   "group": "typo"
+  },
+  {
+   "bite": "quantum sourdough telescope ballet",
+   "targets": [],
+   "group": "control"
+  }
+ ]
+}

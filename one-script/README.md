@@ -114,18 +114,42 @@ exception. Nothing moves before a check-in or after a check-out.
 | Function | What it does |
 |---|---|
 | `checkin(cfg)` | Boot: record, probes, the four gates. Makes this session's serve key |
-| `scope(cfg, by, match, upto)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack |
+| `seed(cfg, bite, repos, exact=False)` | The first bite's words against the box. Counted from the session's store by default (`Cached.counts`: chunks and files per word, `counted_by: store`); `exact` scans for whole files and lines (`seed.py`: the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index), and so does a seed with no store attached, saying why (`counted_why`). D6, the operator: "C". Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in. A held write-back for this exact bite answers it first (`answered_by`), and unseen words are a `miss` row of hashes |
+| `scope(cfg, by, match, upto, max_chars=None)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack. Each chunk's size in characters, read at its blob (no text), the total, and the served document's length; with `max_chars`, whether it `fits` |
 | `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
-| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped |
+| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped. A chunk found gone (not in the index, blob gone, hash mismatch, not at its line) gets one `tombstone` row per check-in, with `forward` where the same SHA-256 reads now |
+| `decline_offer(cfg, key, proof=None)` | A No to a ladder offer (`ladder.py`: asked 1 does, 2 notices, 3 offers, again every 3rd ask); an `offer_declined` row stops it for that key. D5, the operator: "C". A No only narrows, so it takes effect unsigned, marked `said_by: caller`, `sealed: false`, and NEEDS YOU counts the unsealed ones; with the human's proof over `decline:<key>` it is `said_by: human`, sealed, and stands over them |
+| `forge_bite(cfg, bite, project_id, builder_id, root)` | The Forge's `open_bite` with `PileBox` over this session's store as tier 2 (D9, the operator: "A"; live here only, the Forge never imports willow). The Forge not importable, or its own refusal (Nestor absent), is `unreachable`, said. A choice or confirm for the maker comes back `needs_you` with the card; the responder never answers, so nothing is sealed. Else `populated` or `empty`; one `forge_bite` row of hashes and state words |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
 | `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
-| `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below) |
+| `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below). Each answered piece is proposed as a write-back |
+| `writeback_seal(cfg, subject, proof / pair)` | The human's seal over one write-back's exact subject (`writeback:<hash>`); held, the same bite stops at rung 1 (below) |
 | `checkout(cfg)` | Reverse, then the morning screen |
 
-The record is the only state between calls, except the serve key, which is
-kept beside the keys (`serve.key`, 0600), fresh at every check-in, and is
-never the seal key. A `spec` pins the stack to the record's rows up to `upto`,
+The record is the only state between calls, except two keys kept beside the
+keys file, never in the box: the serve key (`serve.key`, 0600), fresh at every
+check-in and never the seal key, and each box's store key
+(`store-<hash of the box path>.key`, 0600), made once at the first check-in,
+which keys the word and sentence hashes in that box's store (`pile.py`): the
+store records only its fingerprint, and another box's store is read only when
+its key is here and its record's chain verifies. A `spec` pins the stack to the record's rows up to `upto`,
 so rows added later can't move a table id out from under a seal.
+
+### The session's store
+
+The operator: "So, all those keys need to live outside the sandbox. Like in
+sean-data vault for me." (willows-grove next-pile.md). Here the store key sits
+beside the keys file, outside the box but inside whatever sandbox the box runs
+in; on the operator's machine `--keys` points that dir at the vault. That
+placement is the operator's to make.
+
+| Rule | How |
+|---|---|
+| Built in the background | The operator: "loaded everything up in the background, in anticipation of my next enter stroke." With the CLI (`Config.store_background`), a store that needs building is built by a detached process (`python -m onescript.pile --build-store`), which writes only the store file, never the record, and reads the key itself. Check-in writes a `building` row and returns; the first verb after the store is ready attaches it (an `attached` row with the file's SHA-256). Until then the store is `unreachable`: "still building". A lock stops a second build |
+| The record holds hashes, not words | "A baseline holds hashes only, never content." The seed row holds the bite's words, keys, misses, pairs and repairs keyed with the store key; the caller still gets its words in the answer. No store key: the words are left out of the row, said |
+| The cache and the direct read are one pair | "Every pair gets a named middle." `pile.rank` (reads the blobs) and `Cached.rank` (reads the store) both end in `score_grams`; `test_the_cache_ranks_exactly_as_the_direct_read` is the reconciler, byte for byte |
+| Typos, rung 2 | `Cached.repair`: an unseen word tried one edit away, each spelling hashed with the key; the words never leave the bite |
+| Every number is the operator's | `deep_thought.py`: "the numbers are yours … The script may propose each from the record; it never sets one." `MAX`, `MIN`, `TITLE`, `QUESTION`, `ATTEST`, `PAIR_MIN`, `PAIR_BASIN` (off), `REPAIR_MIN`, `MAX_STORE`, `MAX_POSTING` are placeholders |
 
 ### Escalate: the deterministic chain
 
@@ -156,6 +180,61 @@ One vocabulary: `answered`, or `escalated:<reason>`.
 | `rung_error` | the rung failed: non-zero exit, unreadable output, or a row the contract or door refused |
 | `empty_scope` | nothing populated is served in this check-in |
 
+### Every escalation writes back
+
+`onescript/writeback.py`. The loop (next-pile.md, "the loop", 6): "the cloud's
+answer is recorded into the pile, tied to the words that missed"; the ladder
+(the one-script README): "every answer is written back by the hash of the
+phrasing, so the next time it stops at rung 1"; the forge's intake contract
+(`the-forge-shape.md`): "a miss log — what was asked that nothing answered".
+Everything here is a record row. Nothing is written into Nestor's store.
+
+| Row | Written when | Holds |
+|---|---|---|
+| `miss` | a seed whose words the session's store has no posting for (in any form `rank` looks for), and no sentence of the bite was said before | the bite's hash, each missing word keyed with the box's store key (BLAKE2b-128), the count, the seed row and the check-in. Never a word, and never a plain hash of one |
+| `writeback` (`proposed`) | an `escalate_rung` row settles `answered`, or a sealed proposal is written | subject `writeback:<sha256>` over `{bite_hash, answer_hash, cites}`; the answer (cites rewritten to content); where it came from |
+
+- **The bite** is this check-in's seed (the words that missed); with no seed,
+  the task as written (or the turn's own bite, for a proposal).
+- **The cites** are content hashes: a chunk's own SHA-256, else the table's
+  content id. The served ids are keyed with the session's serve key and mean
+  nothing in another session. A cite that doesn't map to this check-in's
+  served file, or no cite at all, and nothing is proposed (said, in the
+  verb's `writeback` list).
+- **Held** only while the human's seal over that exact subject verifies
+  (`Run.held`): the HMAC proof, or a sealed Nestor pair whose conclusion is the
+  subject, read from `Config.nestor_db` as any other seal is. A changed byte in
+  the bite, the answer or a cite is another subject with no seal.
+- **The read-back** runs at `seed`, before anything is ranked. A held
+  write-back whose `bite_hash` is this bite's hash, exactly, answers it: the
+  seed row says `answered_by: writeback:<subject>`, and its `writeback` field
+  carries the cites and the row. Nothing fuzzy. A hit logs no miss.
+- **Three states** in the seed's `writeback` field: `held`, `none` (with
+  `unsealed: n` when candidates wait on a seal), and `unreachable` when a
+  candidate's seal can't be checked here (the store or keyring is gone). An
+  unchecked seal is never a hit.
+- **A row is judged on its own bytes.** A `writeback` row whose answer doesn't
+  hash to its `answer_hash`, whose subject isn't the hash of its fields, or
+  whose hashes aren't SHA-256s is skipped, even when another row with that
+  subject is sealed.
+- A store that can't be read logs no miss: unknown is not a miss.
+- `needs` adds `writeback: {misses, since, line, writebacks_proposed,
+  writebacks_held}` when the record holds a miss or a write-back: "N misses
+  since <ts>", counts only. The NEEDS YOU lines are unchanged, so the screen
+  and `needs` still agree.
+
+What the operator decides (not done here):
+
+| Question | Now |
+|---|---|
+| Export held write-backs to Nestor as draft pairs (`nestor.answer.propose`), so they're sealed in Nestor's UI alongside everything else | Not done; the one script only reads Nestor |
+| A missing word's hash: plain SHA-256 (comparable across sessions, but a short word is recoverable by trying a dictionary) or keyed | Plain SHA-256 |
+| Should a write-back hit skip the ranking entirely ("nothing runs") | The seed still scans and ranks, so `scope --seed-top` works; `answered_by` is set first |
+| Which bite an answer is tied to when the escalate task isn't the seed's bite | The check-in's seed, else the task as written |
+| Whether D0's (code's) answers should be written back, since code answers them again anyway | Written back when its cites map to the served file, like any other |
+| A newer held write-back for the same bite supersedes an older one | The newest held one answers; nothing is retired |
+| The spot check ("a small sample of hits is sent up the chain anyway") | Not built; a wrong hit still doesn't escalate |
+
 ### The served-text cap
 
 Serve no longer derives a cap from Claude Code's 10,000-character limit.
@@ -163,6 +242,32 @@ Serve no longer derives a cap from Claude Code's 10,000-character limit.
 bounds the served document's text. Over it, `empty` and "narrow the stack".
 `prompt.py` takes the same number as `ONESCRIPT_MAX_CHARS`, counted over the
 whole injected text.
+
+### The Forge's box: `PileBox`
+
+`onescript/box_lookup.py` is the willow side of the Forge's `BoxLookup` seam
+(`forge/entry.py`, tier 2: "the real lookup ... plugs in from the willow
+side"). It duck-types the Protocol (`name`, `lookup(hits)`) and imports
+nothing from the Forge, so willow-bot never requires forge-play.
+
+`PileBox(stores, top=5)` takes a `pile.Cached`, a `{name: Cached}` dict, or a
+list (several are merged by chunk hash, `pile.merge`), or `rank=` a callable
+`bite -> rank result` in their place. `lookup(hits)` joins the hits' `source`
+keywords into a bite, ranks it, and returns the top chunks as `Candidate`
+(`name` = `repo:path`, `where` = `repo:path:line`, `why` = the keywords and
+the score, or the stores it was seen in when merged).
+
+| `last_state` | When | `name` (what `tiers["box"]` prints before `: nothing`) |
+|---|---|---|
+| `populated` | a chunk ranked | `willow pile` (`: N candidate(s)`) |
+| `empty` | the store answered, nothing ranked; or no keyword | `willow pile (empty: why)` |
+| `unreachable` | no store, a store with no chunks, or the read failed | `willow pile (unreachable: why)` |
+
+`last_why` holds the reason. `api.forge_bite` is the live wiring (D9 A):
+`open_bite(..., box=PileBox(<this session's store>))` with a responder that
+never answers for the maker. `onescript/tests/test_box_lookup.py` and
+`test_forge_bite.py` run it end to end when `forge.entry` and `nestor` are
+importable, and skip otherwise.
 
 ## Gates on the phone
 
@@ -184,6 +289,9 @@ leave a `differently` row on the tests gate saying it was skipped and why.
 ```bash
 cd one-script
 python3 -m onescript checkin                       # boot: record, probes, the four gates
+python3 -m onescript seed "the first bite"         # its words against the box, once per check-in (--exact: files and lines)
+python3 -m onescript forge "the first bite"        # the Forge's entry, this session's pile as its box
+python3 -m onescript decline <key> --proof <p>     # a No to an offer; --proof seals it as the human's
 python3 -m onescript scope --by who --match who=run   # card, subject, spec (JSON)
 python3 -m onescript seal serve:<hash> --pair p.json   # keyring/store: $WILLOW_KEYRING, $WILLOW_NESTOR_DB
 python3 -m onescript serve --by who --match who=run --upto <n> --max-chars 20000

@@ -9,6 +9,7 @@
     take_proposals(cfg, rows)         # the model's rows in, judged, nothing written
     escalate(cfg, task)               # the deterministic chain on the served scope
     seal_proposal(cfg, subject, ...)  # the human's seal; a sealed pass is written
+    writeback_seal(cfg, subject, ...) # the human's seal on one write-back
     needs(cfg)                        # the morning screen's NEEDS YOU lines, read-only
     forecast(cfg, wid, dist, by=...)  # a wager row: the forecast, before the outcome
     seal_outcome(cfg, wager, outcome, proof=...)  # the human's seal on what happened
@@ -24,9 +25,10 @@ the app can serialise it. A refusal comes back as {"refused": why, "code": n}
 and is never an exception: the box wasn't opened, or the state doesn't allow it.
 
 The record is the only state between calls. The serve key, which makes the
-session's ids, is the one thing the record must not hold; it is kept beside the
+session's ids, is a thing the record must not hold; it is kept beside the
 keys (`serve.key`, 0600), made fresh at each check-in, and is never the seal
-key.
+key. So is each box's store key (`pile.key_name`, 0600), made once, which keys
+the hashes in that box's store.
 
 Seals without a terminal: a seal is either the human's HMAC proof over the
 subject (needs a key in the keys file) or a sealed Nestor pair whose conclusion
@@ -38,6 +40,7 @@ public keys only), both fixed in `Config` and never taken from the caller.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -50,7 +53,11 @@ from typing import Callable, Iterable
 
 from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import ladder
+from . import pile as pile_mod
+from . import seed as seed_mod
 from . import serve as served
+from . import writeback as wb_mod
 from .run import PKG, Run
 
 DESK = ("desk", "claude")
@@ -93,6 +100,15 @@ class Config:
     #: Fixed here, never taken from a caller; None: offline, and no table
     #: outcome can be proposed (`unreachable`, said).
     beacon: Callable[[int], dict] | None = None
+    #: Where an indexed repo is read from, by name; any it leaves out are looked
+    #: for beside willow-bot. The session's store and serve read through it.
+    repos: dict | None = None
+    #: Attach the session's store (the pile hashed once, `pile.py`) at check-in.
+    store: bool = True
+    #: Build a store that needs building in the background, so check-in never
+    #: waits on it (the operator: "loaded everything up in the background").
+    #: The CLI turns it on; it attaches at the first verb after it is ready.
+    store_background: bool = False
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -409,11 +425,184 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
         _save_serve_key(cfg, None)  # no key: serve fails closed
         return {"wont_open": str(e), "code": 3}
     _save_serve_key(cfg, run.serve_key)
+    if cfg.store and not rep["hard_close"]:
+        rep["store"] = _attach_store(cfg, run)
     return {
         "report": rep,
         "nested": info["nested"],
         "code": 1 if rep["hard_close"] else 0,
     }
+
+
+def _repos(cfg: Config, index: dict) -> dict:
+    where = {n: cfg.root.parent / n for n in index.get("arrival", {})}
+    where.update({n: Path(p) for n, p in (cfg.repos or {}).items()})
+    return where
+
+
+def _store_key(cfg: Config, box: Path, make: bool = False):
+    """(key, None) for a box's store key, or (None, why). The key lives in
+    the operator's keys dir (`pile.key_name`, 0600), never in a box or beside
+    its store, so the keyed hashes in a store are no dictionary to whoever
+    holds the store alone. Made at check-in when absent, like `serve.key`;
+    another box's key is only ever read, never made."""
+    path = cfg.keys.parent / pile_mod.key_name(box)
+    for inside in (box, pile_mod.store_path(box).parent):
+        if path.resolve().is_relative_to(Path(inside).resolve()):
+            return None, "the store key can't live inside a box or its store"
+    if make:
+        try:
+            pile_mod.make_key(path)
+        except OSError as e:
+            return None, f"the store key can't be made: {type(e).__name__}"
+    return pile_mod.read_key(path)
+
+
+def _attach_store(cfg: Config, run: Run) -> dict:
+    """B1: this session's store, attached at check-in. The pile hashed once
+    (`pile.py`), keyed with this box's store key, for the xref index the
+    record vouches for; built when it isn't there or was built for another
+    index, key or set of repos. One `store` row says which, with the store
+    file's own SHA-256, so a later verb uses it only while it still hashes to
+    that, and what the build reached: the repos read, the files, the skips by
+    reason and each unreachable repo. No index or no key is `unreachable`,
+    said, and the box opens."""
+    index, sha, why = seed_mod.read_index(run.rec)
+    key, kwhy = _store_key(cfg, cfg.box, make=True)
+    if index is None or key is None:
+        row = {"state": "unreachable", "why": why or kwhy}
+    elif cfg.store_background and not pile_mod.cache_ready(
+        index, _repos(cfg, index), pile_mod.store_path(cfg.box), sha, key
+    ):
+        path = pile_mod.store_path(cfg.box)
+        if not pile_mod.building(cfg.box):
+            spec = pile_mod.build_spec(
+                cfg.box,
+                sha,
+                _repos(cfg, index),
+                cfg.keys.parent / pile_mod.key_name(cfg.box),
+            )
+            _spawn_build(spec)
+        row = {
+            "state": "building",
+            "why": "the store builds in the background; it attaches when ready",
+            "index_sha256": sha,
+            "store": path.name,
+        }
+    else:
+        path = pile_mod.store_path(cfg.box)
+        try:
+            db, how = pile_mod.open_cache(index, _repos(cfg, index), path, sha, key)
+            try:
+                tally = pile_mod.Cached(db, key).tally()
+            finally:
+                db.close()
+            row = {
+                "state": "attached",
+                "why": "",
+                "how": how,
+                "index_sha256": sha,
+                "store": path.name,
+                "store_sha256": pile_mod.file_sha256(path),
+                **tally,
+            }
+        except Exception as e:  # noqa: BLE001 — a store that can't be built is a state
+            row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
+    run.rec.append("store", run.sys, where=row.get("store"), **row)
+    return row
+
+
+def _spawn_build(spec: Path) -> None:
+    """Start the background builder, detached: it outlives this verb."""
+    import subprocess
+
+    subprocess.Popen(
+        [sys.executable, "-m", "onescript.pile", "--build-store", str(spec)],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _finish_building(cfg: Config, run: Run, att: dict) -> dict:
+    """A `building` store, attached once its file is ready for this index and
+    key: the `attached` row this verb writes (the builder writes no rows).
+    Not ready yet: the `building` row as it stands."""
+    index, sha, _ = seed_mod.read_index(run.rec)
+    key, _ = _store_key(cfg, cfg.box)
+    path = pile_mod.store_path(cfg.box)
+    if index is None or key is None or sha != att.get("index_sha256"):
+        return att
+    if not pile_mod.cache_ready(index, _repos(cfg, index), path, sha, key):
+        return att
+    db = pile_mod.connect_ro(path)
+    try:
+        tally = pile_mod.Cached(db, key).tally()
+    finally:
+        db.close()
+    row = {
+        "state": "attached",
+        "why": "",
+        "how": "built in the background",
+        "index_sha256": sha,
+        "store": path.name,
+        "store_sha256": pile_mod.file_sha256(path),
+        **tally,
+    }
+    return run.rec.append("store", run.sys, where=path.name, **row)
+
+
+def _open_store(cfg: Config, box: Path, run: Run | None = None):
+    """The one store opener, for this check-in's store (`run`) or another
+    box's: (Cached, None), or (None, why), never an exception.
+
+    The store counts only while its box's last `store` row says `attached`,
+    the row's `index_sha256` is the box's pile pointer now and the store's own
+    meta says the same, and the file hashes to the row (`pile.open_store`:
+    read once, read-only, capped). Another box is read through a record that
+    can't write, and is trusted only when its chain verifies; what comes back
+    of it is a fixed reason, never its own `why`. Its store key must be in
+    this operator's keys dir, or it is `unreachable`, said. Nothing in
+    another box is written or created."""
+    box = Path(box)
+    if run is not None:
+        rec = run.rec
+        rows = seed_mod.since_boot(rec.rows())
+    else:
+        if not (box / "record.jsonl").is_file():
+            return None, "no record in that box"
+        rec = record.Record(box, lambda: "", "", object())
+        if rec.verify_chain():
+            return None, "its record's chain doesn't verify"
+        rows = rec.rows()
+    att = next((r for r in reversed(rows) if r.get("kind") == "store"), None)
+    if att is not None and att.get("state") == "building":
+        if run is None:
+            return None, "that session's store is still building"
+        att = _finish_building(cfg, run, att)
+        if att.get("state") == "building":
+            return None, "the store is still building; it attaches when ready"
+    if att is None:
+        if run is not None:
+            return None, "no store attached at this check-in"
+        return None, "that session attached no store"
+    if att.get("state") != "attached":
+        if run is not None:
+            return None, att.get("why") or "the store is unreachable"
+        return None, "that session's store is unreachable"
+    index, sha, why = seed_mod.read_index(rec)
+    if index is None:
+        return None, why if run is not None else "its index isn't vouched for"
+    if att.get("index_sha256") != sha:
+        return None, "the store was built for another index; check in again"
+    key, why = _store_key(cfg, box)
+    if key is None:
+        return None, why
+    return pile_mod.open_store(
+        pile_mod.store_path(box), att.get("store_sha256"), key, sha
+    )
 
 
 def _breaks_before(cfg: Config, key: bytes | None) -> list[str] | None:
@@ -501,7 +690,11 @@ def needs(
     _from_record(run)
     rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
     lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
-    return {"needs": lines, "count": len(lines), "code": 0}
+    out = {"needs": lines, "count": len(lines), "code": 0}
+    rows = run.rec.rows()
+    if any(r["kind"] in (wb_mod.KIND, wb_mod.MISS) for r in rows):
+        out["writeback"] = wb_mod.needs(rows, run.held(rows)[0])
+    return out
 
 
 def peek(
@@ -538,6 +731,383 @@ def peek(
     return {"needs": lines, "count": len(lines), "peek": True, "code": 0}
 
 
+SEED_TOP = (
+    12  # baseline (D12): the ranked chunks a seed row keeps; scope draws from these
+)
+
+
+def _seed_from_store(cfg: Config, run: Run, bite: str, ws: list[str]) -> dict:
+    """The store's half of a seed: the words' counts (D6), the ranked chunks
+    (by their own SHA-256; the store holds keyed word hashes, never a chunk's
+    text), the kept pairs, and the bite's sentences said before. `store` is
+    `{state, why}`; `counts` is `Cached.counts`, read only while attached."""
+    c, why = _open_store(cfg, cfg.box, run)
+    if c is None:
+        return {"store": {"state": "unreachable", "why": why}}
+    try:
+        fix = c.repair(bite)  # rung 2 first: the rank reads the repaired bite
+        r, q = c.rank(fix["bite"]), c.quotes(bite)  # quotes are your words, exact
+        n = c.counts(ws)
+    finally:
+        c.db.close()
+    if "unreachable" in (r["state"], q["state"], fix["state"], n["state"]):
+        bad = next(x for x in (fix, r, q, n) if x["state"] == "unreachable")
+        return {"store": {"state": "unreachable", "why": bad.get("why", "")}}
+    return {
+        "counts": n,
+        "store": {"state": "attached", "why": ""},
+        "repair": {"state": fix["state"], "repairs": fix["repairs"]},
+        "rank_state": r["state"],
+        "rank": [
+            {k: h[k] for k in ("repo", "path", "line", "chunk", "score")}
+            for h in r["hits"][:SEED_TOP]
+        ],
+        "pairs": r.get("pairs", {}),
+        "quotes": q["quotes"],
+    }
+
+
+def _hidden(cfg: Config, ws: list[str], out: dict) -> dict:
+    """The seed row's half of `out`: every word of the bite keyed with the
+    box's store key (`writeback.word_hash`), never written as itself ("a
+    baseline holds hashes only, never content"; "the plaintext is never
+    written", next-pile.md). The caller still gets its words back in the
+    answer; only the record is hashed. With no store key the words are left
+    out of the row, and the row says so."""
+    key, _ = _store_key(cfg, cfg.box)
+    if key is None:
+        h = None
+    else:
+
+        def h(w: str) -> str:
+            return wb_mod.word_hash(w, key)
+
+    row = dict(out)
+    if h is None:
+        row.update(words=[], hidden="no store key: the bite's words are left out")
+        for k in ("keys", "missed", "pairs"):
+            row.pop(k, None)
+        if "repair" in row:
+            row["repair"] = {"state": row["repair"]["state"], "repairs": []}
+        return row
+    row["words"] = sorted(h(w) for w in ws)
+    if "keys" in row:
+        row["keys"] = [{**k, "word": h(k["word"])} for k in row["keys"]]
+    if "missed" in row:
+        row["missed"] = sorted(h(w) for w in row["missed"])
+    if "pairs" in row:
+        row["pairs"] = {
+            " ".join(h(t) for t in p.split(" ")): v for p, v in row["pairs"].items()
+        }
+    if "repair" in row:
+        row["repair"] = {
+            "state": row["repair"]["state"],
+            "repairs": [[h(a), h(b), d] for a, b, d in row["repair"]["repairs"]],
+        }
+    return row
+
+
+# ── seed ────────────────────────────────────────────────────────────────────
+def seed(
+    cfg: Config,
+    bite: str,
+    repos: dict[str, Path] | None = None,
+    argv: Iterable[str] = ("seed",),
+    *,
+    exact: bool = False,
+) -> dict:
+    """The first bite's words against the box. Once per check-in: the first
+    input seeds, and a second is refused with the first's row. `repos` names
+    where an indexed repo is read from; any it leaves out are looked for
+    beside willow-bot. Writes one `seed` row, the bite as its hash and its
+    words; reads the box and writes nothing else.
+
+    D6 (the operator, 2026-10-18: "C"): the counts come from the session's
+    store (chunks and files per word, `counted_by: store`). The exact files
+    and lines are the scan (`seed.py`), read only on request (`exact`) or
+    when no store is attached, and then `counted_by: scan` says why."""
+    run, info = _open(cfg, "seed", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seed")) is not None:
+        return refusal
+    first = next(
+        (r for r in seed_mod.since_boot(run.rec.rows()) if r["kind"] == "seed"), None
+    )
+    if first is not None:
+        why = f"this check-in is already seeded (row {first['n']}); the first bite seeds once"
+        run.rec.append("refused", run.sys, at="seed", reason=why)
+        return _refused(why, 1)
+    ws = seed_mod.words(bite)
+    if not ws:
+        run.rec.append("refused", run.sys, at="seed", reason="no words in the bite")
+        return _refused("a bite with no words seeds nothing", 1)
+    bite_hash = record.h256(bite)
+    # rung 1: a held write-back for this exact bite answers it, before ranking
+    back = wb_mod.read_back(run, bite_hash)
+    index, sha, why = seed_mod.read_index(run.rec)
+    if index is None:
+        out = {"state": "unreachable", "why": why, "keys": [], "missed": ws}
+    else:
+        out = _seed_from_store(cfg, run, bite, ws)
+        counts = out.pop("counts", None)
+        if counts is not None and not exact:
+            out.update(counts, counted_by="store")
+        else:
+            where = _repos(cfg, index)
+            where.update({n: Path(p) for n, p in (repos or {}).items()})
+            out.update(seed_mod.scan(index, where, ws), counted_by="scan")
+            if not exact:
+                out["counted_why"] = f"no store attached: {out['store']['why']}"
+        out["index_sha256"] = sha
+    rung = ladder.step(run.rec.rows(), ladder.bite_key(bite))
+    out["writeback"] = back
+    if back["state"] == wb_mod.HELD:
+        out["answered_by"] = back["answered_by"]
+    lost = (
+        wb_mod.at_seed(run, bite, ws, lambda: _open_store(cfg, cfg.box, run))
+        if index is not None and back["state"] != wb_mod.HELD
+        else {"state": wb_mod.NONE}
+    )
+    row = run.rec.append(
+        "seed",
+        run.sys,
+        where=seed_mod.INDEX,
+        bite_hash=bite_hash,
+        **_hidden(cfg, ws, out),
+        **rung,
+    )
+    if lost["state"] == wb_mod.MISS:
+        out["miss"] = wb_mod.log_miss(run, row, lost["lost"])
+    if rung["ladder"] == "offer":  # offered, never applied (§0.3)
+        rung["offer_row"] = _offer(run, rung, row["n"])["n"]
+    return {**out, **rung, "row": row["n"], "code": 0}
+
+
+def _offer(run: Run, rung: dict, seed_row: int) -> dict:
+    """The third ask's `offer` row: the key and the count, never the bite."""
+    return run.rec.append(
+        "offer",
+        run.sys,
+        key=rung["bite_key"],
+        asked=rung["asked"],
+        seed_row=seed_row,
+        offer=ladder.OFFER,
+    )
+
+
+def decline_offer(
+    cfg: Config,
+    key: str,
+    argv: Iterable[str] = ("decline",),
+    *,
+    proof: str | None = None,
+) -> dict:
+    """A No to an offer: one `offer_declined` row with its key, so the offer is
+    not made again for that key. Only a key the record has offered.
+
+    D5 (the operator, 2026-10-18: "C"): a No only narrows, so it takes effect
+    unsigned, but it says who said it. Without a proof it is `said_by: caller`,
+    unsealed, and the morning screen counts it; with the human's proof over
+    `decline:<key>` it is `said_by: human`, sealed, and it stands over an
+    unsealed No for the same key."""
+    run, info = _open(cfg, "decline", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "decline", key=key)) is not None:
+        return refusal
+    rows = run.rec.rows()
+    if not any(r["kind"] == "offer" and r.get("key") == key for r in rows):
+        why = "no offer with that key on record"
+        run.rec.append("refused", run.sys, at="decline", reason=why, key=key)
+        return _refused(why, 1)
+    sealed = False
+    if proof is not None:
+        human = run.keys.get(gate.HUMAN)
+        if not human or not gate.verify_seal(ladder.decline_subject(key), proof, human):
+            why = "the proof doesn't seal this No (decline:<key>, the human's key)"
+            run.rec.append("refused", run.sys, at="decline", reason=why, key=key)
+            return _refused(why, 1)
+        sealed = True
+    if ladder.declined(rows, key) and not (sealed and not ladder.sealed_no(rows, key)):
+        return {"declined": key, "already": True, "code": 0}
+    row = run.rec.append(
+        "offer_declined",
+        run.sys,
+        key=key,
+        said="no",
+        said_by="human" if sealed else "caller",
+        sealed=sealed,
+        **({"proof": proof} if sealed else {}),
+    )
+    return {"declined": key, "row": row["n"], "sealed": sealed, "code": 0}
+
+
+# ── lookup: across sessions, merged by hash ─────────────────────────────────
+STATE_WORDS = ("ranked", "escalated:cold_start", "empty", "unreachable")
+
+
+def _session_tag(key: bytes, box: Path) -> str:
+    """A session's name in this box's `lookup` row: a short keyed hash of its
+    box's path, so the row never holds another box's absolute path."""
+    h = hashlib.blake2b(str(Path(box).resolve()).encode(), digest_size=6, key=key)
+    return "box-" + h.hexdigest()
+
+
+def lookup(
+    cfg: Config,
+    bite: str,
+    boxes: Iterable[Path] = (),
+    argv: Iterable[str] = ("lookup",),
+) -> dict:
+    """The bite against this session's store and other sessions' stores,
+    merged by chunk hash (`pile.merge`): a view, rebuilt each time, never a
+    shared store. Each other store counts only through `_open_store` (its
+    chain verified, its row, its index, its key here); one that doesn't is
+    `unreachable`, said, and the rest still answer. Each session is
+    `{state, why}`. One `lookup` row here: the bite's hash, each session's
+    state word only (another box's `why` is never written here), sessions
+    named by a keyed hash of their box, and the top chunks."""
+    run, info = _open(cfg, "lookup", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "lookup")) is not None:
+        return refusal
+    stores, states, tags = {}, {}, {"this": "this"}
+    mine, why = _open_store(cfg, cfg.box, run)
+    if mine is None:
+        states["this"] = {"state": "unreachable", "why": why}
+    else:
+        stores["this"] = mine
+    tag_key = pile_mod.read_key(cfg.keys.parent / pile_mod.key_name(cfg.box))[0]
+    for i, box in enumerate(boxes):
+        name = str(Path(box))
+        tags[name] = _session_tag(tag_key, box) if tag_key else f"box-{i}"
+        c, why = _open_store(cfg, Path(box))
+        if c is None:
+            states[name] = {"state": "unreachable", "why": why}
+        else:
+            stores[name] = c
+    try:
+        out = pile_mod.merge(stores, bite)
+    finally:
+        for c in stores.values():
+            c.db.close()
+    out["sessions"] = {**states, **out["sessions"]}
+    out["hits"] = out["hits"][:SEED_TOP]
+    run.rec.append(
+        "lookup",
+        run.sys,
+        bite_hash=record.h256(bite),
+        sessions={
+            tags[n]: s["state"] if s["state"] in STATE_WORDS else "unreachable"
+            for n, s in out["sessions"].items()
+        },
+        top=[[h["chunk"], h["seen_in"]] for h in out["hits"]],
+    )
+    return {**out, "code": 0}
+
+
+# ── forge_bite: the Forge's first bite, with this session's pile as its box ──
+class _NeedsYou(Exception):
+    """The Forge asked something only the maker answers."""
+
+    def __init__(self, card: dict):
+        super().__init__(card.get("surface", ""))
+        self.card = card
+
+
+class _CardResponder:
+    """The Forge's `Responder`, never answering for the maker: a choice or a
+    confirm comes back as a card, before anything is sealed (the Forge's
+    `_full_socratic` asks the responder first and seals only what it returns).
+    No positional default (forge docs/design/the-positional-default.md)."""
+
+    def confirm(self, prompt: str) -> bool:
+        raise _NeedsYou({"ask": "confirm", "surface": prompt, "options": []})
+
+    def choose(self, decision):
+        raise _NeedsYou(
+            {
+                "ask": "choose",
+                "surface": decision.surface,
+                "options": [
+                    {"label": o.label, "tradeoff": o.tradeoff} for o in decision.options
+                ],
+            }
+        )
+
+
+def forge_bite(
+    cfg: Config,
+    bite: str,
+    *,
+    project_id: str = "one-script",
+    builder_id: str = "willow",
+    root: Path | None = None,
+    argv: Iterable[str] = ("forge",),
+) -> dict:
+    """The Forge's `open_bite` with `PileBox` over this session's store as its
+    tier 2 (D9, the operator, 2026-10-18: "A": live in willow-bot only; the
+    Forge never imports willow). The Forge is imported here, softly: not
+    importable is `unreachable`, said, and so is its own refusal (Nestor
+    absent). A question for the maker is `needs_you` with the card; the
+    responder never chooses. `root` is the Forge's checkpoint root (default:
+    the Forge's own). One `forge_bite` row: the bite's hash, the state, the
+    major, and the box's state word."""
+    run, info = _open(cfg, "forge", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "forge")) is not None:
+        return refusal
+    from .box_lookup import PileBox
+
+    out: dict = {}
+    box = None
+    try:
+        from forge import entry  # type: ignore[import-not-found]
+    except ImportError as e:
+        out = {"state": "unreachable", "why": f"the Forge isn't importable: {e}"}
+    else:
+        c, why = _open_store(cfg, cfg.box, run)
+        box, store_why = PileBox(c), why
+        kw = {} if root is None else {"root": Path(root)}
+        try:
+            e = entry.open_bite(
+                bite,
+                project_id=project_id,
+                builder_id=builder_id,
+                responder=_CardResponder(),
+                box=box,
+                **kw,
+            )
+        except _NeedsYou as n:
+            out = {"state": "needs_you", "card": n.card}
+        except entry.EntryError as err:
+            out = {"state": "unreachable", "why": f"the Forge refused: {err}"}
+        else:
+            d = e.to_dict()
+            found = e.major or e.answer or e.candidates
+            out = {"state": "populated" if found else "empty", "entry": d}
+        finally:
+            if c is not None:
+                c.db.close()
+    if box is not None:
+        out["box"] = {"state": box.last_state, "why": box.last_why}
+        if store_why and box.last_state == "unreachable":
+            out["box"]["why"] = f"no store attached: {store_why}"
+    major = (out.get("entry") or {}).get("major")
+    run.rec.append(
+        "forge_bite",
+        run.sys,
+        bite_hash=record.h256(bite),
+        state=out["state"],
+        major=major,
+        box=(out.get("box") or {}).get("state", "unreachable"),
+    )
+    return {**out, "code": 0}
+
+
 # ── turn ────────────────────────────────────────────────────────────────────
 def turn(
     cfg: Config,
@@ -572,9 +1142,39 @@ def take_proposals(
 def _spec_tables(run: Run, spec: dict) -> tuple[list[dict], dict]:
     """The stack a spec names, over the record up to `upto` (so rows added since
     can't move a table id) and the card for it."""
-    by, match, upto = spec["by"], spec.get("match", {}), spec["upto"]
-    stack = served.piles(run.rec.rows()[: upto + 1], *by)
-    return served.choose(stack, **match), served.propose(stack, **match)
+    by, match, upto = spec.get("by") or [], spec.get("match", {}), spec["upto"]
+    rows = run.rec.rows()[: upto + 1]
+    seed = spec.get("seed")
+    if not by and not seed:
+        raise ValueError("name a stack: W's to group by, or the seed's top chunks")
+    tables, card = [], {"subject": None, "ids": [], "stack": [], "joins": {}}
+    if by:
+        stack = served.piles(rows, *by)
+        tables, card = served.choose(stack, **match), served.propose(stack, **match)
+    if seed:
+        n = seed["row"]
+        if (
+            isinstance(n, bool)
+            or not isinstance(n, int)
+            or not (0 <= n < len(rows))
+            or rows[n].get("n") != n
+            or rows[n].get("kind") != "seed"
+        ):
+            raise ValueError(f"row {n} is not a seed row at or before row {upto}")
+        chunks = served.chunk_tables(rows[n], seed["top"])
+        more = served.propose_chunks(chunks)
+        tables = tables + chunks
+        card = {
+            **card,
+            "ids": card["ids"] + more["ids"],
+            "stack": card["stack"] + more["stack"],
+            "joins": {
+                **card["joins"],
+                **({"file": more["joins"]} if more["joins"] else {}),
+            },
+        }
+        card["subject"] = served.scope_subject(card["ids"]) if card["ids"] else None
+    return tables, card
 
 
 def scope(
@@ -583,10 +1183,16 @@ def scope(
     match: dict | None = None,
     upto: int | None = None,
     argv: Iterable[str] = ("scope",),
+    seed_top: int | None = None,
+    max_chars: int | None = None,
 ) -> dict:
     """Code proposes the stack. Returns the card for the human and the exact
     `subject` whose seal makes it a scope, plus the `spec` that names the stack:
-    hand it back to `serve` unchanged."""
+    hand it back to `serve` unchanged. With `seed_top`, the stack also holds
+    this check-in's seed's top chunks of the repos (by=() for those alone).
+    The card gives each chunk's size in characters, read at its blob (never
+    its text), and the total; with `max_chars`, whether the stack fits
+    (`_sizes`)."""
     run, info = _open(cfg, "scope", argv)
     if run is None:
         return info
@@ -598,12 +1204,77 @@ def scope(
         "match": dict(match or {}),
         "upto": rows[-1]["n"] if upto is None else upto,
     }
+    if seed_top is not None:
+        sd = next((r for r in seed_mod.since_boot(rows) if r["kind"] == "seed"), None)
+        if sd is None:
+            return _refused("no seed in this check-in; the first bite seeds", 1)
+        spec["seed"] = {"row": sd["n"], "top": seed_top}
     try:
-        _, card = _spec_tables(run, spec)
+        tables, card = _spec_tables(run, spec)
     except ValueError as e:
         return _refused(str(e), 1)
+    if max_chars is not None or any(served.is_chunk(t) for t in tables):
+        card = _sizes(cfg, run, tables, card, max_chars)
     run.rec.append("scope", run.sys, where=card["subject"], spec=spec, card=card)
     return {"spec": spec, **card, "code": 0}
+
+
+def _sizes(cfg: Config, run: Run, tables: list[dict], card: dict, max_chars) -> dict:
+    """The card, with each chunk's `chars` read at its blob (or `unreadable`
+    and why) and a `size`: the chunks' total, and `served_chars`, the length
+    of the document serve would write for this stack once the scope is sealed,
+    measured by serve's own builder (no file, no row). With `max_chars`, `fits`
+    says whether that is within the cap; serve over the cap is `empty`."""
+    reads: dict[str, tuple] = {}
+    index, _, _ = seed_mod.read_index(run.rec)
+    repos = _repos(cfg, index) if index is not None else {}
+
+    def reader(ch):
+        k = served.table_id({"rows": [], "source": {"chunk": ch}})
+        if k not in reads:
+            reads[k] = (
+                pile_mod.read_chunk(index, repos, ch)
+                if index is not None
+                else (None, "no xref index to read chunks by")
+            )
+        return reads[k]
+
+    stack = []
+    for entry in card["stack"]:
+        t = next((t for t in tables if served.table_id(t) == entry["id"]), None)
+        if t is not None and served.is_chunk(t):
+            text, why = reader(t["source"]["chunk"])
+            entry = {**entry, "chars": None if text is None else len(text)}
+            if text is None:
+                entry["unreadable"] = why
+        stack.append(entry)
+    size: dict = {
+        "chunk_chars": sum(e.get("chars") or 0 for e in stack),
+        "unreadable": sum(1 for e in stack if "unreadable" in e),
+        "max_chars": max_chars,
+    }
+    try:
+        held, unchecked = run.held()
+        subj = card["subject"]
+        doc = served._serve(
+            run.rec.rows(),
+            tables,
+            card["ids"],
+            run.serve_key,
+            sys.maxsize,
+            ({*held, subj}, {k: v for k, v in unchecked.items() if k != subj}),
+            reader,
+        )
+        if doc["state"] != "populated":
+            raise gate.Refused(doc["why"])
+        size["served_chars"] = len(record.canon(doc))
+    except Exception as e:  # noqa: BLE001 — a size that can't be measured is said
+        size["served_chars"] = None
+        size["why"] = f"not measured: {str(e)[:120] or type(e).__name__}"
+    if max_chars is not None:
+        n = size["served_chars"]
+        size["fits"] = None if n is None else n <= max_chars
+    return {**card, "stack": stack, "size": size}
 
 
 def _seal(
@@ -716,8 +1387,77 @@ def serve(
         tables, card = _spec_tables(run, spec)
     except (ValueError, KeyError, TypeError) as e:
         return _refused(f"bad spec: {type(e).__name__}: {e}", 1)
-    doc = run.serve(tables, card["ids"], max_chars=max_chars)
+    reader = None
+    failed: list[tuple[dict, str]] = []
+    if any(served.is_chunk(t) for t in tables):
+        index, _, _ = seed_mod.read_index(run.rec)
+        if index is not None:
+            repos = _repos(cfg, index)
+
+            def reader(ch):
+                text, why = pile_mod.read_chunk(index, repos, ch)
+                if text is None:
+                    failed.append((ch, why))
+                return text, why
+
+    doc = run.serve(tables, card["ids"], max_chars=max_chars, read_chunk=reader)
+    if failed:
+        _tombstones(cfg, run, index, repos, failed)
     return {"doc": doc, "state": doc["state"], "why": doc["why"], "code": 0}
+
+
+def _tombstones(cfg: Config, run: Run, index: dict, repos: dict, failed) -> None:
+    """A `tombstone` row for each chunk serve found gone (`ladder.reason`),
+    once per chunk per check-in, with where the same SHA-256 sits now
+    (`forward`) when this check-in's store holds it and it reads back there."""
+    store, looked = None, None
+    for ch, why in failed:
+        sha = ch.get("sha256")
+        root = repos.get(ch.get("repo"))
+        blob = next(
+            (
+                f.get("git_blob")
+                for f in index.get("arrival", {})
+                .get(ch.get("repo"), {})
+                .get("files", [])
+                if f.get("path") == ch.get("path")
+            ),
+            None,
+        )
+
+        def blob_there(root=root, blob=blob):
+            try:
+                return blob in seed_mod._blobs(Path(root), [blob])
+            except (seed_mod.GitError, OSError, TypeError):
+                return None
+
+        r = ladder.reason(why, blob_there)
+        if r is None or ladder.tombstoned(run.rec.rows(), sha):
+            continue
+        if looked is None:
+            store, looked = _open_store(cfg, cfg.box, run)
+            looked = looked or "store"
+        fwd = None
+        if store is not None:
+            fwd = ladder.forward(
+                ch,
+                store.where.values(),
+                lambda c: pile_mod.read_chunk(index, repos, c),
+            )
+        run.rec.append(
+            "tombstone",
+            run.sys,
+            where=f"{ch.get('repo')}:{ch.get('path')}:{ch.get('line')}",
+            chunk=sha,
+            repo=ch.get("repo"),
+            path=ch.get("path"),
+            line=ch.get("line"),
+            reason=r,
+            forward=fwd,
+            looked=looked,
+        )
+    if store is not None:
+        store.db.close()
 
 
 def seal_proposal(
@@ -745,13 +1485,61 @@ def seal_proposal(
     if row["kind"] != "seal":
         return {"row": row, "sealed": False, "written": None, "code": 1}
     wrote = run.write_proposal(subject)
+    back = None
+    if wrote["kind"] == "write":
+        prop, _ = run.find_proposal(subject)
+        back = wb_mod.from_proposal(run, prop, _spec_tables) if prop else None
     return {
         "row": row,
         "sealed": True,
         "written": wrote if wrote["kind"] == "write" else None,
         "write": wrote,
+        "writeback": back,
         "code": 0 if wrote["kind"] == "write" else 1,
     }
+
+
+def writeback_seal(
+    cfg: Config,
+    subject: str,
+    *,
+    proof: str | None = None,
+    pair: object = None,
+    verifiers: Iterable[str] | None = None,
+    argv: Iterable[str] = ("seal",),
+) -> dict:
+    """The human's seal over one write-back's exact subject (`writeback:<hash>`),
+    by the human's proof or a sealed Nestor pair whose conclusion is the subject
+    (read from `cfg.nestor_db`, never written). Only a candidate on record whose
+    row hashes to the subject is sealable. Held, the next seed of that exact
+    bite stops at rung 1 (`writeback.read_back`)."""
+    run, info = _open(cfg, "seal", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal", subject=subject)) is not None:
+        return refusal
+    if not isinstance(subject, str) or not subject.startswith(wb_mod.PREFIX):
+        row = run.rec.append(
+            "refused",
+            run.sys,
+            at="seal",
+            reason="not a write-back subject",
+            subject=subject,
+        )
+        return {"row": row, "sealed": False, "state": None, "code": 1}
+    if subject not in wb_mod.subjects(run.rec.rows()):
+        row = run.rec.append(
+            "refused",
+            run.sys,
+            at="seal",
+            reason="no such write-back on record",
+            subject=subject,
+        )
+        return {"row": row, "sealed": False, "state": None, "code": 1}
+    row = _seal(run, cfg, subject, proof, pair, verifiers)
+    st = wb_mod.state_of(run, subject)
+    ok = row["kind"] == "seal" and st["state"] == wb_mod.HELD
+    return {"row": row, "sealed": ok, **st, "code": 0 if ok else 1}
 
 
 def lore(cfg: Config, subject: str, argv: Iterable[str] = ("lore",)) -> dict:
@@ -955,6 +1743,7 @@ def escalate(
         )
     except esc.ChainUnavailable as e:
         return _refused(str(e), 2)
+    out["writeback"] = wb_mod.from_escalate(run, out, task, _spec_tables)
     return {**out, "code": 0}
 
 

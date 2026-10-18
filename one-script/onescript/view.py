@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+from . import ladder
+
 
 def proposal_line(row: dict) -> str:
     """One proposal row for a person: `own_idea` leads, then where it lands, the
@@ -146,6 +148,9 @@ def needs_you(
     needs += [
         f"seen {o['seen']}x · {o['procedure']} · {o['offer']}" for o in report["offers"]
     ]
+    needs += [ladder.offer_line(o) for o in report.get("bite_offers", [])]
+    if report.get("unsealed_nos"):
+        needs.append(ladder.unsealed_line(report["unsealed_nos"]))
     needs += [
         f"re-check row {s['row']} ({s['kind']}) · {s['why']}"
         for s in report["surfaced"]

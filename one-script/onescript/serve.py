@@ -245,6 +245,54 @@ def propose(stack: list[dict], **match: str) -> dict:
     }
 
 
+# ── repo chunks: the session store's pointers, as tables ──────────────────
+def is_chunk(table: dict) -> bool:
+    src = table.get("source")
+    return isinstance(src, dict) and isinstance(src.get("chunk"), dict)
+
+
+def chunk_name(table: dict) -> str:
+    c = table["source"]["chunk"]
+    return f"{c['repo']}:{c['path']}:{c['line']}"
+
+
+def chunk_tables(seed_row: dict, top: int) -> list[dict]:
+    """The seed's top chunks, each a table: no rows, and a source that names
+    the chunk by repo, path, line and its own SHA-256, with its receipt: the
+    seed row's number and hash, chain-checked at serve (`_seed_receipt`). Its
+    id is that content, so a seal over it binds exactly those bytes; the text
+    is read at serve."""
+    out = []
+    receipt = [seed_row.get("n"), seed_row.get("hash")]
+    for h in (seed_row.get("rank") or [])[: max(top, 0)]:
+        ch = {
+            "repo": h["repo"],
+            "path": h["path"],
+            "line": h["line"],
+            "sha256": h["chunk"],
+        }
+        out.append({"rows": [], "source": {"chunk": ch, "seed": receipt}})
+    return out
+
+
+def propose_chunks(tables: list[dict]) -> dict:
+    """The card for chunk tables: their names, and the files two or more share
+    (the mosaic: the human judges the combination)."""
+    ids = [table_id(t) for t in tables]
+    files: dict[str, list[str]] = {}
+    for t in tables:
+        c = t["source"]["chunk"]
+        files.setdefault(f"{c['repo']}:{c['path']}", []).append(chunk_name(t))
+    return {
+        "ids": ids,
+        "stack": [
+            {"name": chunk_name(t), "id": i, "rows": 1, "kind": "chunk"}
+            for t, i in zip(tables, ids)
+        ],
+        "joins": {f: sorted(n) for f, n in sorted(files.items()) if len(n) > 1},
+    }
+
+
 def _binds(row: dict) -> bool:
     """Whether a scope's seal binds this row: not the run's own bookkeeping,
     and not a scope seal (`scope_seal`)."""
@@ -399,8 +447,11 @@ def serve(
     nestor_db: str | os.PathLike | None = None,
     through: int | None = None,
     unpinned: tuple[int, str] | None = None,
+    read_chunk=None,
 ) -> dict:
     """Write the served file and record it. Returns the served document.
+    `read_chunk(chunk) -> (text, why)` reads a chunk table's text at its
+    indexed blob (`pile.read_chunk`); without it a chunk is unreachable.
     The receipts and the scope stay in the record's row, never in the file.
 
     `max_chars` is the caller's cap on the served document's text (its
@@ -412,7 +463,7 @@ def serve(
         seals = sealed_verified(
             rows, human_key, keyring, nestor_db, through, unpinned=unpinned
         )
-        doc = _serve(rows, tables, scope, serve_key, max_chars, seals)
+        doc = _serve(rows, tables, scope, serve_key, max_chars, seals, read_chunk)
         if doc["state"] == "populated" and _has_lore(doc, tables, scope):
             # lore rests on the stored proposal bytes: a rewritten record serves none
             broken = rec.verify_chain()
@@ -477,7 +528,9 @@ def _nothing(state: str, why: str) -> dict:
     return {"state": state, "why": why, "return": RETURN, "tables": []}
 
 
-def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
+def _serve(
+    rows, tables, scope, serve_key, max_chars=None, seals=None, read_chunk=None
+) -> dict:
     if max_chars is None:
         return _nothing(
             "empty", "no max_chars given; the caller sizes the cap, nothing is uncapped"
@@ -500,7 +553,10 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
         )
     by_id = {}
     for t in tables:
-        _receipt(t, rows)
+        if is_chunk(t):  # its seed row on the chain here; its blob at the read
+            _seed_receipt(t, rows)
+        else:
+            _receipt(t, rows)
         by_id[table_id(t)] = t
     missing = set(scope) - set(by_id)
     if missing:  # in scope, so a count is no leak; the plain hashes are
@@ -509,6 +565,9 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
     served = []
     for tid in sorted(set(scope)):
         t = by_id[tid]
+        if is_chunk(t):
+            served.append(_chunk_entry(t, tid, serve_key, seals, read_chunk))
+            continue
         src = t["source"]
         group = src.get("group", {}) if isinstance(src, dict) else {}
         stuck = lore.unchecked_seals(t["rows"], ctx, seals, unchecked)
@@ -555,6 +614,31 @@ def _serve(rows, tables, scope, serve_key, max_chars=None, seals=None) -> dict:
     return doc
 
 
+def _chunk_entry(t: dict, tid: str, serve_key: bytes, seals, read_chunk) -> dict:
+    """A repo chunk as the model reads it: its place and its text, re-read at
+    the indexed blob now. A chunk is someone's file, not a sealed row, so it is
+    `untrusted` unless its own id carries the human's seal."""
+    where = chunk_name(t)
+    entry = {
+        "id": served_id(serve_key, tid),
+        "trust": "human-sealed" if tid in seals else "untrusted",
+        "group": _scrub({"where": where}),
+        "cannot_hold": [],
+        "rows": [],
+    }
+    if read_chunk is None:
+        text, why = None, "no reader for repo chunks in this serve"
+    else:
+        text, why = read_chunk(t["source"]["chunk"])
+    if text is None:
+        entry["state"], entry["why"] = "unreachable", f"{where}: {why}"
+    else:
+        entry["rows"] = [
+            {"what": "chunk", "where": _scrub(where), "text": _scrub(text)}
+        ]
+    return entry
+
+
 def _receipt(table: dict, rows: list[dict]) -> None:
     """A pile's receipt is checked against the chain; a string receipt names an
     outside source, and is served as untrusted like everything unsealed."""
@@ -570,6 +654,40 @@ def _receipt(table: dict, rows: list[dict]) -> None:
         or cited != table["rows"]
     ):
         raise gate.Refused("a pile's receipt doesn't match the record; nothing served")
+
+
+def _seed_receipt(table: dict, rows: list[dict]) -> None:
+    """A chunk's receipt is its seed row, checked against the chain like a
+    pile's: the row at that number is a seed row, carries that hash, hashes to
+    it, and ranks this very chunk. A chunk without one is never served."""
+    src, ch = table["source"], table["source"]["chunk"]
+    rc = src.get("seed")
+    if not (
+        isinstance(rc, list)
+        and len(rc) == 2
+        and isinstance(rc[0], int)
+        and not isinstance(rc[0], bool)
+    ):
+        raise gate.Refused("a chunk without a seed receipt is never served")
+    n, h = rc
+    row = rows[n] if 0 <= n < len(rows) else None
+    body = {k: v for k, v in (row or {}).items() if k != "hash"}
+    if (
+        row is None
+        or row.get("n") != n
+        or row.get("kind") != "seed"
+        or row.get("hash") != h
+        or h256(canon(body)) != h
+        or not any(
+            isinstance(r, dict)
+            and [r.get("repo"), r.get("path"), r.get("line"), r.get("chunk")]
+            == [ch.get("repo"), ch.get("path"), ch.get("line"), ch.get("sha256")]
+            for r in row.get("rank") or []
+        )
+    ):
+        raise gate.Refused(
+            "a chunk's seed receipt doesn't match the record; nothing served"
+        )
 
 
 def check_cites(doc: dict, cited: list[str]) -> list[dict]:

@@ -2,6 +2,7 @@
 
     cd one-script                           # in willow-bot
     python3 -m onescript checkin            # boot: record, probes, the four gates
+    python3 -m onescript seed "the first bite"   # its words against the box, once
     python3 -m onescript scope --by who     # code proposes a stack: card + subject
     python3 -m onescript seal SUBJECT ...   # the human's seal over that subject
     python3 -m onescript serve --by who     # write the one file the model reads
@@ -11,6 +12,7 @@
     python3 -m onescript pooled             # unsealed pass proposals, JSON lines
     python3 -m onescript resume             # the last sealed scope's spec + subject, JSON
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
+    python3 -m onescript decline KEY        # the human's No to an offer, recorded
     python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
@@ -108,6 +110,16 @@ def _checkin_screen(rep: dict, nested: bool = False) -> str:
             f"  settled      {s['gate']}: {s['where']}: {s['verdict']}"
             f" (deferred at row {s['deferred_at']}){why}"
         )
+    st = rep.get("store")
+    if st:
+        what = (
+            f"attached ({st['how']}): {st['store']}"
+            if st["state"] == "attached"
+            else f"building in the background: {st['store']}"
+            if st["state"] == "building"
+            else f"unreachable — {st.get('why', '')}"
+        )
+        L.append(f"store: {what}")
     if rep["hard_close"]:
         L.append("HARD CLOSE:")
         L += [f"  {x}" for x in rep["lines"]]
@@ -128,15 +140,25 @@ def _kv(pairs: list[str]) -> dict[str, str]:
 
 
 def _spec(args) -> dict:
-    return {
+    spec = {
         "by": [w for w in args.by.split(",") if w],
         "match": _kv(args.match),
         "upto": args.upto,
     }
+    if getattr(args, "seed_row", None) is not None and args.seed_top is not None:
+        spec["seed"] = {"row": args.seed_row, "top": args.seed_top}
+    return spec
 
 
 def _print_json(obj) -> None:
     print(json.dumps(obj, indent=1, sort_keys=True, default=str))
+
+
+def _name_path(spec: str) -> tuple[str, Path]:
+    name, sep, path = spec.partition("=")
+    if not (sep and name and path):
+        raise argparse.ArgumentTypeError(f"want NAME=PATH, got {spec!r}")
+    return name, Path(path)
 
 
 def _bot_venv() -> Path:
@@ -152,6 +174,15 @@ def _bot_venv() -> Path:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
     p.add_argument("--box", type=Path, default=ROOT / ".flow" / "onescript")
+    p.add_argument(
+        "--repo",
+        dest="repos",
+        action="append",
+        default=[],
+        type=_name_path,
+        metavar="NAME=PATH",
+        help="where an indexed repo is read from, for the store, seed and serve",
+    )
     p.add_argument(
         "--keys", type=Path, default=ROOT / ".flow" / "onescript-keys" / "keys.json"
     )
@@ -210,6 +241,46 @@ def main(argv: list[str] | None = None) -> int:
         help="default: the box's keyring path (verifiers.public.json)",
     )
     sub.add_parser("checkin")
+    sd = sub.add_parser(
+        "seed", help="the first bite's words against the box; once per check-in"
+    )
+    sd.add_argument("bite")
+    sd.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        type=_name_path,
+        metavar="NAME=PATH",
+        help="where an indexed repo is read from (default: beside willow-bot)",
+    )
+    sd.add_argument(
+        "--exact",
+        action="store_true",
+        help="count exact files and lines by the scan (default: the store's chunks)",
+    )
+    fb = sub.add_parser(
+        "forge", help="the Forge's first bite, this session's pile as its box"
+    )
+    fb.add_argument("bite")
+    fb.add_argument("--project", default="one-script", help="the Forge project id")
+    fb.add_argument("--builder", default="willow", help="the Forge builder id")
+    fb.add_argument(
+        "--root", type=Path, help="the Forge's checkpoint root (default: its own)"
+    )
+    lk = sub.add_parser(
+        "lookup", help="the bite across sessions' stores, merged by hash; a view"
+    )
+    lk.add_argument("bite")
+    lk.add_argument(
+        "--other", action="append", default=[], type=Path, help="another session's box"
+    )
+    dc = sub.add_parser(
+        "decline", help="the human's No to an offer: not offered again for that key"
+    )
+    dc.add_argument("key", help="the offer's key, as NEEDS YOU lists it")
+    dc.add_argument(
+        "--proof", help="the human's HMAC proof over decline:<key>, to seal the No"
+    )
     t = sub.add_parser("turn")
     t.add_argument("bite")
     t.add_argument(
@@ -357,10 +428,18 @@ def main(argv: list[str] | None = None) -> int:
         s.add_argument(
             "--upto", type=int, help="the last record row the stack is drawn from"
         )
+        s.add_argument(
+            "--seed-top",
+            type=int,
+            help="also stack the seed's top N chunks of the repos (--by '' for those alone)",
+        )
+        s.add_argument(
+            "--max-chars",
+            type=int,
+            help="the cap on served text; over it, empty (scope: says if it fits)",
+        )
         if name == "serve":
-            s.add_argument(
-                "--max-chars", type=int, help="the cap on served text; over it, empty"
-            )
+            s.add_argument("--seed-row", type=int, help="the seed row scope named")
     sl = sub.add_parser("seal")
     sl.add_argument("subject", help="serve:<hash> (a scope) or proposal:<hash>")
     sl.add_argument("--proof", help="the human's HMAC proof over the subject")
@@ -408,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         nestor_db=args.nestor_db,
         phone=args.phone,
         beacon=beacon.drand_reader if args.drand else None,
+        repos=dict(args.repos) or None,
+        store_background=True,
     )
 
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
@@ -542,6 +623,21 @@ def main(argv: list[str] | None = None) -> int:
         else:
             _print_json({k: v for k, v in res.items() if k != "code"})
         return res["code"]
+    elif args.cmd == "seed":
+        res = api.seed(
+            cfg, args.bite, repos=dict(args.repo), argv=raw, exact=args.exact
+        )
+    elif args.cmd == "forge":
+        res = api.forge_bite(
+            cfg,
+            args.bite,
+            project_id=args.project,
+            builder_id=args.builder,
+            root=args.root,
+            argv=raw,
+        )
+    elif args.cmd == "lookup":
+        res = api.lookup(cfg, args.bite, args.other, argv=raw)
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)
@@ -562,7 +658,11 @@ def main(argv: list[str] | None = None) -> int:
             match=_kv(args.match),
             upto=args.upto,
             argv=raw,
+            seed_top=args.seed_top,
+            max_chars=args.max_chars,
         )
+    elif args.cmd == "decline":
+        res = api.decline_offer(cfg, args.key, argv=raw, proof=args.proof)
     elif args.cmd == "serve":
         spec = _spec(args)
         if spec["upto"] is None:
