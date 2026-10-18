@@ -115,9 +115,10 @@ exception. Nothing moves before a check-in or after a check-out.
 |---|---|
 | `checkin(cfg)` | Boot: record, probes, the four gates. Makes this session's serve key |
 | `seed(cfg, bite, repos)` | The first bite's words against the box (`seed.py`): the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index. Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in |
-| `scope(cfg, by, match, upto)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack |
+| `scope(cfg, by, match, upto, max_chars=None)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack. Each chunk's size in characters, read at its blob (no text), the total, and the served document's length; with `max_chars`, whether it `fits` |
 | `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
-| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped |
+| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped. A chunk found gone (not in the index, blob gone, hash mismatch, not at its line) gets one `tombstone` row per check-in, with `forward` where the same SHA-256 reads now |
+| `decline_offer(cfg, key)` | The human's No to a ladder offer (`ladder.py`: asked 1 does, 2 notices, 3 offers, again every 3rd ask); an `offer_declined` row stops it for that key |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
 | `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
 | `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below) |
