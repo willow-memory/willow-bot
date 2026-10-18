@@ -9,6 +9,7 @@
     take_proposals(cfg, rows)         # the model's rows in, judged, nothing written
     escalate(cfg, task)               # the deterministic chain on the served scope
     seal_proposal(cfg, subject, ...)  # the human's seal; a sealed pass is written
+    writeback_seal(cfg, subject, ...) # the human's seal on one write-back
     needs(cfg)                        # the morning screen's NEEDS YOU lines, read-only
     forecast(cfg, wid, dist, by=...)  # a wager row: the forecast, before the outcome
     seal_outcome(cfg, wager, outcome, proof=...)  # the human's seal on what happened
@@ -53,6 +54,7 @@ from . import escalate as esc
 from . import pile as pile_mod
 from . import seed as seed_mod
 from . import serve as served
+from . import writeback as wb_mod
 from .run import PKG, Run
 
 DESK = ("desk", "claude")
@@ -573,7 +575,11 @@ def needs(
     _from_record(run)
     rep = run.reconciled(basis=basis, human_key=key, read_head=read_head, breaks=before)
     lines = view.needs_you(rep, last, run.claims, run.acts, surface=True)
-    return {"needs": lines, "count": len(lines), "code": 0}
+    out = {"needs": lines, "count": len(lines), "code": 0}
+    rows = run.rec.rows()
+    if any(r["kind"] in (wb_mod.KIND, wb_mod.MISS) for r in rows):
+        out["writeback"] = wb_mod.needs(rows, run.held(rows)[0])
+    return out
 
 
 def peek(
@@ -663,6 +669,9 @@ def seed(
     if not ws:
         run.rec.append("refused", run.sys, at="seed", reason="no words in the bite")
         return _refused("a bite with no words seeds nothing", 1)
+    bite_hash = record.h256(bite)
+    # rung 1: a held write-back for this exact bite answers it, before ranking
+    back = wb_mod.read_back(run, bite_hash)
     index, why = seed_mod.read_index(run.rec)
     if index is None:
         out = {"state": "unreachable", "why": why, "keys": [], "missed": ws}
@@ -676,14 +685,24 @@ def seed(
             i["sha"] for i in run.rec.pile()["items"] if i["where"] == seed_mod.INDEX
         )
         out.update(_seed_from_store(cfg, run, bite))
+    out["writeback"] = back
+    if back["state"] == wb_mod.HELD:
+        out["answered_by"] = back["answered_by"]
+    lost = (
+        wb_mod.at_seed(run, bite, ws, lambda: _store(cfg, run))
+        if index is not None and back["state"] != wb_mod.HELD
+        else {"state": wb_mod.NONE}
+    )
     row = run.rec.append(
         "seed",
         run.sys,
         where=seed_mod.INDEX,
-        bite_hash=record.h256(bite),
+        bite_hash=bite_hash,
         words=ws,
         **out,
     )
+    if lost["state"] == wb_mod.MISS:
+        out["miss"] = wb_mod.log_miss(run, row, lost["lost"])
     return {**out, "row": row["n"], "code": 0}
 
 
@@ -999,13 +1018,61 @@ def seal_proposal(
     if row["kind"] != "seal":
         return {"row": row, "sealed": False, "written": None, "code": 1}
     wrote = run.write_proposal(subject)
+    back = None
+    if wrote["kind"] == "write":
+        prop, _ = run.find_proposal(subject)
+        back = wb_mod.from_proposal(run, prop, _spec_tables) if prop else None
     return {
         "row": row,
         "sealed": True,
         "written": wrote if wrote["kind"] == "write" else None,
         "write": wrote,
+        "writeback": back,
         "code": 0 if wrote["kind"] == "write" else 1,
     }
+
+
+def writeback_seal(
+    cfg: Config,
+    subject: str,
+    *,
+    proof: str | None = None,
+    pair: object = None,
+    verifiers: Iterable[str] | None = None,
+    argv: Iterable[str] = ("seal",),
+) -> dict:
+    """The human's seal over one write-back's exact subject (`writeback:<hash>`),
+    by the human's proof or a sealed Nestor pair whose conclusion is the subject
+    (read from `cfg.nestor_db`, never written). Only a candidate on record whose
+    row hashes to the subject is sealable. Held, the next seed of that exact
+    bite stops at rung 1 (`writeback.read_back`)."""
+    run, info = _open(cfg, "seal", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal", subject=subject)) is not None:
+        return refusal
+    if not isinstance(subject, str) or not subject.startswith(wb_mod.PREFIX):
+        row = run.rec.append(
+            "refused",
+            run.sys,
+            at="seal",
+            reason="not a write-back subject",
+            subject=subject,
+        )
+        return {"row": row, "sealed": False, "state": None, "code": 1}
+    if subject not in wb_mod.subjects(run.rec.rows()):
+        row = run.rec.append(
+            "refused",
+            run.sys,
+            at="seal",
+            reason="no such write-back on record",
+            subject=subject,
+        )
+        return {"row": row, "sealed": False, "state": None, "code": 1}
+    row = _seal(run, cfg, subject, proof, pair, verifiers)
+    st = wb_mod.state_of(run, subject)
+    ok = row["kind"] == "seal" and st["state"] == wb_mod.HELD
+    return {"row": row, "sealed": ok, **st, "code": 0 if ok else 1}
 
 
 def lore(cfg: Config, subject: str, argv: Iterable[str] = ("lore",)) -> dict:
@@ -1209,6 +1276,7 @@ def escalate(
         )
     except esc.ChainUnavailable as e:
         return _refused(str(e), 2)
+    out["writeback"] = wb_mod.from_escalate(run, out, task, _spec_tables)
     return {**out, "code": 0}
 
 
