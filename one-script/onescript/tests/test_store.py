@@ -56,7 +56,7 @@ def test_no_index_is_an_unreachable_store_and_the_box_still_opens(cfg):  # noqa:
 
 def test_the_first_bite_seeds_from_the_store(box):
     res = api.seed(box["cfg"], BITE)
-    assert res["store"] == "attached"
+    assert res["store"] == {"state": "attached", "why": ""}
     assert (res["rank"][0]["path"], res["rank"][0]["line"]) == ("ads.md", 1)
     assert res["quotes"][0]["path"] == "ads.md"
     assert all(len(h["chunk"]) == 64 for h in res["rank"])
@@ -67,7 +67,8 @@ def test_a_store_that_changed_since_check_in_is_not_used(box):
     with open(path, "ab") as f:
         f.write(b"\0")
     res = api.seed(box["cfg"], BITE)
-    assert "doesn't hash to its row" in res["store"] and "rank" not in res
+    assert res["store"]["state"] == "unreachable" and "rank" not in res
+    assert "doesn't hash to its row" in res["store"]["why"]
 
 
 def served_chunks(box, top=2, seal=True, max_chars=10**6):
@@ -152,7 +153,7 @@ def test_a_chunk_whose_blob_does_not_hash_to_the_index_is_not_read(tmp_path):
         f["sha256"] = "0" * 64
     assert pile.read_chunk(idx, {"docs": repo}, ch) == (
         None,
-        "the blob doesn't hash to the index",
+        "bytes don't hash to the index",
     )
     assert pile.read_chunk(idx, {"docs": repo}, {**ch, "line": 2})[0] is None
 
@@ -190,14 +191,17 @@ def test_another_store_that_changed_is_said_and_the_rest_still_answer(two):
     with open(pile.store_path(cfg_b.box), "ab") as f:
         f.write(b"\0")
     res = api.lookup(cfg_a, "ad breaks in kids games", [cfg_b.box])
-    assert res["sessions"][str(cfg_b.box)].startswith("unreachable")
+    assert res["sessions"][str(cfg_b.box)]["state"] == "unreachable"
     assert res["hits"] and all(h["sessions"] == ["this"] for h in res["hits"])
 
 
 def test_a_box_that_is_not_there_is_said_and_not_created(two, tmp_path):
     ghost = tmp_path / "no-such-box"
     res = api.lookup(two[0], "ad breaks", [ghost])
-    assert res["sessions"][str(ghost)] == "unreachable: no record in that box"
+    assert res["sessions"][str(ghost)] == {
+        "state": "unreachable",
+        "why": "no record in that box",
+    }
     assert not ghost.exists()
 
 

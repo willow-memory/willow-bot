@@ -1,4 +1,5 @@
-"""phrase_rank: chunks never dropped, dedupe, gated folds, pairs, fields, fusion."""
+"""phrase_rank: long chunks split not dropped, dedupe, gated folds, pairs, fields,
+fusion, and the keyed cache."""
 
 from __future__ import annotations
 
@@ -168,10 +169,13 @@ CACHE_FILES = {
 BITES = ["ad breaks", "kids games and stories", "pattern matching skills", "word"]
 
 
+KEY = bytes(range(32))
+
+
 def cached(tmp_path, files):
     idx, repos = pile(tmp_path, files)
-    db, state = pr.open_cache(idx, repos, tmp_path / "c" / "p.sqlite", "sha-1")
-    return idx, repos, pr.Cached(db), state
+    db, state = pr.open_cache(idx, repos, tmp_path / "c" / "p.sqlite", "sha-1", KEY)
+    return idx, repos, pr.Cached(db, KEY), state
 
 
 def test_the_cache_ranks_exactly_as_the_direct_read(tmp_path):
@@ -186,7 +190,7 @@ def test_the_cache_ranks_exactly_as_the_direct_read(tmp_path):
     assert (top["path"], top["line"]) == ("a.md", 3)  # the question outranks
 
 
-def test_the_cache_holds_hashes_never_text(tmp_path):
+def test_the_cache_holds_no_word_or_sentence_text(tmp_path):
     _, _, c, _ = cached(
         tmp_path, {"a.md": "zanzibarquokka appears here once only, in this one file\n"}
     )
@@ -198,9 +202,10 @@ def test_the_cache_holds_hashes_never_text(tmp_path):
 def test_the_cache_is_warm_for_the_same_index_and_rebuilt_for_another(tmp_path):
     idx, repos, _, _ = cached(tmp_path, {"a.md": "the first version of a file\n"})
     p = tmp_path / "c" / "p.sqlite"
-    assert pr.open_cache(idx, repos, p, "sha-1")[1] == "warm"
-    assert pr.open_cache(idx, repos, p, "sha-2")[1] == "built"
-    assert pr.open_cache(idx, repos, p, "sha-2", limit=128)[1] == "built"
+    assert pr.open_cache(idx, repos, p, "sha-1", KEY)[1] == "warm"
+    assert pr.open_cache(idx, repos, p, "sha-2", KEY)[1] == "built"
+    assert pr.open_cache(idx, repos, p, "sha-2", KEY, limit=128)[1] == "built"
+    assert pr.open_cache(idx, repos, p, "sha-2", bytes(32), limit=128)[1] == "built"
 
 
 def test_a_pair_never_spans_a_line_break(tmp_path):
@@ -214,5 +219,9 @@ def test_a_sentence_said_before_comes_back_with_its_count(tmp_path):
         "Nobody counts the ad breaks in kids games, not even once. Something new."
     )
     # c.md's copy dedupes into a.md's chunk, so the sentence counts once
-    assert q == [{"words": 11, "count": 1, "repo": "docs", "path": "a.md", "line": 1}]
-    assert c.quotes("Nothing like this was ever said.") == []
+    assert q["state"] == "populated"
+    assert q["quotes"] == [
+        {"words": 11, "count": 1, "repo": "docs", "path": "a.md", "line": 1}
+    ]
+    none = c.quotes("Nothing like this was ever said.")
+    assert none["state"] == "empty" and none["quotes"] == []

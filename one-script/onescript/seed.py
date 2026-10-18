@@ -36,7 +36,7 @@ from .xref import GitError, git
 
 INDEX = "xref/index.json"
 ANCHORS = 5  # anchors kept per word; the counts are always whole
-WORD = re.compile(r"[^\W_]+")
+WORD = re.compile(r"[^\W_]+")  # a word, for seed and the pile alike
 
 
 def words(bite: str) -> list[str]:
@@ -44,21 +44,36 @@ def words(bite: str) -> list[str]:
     return sorted(set(WORD.findall(bite.lower())))
 
 
-def read_index(rec) -> tuple[dict | None, str | None]:
-    """The box's index, only as the pile's pointer vouches for it."""
-    ptr = next((i for i in rec.pile()["items"] if i["where"] == INDEX), None)
+def read_index(rec) -> tuple[dict | None, str | None, str | None]:
+    """(index, sha, None): the box's index and the pile pointer's SHA-256 for
+    it, only as that pointer vouches for it; else (None, None, why). Callers
+    take the sha from here and never re-derive it."""
+    try:
+        items = rec.pile()["items"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return None, None, f"the pile can't be read: {type(e).__name__}"
+    ptr = next(
+        (i for i in items if isinstance(i, dict) and i.get("where") == INDEX), None
+    )
     if ptr is None:
-        return None, "no xref index in the pile; run `onescript.xref index --record`"
+        return (
+            None,
+            None,
+            "no xref index in the pile; run `onescript.xref index --record`",
+        )
     try:
         data = (rec.box / INDEX).read_bytes()
     except OSError as e:
-        return None, f"the pile's index can't be read: {type(e).__name__}"
-    if hashlib.sha256(data).hexdigest() != ptr["sha"]:
-        return None, "the box's index doesn't hash to its pile pointer"
+        return None, None, f"the pile's index can't be read: {type(e).__name__}"
+    if hashlib.sha256(data).hexdigest() != ptr.get("sha"):
+        return None, None, "the box's index doesn't hash to its pile pointer"
     try:
-        return json.loads(data), None
+        index = json.loads(data)
     except ValueError:
-        return None, "the box's index isn't JSON"
+        return None, None, "the box's index isn't JSON"
+    if not isinstance(index, dict):
+        return None, None, "the box's index isn't an object"
+    return index, ptr["sha"], None
 
 
 def _blobs(repo: Path, oids: list[str]) -> dict[str, bytes]:
@@ -79,53 +94,90 @@ def _blobs(repo: Path, oids: list[str]) -> dict[str, bytes]:
     return got
 
 
+class Texts:
+    """The one reader of indexed text: seed's scan, the pile, its store and a
+    chunk read back all go through it. Each file is read at its indexed blob
+    and yielded as (repo, file, text) only when its bytes hash to the index,
+    hold no NUL and decode as UTF-8. Every skip is tallied by reason; a repo
+    with no checkout, or whose git fails, is `unreachable`, said, never
+    silently left out. `only` = (repo, path) reads that one file."""
+
+    def __init__(self, index: dict, repos: dict, only: tuple[str, str] | None = None):
+        self.index, self.repos, self.only = index, repos, only
+        self.skipped: dict[str, int] = {}
+        self.unreachable: dict[str, str] = {}
+        self.repos_read: list[str] = []
+        self.read = 0
+
+    def _skip(self, why: str) -> None:
+        self.skipped[why] = self.skipped.get(why, 0) + 1
+
+    def __iter__(self):
+        arrivals = self.index.get("arrival", {})
+        for name, arrival in sorted(
+            arrivals.items() if isinstance(arrivals, dict) else ()
+        ):
+            if self.only is not None and name != self.only[0]:
+                continue
+            path = self.repos.get(name)
+            if path is None or not Path(path).is_dir():
+                self.unreachable[name] = "no checkout to read it from"
+                continue
+            files = [
+                f
+                for f in (arrival.get("files", []) if isinstance(arrival, dict) else [])
+                if isinstance(f, dict)
+                and f.get("state") == "present"
+                and f.get("blob_match")
+                and (self.only is None or f.get("path") == self.only[1])
+            ]
+            try:
+                blobs = _blobs(Path(path), sorted({str(f["git_blob"]) for f in files}))
+            except (GitError, ValueError, KeyError) as e:
+                self.unreachable[name] = f"git: {str(e)[:80]}"
+                continue
+            self.repos_read.append(name)
+            for f in files:
+                data = blobs.get(str(f["git_blob"]))
+                if data is None:
+                    self._skip("blob not in the checkout")
+                    continue
+                if hashlib.sha256(data).hexdigest() != f.get("sha256"):
+                    self._skip("bytes don't hash to the index")
+                    continue
+                if b"\0" in data:
+                    self._skip("binary")
+                    continue
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    self._skip("not utf-8")
+                    continue
+                self.read += 1
+                yield name, f, text
+
+    def tally(self) -> dict:
+        """What the read reached: the repos read, the files, every skip by
+        reason and every unreachable repo by why."""
+        return {
+            "repos": sorted(self.repos_read),
+            "files_read": self.read,
+            "skipped": dict(sorted(self.skipped.items())),
+            "unreachable": dict(sorted(self.unreachable.items())),
+        }
+
+
 def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
     """The words against every file the index holds. `repos` names where each
     indexed repo is read from; a repo without one is unreachable, said."""
     want = set(bite_words)
     hits: dict[str, list[tuple[str, str, int]]] = {w: [] for w in bite_words}
-    skipped: dict[str, int] = {}
-    unreachable: dict[str, str] = {}
-    read = 0
-
-    def skip(why: str) -> None:
-        skipped[why] = skipped.get(why, 0) + 1
-
-    for name, arrival in sorted(index.get("arrival", {}).items()):
-        path = repos.get(name)
-        if path is None or not Path(path).is_dir():
-            unreachable[name] = "no checkout to read it from"
-            continue
-        files = [
-            f
-            for f in arrival.get("files", [])
-            if f.get("state") == "present" and f.get("blob_match")
-        ]
-        try:
-            blobs = _blobs(Path(path), sorted({f["git_blob"] for f in files}))
-        except GitError as e:
-            unreachable[name] = f"git: {str(e)[:80]}"
-            continue
-        for f in files:
-            data = blobs.get(f["git_blob"])
-            if data is None:
-                skip("blob not in the checkout")
-                continue
-            if hashlib.sha256(data).hexdigest() != f["sha256"]:
-                skip("bytes don't hash to the index")
-                continue
-            if b"\0" in data:
-                skip("binary")
-                continue
-            try:
-                text = data.decode("utf-8")
-            except UnicodeDecodeError:
-                skip("not utf-8")
-                continue
-            read += 1
-            for n, line in enumerate(text.splitlines(), 1):
-                for w in want.intersection(WORD.findall(line.lower())):
-                    hits[w].append((name, f["path"], n))
+    texts = Texts(index, repos)
+    for name, f, text in texts:
+        for n, line in enumerate(text.splitlines(), 1):
+            for w in want.intersection(WORD.findall(line.lower())):
+                hits[w].append((name, f["path"], n))
+    read = texts.read
 
     keys = []
     for w in bite_words:
@@ -152,8 +204,8 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
         "keys": keys,
         "missed": missed,
         "files_read": read,
-        "skipped": dict(sorted(skipped.items())),
-        "unreachable": dict(sorted(unreachable.items())),
+        "skipped": texts.tally()["skipped"],
+        "unreachable": texts.tally()["unreachable"],
     }
 
 

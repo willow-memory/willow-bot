@@ -123,9 +123,13 @@ exception. Nothing moves before a check-in or after a check-out.
 | `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below) |
 | `checkout(cfg)` | Reverse, then the morning screen |
 
-The record is the only state between calls, except the serve key, which is
-kept beside the keys (`serve.key`, 0600), fresh at every check-in, and is
-never the seal key. A `spec` pins the stack to the record's rows up to `upto`,
+The record is the only state between calls, except two keys kept beside the
+keys file, never in the box: the serve key (`serve.key`, 0600), fresh at every
+check-in and never the seal key, and each box's store key
+(`store-<hash of the box path>.key`, 0600), made once at the first check-in,
+which keys the word and sentence hashes in that box's store (`pile.py`): the
+store records only its fingerprint, and another box's store is read only when
+its key is here and its record's chain verifies. A `spec` pins the stack to the record's rows up to `upto`,
 so rows added later can't move a table id out from under a seal.
 
 ### Escalate: the deterministic chain

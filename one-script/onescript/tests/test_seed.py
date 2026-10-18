@@ -158,7 +158,7 @@ def test_a_named_repo_is_read_from_where_it_is_named(box, tmp_path):
 
 
 def test_same_box_same_bite_same_seed(box):
-    idx, _ = seed.read_index(api._open(box["cfg"], "t", ())[0].rec)
+    idx, _, _ = seed.read_index(api._open(box["cfg"], "t", ())[0].rec)
     where = {"docs": box["docs"], "bot": box["bot"]}
     ws = seed.words("the forge first bite")
     assert seed.scan(idx, where, ws) == seed.scan(idx, where, ws)

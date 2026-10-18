@@ -4,6 +4,7 @@
     python3 scripts/scan/phrase_rank.py "the bite" [--box BOX] [--repo NAME=PATH ...] [--top N]
         [--max CHARS] [--embed DIR]
     python3 scripts/scan/phrase_rank.py --sweep QUERIES.json [--max-values 128,250,500]
+    python3 scripts/scan/phrase_rank.py "the bite" --cache DIR [--key FILE]
 
 Rung 1 of the escalation ladder, past single words. The pile is the box's
 xref index (only while it hashes to its pile pointer); each file is read at
@@ -11,7 +12,7 @@ its indexed blob and counted only when its bytes hash to the index.
 
 | Step | Rule | Prior art |
 |---|---|---|
-| chunks | blank-line paragraphs; one over MAX is split at line breaks, never dropped | passage retrieval; chunk size measured by `--sweep` |
+| chunks | blank-line paragraphs; one over MAX is split at line breaks; one under MIN characters is left out of the pile | passage retrieval; chunk size measured by `--sweep` |
 | dedupe | identical chunks count once (SHA-256), with their copy count | exact-duplicate removal |
 | fold | -ies -> -y, -s, -es, each only when the stem is attested: df(stem) * ATTEST >= df(w) | a corpus-gated light stemmer (S-stemmer family) |
 | pairs | adjacent words within a clause, kept when df >= PAIR_MIN and NPMI > 0 | Bouma 2009 (NPMI) |
@@ -20,7 +21,8 @@ its indexed blob and counted only when its bytes hash to the index.
 | fuse | with `--embed`, a static embedder ranks the same candidates and the two ranks fuse by 1/(RRF_K + rank) | RRF, Cormack et al. 2009 |
 
 ATTEST, PAIR_MIN, QUESTION and MAX are placeholders for the operator's numbers.
-Read only: writes nothing but stdout. Same box, same repos, same bite: same output.
+Writes nothing but stdout, except with `--cache`, which writes the keyed store
+(`build_cache`) into that dir. Same box, same repos, same bite: same output.
 """
 
 from __future__ import annotations
@@ -30,13 +32,19 @@ import collections
 import hashlib
 import json
 import math
+import os
 import re
+import secrets
+import sqlite3
+import stat
 import sys
+import urllib.parse
+import zlib
 from pathlib import Path
 
 from . import seed
 
-WORD = re.compile(r"[^\W_]+")
+WORD = seed.WORD  # one word, for seed and the pile alike
 CLAUSE = re.compile(r"[,.;:!?()\[\]{}|\"]+")
 K1, B = 1.2, 0.75  # BM25's standard constants
 RRF_K = 60  # Cormack, Clarke & Büttcher 2009
@@ -128,44 +136,42 @@ def rrf(*rankings: list) -> list:
 
 
 def read_pile(index: dict, repos: dict, want: set, limit: int = MAX, keep_text=False):
-    """Every unique chunk: (where, body tf, question tf, length[, text])."""
+    """Every unique chunk: (where, body tf, question tf, length[, text]), with
+    the `seed.Texts` read that reached them (its repos, skips, unreachable)."""
     paras, df_raw, copies = [], collections.Counter(), collections.Counter()
-    for name, arr in sorted(index.get("arrival", {}).items()):
-        path = repos.get(name)
-        if path is None or not Path(path).is_dir():
-            continue
-        files = [
-            f
-            for f in arr.get("files", [])
-            if f.get("state") == "present" and f.get("blob_match")
-        ]
-        blobs = seed._blobs(Path(path), sorted({f["git_blob"] for f in files}))
-        for f in files:
-            d = blobs.get(f["git_blob"])
-            if d is None or hashlib.sha256(d).hexdigest() != f["sha256"] or b"\0" in d:
+    texts = seed.Texts(index, repos)
+    for name, f, text in texts:
+        for line, s in chunks(text, limit):
+            if len(s) < MIN:
                 continue
-            try:
-                text = d.decode("utf-8")
-            except UnicodeDecodeError:
+            h = hashlib.sha256(s.encode()).hexdigest()
+            copies[h] += 1
+            if copies[h] > 1:
                 continue
-            for line, s in chunks(text, limit):
-                if len(s) < MIN:
-                    continue
-                h = hashlib.sha256(s.encode()).hexdigest()
-                copies[h] += 1
-                if copies[h] > 1:
-                    continue
-                body, quest, n = collections.Counter(), collections.Counter(), 0
-                for ln in s.split("\n"):
-                    g = raw_grams(ln)
-                    n += len(g)
-                    into = quest if is_question(ln) else body
-                    into.update(x for x in g if x in want)
-                for x in set(body) | set(quest):
-                    df_raw[x] += 1
-                row = ((name, f["path"], line, h), body, quest, n)
-                paras.append(row + ((s,) if keep_text else ()))
-    return paras, df_raw, copies
+            body, quest, n = collections.Counter(), collections.Counter(), 0
+            for ln in s.split("\n"):
+                g = raw_grams(ln)
+                n += len(g)
+                into = quest if is_question(ln) else body
+                into.update(x for x in g if x in want)
+            for x in set(body) | set(quest):
+                df_raw[x] += 1
+            row = ((name, f["path"], line, h), body, quest, n)
+            paras.append(row + ((s,) if keep_text else ()))
+    return paras, df_raw, copies, texts.tally()
+
+
+def nothing(tally: dict) -> dict:
+    """No chunk in the pile: `empty` when it was read and holds none,
+    `unreachable` when no repo could be read, or every file read was refused
+    (INVARIANTS section 1: the two are never collapsed)."""
+    if not tally.get("repos"):
+        state, why = "unreachable", "no indexed repo could be read"
+    elif not tally.get("files_read") and tally.get("skipped"):
+        state, why = "unreachable", "no indexed file could be read as text"
+    else:
+        state, why = "empty", "the pile was read and holds no chunk"
+    return {"state": state, "why": why, "fused": False, "hits": []}
 
 
 def wanted(bite: str) -> tuple[set, set]:
@@ -186,21 +192,21 @@ def rank(
     words, pairs = wanted(bite)
     if pile is None:
         pile = read_pile(index, repos, words | pairs, limit, embed is not None)
-    paras, df_raw, copies = pile
+    paras, df_raw, copies, tally = pile
     if not paras:
-        return {"state": "unreachable", "fused": False, "hits": []}
+        return nothing(tally)
     n_all = len(paras)
     avg = sum(p[3] for p in paras) / n_all
     cands = [p for p in paras if p[1] or p[2]]
     extra = sum(copies.values()) - n_all
-    return score(bite, cands, df_raw, n_all, avg, copies, extra, embed)
+    return score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed)
 
 
-def score(bite, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
+def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
     """Rung 1 over the chunks that hold any of the bite's grams. A row is
     (where, body tf, question tf, length[, text]); `n_all` and `avg` are over
-    every chunk in the pile. The direct read and the cache both end here."""
-    words, _ = wanted(bite)
+    every chunk in the pile; `words` is the caller's `wanted(bite)[0]`. The
+    direct read and the cache both end here."""
     fold = folder(df_raw)
     fmap = {w: fold(w) for w in words}
 
@@ -240,6 +246,7 @@ def score(bite, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
     by_where = {row[0]: s for s, row in scored}
     out = {
         "state": "ranked" if scored else "escalated:cold_start",
+        "why": "",
         "chunks": n_all,
         "copies": extra,
         "folds": {w: f for w, f in sorted(fmap.items()) if w != f and df_raw[w]},
@@ -265,21 +272,79 @@ def score(bite, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
     return out
 
 
-# ── the cache: the pile hashed once, words as hashes, never text ──────────
+# ── the cache: the pile hashed once, words as keyed hashes ─────────────────
 # "A baseline holds hashes only, never content" (one-script README); "once the
 # box is hashed, the hash is a lookup that returns a hash and a count"
-# (next-pile.md). Every word is an 8-byte BLAKE2b with its chunk and position;
-# every sentence of three or more words is one hash with a count. Rebuilt
-# whole when the xref index, MAX, MIN or this version changes.
-CACHE_VERSION = 1
+# (next-pile.md). Every word is an 8-byte BLAKE2b keyed with the store's key,
+# with its chunk and position; every sentence of three or more words is one
+# keyed hash with a count. Unkeyed, a word's hash is a dictionary lookup away
+# from the word, so the key is what makes a hash not text: it lives in the
+# operator's keys dir, never in the box or beside the store, and the store
+# records only its fingerprint. What the store does hold in the clear: each
+# chunk's repo, path and line, and its plain SHA-256 (the id serve re-reads it
+# by and sessions merge on), which confirms a guess of a whole chunk's exact
+# text but names no word. Rebuilt whole when the xref index, the key, MAX, MIN,
+# the repos read or this version changes.
+CACHE_VERSION = 2
 SENT = re.compile(r"[.!?]+")
 GAP = 1  # positions skipped at a clause or line break, so no pair spans one
+KEY_BYTES = 32
+FINGERPRINT = b"onescript store key fingerprint"  # a fixed label, keyed
+MAX_STORE = 1 << 30  # placeholder: the most a store file may weigh to be opened
+MAX_POSTING = 1 << 26  # placeholder: the most one posting may decompress to
+PATH_CAP = 512  # the most of a repo or path name a store hands back
+CORE = ("version", "index_sha256", "max", "min", "byteorder", "key")
+#: What a broken store raises when read; every reader turns it into a state.
+BROKEN = (sqlite3.Error, zlib.error, ValueError, TypeError, KeyError, OverflowError)
 
 
-def term(w: str) -> int:
-    """A word (or a normalized sentence) as a signed 8-byte BLAKE2b."""
-    d = hashlib.blake2b(w.encode(), digest_size=8).digest()
+def term(w: str, key: bytes) -> int:
+    """A word (or a normalized sentence) as a signed 8-byte BLAKE2b, keyed."""
+    d = hashlib.blake2b(w.encode(), digest_size=8, key=key).digest()
     return int.from_bytes(d, "big", signed=True)
+
+
+def fingerprint(key: bytes) -> str:
+    """What the store records of its key: a keyed hash of a fixed label. It
+    names the key without holding it."""
+    return hashlib.blake2b(FINGERPRINT, digest_size=16, key=key).hexdigest()
+
+
+def key_name(box: Path) -> str:
+    """The store key's file name for one box, in the operator's keys dir."""
+    return f"store-{hashlib.sha256(str(Path(box).resolve()).encode()).hexdigest()[:16]}.key"
+
+
+def make_key(path: Path) -> None:
+    """32 fresh bytes, 0600, made once: an existing key is never replaced
+    (`O_EXCL`), so a store stays readable by the key it was built with."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return
+    with os.fdopen(fd, "w") as f:
+        f.write(secrets.token_bytes(KEY_BYTES).hex())
+    path.chmod(0o600)
+
+
+def read_key(path: Path) -> tuple[bytes | None, str | None]:
+    """(key, None), or (None, why): a key that is missing, not a plain file,
+    readable beyond its owner, or not 32 bytes is no key."""
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "the store key isn't a plain file"
+        if st.st_mode & 0o077:
+            return None, "the store key is readable beyond its owner; chmod 600 it"
+        key = bytes.fromhex(path.read_text().strip())
+    except FileNotFoundError:
+        return None, "no store key in the operator's keys dir"
+    except (OSError, ValueError) as e:
+        return None, f"the store key can't be read: {type(e).__name__}"
+    if len(key) != KEY_BYTES:
+        return None, "the store key isn't 32 bytes"
+    return key, None
 
 
 def sentences(line: str) -> list[str]:
@@ -291,74 +356,76 @@ def sentences(line: str) -> list[str]:
     return out
 
 
-def _meta(index_sha: str, limit: int) -> dict:
+def _meta(index_sha: str, limit: int, key: bytes) -> dict:
+    """The store's identity: a store whose meta differs is another store."""
     return {
         "version": str(CACHE_VERSION),
         "index_sha256": index_sha,
         "max": str(limit),
         "min": str(MIN),
         "byteorder": sys.byteorder,
+        "key": fingerprint(key),
     }
 
 
-def build_cache(index: dict, repos: dict, path: Path, index_sha: str, limit: int = MAX):
-    """Read the pile once and write the hashed cache atomically."""
+def reachable(index: dict, repos: dict) -> list[str]:
+    """The indexed repos with a checkout to read now: a store built while one
+    was missing is rebuilt when it returns, never `warm`."""
+    return sorted(
+        n
+        for n in index.get("arrival", {})
+        if repos.get(n) is not None and Path(repos[n]).is_dir()
+    )
+
+
+def build_cache(
+    index: dict, repos: dict, path: Path, index_sha: str, key: bytes, limit: int = MAX
+) -> dict:
+    """Read the pile once and write the keyed store atomically. Its meta holds
+    the identity (`_meta`) and what the read reached (`seed.Texts.tally`):
+    the repos read, the files, the skips by reason, the unreachable repos."""
     import array
-    import os
-    import sqlite3
-    import zlib
 
     post: dict = {}
     sent: dict = {}
     chunks_out, copies, ids = [], collections.Counter(), {}
-    for name, arr in sorted(index.get("arrival", {}).items()):
-        root = repos.get(name)
-        if root is None or not Path(root).is_dir():
-            continue
-        files = [
-            f
-            for f in arr.get("files", [])
-            if f.get("state") == "present" and f.get("blob_match")
-        ]
-        blobs = seed._blobs(Path(root), sorted({f["git_blob"] for f in files}))
-        for f in files:
-            d = blobs.get(f["git_blob"])
-            if d is None or hashlib.sha256(d).hexdigest() != f["sha256"] or b"\0" in d:
+    texts = seed.Texts(index, repos)
+    for name, f, text in texts:
+        for line, s in chunks(text, limit):
+            if len(s) < MIN:
                 continue
-            try:
-                text = d.decode("utf-8")
-            except UnicodeDecodeError:
+            h = hashlib.sha256(s.encode()).hexdigest()
+            copies[h] += 1
+            if h in ids:
                 continue
-            for line, s in chunks(text, limit):
-                if len(s) < MIN:
-                    continue
-                h = hashlib.sha256(s.encode()).hexdigest()
-                copies[h] += 1
-                if h in ids:
-                    continue
-                cid = ids[h] = len(chunks_out)
-                pos, n = 0, 0
-                for ln in s.split("\n"):
-                    q = 1 if is_question(ln) else 0
-                    for clause in CLAUSE.split(ln.lower()):
-                        ws = WORD.findall(clause)
-                        n += len(ws) + max(len(ws) - 1, 0)
-                        for w in ws:
-                            slot = post.get(t := term(w))
-                            if slot is None:
-                                slot = post[t] = (array.array("I"), array.array("I"))
-                            slot[0].append(cid)
-                            slot[1].append(pos << 1 | q)
-                            pos += 1
-                        pos += GAP
+            cid = ids[h] = len(chunks_out)
+            pos, n = 0, 0
+            for ln in s.split("\n"):
+                q = 1 if is_question(ln) else 0
+                for clause in CLAUSE.split(ln.lower()):
+                    ws = WORD.findall(clause)
+                    n += len(ws) + max(len(ws) - 1, 0)
+                    for w in ws:
+                        slot = post.get(t := term(w, key))
+                        if slot is None:
+                            slot = post[t] = (array.array("I"), array.array("I"))
+                        slot[0].append(cid)
+                        slot[1].append(pos << 1 | q)
+                        pos += 1
                     pos += GAP
-                    for sn in sentences(ln):
-                        e = sent.get(t := term(sn))
-                        if e is None:
-                            sent[t] = [1, cid]
-                        else:
-                            e[0] += 1
-                chunks_out.append((cid, h, n, name, f["path"], line))
+                pos += GAP
+                for sn in sentences(ln):
+                    e = sent.get(t := term(sn, key))
+                    if e is None:
+                        sent[t] = [1, cid]
+                    else:
+                        e[0] += 1
+            chunks_out.append((cid, h, n, name, f["path"], line))
+    tally = texts.tally()
+    meta = {
+        **_meta(index_sha, limit, key),
+        **{k: json.dumps(v) for k, v in tally.items()},
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
@@ -370,7 +437,7 @@ def build_cache(index: dict, repos: dict, path: Path, index_sha: str, limit: int
         "CREATE TABLE post(term INTEGER PRIMARY KEY, cids BLOB, pos BLOB);"
         "CREATE TABLE sent(h INTEGER PRIMARY KEY, count INTEGER, cid INTEGER);"
     )
-    db.executemany("INSERT INTO meta VALUES (?, ?)", _meta(index_sha, limit).items())
+    db.executemany("INSERT INTO meta VALUES (?, ?)", meta.items())
     db.executemany(
         "INSERT INTO chunk VALUES (?, ?, ?, ?, ?, ?, ?)",
         ((c, h, n, copies[h], r, p, ln) for c, h, n, r, p, ln in chunks_out),
@@ -388,39 +455,135 @@ def build_cache(index: dict, repos: dict, path: Path, index_sha: str, limit: int
     db.commit()
     db.close()
     os.replace(tmp, path)
+    return tally
 
 
-def open_cache(index: dict, repos: dict, path: Path, index_sha: str, limit: int = MAX):
-    """The cache for this index and limit, built (or rebuilt) when it isn't."""
-    import sqlite3
+def connect_ro(path: Path) -> sqlite3.Connection:
+    """A store opened read-only and immutable, queries only, and no schema
+    function trusted: what is in the file is data, never code."""
+    uri = f"file:{urllib.parse.quote(str(path))}?mode=ro&immutable=1"
+    db = sqlite3.connect(uri, uri=True)
+    db.execute("PRAGMA query_only=1")
+    db.execute("PRAGMA trusted_schema=0")
+    return db
 
-    want = _meta(index_sha, limit)
-    if path.exists():
-        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        try:
-            have = dict(db.execute("SELECT k, v FROM meta"))
-        except sqlite3.DatabaseError:
-            have = {}
-        if have == want:
+
+def read_meta(db) -> dict:
+    """The store's meta; {} when it has none it can read."""
+    try:
+        return {str(k): str(v) for k, v in db.execute("SELECT k, v FROM meta")}
+    except BROKEN:
+        return {}
+
+
+def open_cache(
+    index: dict, repos: dict, path: Path, index_sha: str, key: bytes, limit: int = MAX
+):
+    """The cache for this index, key and limit, built (or rebuilt) when it
+    isn't: another index, key, limit or version, or another set of repos
+    read than can be read now."""
+    want = _meta(index_sha, limit, key)
+    if path.is_file() and not path.is_symlink():
+        db = connect_ro(path)
+        have = read_meta(db)
+        if {k: have.get(k) for k in CORE} == want and have.get("repos") == json.dumps(
+            reachable(index, repos)
+        ):
             return db, "warm"
         db.close()
-    build_cache(index, repos, path, index_sha, limit)
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True), "built"
+    build_cache(index, repos, path, index_sha, key, limit)
+    return connect_ro(path), "built"
+
+
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _same(a: os.stat_result, b: os.stat_result) -> bool:
+    return (a.st_ino, a.st_size, a.st_mtime_ns) == (b.st_ino, b.st_size, b.st_mtime_ns)
+
+
+def open_store(
+    path: Path, sha: object, key: bytes, index_sha: str, limit: int = MAX
+) -> tuple["Cached | None", str | None]:
+    """The one store opener: (Cached, None) or (None, why), never an
+    exception. Read once: the file is stat'ed, hashed against `sha` (its
+    `store` row's), opened read-only and immutable, read, and stat'ed again;
+    a file that moved under the read is `unreachable`. Its meta must be this
+    index's, this key's and this limit's. Capped in size, and so is every
+    posting it decompresses."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None, "no store file"
+    if not stat.S_ISREG(st.st_mode):
+        return None, "the store isn't a plain file"
+    if st.st_size > MAX_STORE:
+        return None, f"the store is over its cap ({MAX_STORE} bytes)"
+    try:
+        if not isinstance(sha, str) or file_sha256(path) != sha:
+            return None, "the store doesn't hash to its row; check in again"
+        db = connect_ro(path)
+    except (OSError, sqlite3.Error) as e:
+        return None, f"the store can't be opened: {type(e).__name__}"
+    c, why = cached(db, key, _meta(index_sha, limit, key))
+    try:
+        moved = not _same(st, os.lstat(path))
+    except OSError:
+        moved = True
+    if c is None or moved:
+        db.close()
+        return None, why or "the store changed while it was read; check in again"
+    return c, None
+
+
+def cached(
+    db, key: bytes, want: dict | None = None
+) -> tuple["Cached | None", str | None]:
+    """`Cached(db, key)`, or (None, why) when the store can't be read as one,
+    was made with another key, or (with `want`) for another index or limit."""
+    meta = read_meta(db)
+    if not meta:
+        return None, "the store has no meta it can read"
+    if meta.get("key") != fingerprint(key):
+        return None, "the store was made with another key"
+    if want is not None and {k: meta.get(k) for k in CORE} != want:
+        return None, "the store was built for another index; check in again"
+    try:
+        return Cached(db, key, meta), None
+    except BROKEN as e:
+        return None, f"the store can't be read: {type(e).__name__}"
+
+
+def _clean(s: object) -> str:
+    """A name a store hands back: printable, and capped."""
+    if not isinstance(s, str):
+        return "?"
+    return "".join(ch if ch.isprintable() else "?" for ch in s)[:PATH_CAP]
 
 
 class Cached:
-    """Rung 1's statistics from the cache, for `score`."""
+    """Rung 1's statistics from the cache, for `score`. `rank` and `quotes`
+    answer with a state, never an exception."""
 
-    def __init__(self, db):
+    def __init__(self, db, key: bytes, meta: dict | None = None):
         import array
-        import zlib
 
-        self.db, self._array, self._zlib = db, array, zlib
+        self.db, self.key, self._array = db, key, array
+        self.meta = read_meta(db) if meta is None else meta
         rows = db.execute("SELECT id, sha, n, copies, repo, path, line FROM chunk")
         self.where, self.n, self.copies = {}, {}, {}
         total = 0
         for cid, sha, n, cp, repo, path, line in rows:
-            self.where[cid] = (repo, path, line, sha)
+            if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
+                raise ValueError("a chunk without a SHA-256")
+            if not all(isinstance(x, int) for x in (cid, n, cp, line)):
+                raise ValueError("a chunk row that isn't whole numbers")
+            self.where[cid] = (_clean(repo), _clean(path), line, sha)
             self.n[cid] = n
             self.copies[sha] = cp
             total += cp
@@ -429,24 +592,50 @@ class Cached:
         self.extra = total - self.n_all
         self._memo: dict = {}
 
+    def tally(self) -> dict:
+        """What the build reached, as its meta says."""
+        out = {}
+        for k in ("repos", "files_read", "skipped", "unreachable"):
+            try:
+                out[k] = json.loads(self.meta[k])
+            except (KeyError, ValueError):
+                out[k] = None
+        return out
+
+    def _inflate(self, blob: bytes):
+        d = zlib.decompressobj()
+        raw = d.decompress(blob, MAX_POSTING)
+        if d.unconsumed_tail or not d.eof:
+            raise ValueError("a posting over its cap")
+        a = self._array.array("I")
+        a.frombytes(raw)
+        return a
+
     def postings(self, w: str) -> list:
         """(cid, position, question) for every occurrence of `w`."""
         if w not in self._memo:
             row = self.db.execute(
-                "SELECT cids, pos FROM post WHERE term = ?", (term(w),)
+                "SELECT cids, pos FROM post WHERE term = ?", (term(w, self.key),)
             ).fetchone()
             if row is None:
                 self._memo[w] = []
             else:
-                a, b = self._array.array("I"), self._array.array("I")
-                a.frombytes(self._zlib.decompress(row[0]))
-                b.frombytes(self._zlib.decompress(row[1]))
+                a, b = self._inflate(row[0]), self._inflate(row[1])
+                if len(a) != len(b) or any(c not in self.n for c in a):
+                    raise ValueError("a posting that names no chunk")
                 self._memo[w] = [(c, p >> 1, p & 1) for c, p in zip(a, b)]
         return self._memo[w]
 
     def rank(self, bite: str, embed=None) -> dict:
+        try:
+            return self._rank(bite, embed)
+        except BROKEN as e:
+            why = f"the store can't be read: {type(e).__name__}"
+            return {"state": "unreachable", "why": why, "fused": False, "hits": []}
+
+    def _rank(self, bite: str, embed=None) -> dict:
         if not self.n_all:
-            return {"state": "unreachable", "fused": False, "hits": []}
+            return nothing(self.tally())
         words, pairs = wanted(bite)
         body: dict = collections.defaultdict(collections.Counter)
         quest: dict = collections.defaultdict(collections.Counter)
@@ -477,28 +666,49 @@ class Cached:
             for c in sorted(set(body) | set(quest))
         ]
         return score(
-            bite, cands, df_raw, self.n_all, self.avg, self.copies, self.extra, embed
+            bite,
+            words,
+            cands,
+            df_raw,
+            self.n_all,
+            self.avg,
+            self.copies,
+            self.extra,
+            embed,
         )
 
-    def quotes(self, bite: str) -> list:
-        """The bite's sentences said before, by hash: a count and where first."""
+    def quotes(self, bite: str) -> dict:
+        """The bite's sentences said before, by keyed hash: a count and where
+        first. `populated`, `empty` (none said before) or `unreachable`."""
         out = []
-        for sn in dict.fromkeys(sentences(bite)):
-            row = self.db.execute(
-                "SELECT count, cid FROM sent WHERE h = ?", (term(sn),)
-            ).fetchone()
-            if row:
-                r, p, ln, _ = self.where[row[1]]
-                out.append(
-                    {
-                        "words": len(sn.split()),
-                        "count": row[0],
-                        "repo": r,
-                        "path": p,
-                        "line": ln,
-                    }
-                )
-        return out
+        try:
+            for sn in dict.fromkeys(sentences(bite)):
+                row = self.db.execute(
+                    "SELECT count, cid FROM sent WHERE h = ?", (term(sn, self.key),)
+                ).fetchone()
+                if row:
+                    r, p, ln, _ = self.where[row[1]]
+                    if not isinstance(row[0], int):
+                        raise ValueError("a sentence count that isn't whole")
+                    out.append(
+                        {
+                            "words": len(sn.split()),
+                            "count": row[0],
+                            "repo": r,
+                            "path": p,
+                            "line": ln,
+                        }
+                    )
+        except BROKEN as e:
+            why = f"the store can't be read: {type(e).__name__}"
+            return {"state": "unreachable", "why": why, "quotes": []}
+        if not out:
+            return {
+                "state": "empty",
+                "why": "no sentence of the bite said before",
+                "quotes": [],
+            }
+        return {"state": "populated", "why": "", "quotes": out}
 
 
 # ── the session's store, and a chunk read back at its blob ─────────────────
@@ -508,44 +718,25 @@ def store_path(box: Path, limit: int = MAX) -> Path:
     return box.with_name(box.name + "-store") / f"pile-{limit}.sqlite"
 
 
-def file_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
 def read_chunk(index: dict, repos: dict, chunk: dict, limit: int = MAX):
     """(text, None) for a chunk read at its indexed blob, or (None, why).
-    Content stays where it lives: the text is re-read here, and only while the
-    blob hashes to the index and the chunk hashes to its own SHA-256."""
+    Content stays where it lives: the text is re-read here (`seed.Texts`), and
+    only while the blob hashes to the index and the chunk hashes to its own
+    SHA-256."""
     name, path = chunk.get("repo"), chunk.get("path")
-    files = {
-        f["path"]: f for f in index.get("arrival", {}).get(name, {}).get("files", [])
-    }
-    f = files.get(path)
+    arrival = index.get("arrival", {}).get(name, {})
+    f = next((x for x in arrival.get("files", []) if x.get("path") == path), None)
     if f is None or f.get("state") != "present" or not f.get("blob_match"):
         return None, "not in the index"
-    root = repos.get(name)
-    if root is None or not Path(root).is_dir():
-        return None, "no checkout to read it from"
-    try:
-        d = seed._blobs(Path(root), [f["git_blob"]]).get(f["git_blob"])
-    except seed.GitError as e:
-        return None, f"git: {str(e)[:80]}"
-    if d is None or hashlib.sha256(d).hexdigest() != f["sha256"]:
-        return None, "the blob doesn't hash to the index"
-    try:
-        text = d.decode("utf-8")
-    except UnicodeDecodeError:
-        return None, "not utf-8"
-    for line, s in chunks(text, limit):
-        if line == chunk.get("line") and hashlib.sha256(
-            s.encode()
-        ).hexdigest() == chunk.get("sha256"):
-            return s, None
-    return None, "the chunk isn't at that line with that hash"
+    texts = seed.Texts(index, repos, only=(name, path))
+    for _, _, text in texts:
+        for line, s in chunks(text, limit):
+            if line == chunk.get("line") and hashlib.sha256(
+                s.encode()
+            ).hexdigest() == chunk.get("sha256"):
+                return s, None
+        return None, "the chunk isn't at that line with that hash"
+    return None, texts.unreachable.get(name) or next(iter(texts.skipped), "not read")
 
 
 # ── across sessions: piles merged by hash, a view rebuilt on demand ─────────
@@ -554,12 +745,18 @@ def merge(stores: dict, bite: str) -> dict:
     hash (one chunk, with every session that holds it and every place it sits)
     and the ranks fuse by RRF. Nothing is written and no store reads another:
     "cross-session lookups are piles merged by hash", never a shared soil.
-    `stores` maps a session's name to its `Cached`."""
+    `stores` maps a session's name to its `Cached`. Each session answers
+    `{state, why}`; one whose store fails is `unreachable` and adds nothing,
+    and the rest still answer."""
     states, orders, by_chunk, quotes = {}, [], {}, []
     for name in sorted(stores):
         c = stores[name]
-        r = c.rank(bite)
-        states[name] = r["state"]
+        r, q = c.rank(bite), c.quotes(bite)
+        if "unreachable" in (r["state"], q["state"]):
+            bad = r if r["state"] == "unreachable" else q
+            states[name] = {"state": "unreachable", "why": bad["why"]}
+            continue
+        states[name] = {"state": r["state"], "why": r.get("why", "")}
         order = []
         for h in r["hits"]:
             e = by_chunk.setdefault(
@@ -571,7 +768,7 @@ def merge(stores: dict, bite: str) -> dict:
                 e["where"].append(loc)
             order.append(h["chunk"])
         orders.append(order)
-        quotes += [{"session": name, **q} for q in c.quotes(bite)]
+        quotes += [{"session": name, **x} for x in q["quotes"]]
     hits = [by_chunk[k] for k in rrf(*orders)]
     for h in hits:
         h["seen_in"] = len(h["sessions"])
@@ -610,7 +807,7 @@ def wordllama_embed(cache: Path):
 
 def sweep(index: dict, repos: dict, queries: list, limits: list, cache=None) -> dict:
     """Mean reciprocal rank of each query's target, at each chunk size.
-    `cache` is (dir, index_sha): each size reads its own hashed cache."""
+    `cache` is (dir, index_sha, key): each size reads its own keyed cache."""
     out = {}
     want = set()
     for q in queries:
@@ -618,9 +815,14 @@ def sweep(index: dict, repos: dict, queries: list, limits: list, cache=None) -> 
     for limit in limits:
         if cache:
             db, _ = open_cache(
-                index, repos, cache[0] / f"pile-{limit}.sqlite", cache[1], limit
+                index,
+                repos,
+                cache[0] / f"pile-{limit}.sqlite",
+                cache[1],
+                cache[2],
+                limit,
             )
-            c = Cached(db)
+            c = Cached(db, cache[2])
             ranker = c.rank
         else:
             pile = read_pile(index, repos, want, limit)
@@ -644,14 +846,27 @@ def sweep(index: dict, repos: dict, queries: list, limits: list, cache=None) -> 
     return out
 
 
-def load_index(box: Path, with_sha: bool = False):
-    """The box's xref index, only while it hashes to its pile pointer."""
-    items = json.loads((box / "pile.json").read_text())["items"]
-    ptr = next((i for i in items if i["where"] == seed.INDEX), None)
-    data = (box / seed.INDEX).read_bytes() if ptr else b""
-    if ptr is None or hashlib.sha256(data).hexdigest() != ptr["sha"]:
-        return (None, None) if with_sha else None
-    return (json.loads(data), ptr["sha"]) if with_sha else json.loads(data)
+def load_index(box: Path):
+    """(index, sha, None) for the box's xref index while it hashes to its pile
+    pointer (`seed.read_index`), else (None, None, why)."""
+    from .record import Record  # noqa: PLC0415
+
+    if not (Path(box) / "pile.json").is_file():
+        return None, None, "no pile in that box"
+    return seed.read_index(Record(Path(box), lambda: "", "", object()))
+
+
+def cli_key(path: Path | None) -> tuple[bytes | None, str | None]:
+    """The store key for `--cache`: read from `--key FILE`, or, without one,
+    an ephemeral key, said on stderr (the cache is rebuilt every run, and no
+    later run can read it)."""
+    if path is not None:
+        return read_key(path)
+    print(
+        "no --key: an ephemeral store key, so the cache is rebuilt each run",
+        file=sys.stderr,
+    )
+    return secrets.token_bytes(KEY_BYTES), None
 
 
 def main(argv=None) -> int:
@@ -670,17 +885,26 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--cache",
         type=Path,
-        help="dir for the hashed pile cache (built once per index and --max)",
+        help="dir for the keyed pile cache (built once per index, key and --max)",
+    )
+    ap.add_argument(
+        "--key", type=Path, help="the cache's store key (32 bytes, hex, 0600)"
     )
     a = ap.parse_args(argv)
     if a.cache and a.embed:
-        ap.error("--embed reads chunk text, and the cache holds hashes only")
-    index, index_sha = load_index(a.box, with_sha=True)
+        ap.error("--embed reads chunk text, and the cache holds no text")
+    if a.key and not a.cache:
+        ap.error("--key is the --cache's key")
+    index, index_sha, why = load_index(a.box)
     if index is None:
-        print(
-            json.dumps({"state": "unreachable", "why": "no index the pile vouches for"})
-        )
+        print(json.dumps({"state": "unreachable", "why": why}))
         return 1
+    key = None
+    if a.cache:
+        key, why = cli_key(a.key)
+        if key is None:
+            print(json.dumps({"state": "unreachable", "why": why}))
+            return 1
     repos = {n: root.parent / n for n in index.get("arrival", {})}
     for spec in a.repo:
         name, _, path = spec.partition("=")
@@ -688,16 +912,16 @@ def main(argv=None) -> int:
     if a.sweep:
         queries = json.loads(a.sweep.read_text())["queries"]
         limits = [int(x) for x in a.max_values.split(",")]
-        cache = (a.cache, index_sha) if a.cache else None
+        cache = (a.cache, index_sha, key) if a.cache else None
         print(json.dumps(sweep(index, repos, queries, limits, cache), indent=1))
         return 0
     if not a.bite:
         ap.error("a bite, or --sweep")
     if a.cache:
         db, state = open_cache(
-            index, repos, a.cache / f"pile-{a.max}.sqlite", index_sha, a.max
+            index, repos, a.cache / f"pile-{a.max}.sqlite", index_sha, key, a.max
         )
-        c = Cached(db)
+        c = Cached(db, key)
         out = c.rank(a.bite)
         out["cache"] = state
         out["quotes"] = c.quotes(a.bite)
