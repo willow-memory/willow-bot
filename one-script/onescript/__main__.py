@@ -250,6 +250,13 @@ def main(argv: list[str] | None = None) -> int:
         metavar="NAME=PATH",
         help="where an indexed repo is read from (default: beside willow-bot)",
     )
+    lk = sub.add_parser(
+        "lookup", help="the bite across sessions' stores, merged by hash; a view"
+    )
+    lk.add_argument("bite")
+    lk.add_argument(
+        "--other", action="append", default=[], type=Path, help="another session's box"
+    )
     t = sub.add_parser("turn")
     t.add_argument("bite")
     t.add_argument(
@@ -591,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
         return res["code"]
     elif args.cmd == "seed":
         res = api.seed(cfg, args.bite, repos=dict(args.repo), argv=raw)
+    elif args.cmd == "lookup":
+        res = api.lookup(cfg, args.bite, args.other, argv=raw)
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)

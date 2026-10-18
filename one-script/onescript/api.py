@@ -687,6 +687,71 @@ def seed(
     return {**out, "row": row["n"], "code": 0}
 
 
+# ── lookup: across sessions, merged by hash ─────────────────────────────────
+def _store_of(box: Path):
+    """(Cached, None) for another session's store while it hashes to that
+    box's own last `store` row, read through a record that can't write; else
+    (None, why). Nothing in that box is written or created."""
+    import sqlite3
+
+    if not (box / "record.jsonl").is_file():
+        return None, "no record in that box"
+    rec = record.Record(box, lambda: "", "", object())
+    att = next((r for r in reversed(rec.rows()) if r["kind"] == "store"), None)
+    if att is None or att.get("state") != "attached":
+        return None, (att or {}).get("why") or "that session attached no store"
+    path = pile_mod.store_path(box)
+    if not path.exists() or pile_mod.file_sha256(path) != att["store_sha256"]:
+        return None, "its store doesn't hash to its own row"
+    return pile_mod.Cached(sqlite3.connect(f"file:{path}?mode=ro", uri=True)), None
+
+
+def lookup(
+    cfg: Config,
+    bite: str,
+    boxes: Iterable[Path] = (),
+    argv: Iterable[str] = ("lookup",),
+) -> dict:
+    """The bite against this session's store and other sessions' stores,
+    merged by chunk hash (`pile.merge`): a view, rebuilt each time, never a
+    shared store. Each other store counts only while it hashes to its own
+    box's row; one that doesn't is said, and the rest still answer. One
+    `lookup` row here: the bite's hash, each session's state, the top chunks."""
+    run, info = _open(cfg, "lookup", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "lookup")) is not None:
+        return refusal
+    stores, states = {}, {}
+    mine, _, why = _store(cfg, run)
+    if mine is None:
+        states["this"] = f"unreachable: {why}"
+    else:
+        stores["this"] = mine
+    for box in boxes:
+        name = str(Path(box))
+        c, why = _store_of(Path(box))
+        if c is None:
+            states[name] = f"unreachable: {why}"
+        else:
+            stores[name] = c
+    try:
+        out = pile_mod.merge(stores, bite)
+    finally:
+        for c in stores.values():
+            c.db.close()
+    out["sessions"] = {**states, **out["sessions"]}
+    out["hits"] = out["hits"][:SEED_TOP]
+    run.rec.append(
+        "lookup",
+        run.sys,
+        bite_hash=record.h256(bite),
+        sessions=out["sessions"],
+        top=[[h["chunk"], h["seen_in"]] for h in out["hits"]],
+    )
+    return {**out, "code": 0}
+
+
 # ── turn ────────────────────────────────────────────────────────────────────
 def turn(
     cfg: Config,

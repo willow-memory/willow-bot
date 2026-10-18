@@ -548,6 +548,36 @@ def read_chunk(index: dict, repos: dict, chunk: dict, limit: int = MAX):
     return None, "the chunk isn't at that line with that hash"
 
 
+# ── across sessions: piles merged by hash, a view rebuilt on demand ─────────
+def merge(stores: dict, bite: str) -> dict:
+    """Each session's store ranks the bite on its own; the hits merge by chunk
+    hash (one chunk, with every session that holds it and every place it sits)
+    and the ranks fuse by RRF. Nothing is written and no store reads another:
+    "cross-session lookups are piles merged by hash", never a shared soil.
+    `stores` maps a session's name to its `Cached`."""
+    states, orders, by_chunk, quotes = {}, [], {}, []
+    for name in sorted(stores):
+        c = stores[name]
+        r = c.rank(bite)
+        states[name] = r["state"]
+        order = []
+        for h in r["hits"]:
+            e = by_chunk.setdefault(
+                h["chunk"], {"chunk": h["chunk"], "sessions": [], "where": []}
+            )
+            e["sessions"].append(name)  # a chunk is once per store: no repeat
+            loc = [h["repo"], h["path"], h["line"]]
+            if loc not in e["where"]:
+                e["where"].append(loc)
+            order.append(h["chunk"])
+        orders.append(order)
+        quotes += [{"session": name, **q} for q in c.quotes(bite)]
+    hits = [by_chunk[k] for k in rrf(*orders)]
+    for h in hits:
+        h["seen_in"] = len(h["sessions"])
+    return {"sessions": states, "hits": hits, "quotes": quotes}
+
+
 def wordllama_embed(cache: Path):
     """Rung 3, from local files only: WordLlama's bundled table, no download.
     Returns None (and the rank stays rung 1 alone) when it can't load."""

@@ -155,3 +155,53 @@ def test_a_chunk_whose_blob_does_not_hash_to_the_index_is_not_read(tmp_path):
         "the blob doesn't hash to the index",
     )
     assert pile.read_chunk(idx, {"docs": repo}, {**ch, "line": 2})[0] is None
+
+
+SHARED = "A shared note on ad breaks in kids games, kept the same in both.\n"
+
+
+@pytest.fixture
+def two(cfg, tmp_path):  # noqa: F811
+    """Two sessions, each its own box and store; one file in common."""
+    a = make(tmp_path, "aaa", {"shared.md": SHARED, "a.md": DOCS["ads.md"]})
+    b = make(tmp_path, "bbb", {"shared.md": SHARED, "b.md": DOCS["more.md"]})
+    cfg_b = replace(cfg, box=tmp_path / "box-b")
+    index_into_box(cfg, a)
+    index_into_box(cfg_b, b)
+    assert api.checkin(cfg)["code"] == 0 and api.checkin(cfg_b)["code"] == 0
+    return cfg, cfg_b
+
+
+def test_a_lookup_merges_sessions_by_chunk_hash(two):
+    cfg_a, cfg_b = two
+    before = (cfg_b.box / "record.jsonl").read_bytes()
+    res = api.lookup(cfg_a, "ad breaks in kids games", [cfg_b.box])
+    assert res["code"] == 0
+    assert set(res["sessions"]) == {"this", str(cfg_b.box)}
+    shared = [h for h in res["hits"] if h["seen_in"] == 2]
+    assert len(shared) == 1 and shared[0]["where"][0][1] == "shared.md"
+    assert {h["where"][0][0] for h in res["hits"]} == {"aaa", "bbb"}
+    assert (cfg_b.box / "record.jsonl").read_bytes() == before  # read, never written
+    assert rows(cfg_a)[-1]["kind"] == "lookup"
+
+
+def test_another_store_that_changed_is_said_and_the_rest_still_answer(two):
+    cfg_a, cfg_b = two
+    with open(pile.store_path(cfg_b.box), "ab") as f:
+        f.write(b"\0")
+    res = api.lookup(cfg_a, "ad breaks in kids games", [cfg_b.box])
+    assert res["sessions"][str(cfg_b.box)].startswith("unreachable")
+    assert res["hits"] and all(h["sessions"] == ["this"] for h in res["hits"])
+
+
+def test_a_box_that_is_not_there_is_said_and_not_created(two, tmp_path):
+    ghost = tmp_path / "no-such-box"
+    res = api.lookup(two[0], "ad breaks", [ghost])
+    assert res["sessions"][str(ghost)] == "unreachable: no record in that box"
+    assert not ghost.exists()
+
+
+def test_merge_is_the_same_view_every_time(two):
+    a = api.lookup(two[0], "ad breaks in kids games", [two[1].box])
+    b = api.lookup(two[0], "ad breaks in kids games", [two[1].box])
+    assert a["hits"] == b["hits"] and a["quotes"] == b["quotes"]
