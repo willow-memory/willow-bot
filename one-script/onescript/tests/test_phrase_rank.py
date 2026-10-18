@@ -429,3 +429,20 @@ def test_a_store_that_cannot_be_read_repairs_nothing(tmp_path):
 def test_a_held_word_is_not_swapped_for_a_held_neighbour(tmp_path):
     _, _, c, _ = cached(tmp_path, REPAIR_FILES)
     assert c.repair("card cart")["state"] == "none"  # each is one edit from the other
+
+
+def test_es_is_a_plural_only_after_s_x_z_ch_sh_and_o():
+    assert "ones" not in pr.forms("on") and "boxes" in pr.forms("box")
+    assert "on" not in pr.stems("ones") and "box" in pr.stems("boxes")
+    fold = pr.folder(collections.Counter({"ones": 9, "on": 99, "boxes": 4, "box": 8}))
+    assert fold("ones") == "ones"  # "one" + s, never "on" + es
+    assert fold("boxes") == "box"
+
+
+def test_the_pair_basin_knob_drops_pairs_of_common_words_only_when_set(
+    tmp_path, monkeypatch
+):
+    _, _, c, _ = cached(tmp_path, CACHE_FILES)
+    assert "ad breaks" in c.rank("ad breaks")["pairs"]  # off by default
+    monkeypatch.setattr(pr, "PAIR_BASIN", 0.0)
+    assert c.rank("ad breaks")["pairs"] == {}

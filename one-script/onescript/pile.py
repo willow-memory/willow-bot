@@ -53,6 +53,11 @@ PAIR_MIN = 2  # placeholder
 QUESTION = 2.0  # placeholder
 TITLE = 2.0  # placeholder: the operator's number
 REPAIR_MIN = 4  # placeholder: the shortest word rung 2 repairs
+#: Off. Keep a pair only if its rarer word sits in at most this share of chunks.
+#: Measured 2026-10-18 on 25 bites: 0.003 gave MRR 0.5439 against 0.5235 off,
+#: fixing one miss (50 -> 2) and costing two (1 -> 2, 13 -> 36); 0.001 was worse,
+#: 0.01 and up changed nothing. The operator's number, if any.
+PAIR_BASIN = None
 ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 MAX, MIN = 500, 40  # chunk characters; MAX is a placeholder
 EMBED_CHARS = 2000  # the most of one chunk the embedder reads
@@ -178,9 +183,18 @@ def _chunk(parts: list, n_title: int) -> tuple:
     return parts[0][0], "\n".join(lines), frozenset(titles)
 
 
+ES_AFTER = ("s", "x", "z", "ch", "sh", "o")  # English takes -es only after these
+
+
+def _takes(stem: str, suf: str) -> bool:
+    return suf != "es" or stem.endswith(ES_AFTER)
+
+
 def stems(w: str) -> set[str]:
     return {
-        w[: -len(s)] + r for s, r in SUFFIXES if w.endswith(s) and len(w) > len(s) + 1
+        w[: -len(s)] + r
+        for s, r in SUFFIXES
+        if w.endswith(s) and len(w) > len(s) + 1 and _takes(w[: -len(s)], s)
     }
 
 
@@ -200,7 +214,8 @@ def forms(w: str) -> set[str]:
     bases = {w} | stems(w)
     out = set()
     for b in bases:
-        out |= {b, b + "s", b + "es"} | ({b[:-1] + "ies"} if b.endswith("y") else set())
+        out |= {b, b + "s"} | ({b + "es"} if _takes(b, "es") else set())
+        out |= {b[:-1] + "ies"} if b.endswith("y") else set()
     return out
 
 
@@ -211,6 +226,8 @@ def folder(df: collections.Counter, attest: int = ATTEST):
         for suf, rep in SUFFIXES:
             if w.endswith(suf) and len(w) > len(suf) + 1:
                 if suf == "s" and w.endswith("ss"):
+                    continue
+                if not _takes(w[: -len(suf)], suf):  # "ones" is not "on" + es
                     continue
                 stem = w[: -len(suf)] + rep
                 if df[stem] and df[stem] * attest >= df[w]:
@@ -305,25 +322,53 @@ def rank(
 def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> dict:
     """Rung 1 over the chunks that hold any of the bite's grams. A row is
     (where, body tf, question tf, title tf, length[, text]); `n_all` and `avg` are over
-    every chunk in the pile; `words` is the caller's `wanted(bite)[0]`. The
-    direct read and the cache both end here."""
+    every chunk in the pile; `words` is the caller's `wanted(bite)[0]`. Turned
+    word-major and scored by `score_grams`, where the cache ends too."""
+    grams: dict = collections.defaultdict(dict)
+    n_of, texts = {}, {}
+    for row in cands:
+        w = row[0]
+        n_of[w] = row[4]
+        if len(row) > 5:
+            texts[w] = row[5]
+        for x in set(row[1]) | set(row[2]) | set(row[3]):
+            grams[x][w] = row[1][x] + QUESTION * row[2][x] + TITLE * row[3][x]
+    return score_grams(
+        bite,
+        words,
+        grams,
+        n_of,
+        df_raw,
+        n_all,
+        avg,
+        copies,
+        extra,
+        texts if len(texts) == len(n_of) else None,
+        embed,
+    )
+
+
+def score_grams(
+    bite, words, grams, n_of, df_raw, n_all, avg, copies, extra, texts=None, embed=None
+) -> dict:
+    """BM25F, word by word: `grams` maps each raw gram to {where: its weighted
+    tf (body + QUESTION x question + TITLE x title)}; `n_of` is each chunk's
+    length. Each kept gram's postings are walked once, so the cost follows the
+    postings, not the chunks a common word touches. A chunk's terms are summed
+    in kept order, as `sum` over them, so the scores don't depend on the walk."""
     fold = folder(df_raw)
     fmap = {w: fold(w) for w in words}
 
     def fg(x: str) -> str:
         return " ".join(fmap.get(t, t) for t in x.split(" "))
 
-    folded = []
-    for row in cands:
-        tf = collections.Counter()
-        for x, k in row[1].items():
-            tf[fg(x)] += k
-        for x, k in row[2].items():
-            tf[fg(x)] += QUESTION * k  # BM25F: weighted before saturation
-        for x, k in row[3].items():
-            tf[fg(x)] += TITLE * k
-        folded.append((row[0], tf, row[4]) + row[5:])
-    df = collections.Counter(x for _, tf, *_ in folded for x in tf)
+    tf: dict = collections.defaultdict(dict)
+    for x in sorted(grams):
+        d = tf[fg(x)]
+        for w, k in grams[x].items():
+            if k:
+                d[w] = d.get(w, 0) + k
+    df = collections.Counter({g: len(d) for g, d in tf.items()})
     bite_grams = sorted({fg(g) for g in raw_grams(bite)})
 
     def pair_score(p: str) -> float:
@@ -332,20 +377,30 @@ def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> 
 
     kept = [g for g in bite_grams if " " not in g and df[g]]
     kept += [
-        g for g in bite_grams if " " in g and df[g] >= PAIR_MIN and pair_score(g) > 0
+        g
+        for g in bite_grams
+        if " " in g
+        and df[g] >= PAIR_MIN
+        and pair_score(g) > 0
+        and (
+            PAIR_BASIN is None or min(df[t] for t in g.split(" ")) <= PAIR_BASIN * n_all
+        )
     ]
     idf = {g: math.log(1 + (n_all - df[g] + 0.5) / (df[g] + 0.5)) for g in kept}
-
-    def bm25(tf, n) -> float:
-        norm = K1 * (1 - B + B * n / avg)
-        return sum(idf[g] * tf[g] * (K1 + 1) / (tf[g] + norm) for g in kept if tf[g])
-
+    terms: dict = {}
+    norms: dict = {}
+    for g in kept:
+        for w, t in tf[g].items():
+            norm = norms.get(w)
+            if norm is None:
+                norm = norms[w] = K1 * (1 - B + B * n_of[w] / avg)
+            terms.setdefault(w, []).append(idf[g] * t * (K1 + 1) / (t + norm))
     scored = sorted(
-        ((sc, row) for row in folded if (sc := bm25(row[1], row[2])) > 0),
-        key=lambda x: (-x[0], x[1][0]),
+        ((sc, w) for w, ts in terms.items() if (sc := sum(ts)) > 0),
+        key=lambda x: (-x[0], x[1]),
     )
-    order = [row[0] for _, row in scored]
-    by_where = {row[0]: s for s, row in scored}
+    order = [w for _, w in scored]
+    by_where = {w: sc for sc, w in scored}
     out = {
         "state": "ranked" if scored else "escalated:cold_start",
         "why": "",
@@ -355,8 +410,8 @@ def score(bite, words, cands, df_raw, n_all, avg, copies, extra, embed=None) -> 
         "pairs": {g: round(pair_score(g), 3) for g in kept if " " in g},
         "fused": False,
     }
-    if embed is not None and scored and all(len(row) > 3 for _, row in scored):
-        emb_order = embed(bite, [(row[0], row[3]) for _, row in scored])
+    if embed is not None and scored and texts is not None:
+        emb_order = embed(bite, [(w, texts[w]) for w in order])
         if emb_order is not None:
             order = rrf(order, emb_order)
             out["fused"] = True
@@ -676,7 +731,7 @@ class Cached:
         self.db, self.key, self._array = db, key, array
         self.meta = read_meta(db) if meta is None else meta
         rows = db.execute("SELECT id, sha, n, copies, repo, path, line FROM chunk")
-        self.where, self.n, self.copies = {}, {}, {}
+        self.where, self.n, self.copies, self._cid = {}, {}, {}, {}
         total = 0
         for cid, sha, n, cp, repo, path, line in rows:
             if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
@@ -684,6 +739,7 @@ class Cached:
             if not all(isinstance(x, int) for x in (cid, n, cp, line)):
                 raise ValueError("a chunk row that isn't whole numbers")
             self.where[cid] = (_clean(repo), _clean(path), line, sha)
+            self._cid[self.where[cid]] = cid
             self.n[cid] = n
             self.copies[sha] = cp
             total += cp
@@ -721,7 +777,7 @@ class Cached:
                 self._memo[w] = []
             else:
                 a, b = self._inflate(row[0]), self._inflate(row[1])
-                if len(a) != len(b) or any(c not in self.n for c in a):
+                if len(a) != len(b) or not set(a) <= self.n.keys():
                     raise ValueError("a posting that names no chunk")
                 if any(p & 3 == 3 for p in b):
                     raise ValueError("a posting in no field")
@@ -777,43 +833,47 @@ class Cached:
         if not self.n_all:
             return nothing(self.tally())
         words, pairs = wanted(bite)
-        fields: tuple = tuple(
-            collections.defaultdict(collections.Counter) for _ in range(3)
-        )
+        weight = (1, QUESTION, TITLE)
+        grams: dict = {}
         df_raw = collections.Counter()
+
+        def add(x: str, hits) -> None:
+            counts: dict = {}
+            for c, f in hits:
+                k = counts.setdefault(c, [0, 0, 0])
+                k[f] += 1
+            if counts:
+                where = self.where
+                grams[x] = {
+                    where[c]: k[0] * weight[0] + weight[1] * k[1] + weight[2] * k[2]
+                    for c, k in counts.items()
+                }
+                df_raw[x] = len(counts)
+
         for w in sorted(words):
-            seen = set()
-            for c, _, q in self.postings(w):
-                fields[q][c][w] += 1
-                seen.add(c)
-            df_raw[w] = len(seen)
+            add(w, ((c, f) for c, _, f in self.postings(w)))
+        nexts: dict = {}  # one position set per second word, not per pair
         for p in sorted(pairs):
             a, b = p.split(" ")
-            nxt = {(c, pos) for c, pos, _ in self.postings(b)}
-            seen = set()
-            for c, pos, q in self.postings(a):
-                if (c, pos + 1) in nxt:
-                    fields[q][c][p] += 1
-                    seen.add(c)
-            if seen:
-                df_raw[p] = len(seen)
-        cands = [
-            (
-                self.where[c],
-                *(f.get(c, collections.Counter()) for f in fields),
-                self.n[c],
-            )
-            for c in sorted(set().union(*fields))
-        ]
-        return score(
+            first = self.postings(a)
+            if not first or not self.postings(b):
+                continue
+            nxt = nexts.get(b)
+            if nxt is None:
+                nxt = nexts[b] = {(c, pos) for c, pos, _ in self.postings(b)}
+            add(p, ((c, f) for c, pos, f in first if (c, pos + 1) in nxt))
+        n_of = {w: self.n[self._cid[w]] for d in grams.values() for w in d}
+        return score_grams(
             bite,
             words,
-            cands,
+            grams,
+            n_of,
             df_raw,
             self.n_all,
             self.avg,
             self.copies,
             self.extra,
+            None,
             embed,
         )
 
