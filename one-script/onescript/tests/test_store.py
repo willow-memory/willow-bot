@@ -209,3 +209,11 @@ def test_merge_is_the_same_view_every_time(two):
     a = api.lookup(two[0], "ad breaks in kids games", [two[1].box])
     b = api.lookup(two[0], "ad breaks in kids games", [two[1].box])
     assert a["hits"] == b["hits"] and a["quotes"] == b["quotes"]
+
+
+def test_the_seed_ranks_the_repaired_bite_and_quotes_your_own_words(box):
+    res = api.seed(box["cfg"], "Nobody counts the add braeks in kids games")
+    assert res["repair"]["state"] == "repaired"
+    assert ["braeks", "breaks", 2] in res["repair"]["repairs"]
+    assert res["rank"][0]["path"] == "ads.md"
+    assert res["quotes"] == []  # your words, exact: nobody said this one

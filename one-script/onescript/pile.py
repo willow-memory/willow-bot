@@ -52,6 +52,8 @@ ATTEST = 10  # placeholder
 PAIR_MIN = 2  # placeholder
 QUESTION = 2.0  # placeholder
 TITLE = 2.0  # placeholder: the operator's number
+REPAIR_MIN = 4  # placeholder: the shortest word rung 2 repairs
+ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 MAX, MIN = 500, 40  # chunk characters; MAX is a placeholder
 EMBED_CHARS = 2000  # the most of one chunk the embedder reads
 SUFFIXES = (("ies", "y"), ("s", ""), ("es", ""))  # tried in this order
@@ -180,6 +182,18 @@ def stems(w: str) -> set[str]:
     return {
         w[: -len(s)] + r for s, r in SUFFIXES if w.endswith(s) and len(w) > len(s) + 1
     }
+
+
+def edits1(w: str) -> list[str]:
+    """Every spelling one edit from `w` (a deletion, a swap of neighbours, a
+    replacement or an insertion, over a-z), sorted, `w` itself left out."""
+    s = [(w[:i], w[i:]) for i in range(len(w) + 1)]
+    out = {a + b[1:] for a, b in s if b}
+    out |= {a + b[1] + b[0] + b[2:] for a, b in s if len(b) > 1}
+    out |= {a + x + b[1:] for a, b in s if b for x in ALPHABET}
+    out |= {a + x + b for a, b in s for x in ALPHABET}
+    out.discard(w)
+    return sorted(out)
 
 
 def forms(w: str) -> set[str]:
@@ -714,6 +728,44 @@ class Cached:
                 self._memo[w] = [(c, p >> 2, p & 3) for c, p in zip(a, b)]
         return self._memo[w]
 
+    def df(self, w: str) -> int:
+        """How many chunks hold `w`."""
+        return len({c for c, _, _ in self.postings(w)})
+
+    def repair(self, bite: str) -> dict:
+        """Rung 2, over hashes: a word of the bite the store holds in no form
+        is tried at every spelling one edit away (`edits1`), each hashed with
+        the store's key and looked up; the spelling most chunks hold wins, ties
+        to the first in order. The store still holds no word list: the
+        candidates come from the bite. A word it holds is never touched, nor
+        one shorter than REPAIR_MIN or not plain a-z. `repaired` or `none`, with
+        the bite as repaired and each [word, spelling, chunks]; `unreachable`
+        (the bite unchanged) when the store can't be read."""
+        try:
+            fixes = {}
+            for w in dict.fromkeys(WORD.findall(bite.lower())):
+                if len(w) < REPAIR_MIN or not (w.isascii() and w.isalpha()):
+                    continue
+                if any(self.postings(f) for f in sorted(forms(w))):
+                    continue
+                best = min(
+                    ((-d, x) for x in edits1(w) if (d := self.df(x))), default=None
+                )
+                if best is not None:
+                    fixes[w] = (best[1], -best[0])
+        except BROKEN as e:
+            why = f"the store can't be read: {type(e).__name__}"
+            return {"state": "unreachable", "why": why, "bite": bite, "repairs": []}
+        fixed = WORD.sub(
+            lambda m: fixes.get(m.group(0).lower(), (m.group(0),))[0], bite
+        )
+        return {
+            "state": "repaired" if fixes else "none",
+            "why": "",
+            "bite": fixed,
+            "repairs": [[w, x, d] for w, (x, d) in sorted(fixes.items())],
+        }
+
     def rank(self, bite: str, embed=None) -> dict:
         try:
             return self._rank(bite, embed)
@@ -971,6 +1023,11 @@ def main(argv=None) -> int:
     ap.add_argument("--sweep", type=Path, help="queries JSON: MRR at each --max-values")
     ap.add_argument("--max-values", default="128,250,500")
     ap.add_argument(
+        "--repair",
+        action="store_true",
+        help="with --cache: repair unseen words one edit away (rung 2) first",
+    )
+    ap.add_argument(
         "--cache",
         type=Path,
         help="dir for the keyed pile cache (built once per index, key and --max)",
@@ -1010,7 +1067,10 @@ def main(argv=None) -> int:
             index, repos, a.cache / f"pile-{a.max}.sqlite", index_sha, key, a.max
         )
         c = Cached(db, key)
-        out = c.rank(a.bite)
+        fix = c.repair(a.bite) if a.repair else None
+        out = c.rank(fix["bite"] if fix else a.bite)
+        if fix:
+            out["repair"] = {k: fix[k] for k in ("state", "repairs")}
         out["cache"] = state
         out["quotes"] = c.quotes(a.bite)
     else:

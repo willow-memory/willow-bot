@@ -366,3 +366,66 @@ def test_an_emphasised_question_line_in_a_body_is_a_question_field(tmp_path):
     for out in (c.rank("ad breaks"), pr.rank(idx, repos, "ad breaks")):
         assert [h["path"] for h in out["hits"]][:2] == ["q.md", "b.md"]
         assert out["hits"][0]["score"] > out["hits"][1]["score"]
+
+
+REPAIR_FILES = {
+    "k.md": "The knowledge base holds every embedder note we wrote down here.\n",
+    "c1.md": "A card file, one of two that hold a single word apiece here.\n",
+    "c2.md": "A cart file, the other of two that hold a single word apiece.\n",
+    "t.md": "the the the the and the, a short word that is everywhere here.\n",
+}
+
+
+def test_edits1_is_every_spelling_one_edit_away_and_sorted():
+    e = pr.edits1("ab")
+    assert e == sorted(e) and "ab" not in e
+    assert {"a", "b", "ba", "xab", "axb", "abx", "xb", "ax"} <= set(e)
+    assert all(abs(len(x) - 2) <= 1 for x in e)
+
+
+def test_an_unseen_word_is_repaired_to_the_spelling_the_store_holds(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    fix = c.repair("Knowlege base")
+    assert fix["state"] == "repaired" and fix["bite"] == "knowledge base"
+    assert fix["repairs"] == [["knowlege", "knowledge", 1]]
+    assert c.rank(fix["bite"])["hits"][0]["path"] == "k.md"
+    assert c.rank("knowlege")["hits"] == []  # unrepaired, the word alone misses
+    assert c.rank(c.repair("knowlege")["bite"])["hits"][0]["path"] == "k.md"
+
+
+def test_a_word_the_store_holds_is_never_touched(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    assert c.repair("knowledge embedder") == {
+        "state": "none",
+        "why": "",
+        "bite": "knowledge embedder",
+        "repairs": [],
+    }
+
+
+def test_short_and_non_ascii_words_are_left_alone(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    assert c.repair("teh")["state"] == "none"  # under REPAIR_MIN, though "the" is held
+    assert c.repair("knöwledge")["state"] == "none"
+
+
+def test_a_tie_goes_to_the_first_spelling_in_order(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    assert c.repair("carx")["repairs"] == [["carx", "card", 1]]  # card, cart: 1 each
+
+
+def test_no_spelling_one_edit_away_leaves_the_word(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    assert c.repair("zzqqxx")["state"] == "none"
+
+
+def test_a_store_that_cannot_be_read_repairs_nothing(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    c.db.close()
+    fix = c.repair("knowlege")
+    assert fix["state"] == "unreachable" and fix["bite"] == "knowlege"
+
+
+def test_a_held_word_is_not_swapped_for_a_held_neighbour(tmp_path):
+    _, _, c, _ = cached(tmp_path, REPAIR_FILES)
+    assert c.repair("card cart")["state"] == "none"  # each is one edit from the other

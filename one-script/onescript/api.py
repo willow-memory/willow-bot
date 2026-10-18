@@ -672,14 +672,16 @@ def _seed_from_store(cfg: Config, run: Run, bite: str) -> dict:
     if c is None:
         return {"store": {"state": "unreachable", "why": why}}
     try:
-        r, q = c.rank(bite), c.quotes(bite)
+        fix = c.repair(bite)  # rung 2 first: the rank reads the repaired bite
+        r, q = c.rank(fix["bite"]), c.quotes(bite)  # quotes are your words, exact
     finally:
         c.db.close()
-    if "unreachable" in (r["state"], q["state"]):
-        bad = r if r["state"] == "unreachable" else q
+    if "unreachable" in (r["state"], q["state"], fix["state"]):
+        bad = next(x for x in (fix, r, q) if x["state"] == "unreachable")
         return {"store": {"state": "unreachable", "why": bad["why"]}}
     return {
         "store": {"state": "attached", "why": ""},
+        "repair": {"state": fix["state"], "repairs": fix["repairs"]},
         "rank_state": r["state"],
         "rank": [
             {k: h[k] for k in ("repo", "path", "line", "chunk", "score")}
