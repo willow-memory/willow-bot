@@ -637,17 +637,100 @@ def open_cache(
     """The cache for this index, key and limit, built (or rebuilt) when it
     isn't: another index, key, limit or version, or another set of repos
     read than can be read now."""
-    want = _meta(index_sha, limit, key)
-    if path.is_file() and not path.is_symlink():
-        db = connect_ro(path)
-        have = read_meta(db)
-        if {k: have.get(k) for k in CORE} == want and have.get("repos") == json.dumps(
-            reachable(index, repos)
-        ):
-            return db, "warm"
-        db.close()
+    if cache_ready(index, repos, path, index_sha, key, limit):
+        return connect_ro(path), "warm"
     build_cache(index, repos, path, index_sha, key, limit)
     return connect_ro(path), "built"
+
+
+def cache_ready(
+    index: dict, repos: dict, path: Path, index_sha: str, key: bytes, limit: int = MAX
+) -> bool:
+    """Whether the cache at `path` is the one this index, key, limit, version
+    and set of readable repos would build, so it needs no build."""
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        db = connect_ro(path)
+    except BROKEN:
+        return False
+    try:
+        have = read_meta(db)
+    except BROKEN:
+        return False
+    finally:
+        db.close()
+    return {k: have.get(k) for k in CORE} == _meta(index_sha, limit, key) and have.get(
+        "repos"
+    ) == json.dumps(reachable(index, repos))
+
+
+# ── the store built in the background ──────────────────────────────────────
+# The operator: "loaded everything up in the background, in anticipation of
+# my next enter stroke" (next-pile.md). Check-in writes a `building` row and
+# starts this; it writes only the store file, never the record (one writer),
+# and reads the key itself from the keys dir, so no key sits in a spec.
+LOCK = "build.lock"
+
+
+def build_spec(box: Path, index_sha: str, repos: dict, key_path: Path) -> Path:
+    """The builder's orders, beside the store: no key, only where it lives."""
+    spec = store_path(box).parent / "build.json"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "box": str(Path(box).resolve()),
+        "index_sha256": index_sha,
+        "repos": {n: str(Path(p)) for n, p in sorted(repos.items())},
+        "key_path": str(key_path),
+    }
+    tmp = spec.with_suffix(".tmp")
+    tmp.write_text(json.dumps(body, sort_keys=True))
+    os.replace(tmp, spec)
+    return spec
+
+
+def building(box: Path) -> bool:
+    """Whether a builder holds the lock now (a lock whose process is gone is
+    stale, and is cleared)."""
+    lock = store_path(box).parent / LOCK
+    try:
+        pid = int(lock.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        lock.unlink(missing_ok=True)
+        return False
+
+
+def build_from_spec(spec_path: Path) -> int:
+    """The background builder: 0 built, 1 refused (with why on stderr)."""
+    spec = json.loads(Path(spec_path).read_text())
+    box = Path(spec["box"])
+    lock = store_path(box).parent / LOCK
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        print("a build already holds the lock", file=sys.stderr)
+        return 1
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        index, sha, _ = load_index(box)
+        if index is None or sha != spec["index_sha256"]:
+            print("the index moved since check-in", file=sys.stderr)
+            return 1
+        key, why = read_key(Path(spec["key_path"]))
+        if key is None:
+            print(f"no store key: {why}", file=sys.stderr)
+            return 1
+        repos = {n: Path(p) for n, p in spec["repos"].items()}
+        build_cache(index, repos, store_path(box), sha, key)
+        return 0
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def file_sha256(path: Path) -> str:
@@ -1070,6 +1153,9 @@ def cli_key(path: Path | None) -> tuple[bytes | None, str | None]:
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["--build-store"] and len(argv) == 2:
+        return build_from_spec(Path(argv[1]))
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("bite", nargs="?")
     root = Path(__file__).resolve().parents[2]

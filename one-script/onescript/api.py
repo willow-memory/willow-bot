@@ -105,6 +105,10 @@ class Config:
     repos: dict | None = None
     #: Attach the session's store (the pile hashed once, `pile.py`) at check-in.
     store: bool = True
+    #: Build a store that needs building in the background, so check-in never
+    #: waits on it (the operator: "loaded everything up in the background").
+    #: The CLI turns it on; it attaches at the first verb after it is ready.
+    store_background: bool = False
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -467,6 +471,24 @@ def _attach_store(cfg: Config, run: Run) -> dict:
     key, kwhy = _store_key(cfg, cfg.box, make=True)
     if index is None or key is None:
         row = {"state": "unreachable", "why": why or kwhy}
+    elif cfg.store_background and not pile_mod.cache_ready(
+        index, _repos(cfg, index), pile_mod.store_path(cfg.box), sha, key
+    ):
+        path = pile_mod.store_path(cfg.box)
+        if not pile_mod.building(cfg.box):
+            spec = pile_mod.build_spec(
+                cfg.box,
+                sha,
+                _repos(cfg, index),
+                cfg.keys.parent / pile_mod.key_name(cfg.box),
+            )
+            _spawn_build(spec)
+        row = {
+            "state": "building",
+            "why": "the store builds in the background; it attaches when ready",
+            "index_sha256": sha,
+            "store": path.name,
+        }
     else:
         path = pile_mod.store_path(cfg.box)
         try:
@@ -488,6 +510,48 @@ def _attach_store(cfg: Config, run: Run) -> dict:
             row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
     run.rec.append("store", run.sys, where=row.get("store"), **row)
     return row
+
+
+def _spawn_build(spec: Path) -> None:
+    """Start the background builder, detached: it outlives this verb."""
+    import subprocess
+
+    subprocess.Popen(
+        [sys.executable, "-m", "onescript.pile", "--build-store", str(spec)],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _finish_building(cfg: Config, run: Run, att: dict) -> dict:
+    """A `building` store, attached once its file is ready for this index and
+    key: the `attached` row this verb writes (the builder writes no rows).
+    Not ready yet: the `building` row as it stands."""
+    index, sha, _ = seed_mod.read_index(run.rec)
+    key, _ = _store_key(cfg, cfg.box)
+    path = pile_mod.store_path(cfg.box)
+    if index is None or key is None or sha != att.get("index_sha256"):
+        return att
+    if not pile_mod.cache_ready(index, _repos(cfg, index), path, sha, key):
+        return att
+    db = pile_mod.connect_ro(path)
+    try:
+        tally = pile_mod.Cached(db, key).tally()
+    finally:
+        db.close()
+    row = {
+        "state": "attached",
+        "why": "",
+        "how": "built in the background",
+        "index_sha256": sha,
+        "store": path.name,
+        "store_sha256": pile_mod.file_sha256(path),
+        **tally,
+    }
+    return run.rec.append("store", run.sys, where=path.name, **row)
 
 
 def _open_store(cfg: Config, box: Path, run: Run | None = None):
@@ -514,6 +578,12 @@ def _open_store(cfg: Config, box: Path, run: Run | None = None):
             return None, "its record's chain doesn't verify"
         rows = rec.rows()
     att = next((r for r in reversed(rows) if r.get("kind") == "store"), None)
+    if att is not None and att.get("state") == "building":
+        if run is None:
+            return None, "that session's store is still building"
+        att = _finish_building(cfg, run, att)
+        if att.get("state") == "building":
+            return None, "the store is still building; it attaches when ready"
     if att is None:
         if run is not None:
             return None, "no store attached at this check-in"

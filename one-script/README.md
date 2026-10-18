@@ -134,6 +134,22 @@ store records only its fingerprint, and another box's store is read only when
 its key is here and its record's chain verifies. A `spec` pins the stack to the record's rows up to `upto`,
 so rows added later can't move a table id out from under a seal.
 
+### The session's store
+
+The operator: "So, all those keys need to live outside the sandbox. Like in
+sean-data vault for me." (willows-grove next-pile.md). Here the store key sits
+beside the keys file, outside the box but inside whatever sandbox the box runs
+in; on the operator's machine `--keys` points that dir at the vault. That
+placement is the operator's to make.
+
+| Rule | How |
+|---|---|
+| Built in the background | The operator: "loaded everything up in the background, in anticipation of my next enter stroke." With the CLI (`Config.store_background`), a store that needs building is built by a detached process (`python -m onescript.pile --build-store`), which writes only the store file, never the record, and reads the key itself. Check-in writes a `building` row and returns; the first verb after the store is ready attaches it (an `attached` row with the file's SHA-256). Until then the store is `unreachable`: "still building". A lock stops a second build |
+| The record holds hashes, not words | "A baseline holds hashes only, never content." The seed row holds the bite's words, keys, misses, pairs and repairs keyed with the store key; the caller still gets its words in the answer. No store key: the words are left out of the row, said |
+| The cache and the direct read are one pair | "Every pair gets a named middle." `pile.rank` (reads the blobs) and `Cached.rank` (reads the store) both end in `score_grams`; `test_the_cache_ranks_exactly_as_the_direct_read` is the reconciler, byte for byte |
+| Typos, rung 2 | `Cached.repair`: an unseen word tried one edit away, each spelling hashed with the key; the words never leave the bite |
+| Every number is the operator's | `deep_thought.py`: "the numbers are yours … The script may propose each from the record; it never sets one." `MAX`, `MIN`, `TITLE`, `QUESTION`, `ATTEST`, `PAIR_MIN`, `PAIR_BASIN` (off), `REPAIR_MIN`, `MAX_STORE`, `MAX_POSTING` are placeholders |
+
 ### Escalate: the deterministic chain
 
 `python3 -m onescript escalate "<task>"` (`api.escalate`) runs the chain over the
@@ -174,7 +190,7 @@ Everything here is a record row. Nothing is written into Nestor's store.
 
 | Row | Written when | Holds |
 |---|---|---|
-| `miss` | a seed whose words the session's store has no posting for (in any form `rank` looks for), and no sentence of the bite was said before | the bite's hash, the SHA-256 of each missing word, the count, the seed row and the check-in. Never a word |
+| `miss` | a seed whose words the session's store has no posting for (in any form `rank` looks for), and no sentence of the bite was said before | the bite's hash, each missing word keyed with the box's store key (BLAKE2b-128), the count, the seed row and the check-in. Never a word, and never a plain hash of one |
 | `writeback` (`proposed`) | an `escalate_rung` row settles `answered`, or a sealed proposal is written | subject `writeback:<sha256>` over `{bite_hash, answer_hash, cites}`; the answer (cites rewritten to content); where it came from |
 
 - **The bite** is this check-in's seed (the words that missed); with no seed,

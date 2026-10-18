@@ -115,6 +115,8 @@ def _checkin_screen(rep: dict, nested: bool = False) -> str:
         what = (
             f"attached ({st['how']}): {st['store']}"
             if st["state"] == "attached"
+            else f"building in the background: {st['store']}"
+            if st["state"] == "building"
             else f"unreachable — {st.get('why', '')}"
         )
         L.append(f"store: {what}")
@@ -469,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         phone=args.phone,
         beacon=beacon.drand_reader if args.drand else None,
         repos=dict(args.repos) or None,
+        store_background=True,
     )
 
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
