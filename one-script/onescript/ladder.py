@@ -89,6 +89,8 @@ def offer_line(o: dict) -> str:
 GONE = {
     "not in the index": "not_in_index",
     "the blob doesn't hash to the index": "hash_mismatch",  # or blob_gone, below
+    "bytes don't hash to the index": "hash_mismatch",  # seed.Texts' wording
+    "blob not in the checkout": "blob_gone",
     "the chunk isn't at that line with that hash": "not_at_line",
     "not utf-8": "not_utf8",
 }

@@ -114,14 +114,15 @@ exception. Nothing moves before a check-in or after a check-out.
 | Function | What it does |
 |---|---|
 | `checkin(cfg)` | Boot: record, probes, the four gates. Makes this session's serve key |
-| `seed(cfg, bite, repos)` | The first bite's words against the box (`seed.py`): the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index. Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in |
+| `seed(cfg, bite, repos)` | The first bite's words against the box (`seed.py`): the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index. Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in. A held write-back for this exact bite answers it first (`answered_by`), and unseen words are a `miss` row of hashes |
 | `scope(cfg, by, match, upto, max_chars=None)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack. Each chunk's size in characters, read at its blob (no text), the total, and the served document's length; with `max_chars`, whether it `fits` |
 | `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
 | `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped. A chunk found gone (not in the index, blob gone, hash mismatch, not at its line) gets one `tombstone` row per check-in, with `forward` where the same SHA-256 reads now |
 | `decline_offer(cfg, key)` | The human's No to a ladder offer (`ladder.py`: asked 1 does, 2 notices, 3 offers, again every 3rd ask); an `offer_declined` row stops it for that key |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
 | `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
-| `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below) |
+| `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below). Each answered piece is proposed as a write-back |
+| `writeback_seal(cfg, subject, proof / pair)` | The human's seal over one write-back's exact subject (`writeback:<hash>`); held, the same bite stops at rung 1 (below) |
 | `checkout(cfg)` | Reverse, then the morning screen |
 
 The record is the only state between calls, except two keys kept beside the
@@ -161,6 +162,61 @@ One vocabulary: `answered`, or `escalated:<reason>`.
 | `cap` | a piece, or a rung's output, was over its cap |
 | `rung_error` | the rung failed: non-zero exit, unreadable output, or a row the contract or door refused |
 | `empty_scope` | nothing populated is served in this check-in |
+
+### Every escalation writes back
+
+`onescript/writeback.py`. The loop (next-pile.md, "the loop", 6): "the cloud's
+answer is recorded into the pile, tied to the words that missed"; the ladder
+(the one-script README): "every answer is written back by the hash of the
+phrasing, so the next time it stops at rung 1"; the forge's intake contract
+(`the-forge-shape.md`): "a miss log — what was asked that nothing answered".
+Everything here is a record row. Nothing is written into Nestor's store.
+
+| Row | Written when | Holds |
+|---|---|---|
+| `miss` | a seed whose words the session's store has no posting for (in any form `rank` looks for), and no sentence of the bite was said before | the bite's hash, the SHA-256 of each missing word, the count, the seed row and the check-in. Never a word |
+| `writeback` (`proposed`) | an `escalate_rung` row settles `answered`, or a sealed proposal is written | subject `writeback:<sha256>` over `{bite_hash, answer_hash, cites}`; the answer (cites rewritten to content); where it came from |
+
+- **The bite** is this check-in's seed (the words that missed); with no seed,
+  the task as written (or the turn's own bite, for a proposal).
+- **The cites** are content hashes: a chunk's own SHA-256, else the table's
+  content id. The served ids are keyed with the session's serve key and mean
+  nothing in another session. A cite that doesn't map to this check-in's
+  served file, or no cite at all, and nothing is proposed (said, in the
+  verb's `writeback` list).
+- **Held** only while the human's seal over that exact subject verifies
+  (`Run.held`): the HMAC proof, or a sealed Nestor pair whose conclusion is the
+  subject, read from `Config.nestor_db` as any other seal is. A changed byte in
+  the bite, the answer or a cite is another subject with no seal.
+- **The read-back** runs at `seed`, before anything is ranked. A held
+  write-back whose `bite_hash` is this bite's hash, exactly, answers it: the
+  seed row says `answered_by: writeback:<subject>`, and its `writeback` field
+  carries the cites and the row. Nothing fuzzy. A hit logs no miss.
+- **Three states** in the seed's `writeback` field: `held`, `none` (with
+  `unsealed: n` when candidates wait on a seal), and `unreachable` when a
+  candidate's seal can't be checked here (the store or keyring is gone). An
+  unchecked seal is never a hit.
+- **A row is judged on its own bytes.** A `writeback` row whose answer doesn't
+  hash to its `answer_hash`, whose subject isn't the hash of its fields, or
+  whose hashes aren't SHA-256s is skipped, even when another row with that
+  subject is sealed.
+- A store that can't be read logs no miss: unknown is not a miss.
+- `needs` adds `writeback: {misses, since, line, writebacks_proposed,
+  writebacks_held}` when the record holds a miss or a write-back: "N misses
+  since <ts>", counts only. The NEEDS YOU lines are unchanged, so the screen
+  and `needs` still agree.
+
+What the operator decides (not done here):
+
+| Question | Now |
+|---|---|
+| Export held write-backs to Nestor as draft pairs (`nestor.answer.propose`), so they're sealed in Nestor's UI alongside everything else | Not done; the one script only reads Nestor |
+| A missing word's hash: plain SHA-256 (comparable across sessions, but a short word is recoverable by trying a dictionary) or keyed | Plain SHA-256 |
+| Should a write-back hit skip the ranking entirely ("nothing runs") | The seed still scans and ranks, so `scope --seed-top` works; `answered_by` is set first |
+| Which bite an answer is tied to when the escalate task isn't the seed's bite | The check-in's seed, else the task as written |
+| Whether D0's (code's) answers should be written back, since code answers them again anyway | Written back when its cites map to the served file, like any other |
+| A newer held write-back for the same bite supersedes an older one | The newest held one answers; nothing is retired |
+| The spot check ("a small sample of hits is sent up the chain anyway") | Not built; a wrong hit still doesn't escalate |
 
 ### The served-text cap
 

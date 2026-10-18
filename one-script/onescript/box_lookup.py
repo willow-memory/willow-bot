@@ -103,12 +103,12 @@ class PileBox:
             ((name, c),) = self._stores.items()
             out = c.rank(bite)
             if out["state"] == UNREACHABLE:
-                return UNREACHABLE, [], f"{name} holds no chunks"
+                return UNREACHABLE, [], f"{name}: {out.get('why') or 'unreachable'}"
             return out["state"], out["hits"], ""
         out = pile_mod.merge(self._stores, bite)
-        down = [n for n, s in out["sessions"].items() if s == UNREACHABLE]
+        down = [n for n, s in out["sessions"].items() if s.get("state") == UNREACHABLE]
         if len(down) == len(self._stores):
-            return UNREACHABLE, [], "no store holds chunks: " + ", ".join(down)
+            return UNREACHABLE, [], "no store could answer: " + ", ".join(down)
         why = f"unreachable: {', '.join(down)}" if down else ""
         return "ranked", out["hits"], why
 
