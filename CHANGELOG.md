@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [1.13.0](https://github.com/willow-memory/willow-bot/compare/v1.12.0...v1.13.0) (2026-10-19)
+
+
+### Added
+
+* **onescript:** one seal per session, at its end, over the session's bundle ([b5871d5](https://github.com/willow-memory/willow-bot/commit/b5871d5348760ce93f7e16b90cfa40f8101a83e6))
+* **onescript:** the box starts right after the first bite ([831461c](https://github.com/willow-memory/willow-bot/commit/831461c7a24dc9bf4a91e0352cb50e966883d4a7))
+* **onescript:** the box starts right after the first bite, and seals once at the session's end ([63de7c1](https://github.com/willow-memory/willow-bot/commit/63de7c1f534cd41d658b9b5ad045d739a05b49ad))
+
 ## [1.12.0](https://github.com/willow-memory/willow-bot/compare/v1.11.0...v1.12.0) (2026-10-18)
 
 
