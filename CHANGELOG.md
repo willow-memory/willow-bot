@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.14.0](https://github.com/willow-memory/willow-bot/compare/v1.13.0...v1.14.0) (2026-10-19)
+
+
+### Added
+
+* **onescript:** Jeles as the pile's escalation rung ([917d98e](https://github.com/willow-memory/willow-bot/commit/917d98e2531b21318f7efa13982bdfe4a346d360))
+* **onescript:** Jeles as the pile's escalation rung ([e07899b](https://github.com/willow-memory/willow-bot/commit/e07899beda88776e10d0fce6ff39cd16b472d5e0))
+
 ## [1.13.0](https://github.com/willow-memory/willow-bot/compare/v1.12.0...v1.13.0) (2026-10-19)
 
 
