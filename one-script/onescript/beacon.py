@@ -36,9 +36,9 @@ on one operator's reader can each forecast the same round and play only the
 box whose forecast the dice favour; closing that needs a round registry
 beside the operator's reader, which this module does not have.
 
-The dice (R23a): `Stream` restates the-table's `the_table/stream.py`
-(`Stream.u32`, `Stream.below`, generator `sha256-stream/v1`) so a roll can be
-REPLAYED from the open row's randomness alone; `roll_2d6` replays
+The dice (R23a): `Stream` is the pile's one stream (`onescript/stream.py`,
+generator `sha256-stream/v1`, flatten F1) so a roll can be REPLAYED from the
+open row's randomness alone; `roll_2d6` replays
 `engine_v1_7.Engine.roll`'s two `random.randint(1, 6)` draws
 (`apps/game/engine_v1_7.py`, through `StreamRandom.randint`). e2e pins both
 equal to the-table's.
@@ -49,6 +49,8 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
+
+from . import stream
 
 DRAND = "https://api.drand.sh"
 CHAIN = "8990e7a9aaed2ffed73dbd7092123d6f289930540d7651336225dc172e51b2ce"
@@ -119,26 +121,8 @@ def latest(read) -> tuple[int | None, str | None]:
 
 
 # ── the dice, replayed (R23a) ────────────────────────────────────────────────
-GENERATOR_ID = "sha256-stream/v1"  # the_table/stream.py GENERATOR_ID
-
-
-class Stream:
-    """the_table/stream.py `Stream`, restated: SHA-256 over seed + counter."""
-
-    def __init__(self, seed: bytes, n: int = 0):
-        self.seed, self.n = seed, n
-
-    def u32(self) -> int:
-        d = hashlib.sha256(self.seed + self.n.to_bytes(8, "big")).digest()
-        self.n += 1
-        return int.from_bytes(d[:4], "big")
-
-    def below(self, k: int) -> int:
-        """Uniform in 0..k-1, by rejection (no modulo bias), as the table's."""
-        cap = (1 << 32) - (1 << 32) % k
-        while (x := self.u32()) >= cap:
-            pass
-        return x % k
+GENERATOR_ID = stream.GENERATOR_ID
+Stream = stream.Stream  # the one stream (flatten F1); was a restatement here
 
 
 def roll_2d6(randomness: str, counter_before: int) -> tuple[int, int, int]:
