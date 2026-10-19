@@ -77,7 +77,16 @@ session outside Rat then had no per-prompt pass at all. It has one again:
   `empty` ("narrow the stack"). A crash exits 2, which blocks the prompt.
 - The box is willow-bot's `.flow/onescript/` unless `ONESCRIPT_BOX` and
   `ONESCRIPT_KEYS` name another. The cap is `ONESCRIPT_MAX_CHARS`.
-- Cost: about 11 s a prompt on a warm store. The check-in stays once a session.
+- The embedder rung (the pile's rung 3) fuses in when `ONESCRIPT_EMBED` (or
+  `--embed`) names WordLlama's local file dir: the words' top `EMBED_POOL`
+  (100) candidates, re-read at their indexed blobs, ranked by the embedder and
+  fused by RRF, the way `pile.score_grams` fuses. Install it with
+  `pip install -e ".[embed]"`; the model is the one WordLlama bundles, never
+  downloaded (its tokenizer config is copied into the cache dir, since 0.4
+  ships it where its own lookup doesn't look). The served document's `rung`
+  says `fused` or `words`, and why. The lookup row still keeps SEED_TOP.
+- Cost: about 11–14 s a prompt on a warm store, about 1 s more with the
+  embedder. The check-in stays once a session.
 
 Said, not hidden: `prompt.py`'s frame opens with "data the human's sealed
 scope allows you to read". A per-prompt document is not sealed; its own

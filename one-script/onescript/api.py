@@ -126,6 +126,11 @@ class Config:
     #: check-in reads the person's seal back. Off: a scope serves only once
     #: sealed, as before. The CLI turns it on.
     seal_at_end: bool = False
+    #: The pile's rung 3 for the per-prompt hook: WordLlama's local file dir.
+    #: Set, `prompt` fuses the words' rank with the embedder's by RRF over the
+    #: top EMBED_POOL candidates; None, or a rung that won't load: the words'
+    #: rank alone, and the served document says which.
+    embed: Path | None = None
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -1112,8 +1117,12 @@ def lookup(
     return {**_lookup(cfg, run, bite, boxes), "code": 0}
 
 
-def _lookup(cfg: Config, run: Run, bite: str, boxes: Iterable[Path] = ()) -> dict:
-    """`lookup`'s work on an open run: the merge, and its one `lookup` row."""
+def _lookup(
+    cfg: Config, run: Run, bite: str, boxes: Iterable[Path] = (), keep: int = 0
+) -> dict:
+    """`lookup`'s work on an open run: the merge, and its one `lookup` row.
+    The row keeps SEED_TOP chunks; the answer keeps `keep` (default SEED_TOP),
+    so a caller fusing a second rank has candidates past the row's."""
     stores, states, tags = {}, {}, {"this": "this"}
     mine, why = _open_store(cfg, cfg.box, run)
     if mine is None:
@@ -1135,7 +1144,8 @@ def _lookup(cfg: Config, run: Run, bite: str, boxes: Iterable[Path] = ()) -> dic
         for c in stores.values():
             c.db.close()
     out["sessions"] = {**states, **out["sessions"]}
-    out["hits"] = out["hits"][:SEED_TOP]
+    out["hits"] = out["hits"][: max(keep, SEED_TOP)]
+    top = out["hits"][:SEED_TOP]
     run.rec.append(
         "lookup",
         run.sys,
@@ -1144,13 +1154,14 @@ def _lookup(cfg: Config, run: Run, bite: str, boxes: Iterable[Path] = ()) -> dic
             tags[n]: s["state"] if s["state"] in STATE_WORDS else "unreachable"
             for n, s in out["sessions"].items()
         },
-        top=[[h["chunk"], h["seen_in"]] for h in out["hits"]],
+        top=[[h["chunk"], h["seen_in"]] for h in top],
     )
     return out
 
 
 # ── prompt: every prompt is a bite (workflow.md §2c), served into the turn ──
 PROMPT_TOP = 8  # the chunks one prompt's bite serves; the lookup row keeps SEED_TOP
+EMBED_POOL = 100  # the words' top candidates the embedder re-ranks (rung 3)
 PROMPT_RETURN = (
     "Context drawn by code from the box for this prompt, by the prompt's own "
     "words. Answer the human as you would; where you lean on a table, cite its "
@@ -1172,6 +1183,8 @@ def prompt(
     index is `unreachable`; a bite that finds nothing is `empty`; over the
     caller's cap is `empty` ("narrow the stack"), never truncated."""
 
+    rung = {"used": "words", "why": "no embedder set" if cfg.embed is None else ""}
+
     def doc(state: str, why: str, tables: list | None = None) -> dict:
         out = {
             "state": state,
@@ -1181,6 +1194,7 @@ def prompt(
         }
         if state == "populated":
             out["seal"] = served.UNSEALED
+            out["rung"] = dict(rung)
         return {"doc": out, "state": state, "why": why, "code": 0}
 
     run, info = _open(cfg, "prompt", argv)
@@ -1192,8 +1206,8 @@ def prompt(
         return doc("empty", "the prompt has no words to look up")
     if run.serve_key is None:
         return doc("unreachable", "no serve key this check-in")
-    out = _lookup(cfg, run, text)
-    hits = out["hits"][:PROMPT_TOP]
+    out = _lookup(cfg, run, text, keep=EMBED_POOL if cfg.embed else 0)
+    hits = out["hits"]
     if not hits:
         why = next((s["why"] for s in out["sessions"].values() if s.get("why")), "")
         return doc("empty", why or "the bite found nothing in this box")
@@ -1201,20 +1215,36 @@ def prompt(
     if index is None:
         return doc("unreachable", "no index this check-in; seed once first")
     repos = _repos(cfg, index)
-    tables = []
-    for h in hits:
+    texts: dict = {}
+
+    def read(ch: dict):
+        if ch["sha256"] not in texts:
+            texts[ch["sha256"]] = pile_mod.read_chunk(index, repos, ch)
+        return texts[ch["sha256"]]
+
+    def chunk_of(h: dict) -> dict:
         repo, path, line = h["where"][0]
-        ch = {"repo": repo, "path": path, "line": line, "sha256": h["chunk"]}
-        t = {"rows": [], "source": {"chunk": ch}}
-        tables.append(
-            served._chunk_entry(
-                t,
-                h["chunk"],
-                run.serve_key,
-                set(),
-                lambda c: pile_mod.read_chunk(index, repos, c),
-            )
-        )
+        return {"repo": repo, "path": path, "line": line, "sha256": h["chunk"]}
+
+    if cfg.embed is not None:
+        embed = pile_mod.wordllama_embed(cfg.embed)
+        if embed is None:
+            rung["why"] = "the embedder can't be loaded from its local files"
+        else:
+            cands = []  # the pile's candidate shape: ((repo, path, line, sha), text)
+            for h in hits:
+                ch = chunk_of(h)
+                t, _ = read(ch)
+                if t is not None:  # a chunk that can't be read can't be embedded
+                    cands.append(((ch["repo"], ch["path"], ch["line"], h["chunk"]), t))
+            by = {h["chunk"]: h for h in hits}
+            ranked = [w[3] for w in embed(text, cands)]
+            hits = [by[k] for k in pile_mod.rrf([h["chunk"] for h in hits], ranked)]
+            rung["used"] = "fused"
+    tables = []
+    for h in hits[:PROMPT_TOP]:
+        t = {"rows": [], "source": {"chunk": chunk_of(h)}}
+        tables.append(served._chunk_entry(t, h["chunk"], run.serve_key, set(), read))
     tables.sort(key=lambda t: t["id"])
     res = doc("populated", "", tables)
     if max_chars is not None and len(record.canon(res["doc"])) > max_chars:

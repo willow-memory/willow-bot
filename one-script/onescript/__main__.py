@@ -50,6 +50,7 @@ so a turn proves the record's chain, not who sat at the keyboard.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import shlex
@@ -229,6 +230,10 @@ def _prompt_hook(cfg, args, raw) -> int:
             cap = frame.cap_from(os.environ.get("ONESCRIPT_MAX_CHARS"))
         elif cap < 1:
             raise ValueError("cap must be positive")
+        where = args.embed or os.environ.get("ONESCRIPT_EMBED") or None
+        cfg = dataclasses.replace(
+            cfg, embed=Path(where).expanduser() if where else None
+        )
         res = api.prompt(cfg, text if isinstance(text, str) else "", cap, argv=raw)
         out = {
             "hookEventName": "UserPromptSubmit",
@@ -354,6 +359,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="the cap on the served text (default: $ONESCRIPT_MAX_CHARS, else none)",
+    )
+    pr.add_argument(
+        "--embed",
+        type=Path,
+        default=None,
+        help="WordLlama's local file dir: fuse the embedder rung (default: $ONESCRIPT_EMBED)",
     )
     dc = sub.add_parser(
         "decline", help="the human's No to an offer: not offered again for that key"

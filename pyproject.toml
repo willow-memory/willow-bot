@@ -41,6 +41,13 @@ mcp = ["mcp>=1.0,<3"]
 # `ruff` is pinned exactly to the fleet's CI pin: the one script's toolchain
 # gate checks the bot venv's ruff against it (D2: the venvs live in the bot).
 dev = ["pytest>=8", "httpx>=0.27", "ruff==0.16.7"]
+# The pile's rung 3 (`pile.wordllama_embed`): a static embedder, run from the
+# model files its package bundles, never downloaded. The per-prompt hook fuses
+# it with the words' rank when `ONESCRIPT_EMBED` names its cache dir.
+#   wordllama: 0.4 is the release the rung and the hook were verified against
+#   (its bundled `l2_supercat_256`); capped at the next minor, whose file
+#   layout the rung's tokenizer copy depends on.
+embed = ["wordllama>=0.4,<0.5"]
 # The grove CLI seat's runtime (D2: the venvs live in the bot). The seat's
 # close-out deposit lazy-imports `willow_mcp` (onescript_deposit, db.Store) and
 # its flowering turns shell out to the `ratatosk` console script, so a
