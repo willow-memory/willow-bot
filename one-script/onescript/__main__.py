@@ -201,6 +201,45 @@ def _bot_venv() -> Path:
     return old if not new.is_dir() and old.is_dir() else new
 
 
+def _frame():
+    """prompt.py, the one frame both seats use (Rat's and this hook): the
+    named middle, so what the model is shown can't drift between them."""
+    import importlib.util  # noqa: PLC0415
+
+    spec = importlib.util.spec_from_file_location(
+        "onescript_prompt", ROOT / "one-script" / "prompt.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _prompt_hook(cfg, args, raw) -> int:
+    """Every prompt is a bite (willows-grove one-script/workflow.md §2c): the
+    hook's event on stdin, its prompt looked up in the box, the result framed
+    by prompt.py into the turn. The prompt's words never reach argv or the
+    record (the `lookup` row keeps its hash). A crash exits 2, which blocks
+    the prompt: it never fails open."""
+    try:
+        event = json.load(sys.stdin)
+        text = event.get("prompt", "") if isinstance(event, dict) else ""
+        frame = _frame()
+        cap = args.max_chars
+        if cap is None:
+            cap = frame.cap_from(os.environ.get("ONESCRIPT_MAX_CHARS"))
+        elif cap < 1:
+            raise ValueError("cap must be positive")
+        res = api.prompt(cfg, text if isinstance(text, str) else "", cap, argv=raw)
+        out = {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": frame.context(res["doc"]),
+        }
+        print(json.dumps({"hookSpecificOutput": out}))
+        return 0
+    except Exception:  # noqa: BLE001 — any failure blocks; it never fails open
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
     p.add_argument("--box", type=Path, default=ROOT / ".flow" / "onescript")
@@ -305,6 +344,16 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument("bite")
     lk.add_argument(
         "--other", action="append", default=[], type=Path, help="another session's box"
+    )
+    pr = sub.add_parser(
+        "prompt",
+        help="Claude Code UserPromptSubmit: the prompt (stdin) as a bite, served into the turn",
+    )
+    pr.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help="the cap on the served text (default: $ONESCRIPT_MAX_CHARS, else none)",
     )
     dc = sub.add_parser(
         "decline", help="the human's No to an offer: not offered again for that key"
@@ -676,6 +725,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "lookup":
         res = api.lookup(cfg, args.bite, args.other, argv=raw)
+    elif args.cmd == "prompt":
+        return _prompt_hook(cfg, args, raw)
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)

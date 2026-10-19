@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/one-script/scripts/prompt-hook",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

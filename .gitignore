@@ -1,4 +1,7 @@
-.claude/
+# .claude/ stays local, except the settings that wire the per-prompt
+# one-script hook (one-script/scripts/prompt-hook), which are committed.
+.claude/*
+!.claude/settings.json
 __pycache__/
 .venv/
 *.pyc

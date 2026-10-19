@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Claude Code UserPromptSubmit: every prompt is a bite (willows-grove
+# one-script/workflow.md §2c). The prompt, on stdin, is looked up in the box
+# and what it finds is framed into the turn by prompt.py. Wired in willow-bot's
+# .claude/settings.json; the box is willow-bot's own .flow/onescript unless
+# ONESCRIPT_BOX and ONESCRIPT_KEYS name another. Exit 2 blocks the prompt.
+set -u
+here="$(cd "$(dirname "$0")/.." && pwd)"   # one-script/
+bot="$(dirname "$here")"                   # willow-bot/
+py="${ONESCRIPT_PYTHON:-}"
+if [ -z "$py" ]; then
+  for c in "$bot/venvs/willow-bot/bin/python" "$HOME/.willow/venvs/willow-bot/bin/python" python3; do
+    if command -v "$c" >/dev/null 2>&1; then py="$c"; break; fi
+  done
+fi
+args=()
+[ -n "${ONESCRIPT_BOX:-}" ] && args+=(--box "$ONESCRIPT_BOX")
+[ -n "${ONESCRIPT_KEYS:-}" ] && args+=(--keys "$ONESCRIPT_KEYS")
+cd "$here" && exec "$py" -m onescript ${args[@]+"${args[@]}"} prompt
