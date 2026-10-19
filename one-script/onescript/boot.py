@@ -118,6 +118,34 @@ def _run(
     return p.returncode, lines[-1] if lines else ""
 
 
+#: Run by the suite's own interpreter: prints the modules it can't import, or "-".
+_PROBE = (
+    "import importlib.util, sys; "
+    "print(' '.join(m for m in sys.argv[1:] if importlib.util.find_spec(m) is None)"
+    " or '-')"
+)
+
+
+def _missing(s: dict, runner) -> list[str]:
+    """The suite's `needs` that its interpreter can't import. A suite with a
+    `python` (the bot's venv, D2) is asked through that interpreter, never this
+    one: a module this process happens to have says nothing about the venv. One
+    that won't start is missing everything."""
+    needs = list(s.get("needs", []))
+    if not needs:
+        return []
+    py = s.get("python")
+    if py is None:
+        return [m for m in needs if importlib.util.find_spec(m) is None]
+    try:
+        rc, last = runner([py, "-c", _PROBE, *needs], ".")
+    except (OSError, subprocess.SubprocessError):
+        return needs
+    if rc != 0:
+        return needs
+    return [] if last.strip() == "-" else last.split()
+
+
 def tests_gate(
     suites: list[dict], runner=_run, phone: bool = False, skipped: list | None = None
 ) -> list[dict]:
@@ -130,10 +158,13 @@ def tests_gate(
         for s in sorted(skipped or [], key=lambda s: s["name"])
     ]
     for s in sorted(suites, key=lambda s: s["name"]):
-        missing = [m for m in s.get("needs", []) if importlib.util.find_spec(m) is None]
+        missing = _missing(s, runner)
         if missing:
+            where = " in the venv" if s.get("python") else ""
             out.append(
-                _unreachable("tests", s["name"], f"can't run: needs {missing}", phone)
+                _unreachable(
+                    "tests", s["name"], f"can't run: needs {missing}{where}", phone
+                )
             )
         elif not Path(s["cwd"]).is_dir():
             out.append(

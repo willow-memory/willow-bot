@@ -41,6 +41,7 @@ public keys only), both fixed in `Config` and never taken from the caller.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -57,6 +58,7 @@ from . import ladder
 from . import pile as pile_mod
 from . import seed as seed_mod
 from . import serve as served
+from . import session as session_mod
 from . import writeback as wb_mod
 from .run import PKG, Run
 
@@ -109,6 +111,21 @@ class Config:
     #: waits on it (the operator: "loaded everything up in the background").
     #: The CLI turns it on; it attaches at the first verb after it is ready.
     store_background: bool = False
+    #: A Forge checkout (the repo root, holding `forge/entry.py`): put first on
+    #: the import path for `forge_bite`, so the Forge needs a clone, not an
+    #: install. None, or no `forge/entry.py` there: whatever is importable.
+    forge: Path | None = None
+    #: When the pile holds no xref index at check-in, build one over these
+    #: repos (name -> path), through the record, before the store attaches.
+    #: None: no index is `unreachable`, said, as before. An index that is there
+    #: but doesn't hash to its pointer is never rebuilt over.
+    index_repos: dict | None = None
+    #: One seal per session, at its end (`onescript.session`; the operator,
+    #: 2026-10-19). Serve hands out an unsealed scope, the Forge's card answers
+    #: are drafts, check-out proposes the session's bundle to Nestor, and
+    #: check-in reads the person's seal back. Off: a scope serves only once
+    #: sealed, as before. The CLI turns it on.
+    seal_at_end: bool = False
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -272,6 +289,10 @@ def _gate_cfg(
             }
         ]
     else:
+        # The suite runs in the bot's venv when it has one (D2), and its needs
+        # are asked of that interpreter; else this one, as before.
+        venv_py = venv / "bin" / "python"
+        py = str(venv_py) if venv_py.exists() else None
         # Set in the child's environment only. Setting it in this process
         # would make every later check-in in a long-lived process skip the gate.
         cfg["tests"] = [
@@ -282,7 +303,7 @@ def _gate_cfg(
                 # whatever it would find beside itself.
                 "env": {NESTED: "1", "ONESCRIPT_GROVE": str(grove)},
                 "argv": [
-                    sys.executable,
+                    py or sys.executable,
                     "-m",
                     "pytest",
                     "-q",
@@ -292,6 +313,7 @@ def _gate_cfg(
                 ],
                 "cwd": str(PKG.parent),
                 "needs": ["pytest"],
+                **({"python": py} if py else {}),
             }
         ]
     return cfg
@@ -427,6 +449,8 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
     _save_serve_key(cfg, run.serve_key)
     if cfg.store and not rep["hard_close"]:
         rep["store"] = _attach_store(cfg, run)
+    if cfg.seal_at_end and not rep["hard_close"]:
+        rep["sessions"] = _read_session_seals(cfg, run)
     return {
         "report": rep,
         "nested": info["nested"],
@@ -468,6 +492,11 @@ def _attach_store(cfg: Config, run: Run) -> dict:
     reason and each unreachable repo. No index or no key is `unreachable`,
     said, and the box opens."""
     index, sha, why = seed_mod.read_index(run.rec)
+    indexed = False
+    if index is None and why == seed_mod.NO_INDEX and cfg.index_repos:
+        _index_box(cfg, run)
+        index, sha, why = seed_mod.read_index(run.rec)
+        indexed = index is not None
     key, kwhy = _store_key(cfg, cfg.box, make=True)
     if index is None or key is None:
         row = {"state": "unreachable", "why": why or kwhy}
@@ -508,8 +537,34 @@ def _attach_store(cfg: Config, run: Run) -> dict:
             }
         except Exception as e:  # noqa: BLE001 — a store that can't be built is a state
             row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
+    if indexed:
+        row["indexed"] = sorted(cfg.index_repos)
     run.rec.append("store", run.sys, where=row.get("store"), **row)
     return row
+
+
+def _index_box(cfg: Config, run: Run) -> None:
+    """The xref index over `cfg.index_repos`, written through this run's record
+    as `onescript.xref index --record` writes it: both outputs, then one `xref`
+    row saying which repos at which commits (`at: checkin`)."""
+    from . import xref
+
+    idx = xref.build(sorted((n, Path(p)) for n, p in cfg.index_repos.items()))
+    ib = (xref.canon(idx) + "\n").encode()
+    rb = xref.report(idx).encode()
+    run.rec.write_file(run.sys, seed_mod.INDEX, ib, provenance="authored")
+    run.rec.write_file(run.sys, "xref/report.txt", rb, provenance="authored")
+    run.rec.append(
+        "xref",
+        run.sys,
+        at="checkin",
+        inputs=[
+            {k: i.get(k) for k in ("repo", "state", "commit", "on_remote")}
+            for i in idx["inputs"]
+        ],
+        index_sha256=record.h256(ib),
+        report_sha256=record.h256(rb),
+    )
 
 
 def _spawn_build(spec: Path) -> None:
@@ -652,7 +707,88 @@ def checkout(
         read_head=read_head,
         breaks=before,
     )
-    return {"report": rep, "screen": screen, "code": 0}
+    out = {"report": rep, "screen": screen, "code": 0}
+    if cfg.seal_at_end:
+        out["session"] = _close_session(cfg, run)
+    return out
+
+
+def _close_session(cfg: Config, run: Run) -> dict:
+    """The session, from its check-in to now, as one bundle: written to the box
+    and proposed to Nestor as one draft pair over its hash. One `session` row
+    says which, and why when Nestor can't take it; the bundle is on the record
+    either way, so the proposal can be made again."""
+    rows = run.rec.rows()
+    start = session_mod.current(rows)
+    if start is None:
+        return {"state": "empty", "why": "no check-in to close"}
+    b = session_mod.bundle(rows, start, record.h256(str(cfg.box.resolve()))[:12])
+    data = session_mod.canonical(b)
+    subj = session_mod.subject(data)
+    where = f"{session_mod.DIR}/{start}.json"
+    run.rec.write_file(run.sys, where, data, provenance="authored")
+    pair = _propose_session(cfg, b, subj)
+    run.rec.append(
+        session_mod.KIND,
+        run.sys,
+        where=where,
+        subject=subj,
+        bundle_sha256=record.h256(data),
+        actions=len(b["actions"]),
+        pair=pair,
+        **{"from": start},
+    )
+    return {"subject": subj, "actions": len(b["actions"]), "pair": pair}
+
+
+def _propose_session(cfg: Config, bundle: dict, subj: str) -> dict:
+    """Nestor's draft pair for the bundle (`nestor.session_seal.propose`), or
+    `unreachable` and why. A draft is a proposal: Nestor lets a machine make
+    one, and only the person seals or denies it."""
+    if cfg.nestor_db is None:
+        return {"state": "unreachable", "why": NO_STORE}
+    try:
+        from nestor import cascade, home_paths  # type: ignore[import-not-found]
+        from nestor import session_seal as ns  # type: ignore[import-not-found]
+        from nestor.sqlite_store import SqliteStore  # type: ignore[import-not-found]
+    except ImportError as e:
+        return {"state": "unreachable", "why": f"Nestor isn't importable: {e}"}
+    try:
+        cascade.set_ledger_path(home_paths.ledger_for(cfg.nestor_db))
+        store = SqliteStore(str(cfg.nestor_db))
+        store.init_db()
+        got = ns.propose(bundle, origin="one-script", store=store)
+    except Exception as e:  # noqa: BLE001 — Nestor's refusal is a state
+        return {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:160]}"}
+    if got.get("target_text") != subj:
+        return {"state": "unreachable", "why": "Nestor hashed the bundle differently"}
+    return {"state": "proposed", "id": got["id"], "status": got["status"]}
+
+
+def _read_session_seals(cfg: Config, run: Run) -> dict:
+    """Each checked-out session the person has sealed in Nestor since, read
+    back as a `seal` row (`_seal`, checked like any Nestor seal). Denied and
+    unanswered sessions stay as they are: on the record, never served."""
+    rows = run.rec.rows()
+    held = run.held(rows)[0]
+    waiting = [x for x in session_mod.subjects(rows).values() if x not in held]
+    out = {"sealed": len(session_mod.subjects(rows)) - len(waiting), "waiting": 0}
+    if not waiting:
+        return out
+    if cfg.nestor_db is None or cfg.keyring is None:
+        out["waiting"] = len(waiting)
+        out["why"] = "no Nestor store or keyring to read seals from"
+        return out
+    for subj in waiting:
+        try:
+            found = nestor_seal.pairs_for(cfg.nestor_db, subj)
+        except nestor_seal.Unverifiable:
+            found = []
+        if found and _seal(run, cfg, subj, None, None, None)["kind"] == "seal":
+            out["sealed"] += 1
+        else:
+            out["waiting"] += 1
+    return out
 
 
 def needs(
@@ -1038,6 +1174,16 @@ class _CardResponder:
         )
 
 
+def _forge_on_path(where: Path | None) -> None:
+    """Put a Forge checkout first on the import path, once, when it holds the
+    engine; anything else changes nothing and the import says what it finds."""
+    if where is None or not (Path(where) / "forge" / "entry.py").is_file():
+        return
+    root = str(Path(where).resolve())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
 def forge_bite(
     cfg: Config,
     bite: str,
@@ -1064,6 +1210,7 @@ def forge_bite(
 
     out: dict = {}
     box = None
+    _forge_on_path(cfg.forge)
     try:
         from forge import entry  # type: ignore[import-not-found]
     except ImportError as e:
@@ -1072,6 +1219,11 @@ def forge_bite(
         c, why = _open_store(cfg, cfg.box, run)
         box, store_why = PileBox(c), why
         kw = {} if root is None else {"root": Path(root)}
+        if (
+            cfg.seal_at_end
+            and "defer_seal" in inspect.signature(entry.open_bite).parameters
+        ):
+            kw["defer_seal"] = True  # card answers are drafts; one seal, at the end
         try:
             e = entry.open_bite(
                 bite,
@@ -1367,6 +1519,40 @@ def seal_scope(
     }
 
 
+def seal_session(
+    cfg: Config,
+    subject: str,
+    *,
+    proof: str | None = None,
+    pair: object = None,
+    verifiers: Iterable[str] | None = None,
+    argv: Iterable[str] = ("seal",),
+) -> dict:
+    """The person's seal over one session's bundle (`session:<sha256>`), as
+    `seal_scope` takes a scope's: the check-in reads a Nestor seal back on its
+    own, and this is the same seal by hand."""
+    run, info = _open(cfg, "seal", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "seal", subject=subject)) is not None:
+        return refusal
+    if subject not in session_mod.subjects(run.rec.rows()).values():
+        row = run.rec.append(
+            "refused",
+            run.sys,
+            at="seal",
+            reason="not a session of this box",
+            subject=subject,
+        )
+        return {"row": row, "sealed": False, "code": 1}
+    row = _seal(run, cfg, subject, proof, pair, verifiers)
+    return {
+        "row": row,
+        "sealed": row["kind"] == "seal",
+        "code": 0 if row["kind"] == "seal" else 1,
+    }
+
+
 def serve(
     cfg: Config,
     spec: dict,
@@ -1400,7 +1586,12 @@ def serve(
                     failed.append((ch, why))
                 return text, why
 
-    doc = run.serve(tables, card["ids"], max_chars=max_chars, read_chunk=reader)
+    session = None
+    if cfg.seal_at_end:
+        session = session_mod.servable(run.rec.rows(), run.held()[0])
+    doc = run.serve(
+        tables, card["ids"], max_chars=max_chars, read_chunk=reader, session=session
+    )
     if failed:
         _tombstones(cfg, run, index, repos, failed)
     return {"doc": doc, "state": doc["state"], "why": doc["why"], "code": 0}

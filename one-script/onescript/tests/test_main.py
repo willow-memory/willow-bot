@@ -59,7 +59,8 @@ def test_checkin_turn_checkout_is_one_run(tmp_path, capsys):
     kinds = [r["kind"] for r in rows(tmp_path)]
     assert kinds.count("invocation") == 3
     assert "boot" in kinds and "turn_open" in kinds and "turn_close" in kinds
-    assert kinds[-1] == "reconcile"
+    # the CLI seals at the session's end: check-out closes with the session's row
+    assert kinds[-3:] == ["reconcile", "write", "session"]  # the bundle, then its row
     # the first morning has no reconcile behind it, and says so
     assert "coverage: no reconcile on record" in capsys.readouterr().out
     # the second has one, read from the record by a fresh invocation
