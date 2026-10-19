@@ -109,6 +109,15 @@ class Config:
     #: waits on it (the operator: "loaded everything up in the background").
     #: The CLI turns it on; it attaches at the first verb after it is ready.
     store_background: bool = False
+    #: A Forge checkout (the repo root, holding `forge/entry.py`): put first on
+    #: the import path for `forge_bite`, so the Forge needs a clone, not an
+    #: install. None, or no `forge/entry.py` there: whatever is importable.
+    forge: Path | None = None
+    #: When the pile holds no xref index at check-in, build one over these
+    #: repos (name -> path), through the record, before the store attaches.
+    #: None: no index is `unreachable`, said, as before. An index that is there
+    #: but doesn't hash to its pointer is never rebuilt over.
+    index_repos: dict | None = None
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -272,6 +281,10 @@ def _gate_cfg(
             }
         ]
     else:
+        # The suite runs in the bot's venv when it has one (D2), and its needs
+        # are asked of that interpreter; else this one, as before.
+        venv_py = venv / "bin" / "python"
+        py = str(venv_py) if venv_py.exists() else None
         # Set in the child's environment only. Setting it in this process
         # would make every later check-in in a long-lived process skip the gate.
         cfg["tests"] = [
@@ -282,7 +295,7 @@ def _gate_cfg(
                 # whatever it would find beside itself.
                 "env": {NESTED: "1", "ONESCRIPT_GROVE": str(grove)},
                 "argv": [
-                    sys.executable,
+                    py or sys.executable,
                     "-m",
                     "pytest",
                     "-q",
@@ -292,6 +305,7 @@ def _gate_cfg(
                 ],
                 "cwd": str(PKG.parent),
                 "needs": ["pytest"],
+                **({"python": py} if py else {}),
             }
         ]
     return cfg
@@ -468,6 +482,11 @@ def _attach_store(cfg: Config, run: Run) -> dict:
     reason and each unreachable repo. No index or no key is `unreachable`,
     said, and the box opens."""
     index, sha, why = seed_mod.read_index(run.rec)
+    indexed = False
+    if index is None and why == seed_mod.NO_INDEX and cfg.index_repos:
+        _index_box(cfg, run)
+        index, sha, why = seed_mod.read_index(run.rec)
+        indexed = index is not None
     key, kwhy = _store_key(cfg, cfg.box, make=True)
     if index is None or key is None:
         row = {"state": "unreachable", "why": why or kwhy}
@@ -508,8 +527,34 @@ def _attach_store(cfg: Config, run: Run) -> dict:
             }
         except Exception as e:  # noqa: BLE001 — a store that can't be built is a state
             row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
+    if indexed:
+        row["indexed"] = sorted(cfg.index_repos)
     run.rec.append("store", run.sys, where=row.get("store"), **row)
     return row
+
+
+def _index_box(cfg: Config, run: Run) -> None:
+    """The xref index over `cfg.index_repos`, written through this run's record
+    as `onescript.xref index --record` writes it: both outputs, then one `xref`
+    row saying which repos at which commits (`at: checkin`)."""
+    from . import xref
+
+    idx = xref.build(sorted((n, Path(p)) for n, p in cfg.index_repos.items()))
+    ib = (xref.canon(idx) + "\n").encode()
+    rb = xref.report(idx).encode()
+    run.rec.write_file(run.sys, seed_mod.INDEX, ib, provenance="authored")
+    run.rec.write_file(run.sys, "xref/report.txt", rb, provenance="authored")
+    run.rec.append(
+        "xref",
+        run.sys,
+        at="checkin",
+        inputs=[
+            {k: i.get(k) for k in ("repo", "state", "commit", "on_remote")}
+            for i in idx["inputs"]
+        ],
+        index_sha256=record.h256(ib),
+        report_sha256=record.h256(rb),
+    )
 
 
 def _spawn_build(spec: Path) -> None:
@@ -1038,6 +1083,16 @@ class _CardResponder:
         )
 
 
+def _forge_on_path(where: Path | None) -> None:
+    """Put a Forge checkout first on the import path, once, when it holds the
+    engine; anything else changes nothing and the import says what it finds."""
+    if where is None or not (Path(where) / "forge" / "entry.py").is_file():
+        return
+    root = str(Path(where).resolve())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
 def forge_bite(
     cfg: Config,
     bite: str,
@@ -1064,6 +1119,7 @@ def forge_bite(
 
     out: dict = {}
     box = None
+    _forge_on_path(cfg.forge)
     try:
         from forge import entry  # type: ignore[import-not-found]
     except ImportError as e:

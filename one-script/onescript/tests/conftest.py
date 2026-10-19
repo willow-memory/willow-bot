@@ -50,3 +50,11 @@ def pytest_collection_modifyitems(config, items):
     line = grove_absence(items)
     if line:
         raise pytest.UsageError(line)
+
+
+@pytest.fixture(autouse=True)
+def _no_sibling_index(monkeypatch):
+    """The CLI's default repo set is every clone beside willow-bot, and a
+    check-in with no index builds one over it. A test box must never index the
+    machine's real clones: the CLI sees no siblings here unless a test says so."""
+    monkeypatch.setattr(cli, "_siblings", lambda parent: {})

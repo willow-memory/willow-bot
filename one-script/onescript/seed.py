@@ -35,6 +35,9 @@ from pathlib import Path
 from .xref import GitError, git
 
 INDEX = "xref/index.json"
+#: read_index's why when the pile has no index pointer at all: the one case a
+#: check-in may build an index for (`Config.index_repos`).
+NO_INDEX = "no xref index in the pile; run `onescript.xref index --record`"
 ANCHORS = 5  # anchors kept per word; the counts are always whole
 WORD = re.compile(r"[^\W_]+")  # a word, for seed and the pile alike
 
@@ -56,11 +59,7 @@ def read_index(rec) -> tuple[dict | None, str | None, str | None]:
         (i for i in items if isinstance(i, dict) and i.get("where") == INDEX), None
     )
     if ptr is None:
-        return (
-            None,
-            None,
-            "no xref index in the pile; run `onescript.xref index --record`",
-        )
+        return None, None, NO_INDEX
     try:
         data = (rec.box / INDEX).read_bytes()
     except OSError as e:

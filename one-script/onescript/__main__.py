@@ -75,6 +75,7 @@ GROVE = Path(
     os.environ.get("ONESCRIPT_GROVE") or ROOT.parent / "willows-grove"
 ).expanduser()
 CONSTITUTION = GROVE / "governance" / "CONSTITUTION.md"
+FORGE = Path(os.environ.get("ONESCRIPT_FORGE") or ROOT.parent / "forge").expanduser()
 CI = GROVE / ".github" / "workflows" / "tests.yml"
 
 
@@ -161,6 +162,16 @@ def _name_path(spec: str) -> tuple[str, Path]:
     return name, Path(path)
 
 
+def _siblings(parent: Path) -> dict[str, Path]:
+    """Every git clone beside willow-bot, willow-bot included, by directory name:
+    the repo set when no --repo is given."""
+    try:
+        kids = sorted(parent.iterdir())
+    except OSError:
+        return {}
+    return {d.name: d for d in kids if d.is_dir() and (d / ".git").exists()}
+
+
 def _bot_venv() -> Path:
     """The bot's venv: ``$WILLOW_HOME/willow-bot/venvs/willow-bot`` (D2: the
     venvs live in the bot), or the old ``$WILLOW_HOME/venvs/willow-bot`` while
@@ -181,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         type=_name_path,
         metavar="NAME=PATH",
-        help="where an indexed repo is read from, for the store, seed and serve",
+        help="where an indexed repo is read from, for the store, seed and serve;"
+        " with none, every clone beside willow-bot, which a check-in indexes"
+        " when the pile has no index",
     )
     p.add_argument(
         "--keys", type=Path, default=ROOT / ".flow" / "onescript-keys" / "keys.json"
@@ -489,6 +502,8 @@ def main(argv: list[str] | None = None) -> int:
         beacon=beacon.drand_reader if args.drand else None,
         repos=dict(args.repos) or None,
         store_background=True,
+        forge=FORGE,
+        index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
     )
 
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
