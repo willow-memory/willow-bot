@@ -19,6 +19,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 |---|---|
 | `onescript/api.py` | The function API the app calls: check-in, scope, seal, serve, proposals, check-out |
 | `onescript/` | The parts, `run`, serve, xref, proposals, nestor_seal, escalate, and the CLI (`__main__.py`, a thin wrapper over `api`) |
+| `onescript/jeles_store.py` | Jeles's verified corpus as the pile's escalation rung: asked at seed only when the pile doesn't hold the bite, then proposed, sealed and served like any chunk |
 | `onescript/tests/` | Its tests |
 | `prompt.py` | The served tables, put into a prompt as framed data, so the model never holds a path |
 | `foundation/` | `prompt.py`'s tests run on a bare interpreter, without pytest |

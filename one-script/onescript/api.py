@@ -50,10 +50,11 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 from . import beacon, boot, gate, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import jeles_store as jeles_mod
 from . import ladder
 from . import pile as pile_mod
 from . import seed as seed_mod
@@ -126,6 +127,12 @@ class Config:
     #: check-in reads the person's seal back. Off: a scope serves only once
     #: sealed, as before. The CLI turns it on.
     seal_at_end: bool = False
+    #: Jeles's verified corpus, the pile's escalation rung (`jeles_store`): a
+    #: `JelesStore`, asked at seed only when the pile ranks nothing for the
+    #: bite or there is no pile, and read back at serve. None: Jeles is never
+    #: asked, and a seed row is what it was before. The CLI turns it on when
+    #: `jeles` is installed.
+    jeles: Any = None
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
@@ -996,6 +1003,9 @@ def seed(
             if not exact:
                 out["counted_why"] = f"no store attached: {out['store']['why']}"
         out["index_sha256"] = sha
+    asked = jeles_mod.escalate(cfg.jeles, bite, out)
+    if asked is not None:
+        out["jeles"] = asked
     rung = ladder.step(run.rec.rows(), ladder.bite_key(bite))
     out["writeback"] = back
     if back["state"] == wb_mod.HELD:
@@ -1381,14 +1391,17 @@ def _sizes(cfg: Config, run: Run, tables: list[dict], card: dict, max_chars) -> 
     index, _, _ = seed_mod.read_index(run.rec)
     repos = _repos(cfg, index) if index is not None else {}
 
+    pile_read = (
+        (lambda ch: pile_mod.read_chunk(index, repos, ch))
+        if index is not None
+        else None
+    )
+    read_any = jeles_mod.chunk_reader(cfg.jeles, pile_read)
+
     def reader(ch):
         k = served.table_id({"rows": [], "source": {"chunk": ch}})
         if k not in reads:
-            reads[k] = (
-                pile_mod.read_chunk(index, repos, ch)
-                if index is not None
-                else (None, "no xref index to read chunks by")
-            )
+            reads[k] = read_any(ch)
         return reads[k]
 
     stack = []
@@ -1577,14 +1590,20 @@ def serve(
     failed: list[tuple[dict, str]] = []
     if any(served.is_chunk(t) for t in tables):
         index, _, _ = seed_mod.read_index(run.rec)
+        pile_read = None
         if index is not None:
             repos = _repos(cfg, index)
 
-            def reader(ch):
+            def pile_read(ch):
                 text, why = pile_mod.read_chunk(index, repos, ch)
                 if text is None:
-                    failed.append((ch, why))
+                    failed.append((ch, why))  # a pile chunk gone is tombstoned
                 return text, why
+
+        if pile_read is not None or cfg.jeles is not None:
+            # A Jeles chunk that fails is served `unreachable` with its why,
+            # never tombstoned: it is Jeles's record, not a file at a blob.
+            reader = jeles_mod.chunk_reader(cfg.jeles, pile_read)
 
     session = None
     if cfg.seal_at_end:
