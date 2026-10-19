@@ -59,7 +59,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, table, view
+from . import beacon, jeles_store, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -587,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         forge=FORGE,
         index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
         seal_at_end=True,
+        jeles=jeles_store.default_store(),
     )
 
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
