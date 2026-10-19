@@ -52,12 +52,20 @@ jobs:
           ref: master
           path: willows-grove
 
+      # The one stream's parity and seam tests (flatten F1) drive the-table's
+      # games; without safe-app-store beside, they skip.
+      - uses: actions/checkout@v7
+        with:
+          repository: rudi193-cmd/safe-app-store
+          ref: master
+          path: safe-app-store
+
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install pytest cryptography ruff==0.16.7
+        run: pip install pytest cryptography ruff==0.16.7 "chess>=1.10" "dice>=4.0.0"
 
       - name: Lint
         working-directory: willow-bot/one-script

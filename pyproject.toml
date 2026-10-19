@@ -48,6 +48,14 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff==0.16.7"]
 #   (its bundled `l2_supercat_256`); capped at the next minor, whose file
 #   layout the rung's tokenizer copy depends on.
 embed = ["wordllama>=0.4,<0.5"]
+# The one stream's table tests (one-script/onescript/tests/test_stream.py,
+# flatten F1) drive the-table's games from safe-app-store beside the bot.
+#   chess: python-chess, which game-lab's sims/baseline_core.py imports at the
+#   top; the checkers and backgammon adapters reuse its rules. Floor 1.10 is
+#   the-table's own requirements.txt floor.
+#   dice: the dice-notation library the-table's requirements.txt names
+#   (aetheris5e/dice5e.py's authority). Floor 4.0.0, the same file's.
+table = ["chess>=1.10", "dice>=4.0.0"]
 # The grove CLI seat's runtime (D2: the venvs live in the bot). The seat's
 # close-out deposit lazy-imports `willow_mcp` (onescript_deposit, db.Store) and
 # its flowering turns shell out to the `ratatosk` console script, so a

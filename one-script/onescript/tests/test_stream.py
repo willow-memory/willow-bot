@@ -161,28 +161,31 @@ def test_parity_with_the_tables_stream_draw_for_draw(table, seed, label):
 CAP = 3000
 
 
+ADAPTERS = {
+    "backgammon": ("backgammon_adapter", "BackgammonSession"),
+    "checkers": ("checkers_adapter", "CheckersSession"),
+    "crazy_eights": ("crazy_eights_adapter", "CrazyEightsSession"),
+    "hearts": ("hearts_adapter", "HeartsSession"),
+    "liars_dice": ("liars_dice_adapter", "LiarsDiceSession"),
+    "scene": ("game_engine_adapter", "SceneSession"),
+}
+
+
 def _session(name):
     """The game's class, taking ``rng_factory``. Checkers and backgammon reuse
-    game-lab's rules, which import python-chess: skipped, said, without it."""
+    game-lab's rules, which import python-chess; an adapter the checked-out
+    the-table does not have yet is skipped, said, not failed."""
     if name in ("backgammon", "checkers"):
         pytest.importorskip(
             "chess", reason="game-lab's baseline_core needs python-chess"
         )
-    if name == "backgammon":
-        from the_table.backgammon_adapter import BackgammonSession as cls
-    elif name == "checkers":
-        from the_table.checkers_adapter import CheckersSession as cls
-    elif name == "crazy_eights":
-        from the_table.crazy_eights_adapter import CrazyEightsSession as cls
-    elif name == "hearts":
-        from the_table.hearts_adapter import HeartsSession as cls
-    elif name == "liars_dice":
-        from the_table.liars_dice_adapter import LiarsDiceSession as cls
-    else:
-        from the_table.game_engine_adapter import SceneSession
-
-        return lambda rng_factory: SceneSession(beats=6, rng_factory=rng_factory)
-    return cls
+    module, cls = ADAPTERS[name]
+    mod = pytest.importorskip(
+        f"the_table.{module}", reason=f"this the-table has no {module} yet"
+    )
+    if name == "scene":
+        return lambda rng_factory: mod.SceneSession(beats=6, rng_factory=rng_factory)
+    return getattr(mod, cls)
 
 
 #: Games whose deal or dice draw from the seam (checkers takes the seam for
