@@ -53,8 +53,28 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(autouse=True)
-def _no_sibling_index(monkeypatch):
+def _no_sibling_index():
     """The CLI's default repo set is every clone beside willow-bot, and a
     check-in with no index builds one over it. A test box must never index the
-    machine's real clones: the CLI sees no siblings here unless a test says so."""
-    monkeypatch.setattr(cli, "_siblings", lambda parent: {})
+    machine's real clones: the CLI sees no siblings here unless a test says so.
+    Its own MonkeyPatch, so a test's `monkeypatch.undo()` can't lift it."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli, "_siblings", lambda parent: {})
+        yield
+
+
+#: The operator's Nestor store, as the CLI finds it. A check-out proposes the
+#: session to it, so a suite run on the operator's box (the tests gate's child
+#: inherits their environment) would fill their queue with test sessions.
+NESTOR_ENV = ("WILLOW_NESTOR_DB", "NESTOR_DB")
+
+
+@pytest.fixture(autouse=True)
+def _no_operator_nestor():
+    """No test sees the operator's Nestor store; one that needs a store names
+    its own (`monkeypatch.setenv` in the test, or `Config.nestor_db`). Its own
+    MonkeyPatch, so a test's `monkeypatch.undo()` can't bring the store back."""
+    with pytest.MonkeyPatch.context() as mp:
+        for name in NESTOR_ENV:
+            mp.delenv(name, raising=False)
+        yield

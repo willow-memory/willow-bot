@@ -194,9 +194,11 @@ class Run:
         scope: list[str] | None,
         max_chars: int | None = None,
         read_chunk=None,
+        session=None,
     ) -> dict:
         """Write the one file the model reads. Before check-in there's no serve
-        key, and serve fails closed. `max_chars` is the caller's cap."""
+        key, and serve fails closed. `max_chars` is the caller's cap; `session`
+        as `serve.serve` takes it."""
         return serve.serve(
             self.rec,
             tables,
@@ -204,6 +206,7 @@ class Run:
             self.serve_key,
             max_chars=max_chars,
             read_chunk=read_chunk,
+            session=session,
             human_key=self.keys.get(gate.HUMAN),
             keyring=self.keyring,
             nestor_db=self.nestor_db,

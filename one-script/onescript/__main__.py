@@ -121,6 +121,12 @@ def _checkin_screen(rep: dict, nested: bool = False) -> str:
             else f"unreachable — {st.get('why', '')}"
         )
         L.append(f"store: {what}")
+    ss = rep.get("sessions")
+    if ss:
+        why = f" ({ss['why']})" if ss.get("why") else ""
+        L.append(
+            f"sessions: {ss['sealed']} sealed, {ss['waiting']} waiting on your seal{why}"
+        )
     if rep["hard_close"]:
         L.append("HARD CLOSE:")
         L += [f"  {x}" for x in rep["lines"]]
@@ -160,6 +166,19 @@ def _name_path(spec: str) -> tuple[str, Path]:
     if not (sep and name and path):
         raise argparse.ArgumentTypeError(f"want NAME=PATH, got {spec!r}")
     return name, Path(path)
+
+
+def _session_line(ss: dict) -> str:
+    """Check-out's one line about the session's seal."""
+    if "subject" not in ss:
+        return f"session: {ss.get('state')} — {ss.get('why', '')}"
+    pair = ss["pair"]
+    said = (
+        "proposed to Nestor: seal it there (yes, these were my actions) or deny it"
+        if pair.get("state") == "proposed"
+        else f"not proposed — {pair.get('why', '')}"
+    )
+    return f"session: {ss['actions']} action(s), {ss['subject']}; {said}"
 
 
 def _siblings(parent: Path) -> dict[str, Path]:
@@ -454,7 +473,10 @@ def main(argv: list[str] | None = None) -> int:
         if name == "serve":
             s.add_argument("--seed-row", type=int, help="the seed row scope named")
     sl = sub.add_parser("seal")
-    sl.add_argument("subject", help="serve:<hash> (a scope) or proposal:<hash>")
+    sl.add_argument(
+        "subject",
+        help="serve:<hash> (a scope), proposal:<hash> or session:<hash> (a session)",
+    )
     sl.add_argument("--proof", help="the human's HMAC proof over the subject")
     sl.add_argument(
         "--pair", type=Path, help="a sealed Nestor pair, as JSON, to find in the store"
@@ -504,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         store_background=True,
         forge=FORGE,
         index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
+        seal_at_end=True,
     )
 
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
@@ -691,6 +714,8 @@ def main(argv: list[str] | None = None) -> int:
         seal = (
             api.seal_proposal
             if args.subject.startswith("proposal:")
+            else api.seal_session
+            if args.subject.startswith("session:")
             else api.seal_scope
         )
         pair = json.loads(args.pair.read_text()) if args.pair else None
@@ -712,6 +737,8 @@ def main(argv: list[str] | None = None) -> int:
             print(_checkin_screen(res["report"], res["nested"]))
     elif args.cmd == "checkout":
         print(res["screen"])
+        if res.get("session"):
+            print(_session_line(res["session"]))
     elif args.cmd == "turn":
         out = dict(res["out"])
         if "proposals" in out:  # own_idea leads each proposal row (null: never parsed)

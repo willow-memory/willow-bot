@@ -79,6 +79,30 @@ and claim). Only a `pass` that is sealed is written, by `rec.write_file`; the
 write reads the seal from the record, never from the caller. A changed byte is
 a different proposal that needs its own seal.
 
+## One seal per session, at its end
+
+The operator, 2026-10-19: *"there is really nothing to seal yet because no
+real decision has been made other than hey I want to build this thing that's
+not a decision that's an idea"*, and *"It's still my seal, the bundle is what
+I'm sealing. I don't need to seal tool calls, I need, and user's, to be able to
+say, yes, these were my actions in this session. Agree, or disagree, if
+disagree, then deny the pair. The record is still there, and can still be
+looked at, it just can't be served."* And on what serves: *"It can still be
+tagged as session, but it shouldn't be excluded."*
+
+`Config.seal_at_end` (`onescript/session.py`; the CLI turns it on):
+
+| When | What happens |
+|---|---|
+| During | Nothing waits on a seal. `serve` hands out an unsealed scope; the Forge's card answers are drafts |
+| Check-out | The session, from its check-in to now, is one bundle: the person's actions, what came of each, every record row by number, kind and hash. Written to the box and proposed to Nestor (`nestor.session_seal`) as one draft pair, `session:<sha256>` over its bytes |
+| The seal | The person's, in Nestor's UI, which shows the bundle's actions and refuses a seal whose bundle changed. Seal: yes, these were my actions. Deny: `reject_pair` |
+| Next check-in | A session sealed in Nestor since is read back as a `seal` row, checked like any Nestor seal; the screen says how many are sealed and how many wait |
+| Serving | A sealed session's rows serve like any piece; a denied or unanswered one's never do, and stay on the record to be read. Rows from before any check-in never serve unsealed |
+
+Without `seal_at_end` nothing changes: a scope serves only once sealed. A
+sealed scope still serves everything it covers, either way.
+
 ## Seals without a terminal
 
 The operator, 2026-10-07: "I won't have access to a terminal when this moves to
@@ -117,14 +141,15 @@ exception. Nothing moves before a check-in or after a check-out.
 | `seed(cfg, bite, repos, exact=False)` | The first bite's words against the box. Counted from the session's store by default (`Cached.counts`: chunks and files per word, `counted_by: store`); `exact` scans for whole files and lines (`seed.py`: the pile's xref index, each file read at its indexed blob and counted only when it hashes to the index), and so does a seed with no store attached, saying why (`counted_why`). D6, the operator: "C". Keys rarest first, whole counts. `seeded`, `escalated:cold_start` or `unreachable`; once per check-in. A held write-back for this exact bite answers it first (`answered_by`), and unseen words are a `miss` row of hashes |
 | `scope(cfg, by, match, upto, max_chars=None)` | Code proposes the stack. Returns the card (stack, joins), the `subject` to seal, and the `spec` that names the stack. Each chunk's size in characters, read at its blob (no text), the total, and the served document's length; with `max_chars`, whether it `fits` |
 | `seal_scope(cfg, subject, proof / pair)` | The human's seal over the scope's exact set. A Nestor seal is checked against `cfg.keyring` and `cfg.nestor_db` |
-| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set; over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped. A chunk found gone (not in the index, blob gone, hash mismatch, not at its line) gets one `tombstone` row per check-in, with `forward` where the same SHA-256 reads now |
+| `seal_session(cfg, subject, proof / pair)` | The person's seal over one of this box's sessions (`session:<sha256>`), checked as any Nestor seal. The check-in does this on its own for every session sealed in Nestor since |
+| `serve(cfg, spec, max_chars)` | Writes `served.json`. Only the sealed set, or, with `cfg.seal_at_end` (the CLI's), a scope nobody sealed, marked `seal: unsealed: this session`, serving only this session's record rows and sealed sessions' (below); over `max_chars`, or with no `max_chars`, `empty`, never truncated and never uncapped. A chunk found gone (not in the index, blob gone, hash mismatch, not at its line) gets one `tombstone` row per check-in, with `forward` where the same SHA-256 reads now |
 | `decline_offer(cfg, key, proof=None)` | A No to a ladder offer (`ladder.py`: asked 1 does, 2 notices, 3 offers, again every 3rd ask); an `offer_declined` row stops it for that key. D5, the operator: "C". A No only narrows, so it takes effect unsigned, marked `said_by: caller`, `sealed: false`, and NEEDS YOU counts the unsealed ones; with the human's proof over `decline:<key>` it is `said_by: human`, sealed, and stands over them |
-| `forge_bite(cfg, bite, project_id, builder_id, root)` | The Forge's `open_bite` with `PileBox` over this session's store as tier 2 (D9, the operator: "A"; live here only, the Forge never imports willow). `cfg.forge` (the CLI: `$ONESCRIPT_FORGE`, else `../forge` beside willow-bot) goes first on the import path when it holds `forge/entry.py`, so a clone is enough. The Forge not importable, or its own refusal (Nestor absent), is `unreachable`, said. A choice or confirm for the maker comes back `needs_you` with the card; the responder never answers, so nothing is sealed. Else `populated` or `empty`; one `forge_bite` row of hashes and state words |
+| `forge_bite(cfg, bite, project_id, builder_id, root)` | The Forge's `open_bite` with `PileBox` over this session's store as tier 2 (D9, the operator: "A"; live here only, the Forge never imports willow). `cfg.forge` (the CLI: `$ONESCRIPT_FORGE`, else `../forge` beside willow-bot) goes first on the import path when it holds `forge/entry.py`, so a clone is enough. The Forge not importable, or its own refusal (Nestor absent), is `unreachable`, said. A choice or confirm for the maker comes back `needs_you` with the card; the responder never answers, so nothing is sealed. With `cfg.seal_at_end` the Forge is asked to `defer_seal`: an answer becomes a Nestor draft, a piece of the session, never a seal of its own. Else `populated` or `empty`; one `forge_bite` row of hashes and state words |
 | `take_proposals(cfg, rows)` | The model's rows through a turn: door, served cites, recorded, graded, nothing written |
 | `seal_proposal(cfg, subject, proof / pair)` | The human's seal over one proposal; a sealed `pass` is written, from the stored path and data, which must hash to the subject, inside the box (no symlink is followed out) |
 | `escalate(cfg, task)` | willow-bot's deterministic chain on the sealed served scope (below). Each answered piece is proposed as a write-back |
 | `writeback_seal(cfg, subject, proof / pair)` | The human's seal over one write-back's exact subject (`writeback:<hash>`); held, the same bite stops at rung 1 (below) |
-| `checkout(cfg)` | Reverse, then the morning screen |
+| `checkout(cfg)` | Reverse, then the morning screen. With `cfg.seal_at_end`, then the session's bundle: written to `sessions/<from>.json` and proposed to Nestor as one draft pair (below), one `session` row |
 
 The record is the only state between calls, except two keys kept beside the
 keys file, never in the box: the serve key (`serve.key`, 0600), fresh at every

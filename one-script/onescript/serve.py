@@ -448,6 +448,7 @@ def serve(
     through: int | None = None,
     unpinned: tuple[int, str] | None = None,
     read_chunk=None,
+    session=None,
 ) -> dict:
     """Write the served file and record it. Returns the served document.
     `read_chunk(chunk) -> (text, why)` reads a chunk table's text at its
@@ -457,13 +458,20 @@ def serve(
     `max_chars` is the caller's cap on the served document's text (its
     canonical JSON). The caller sizes it, from the model's context: serve does
     not know the model. Over the cap the answer is `empty`, "narrow the stack",
-    never a truncation. No cap is `empty` too: nothing is served uncapped."""
+    never a truncation. No cap is `empty` too: nothing is served uncapped.
+
+    `session` is set when the one seal comes at the session's end
+    (`Config.seal_at_end`, `onescript.session`): a scope nobody sealed is then
+    served, marked `unsealed: this session`, with only the record rows
+    `session(n)` passes (the open session's, and sealed sessions')."""
     try:
         rows = rec.rows()
         seals = sealed_verified(
             rows, human_key, keyring, nestor_db, through, unpinned=unpinned
         )
-        doc = _serve(rows, tables, scope, serve_key, max_chars, seals, read_chunk)
+        doc = _serve(
+            rows, tables, scope, serve_key, max_chars, seals, read_chunk, session
+        )
         if doc["state"] == "populated" and _has_lore(doc, tables, scope):
             # lore rests on the stored proposal bytes: a rewritten record serves none
             broken = rec.verify_chain()
@@ -528,8 +536,19 @@ def _nothing(state: str, why: str) -> dict:
     return {"state": state, "why": why, "return": RETURN, "tables": []}
 
 
+#: What a scope served with no seal says of itself (`Config.seal_at_end`).
+UNSEALED = "unsealed: this session"
+
+
 def _serve(
-    rows, tables, scope, serve_key, max_chars=None, seals=None, read_chunk=None
+    rows,
+    tables,
+    scope,
+    serve_key,
+    max_chars=None,
+    seals=None,
+    read_chunk=None,
+    session=None,
 ) -> dict:
     if max_chars is None:
         return _nothing(
@@ -542,15 +561,18 @@ def _serve(
     if not scope:
         return _nothing("empty", "no scope given; nothing is served without one")
     seals, unchecked = seals if seals is not None else (set(), {})
-    if scope_subject(scope) in unchecked:
-        return _nothing(
-            "unreachable",
-            f"the scope's seal can't be checked here ({unchecked[scope_subject(scope)]})",
-        )
-    if scope_subject(scope) not in seals:
+    sealed_scope = scope_subject(scope) in seals
+    if not sealed_scope and session is None:
+        if scope_subject(scope) in unchecked:
+            return _nothing(
+                "unreachable",
+                "the scope's seal can't be checked here "
+                f"({unchecked[scope_subject(scope)]})",
+            )
         return _nothing(
             "empty", "the scope has no human seal over this exact set; nothing served"
         )
+    in_session = (lambda r: True) if sealed_scope else (lambda r: session(r["n"]))
     by_id = {}
     for t in tables:
         if is_chunk(t):  # its seed row on the chain here; its blob at the read
@@ -583,7 +605,9 @@ def _serve(
             "rows": [
                 view(r)
                 for r in authored(t["rows"])
-                if lore.servable(r, ctx, seals) and rules.servable(r, ctx, seals)
+                if in_session(r)
+                and lore.servable(r, ctx, seals)
+                and rules.servable(r, ctx, seals)
             ],
         }
         if (
@@ -603,6 +627,8 @@ def _serve(
         served.append(entry)
     served.sort(key=lambda t: t["id"])
     doc = {"state": "populated", "why": "", "return": RETURN, "tables": served}
+    if not sealed_scope:
+        doc["seal"] = UNSEALED
     if served and all(
         t.get("state") == "unreachable" and not t["rows"] for t in served
     ):
