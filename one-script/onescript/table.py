@@ -322,6 +322,8 @@ def beat_seal(
     `unsealed` (A5). A `sealed` answer names what was sealed (B2): the stored
     proposal that really hashes to `subject` (`Run.find_proposal`), its
     `path` and `data`, so a caller can refuse a seal over another beat.
+    `rejected` is the same answer for the human's rejection (`api.REJECT`,
+    a seal over `reject:<subject>`); both on record is `unsealed`.
     Read-only: an `invocation` row and nothing else."""
     run, info = api._open(cfg, "beat-seal", argv)
     if run is None:
@@ -330,13 +332,28 @@ def beat_seal(
     good, unchecked = run.seal_rows(rows)
     over = [r for r in rows if r["kind"] == "seal" and r.get("subject") == subject]
     ok = [r for r in over if r["n"] in good]
-    if ok:
+    no = [
+        r
+        for r in rows
+        if r["kind"] == "seal"
+        and r.get("subject") == api.REJECT + subject
+        and r["n"] in good
+    ]
+    if ok and no:
+        # the api refuses the second of the two; both on record means one was
+        # written around it: neither is taken
+        return {
+            "state": "unsealed",
+            "why": "the human's seal and their rejection are both on record",
+            "code": 1,
+        }
+    if ok or no:
         prop, why = run.find_proposal(subject)
         if prop is None:
             return {"state": "unsealed", "why": f"sealed, but {why}", "code": 1}
-        r = ok[-1]
+        r = (ok or no)[-1]
         return {
-            "state": "sealed",
+            "state": "sealed" if ok else "rejected",
             "by": r.get("verifier") or "human",
             "seal": r["n"],
             "path": prop["path"],

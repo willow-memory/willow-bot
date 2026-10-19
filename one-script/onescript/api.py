@@ -1796,6 +1796,8 @@ def seal_proposal(
     if (refusal := _need_open(run, "seal", subject=subject)) is not None:
         return refusal
     _, why = run.find_proposal(subject)
+    if why is None and _held(run, REJECT + subject):
+        why = "the human rejected this proposal; a rejection stands (seal a new one)"
     if why is not None:
         row = run.rec.append("refused", run.sys, at="seal", reason=why, subject=subject)
         return {"row": row, "sealed": False, "written": None, "code": 1}
@@ -1815,6 +1817,57 @@ def seal_proposal(
         "writeback": back,
         "code": 0 if wrote["kind"] == "write" else 1,
     }
+
+
+#: A rejection is the human's seal over this prefix and a proposal's subject
+#: (`reject:proposal:<hash>`): the same row kind, proof and checks as a seal,
+#: over a subject a seal over the proposal can never be (flatten F3, "1 a").
+REJECT = "reject:"
+
+
+def _held(run: Run, subject: str) -> bool:
+    """A seal row over `subject` whose own proof (or pair) re-checks now."""
+    rows = run.rec.rows()
+    good, _ = run.seal_rows(rows)
+    return any(
+        r["kind"] == "seal" and r.get("subject") == subject and r["n"] in good
+        for r in rows
+    )
+
+
+def reject_proposal(
+    cfg: Config,
+    subject: str,
+    *,
+    proof: str | None = None,
+    pair: object = None,
+    verifiers: Iterable[str] | None = None,
+    argv: Iterable[str] = ("seal",),
+) -> dict:
+    """The human's rejection of one proposal (`subject` is `proposal:<hash>`,
+    or `reject:proposal:<hash>` as the CLI takes it): their proof, or a sealed
+    Nestor pair, over `reject:<subject>`. Recorded as durably as a seal, as a
+    seal row over that subject; nothing is written. Refused for a proposal not
+    on record, or one the human already sealed (a seal stands)."""
+    if subject.startswith(REJECT):
+        subject = subject[len(REJECT) :]
+    run, info = _open(cfg, "seal", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "reject", subject=subject)) is not None:
+        return refusal
+    _, why = run.find_proposal(subject)
+    if why is None and _held(run, subject):
+        why = "the human sealed this proposal; a seal stands"
+    if why is not None:
+        row = run.rec.append(
+            "refused", run.sys, at="reject", reason=why, subject=subject
+        )
+        return {"row": row, "rejected": False, "code": 1}
+    row = _seal(run, cfg, REJECT + subject, proof, pair, verifiers)
+    if row["kind"] != "seal":
+        return {"row": row, "rejected": False, "code": 1}
+    return {"row": row, "rejected": True, "code": 0}
 
 
 def writeback_seal(

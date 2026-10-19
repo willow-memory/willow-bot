@@ -535,7 +535,8 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("seal")
     sl.add_argument(
         "subject",
-        help="serve:<hash> (a scope), proposal:<hash> or session:<hash> (a session)",
+        help="serve:<hash> (a scope), proposal:<hash>, reject:proposal:<hash> (the "
+        "human's rejection of a proposal) or session:<hash> (a session)",
     )
     sl.add_argument("--proof", help="the human's HMAC proof over the subject")
     sl.add_argument(
@@ -775,7 +776,9 @@ def main(argv: list[str] | None = None) -> int:
         res = api.serve(cfg, spec, max_chars=args.max_chars, argv=raw)
     else:
         seal = (
-            api.seal_proposal
+            api.reject_proposal
+            if args.subject.startswith(api.REJECT + "proposal:")
+            else api.seal_proposal
             if args.subject.startswith("proposal:")
             else api.seal_session
             if args.subject.startswith("session:")

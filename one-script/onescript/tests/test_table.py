@@ -677,6 +677,128 @@ def test_a_beat_sealed_by_a_name_instead_of_a_proof_is_refused(cfg):
     assert not bad["sealed"] and not (cfg.box / "world").exists()
 
 
+# ── the human's rejection (flatten F3, "1 a") ──────────────────────────────
+def _proposed(cfg) -> str:
+    cite = play(cfg)[-1]["row"]["hash"]
+    return table.propose_beat(cfg, PENDING, [cite])["subject"]
+
+
+def test_a_rejection_is_the_humans_proof_over_reject_and_writes_nothing(cfg):
+    sub = _proposed(cfg)
+    got = api.reject_proposal(cfg, sub, proof=proof(api.REJECT + sub))
+    assert got["rejected"] and got["row"]["kind"] == "seal"
+    assert got["row"]["subject"] == api.REJECT + sub and got["row"]["who"] == "human"
+    beat = table.beat_seal(cfg, sub)
+    assert beat["state"] == "rejected" and beat["by"] == "human"
+    assert beat["path"] == BEAT_PATH and beat["data"] == PENDING["fact"]
+    assert not (cfg.box / "world").exists()  # a rejection writes nothing
+
+
+def test_a_seal_proof_is_not_a_rejection_and_a_rejection_proof_is_not_a_seal(cfg):
+    """Forbidden act: one proof doing the other's work (the subjects differ)."""
+    sub = _proposed(cfg)
+    assert not api.reject_proposal(cfg, sub, proof=proof(sub))["rejected"]
+    assert not api.seal_proposal(cfg, sub, proof=proof(api.REJECT + sub))["sealed"]
+    assert table.beat_seal(cfg, sub)["state"] == "unsealed"
+
+
+def test_a_rejection_stands_against_a_later_seal_and_a_seal_against_a_rejection(cfg):
+    sub = _proposed(cfg)
+    assert api.reject_proposal(cfg, sub, proof=proof(api.REJECT + sub))["rejected"]
+    late = api.seal_proposal(cfg, sub, proof=proof(sub))
+    assert not late["sealed"] and "rejected" in late["row"]["reason"]
+    assert table.beat_seal(cfg, sub)["state"] == "rejected"
+
+    cite = table.verdict(
+        cfg, {"what": "step", "session": "s1", "verdict": "step", "reason": "x"}
+    )["row"]["hash"]
+    o = table.propose_beat(cfg, {**PENDING, "fact_id": "s1::b4"}, [cite])["subject"]
+    assert api.seal_proposal(cfg, o, proof=proof(o))["sealed"]
+    late = api.reject_proposal(cfg, o, proof=proof(api.REJECT + o))
+    assert not late["rejected"] and "sealed" in late["row"]["reason"]
+    assert table.beat_seal(cfg, o)["state"] == "sealed"
+
+
+def test_a_rejection_of_no_proposal_on_record_is_refused(cfg):
+    got = api.reject_proposal(cfg, "proposal:" + "cd" * 32, proof="x")
+    assert not got["rejected"] and got["row"]["kind"] == "refused"
+
+
+def test_a_forged_rejection_row_rejects_nothing(cfg):
+    """A `seal` row over `reject:<subject>`, `who: human`, re-chained, no
+    proof: a label (A5). The beat stays unsealed."""
+    sub = _proposed(cfg)
+    rs = rows(cfg)
+    forged = {
+        "n": len(rs),
+        "kind": "seal",
+        "who": "human",
+        "family": "human",
+        "standing": "sealed",
+        "version": rs[-1]["version"],
+        "ts": "t",
+        "prev": rs[-1]["hash"],
+        "where": api.REJECT + sub,
+        "subject": api.REJECT + sub,
+    }
+    forged["hash"] = record.h256(record.canon(forged))
+    with (cfg.box / "record.jsonl").open("a") as fh:
+        fh.write(record.canon(forged) + "\n")
+    assert table.beat_seal(cfg, sub)["state"] == "unsealed"
+
+
+def _forge_seal(cfg, subject: str) -> None:
+    rs = rows(cfg)
+    forged = {
+        "n": len(rs),
+        "kind": "seal",
+        "who": "human",
+        "family": "human",
+        "standing": "sealed",
+        "version": rs[-1]["version"],
+        "ts": "t",
+        "prev": rs[-1]["hash"],
+        "where": subject,
+        "subject": subject,
+    }
+    forged["hash"] = record.h256(record.canon(forged))
+    with (cfg.box / "record.jsonl").open("a") as fh:
+        fh.write(record.canon(forged) + "\n")
+
+
+def test_a_forged_seal_blocks_no_rejection_and_a_forged_rejection_no_seal(cfg):
+    """Forbidden act: a label standing in the way of the human's proof."""
+    sub = _proposed(cfg)
+    _forge_seal(cfg, sub)
+    assert api.reject_proposal(cfg, sub, proof=proof(api.REJECT + sub))["rejected"]
+    cite = table.verdict(
+        cfg, {"what": "step", "session": "s1", "verdict": "step", "reason": "x"}
+    )["row"]["hash"]
+    o = table.propose_beat(cfg, {**PENDING, "fact_id": "s1::b4"}, [cite])["subject"]
+    _forge_seal(cfg, api.REJECT + o)
+    assert api.seal_proposal(cfg, o, proof=proof(o))["sealed"]
+
+
+def test_a_seal_and_a_rejection_both_on_record_take_neither(cfg):
+    """Written around the api with the human's key: neither stands."""
+    sub = _proposed(cfg)
+    assert api.seal_proposal(cfg, sub, proof=proof(sub))["sealed"]
+    run, _ = api._open(cfg, "seal", ("seal",))
+    run.seal(api.REJECT + sub, proof(api.REJECT + sub), HUMAN_KEY)
+    got = table.beat_seal(cfg, sub)
+    assert got["state"] == "unsealed" and "both" in got["why"]
+
+
+def test_the_cli_seal_verb_takes_a_rejection(cfg, capsys, monkeypatch):
+    for k, v in (("CONSTITUTION", cfg.constitution), ("CI", cfg.ci),
+                 ("ROOT", cfg.root), ("GROVE", cfg.grove)):  # fmt: skip
+        monkeypatch.setattr(cli, k, v)
+    sub = _proposed(cfg)
+    base = ["--box", str(cfg.box), "--keys", str(cfg.keys), "--no-tests", "--phone"]
+    cli.main([*base, "seal", api.REJECT + sub, "--proof", proof(api.REJECT + sub)])
+    assert table.beat_seal(cfg, sub)["state"] == "rejected"
+
+
 def test_a_beat_must_cite_verdict_rows_on_record(cfg):
     assert table.propose_beat(cfg, PENDING, [])["code"] == 1
     got = table.propose_beat(cfg, PENDING, ["ab" * 32])
