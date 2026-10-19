@@ -77,6 +77,12 @@ session outside Rat then had no per-prompt pass at all. It has one again:
   `empty` ("narrow the stack"). A crash exits 2, which blocks the prompt.
 - The box is willow-bot's `.flow/onescript/` unless `ONESCRIPT_BOX` and
   `ONESCRIPT_KEYS` name another. The cap is `ONESCRIPT_MAX_CHARS`.
+- The interpreter is `ONESCRIPT_PYTHON`, else the bot's venv found the way
+  the one script's own `--venv` default finds it (`_bot_venv`, D2):
+  `$WILLOW_HOME/willow-bot/venvs/willow-bot`, or the old
+  `$WILLOW_HOME/venvs/willow-bot` while only that one exists (said on stderr),
+  `$WILLOW_HOME` defaulting to `~`; else `python3`. A test holds the script
+  and `_bot_venv` to the same answer.
 - The embedder rung (the pile's rung 3) fuses in when `ONESCRIPT_EMBED` (or
   `--embed`) names WordLlama's local file dir: the words' top `EMBED_POOL`
   (100) candidates, re-read at their indexed blobs, ranked by the embedder and

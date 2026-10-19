@@ -7,12 +7,25 @@
 set -u
 here="$(cd "$(dirname "$0")/.." && pwd)"   # one-script/
 bot="$(dirname "$here")"                   # willow-bot/
+# The interpreter: ONESCRIPT_PYTHON, else the bot's venv the way the one
+# script's own `--venv` default finds it (`onescript.__main__._bot_venv`; seal
+# D2: "all the .venv live in the bot"): $WILLOW_HOME/willow-bot/venvs/willow-bot,
+# or the old $WILLOW_HOME/venvs/willow-bot while only that one exists (said on
+# stderr), $WILLOW_HOME defaulting to ~. tests/test_prompt_hook.py holds the two
+# to the same answer. A venv without the embedder still runs: the served
+# document says the rung fell back to words, and why.
 py="${ONESCRIPT_PYTHON:-}"
 if [ -z "$py" ]; then
-  for c in "$bot/venvs/willow-bot/bin/python" "$HOME/.willow/venvs/willow-bot/bin/python" python3; do
-    if command -v "$c" >/dev/null 2>&1; then py="$c"; break; fi
-  done
+  home="${WILLOW_HOME:-$HOME}"
+  home="${home/#\~/$HOME}"
+  venv="$home/willow-bot/venvs/willow-bot"
+  if [ ! -d "$venv" ] && [ -d "$home/venvs/willow-bot" ]; then
+    venv="$home/venvs/willow-bot"
+    echo "prompt-hook: using the venv's old home $venv (D2: move it into the bot)" >&2
+  fi
+  [ -x "$venv/bin/python" ] && py="$venv/bin/python"
 fi
+[ -n "$py" ] || py=python3
 args=()
 [ -n "${ONESCRIPT_BOX:-}" ] && args+=(--box "$ONESCRIPT_BOX")
 [ -n "${ONESCRIPT_KEYS:-}" ] && args+=(--keys "$ONESCRIPT_KEYS")

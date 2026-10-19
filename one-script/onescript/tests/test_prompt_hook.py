@@ -291,3 +291,68 @@ class TestBundledTokenizers:
         mine.write_text('{"mine": 1}')
         pile._bundled_tokenizers(self.fake(tmp_path), tmp_path / "cache")
         assert mine.read_text() == '{"mine": 1}'
+
+
+class TestTheHookFindsItsPython:
+    """prompt-hook finds the interpreter the way the one script's own `--venv`
+    default does (`__main__._bot_venv`, D2), held to it by a parity test."""
+
+    def stub(self, where: Path) -> Path:
+        py = where / "bin" / "python"
+        py.parent.mkdir(parents=True)
+        py.write_text('#!/usr/bin/env bash\necho "$0"\n')
+        py.chmod(0o755)
+        return py
+
+    def run(self, tmp_path, **env):
+        import subprocess
+
+        base = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home")}
+        r = subprocess.run(
+            ["bash", str(HOOK)],
+            input="{}",
+            capture_output=True,
+            text=True,
+            env={**base, **env},
+            timeout=30,
+        )
+        return r.stdout.strip(), r.stderr
+
+    def test_the_d2_home_wins_over_the_old_one(self, tmp_path):
+        d2 = self.stub(tmp_path / "wh" / "willow-bot" / "venvs" / "willow-bot")
+        self.stub(tmp_path / "wh" / "venvs" / "willow-bot")
+        out, err = self.run(tmp_path, WILLOW_HOME=str(tmp_path / "wh"))
+        assert out == str(d2) and err == ""
+
+    def test_the_old_home_is_used_and_said(self, tmp_path):
+        old = self.stub(tmp_path / "wh" / "venvs" / "willow-bot")
+        out, err = self.run(tmp_path, WILLOW_HOME=str(tmp_path / "wh"))
+        assert out == str(old) and "old home" in err
+
+    def test_no_willow_home_means_home(self, tmp_path):
+        d2 = self.stub(tmp_path / "home" / "willow-bot" / "venvs" / "willow-bot")
+        out, _ = self.run(tmp_path)
+        assert out == str(d2)
+
+    def test_onescript_python_overrides_every_home(self, tmp_path):
+        self.stub(tmp_path / "wh" / "willow-bot" / "venvs" / "willow-bot")
+        mine = self.stub(tmp_path / "mine")
+        out, _ = self.run(
+            tmp_path, WILLOW_HOME=str(tmp_path / "wh"), ONESCRIPT_PYTHON=str(mine)
+        )
+        assert out == str(mine)
+
+    @pytest.mark.parametrize("layout", ["both", "new", "old", "none"])
+    def test_the_script_and_the_one_script_agree(self, tmp_path, monkeypatch, layout):
+        wh = tmp_path / "wh"
+        if layout in ("both", "new"):
+            self.stub(wh / "willow-bot" / "venvs" / "willow-bot")
+        if layout in ("both", "old"):
+            self.stub(wh / "venvs" / "willow-bot")
+        monkeypatch.setenv("WILLOW_HOME", str(wh))
+        want = cli._bot_venv() / "bin" / "python"
+        out, _ = self.run(tmp_path, WILLOW_HOME=str(wh))
+        if want.exists():
+            assert out == str(want)
+        else:  # neither home: no venv chosen, python3 runs the hook itself
+            assert str(wh) not in out
