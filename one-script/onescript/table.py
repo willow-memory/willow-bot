@@ -81,7 +81,10 @@ LEDGER = "ai-game-master"
 #: SPEC R9 names the head row `agm_head`; R12 adds `escalate`: a model's
 #: move pick that code refused (off the menu, ESCALATE, or unreachable) and
 #: fell back from, recorded so the human sees it; never a seal).
-WHATS = ("open", "roll", "step", "decision", "result", "agm_head", "escalate", "deck")
+WHATS = (
+    "open", "roll", "step", "decision", "result", "agm_head", "escalate", "deck",
+    "market",
+)  # fmt: skip
 
 #: A verdict row carries none of these. The stamp is the record's own; the rest
 #: are what a seal reader reads (`reverse._outcome_row`, `serve.sealed_verified`,
@@ -807,6 +810,7 @@ def basis(
     human_key: bytes | None,
     read_beacon: Callable[[int], dict] | None = None,
     seal_rounds: dict | None = None,
+    read_market: Callable[[str, str], dict] | None = None,
 ) -> Callable[[dict, list[dict], dict], str | dict | None]:
     """The R3 hook for `reverse.reconcile_wagers` (B1). A table forecast (its
     wager names a `table` world) counts only with an outcome `propose_outcome`
@@ -816,6 +820,24 @@ def basis(
     score stands (round 3 N4). Returns why (str), a note (dict) or None."""
 
     def check(wager: dict, rows: list[dict], outcome: dict) -> str | dict | None:
+        if isinstance(wager.get("market"), dict):
+            # a market call: its outcome is the market row's (market.py)
+            from . import market  # market imports table
+
+            got = market.propose_outcome(
+                rows, wager["hash"], human_key, read_market, seal_rounds
+            )
+            if got["state"] == "unreachable":
+                return {"unreachable": str(got.get("reason"))}
+            if got["state"] != "proposed":
+                return str(got.get("reason", got["state"]))
+            idx, _ = reverse._match_distribution(wager, outcome)
+            if idx != got["path_index"]:
+                return (
+                    f"the sealed outcome {outcome} is not what the market row says "
+                    f"({got['outcome']['path']!r})"
+                )
+            return None
         if isinstance(wager.get("deck"), dict):
             # a deck forecast (flatten F6): its outcome is the deck row's
             from . import deck  # deck imports table

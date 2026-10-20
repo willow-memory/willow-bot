@@ -62,6 +62,7 @@ class Run:
         self.nestor_db: Path | None = None
         # the operator's drand reader, from Config (W4 break 1); None: offline
         self.beacon = None
+        self.market = None
 
     def checkin(self, gate_cfg: dict | None = None) -> dict:
         report = boot.boot(self.rec, self.keys, self.law, gate_cfg)
@@ -608,6 +609,7 @@ class Run:
         commit: str | None = None,
         table: dict | None = None,
         deck: dict | None = None,
+        market: dict | None = None,
         beacon_latest: int | None = None,
     ) -> dict:
         """Record a declared wager. Its row hash is the subject a human seal
@@ -625,6 +627,8 @@ class Run:
             extra["table"] = table
         if deck is not None:  # the deck question and round it is about (F6)
             extra["deck"] = deck
+        if market is not None:  # the market call it is (market.py)
+            extra["market"] = market
         if beacon_latest is not None:  # the reader's newest round then (R23a)
             extra["beacon_latest"] = beacon_latest
         return self.rec.append(
@@ -806,13 +810,14 @@ class Run:
             (r["kind"] == "verdict" and r.get("who") == "table")
             or (r["kind"] == "wager" and isinstance(r.get("table"), dict))
             or (r["kind"] == "wager" and isinstance(r.get("deck"), dict))
+            or (r["kind"] == "wager" and isinstance(r.get("market"), dict))
             for r in rows
         ):
             from . import table  # table imports api, which imports this module
 
             # R23a: on a table box the hook is the Run's, bound to the
             # operator's reader (Config.beacon); a caller's `basis` is ignored
-            basis = table.basis(human_key, self.beacon, self.seal_rounds())
+            basis = table.basis(human_key, self.beacon, self.seal_rounds(), self.market)
         key = human_key if human_key is not None else self.keys.get(gate.HUMAN)
         through = reverse.covered_through(self.rec, key)
         held, unreachable = self.held(rows, key, self.old_seals(key))

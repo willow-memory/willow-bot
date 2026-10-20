@@ -133,7 +133,9 @@ def test_a_forecast_is_a_table_world_or_a_deck_question_not_both(cfg):
     got = api.forecast(cfg, "d1", _dist(), by="desk",
                        table={"world": "w", "sheets_sha": "s", "beacon_round": ROUND},
                        deck={"question": Q, "beacon_round": ROUND})  # fmt: skip
-    assert got["code"] == 1 and "not both" in got["refused"]
+    assert (
+        got["code"] == 1 and "one of a table world, a deck question" in got["refused"]
+    )
 
 
 # ── reveal ─────────────────────────────────────────────────────────────────
