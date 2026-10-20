@@ -24,6 +24,7 @@ so a rename of the env or a change to the default lands in one place.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -42,15 +43,18 @@ BOX_NOT_CONFIGURED = (
 BOX_ENV = ("WILLOW_HOME", "WILLOW_VAULT_BOX")
 
 
-def env_box(*names: str) -> Path:
+def env_box(*names: str, environ: Mapping[str, str] | None = None) -> Path:
     """The box: the first of ``names`` (default ``BOX_ENV``) set to a
     non-blank value, ``~`` expanded — and it must be an existing directory.
     Otherwise ``BoxNotConfigured``. The one rule every box resolver in this
-    repo uses. A named box that does not exist is refused too (Loki
+    repo uses, and the fleet's (flatten F-17: willows-grove's seat reads it
+    too, with ``environ`` the environment it was handed; default
+    ``os.environ``). A named box that does not exist is refused too (Loki
     A726C6F8): the first write would otherwise create a whole bogus tree,
     and every read would report "empty" when the truth is "no box"."""
+    env = os.environ if environ is None else environ
     for name in names or BOX_ENV:
-        raw = os.environ.get(name, "").strip()
+        raw = env.get(name, "").strip()
         if raw:
             box = Path(raw).expanduser()
             if not box.is_absolute():

@@ -26,7 +26,7 @@ if [ -z "$py" ]; then
   for v in "${WILLOW_HOME:-}" "${WILLOW_VAULT_BOX:-}"; do
     v="${v#"${v%%[![:space:]]*}"}"
     v="${v%"${v##*[![:space:]]}"}"
-    if [ -n "$v" ]; then box="${v/#\~/$HOME}"; break; fi
+    if [ -n "$v" ]; then box="${v/#\~/${HOME:-}}"; break; fi
   done
   if [ -z "$box" ] || [ "${box#/}" = "$box" ] || [ ! -d "$box" ]; then
     echo "prompt-hook: no box (WILLOW_HOME, else WILLOW_VAULT_BOX, an existing absolute directory): no venv, python3 runs the hook" >&2
