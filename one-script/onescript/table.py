@@ -69,7 +69,7 @@ import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import api, beacon, gate, proposals, record, reverse
+from . import api, beacon, gate, odds, proposals, record, reverse
 from . import serve as served
 from .record import canon
 
@@ -402,10 +402,9 @@ def path_of(srows: list[dict]) -> tuple[str | None, str | None]:
     )
 
 
-def bucket(total: int) -> str:
-    """StorySession's read of a 2d6+stat sum: strong 10+, weak 7-9, miss 6-
-    (`the_table/story_session.py`, restated: onescript imports no table code)."""
-    return "strong" if total >= 10 else "weak" if total >= 7 else "miss"
+# StorySession's read of a 2d6+stat sum (strong 10+, weak 7-9, miss 6-): the
+# one copy is the odds' (flatten F5; it was restated here before F-14).
+bucket = odds.bucket
 
 
 def _int(v: object) -> bool:

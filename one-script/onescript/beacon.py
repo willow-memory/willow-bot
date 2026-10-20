@@ -8,10 +8,10 @@ seeds offline until the dice land on its forecast.
 
 The constants and `round_time` are the house's: willows-grove
 `seat/willow/experiments/predictions-2026-10-17/play.py:33-52` (the League of
-Entropy default chain, 30 s rounds). `seed_id` is the-table's
-`StreamRandom.seed_id` (`the_table/stream.py`): the first 16 hex of SHA-256
-over the seed bytes, here for a drand `randomness` (hex). Both are restated,
-not imported, so onescript stays stdlib-only; e2e pins them equal.
+Entropy default chain, 30 s rounds). `seed_id` is the one stream's
+`StreamRandom.seed_id` (`stream.py`): the first 16 hex of SHA-256 over the
+seed bytes, here for a drand `randomness` (hex), and taken from the stream
+itself (flatten F5: one copy; it was restated here).
 
 Not checked here, said (SPEC-rival T10): the beacon's BLS signature. A reader
 (`Config.beacon`) hands back what drand says round R's randomness is; that is
@@ -88,8 +88,8 @@ def is_randomness(value: object) -> bool:
 
 
 def seed_id(randomness: str) -> str:
-    """the-table's `StreamRandom.seed_id` for a hex seed."""
-    return hashlib.sha256(bytes.fromhex(randomness)).hexdigest()[:16]
+    """The stream's `StreamRandom.seed_id` for a hex seed (one copy, F5)."""
+    return stream.StreamRandom.from_seed(randomness).seed_id
 
 
 # ── a day's round, and the u32 seed it gives (catgrid's daily board, F-14) ──
