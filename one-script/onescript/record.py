@@ -27,8 +27,14 @@ import json
 import os
 import secrets
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # not POSIX: no flock; _locked() says so and runs unlocked
+    fcntl = None  # type: ignore[assignment]
 
 from . import mai_shape
 
@@ -85,6 +91,25 @@ class Record:
         box.mkdir(parents=True, exist_ok=True)
 
     # ── rows ────────────────────────────────────────────────────────────────
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """One writer at a time per box. Two processes (two per-prompt hook
+        calls) that each read the tail before either appended would link to the
+        same prev and fork the chain. The lock is an exclusive flock on
+        `record.lock` in the box, held over read-tail, hash and append, and
+        the tail is read under it, never cached. Without fcntl (not POSIX) there
+        is no lock to take: that is said here, and the append runs as it did
+        before, unserialized."""
+        if fcntl is None:
+            yield
+            return
+        with (self.box / "record.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
     def _read(self) -> tuple[list[dict], list[int]]:
         """The rows, and the line numbers (1-based) of every line that isn't one."""
         if not self.path.exists():
@@ -121,26 +146,27 @@ class Record:
             raise PermissionError(
                 "record: unverified identity; the stamp comes from the gate"
             )
-        rows = self.rows()
-        row = {
-            "n": len(rows),
-            "kind": kind,
-            "who": who.who,
-            "family": who.family,
-            "standing": "sealed"
-            if (kind == "seal" and who.who == "human")
-            else "unattested",
-            "version": self.version,
-            "ts": self.clock(),
-            "prev": rows[-1]["hash"] if rows else GENESIS,
-            "where": where,
-            **fields,
-        }
-        row["hash"] = h256(canon(row))
-        with self.path.open("a", encoding="utf-8") as f:
-            f.write(canon(row) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
+        with self._locked():
+            rows = self.rows()  # the true tail, read under the lock
+            row = {
+                "n": len(rows),
+                "kind": kind,
+                "who": who.who,
+                "family": who.family,
+                "standing": "sealed"
+                if (kind == "seal" and who.who == "human")
+                else "unattested",
+                "version": self.version,
+                "ts": self.clock(),
+                "prev": rows[-1]["hash"] if rows else GENESIS,
+                "where": where,
+                **fields,
+            }
+            row["hash"] = h256(canon(row))
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(canon(row) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
         return row
 
     def verify_chain(self) -> list[str]:

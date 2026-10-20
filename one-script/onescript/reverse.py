@@ -30,7 +30,7 @@ COMMIT = "chain-order/v1"
 #: Who a forecast is by: a role, never a person's name (SPEC-documented J1).
 ROLES = ("human", "desk", "oracle", "coin")
 
-KEEP_OUT = {"record.jsonl", "pile.json"}
+KEEP_OUT = {"record.jsonl", "record.lock", "pile.json"}
 
 
 def three_way(box: Path, pile: dict, rows: list[dict]) -> list[dict]:
