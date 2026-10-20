@@ -115,6 +115,12 @@ class Config:
     #: Fixed here, never taken from a caller; None: offline, and no table
     #: outcome can be proposed (`unreachable`, said).
     beacon: Callable[[int], dict] | None = None
+    #: The operator's price reader (`market.stooq_reader`, or a stand-in):
+    #: (symbol, YYYY-MM-DD) -> {"close", "prev_close"}. A market call's
+    #: outcome counts only once the closes on its row are the ones this gives.
+    #: Fixed here, never taken from a caller; None: no market call resolves
+    #: (`unreachable`, said).
+    market: Callable[[str, str], dict] | None = None
     #: Where an indexed repo is read from, by name; any it leaves out are looked
     #: for beside willow-bot. The session's store and serve read through it.
     repos: dict | None = None
@@ -392,7 +398,7 @@ def _open(
     run = Run(cfg.box, keys, law, clock, anchor=cfg.keys.parent / ANCHOR)
     run.serve_key = _load_serve_key(cfg)
     run.keyring, run.nestor_db = cfg.keyring, cfg.nestor_db
-    run.beacon = cfg.beacon
+    run.beacon, run.market = cfg.beacon, cfg.market
     if not write:  # `peek`: a Run to read through; no invocation, no pin, no row
         return run, {"ci_text": ci_text, "nested": False}
     run.rec.append(
@@ -2172,6 +2178,38 @@ def _deck_problem(
     return None, latest
 
 
+def _market_problem(
+    market_: object, distribution: list[dict], by: str, run: Run
+) -> tuple[str | None, int | None]:
+    """(why a market call does not stand, None) or (None, the drand reader's
+    latest round): the call's shape (`market.check_forecast`), made before
+    the deadline on its close date by the reader's rounds (`market.in_time`),
+    and one call per question and role."""
+    from . import market  # market imports api
+
+    why = market.check_forecast(market_, distribution)
+    if why is not None:
+        return why, None
+    newest, why = beacon.latest(run.beacon)
+    if why is not None:
+        return f"a market call is timed by the drand reader: {why}", None
+    if not market.in_time(newest, market_["close_date"]):
+        return (
+            f"too late: a call on {market_['close_date']} is committed before "
+            f"{market.DEADLINE_UTC}:00 UTC that day, before the market opens "
+            f"(the drand reader is at round {newest})"
+        ), None
+    for r in run.rec.rows():
+        m = r.get("market") if r["kind"] == "wager" else None
+        if isinstance(m, dict) and m == market_ and r.get("by") == by:
+            return (
+                f"the {by} already called this ({market_['symbol']} "
+                f"{market_['kind']} on {market_['close_date']}): one call per "
+                "question and role"
+            ), None
+    return None, newest
+
+
 def _future_round(rnd: object, run: Run) -> tuple[str | None, int | None]:
     """(why `rnd` is not a drand round still ahead, None) or (None, the
     reader's latest round). Ahead means the operator's reader can NOT read it
@@ -2211,6 +2249,7 @@ def forecast(
     committed: dict | None = None,
     table: dict | None = None,
     deck: dict | None = None,
+    market: dict | None = None,
     argv: Iterable[str] = ("forecast",),
 ) -> dict:
     """`forecast()` seals a prediction into the ledger before the outcome
@@ -2229,7 +2268,11 @@ def forecast(
     (`table.propose_outcome`). `deck` names a deck forecast instead, exactly
     {question, beacon_round} (flatten F6, `deck.py`): one of the predictions
     game's questions, over the paths yes and no, and a round still ahead; one
-    forecast per round, question and role, so no role holds both sides."""
+    forecast per round, question and role, so no role holds both sides.
+    `market` names a market call instead (`market.py`): {symbol, kind,
+    close_date[, threshold]}, over yes and no, made before the market opens
+    on its close date by the drand reader's rounds; one call per question
+    and role. A forecast is about one of table, deck or market."""
     run, info = _open(cfg, "forecast", argv)
     if run is None:
         return info
@@ -2267,9 +2310,16 @@ def forecast(
             f"a table forecast already names beacon round {table['beacon_round']}: "
             "one forecast per round"
         )
-    elif table is not None and deck is not None:
-        why = "a forecast is about a table world or a deck question, not both"
+    elif sum(x is not None for x in (table, deck, market)) > 1:
+        why = (
+            "a forecast is about one of a table world, a deck question or a market call"
+        )
     elif deck is not None and (got := _deck_problem(deck, distribution, by, run))[0]:
+        why = got[0]
+    elif (
+        market is not None
+        and (got := _market_problem(market, distribution, by, run))[0]
+    ):
         why = got[0]
     elif any(r["kind"] == "wager" and r.get("id") == wid for r in run.rec.rows()):
         why = f"a wager {wid!r} is already on record; a forecast stands"
@@ -2286,9 +2336,11 @@ def forecast(
         commit=reverse.COMMIT,
         table=table,
         deck=deck,
+        market=market,
         # R23a: the reader's newest round as the forecast was made, a fact
-        # the reader checked; the round named must be after it
-        beacon_latest=got[1] if table is not None or deck is not None else None,
+        # the reader checked; the round named must be after it (a market
+        # call: the deadline must be after its next round)
+        beacon_latest=got[1] if (table, deck, market) != (None, None, None) else None,
     )
     return {
         "row": row,

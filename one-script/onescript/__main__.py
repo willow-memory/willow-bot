@@ -17,6 +17,9 @@
     python3 -m onescript forecast ID --dist FILE --deck FILE  # {question, beacon_round}
     python3 -m onescript deck-reveal ROUND  # the beacon's answers as deck rows (--drand)
     python3 -m onescript deck-outcome WAGER [--human-key FILE]  # proposed, never sealed
+    python3 -m onescript forecast ID --dist FILE --market FILE  # {symbol, kind, close_date[, threshold]}
+    python3 -m onescript market-reveal DATE  # the closes as market rows (--prices, --drand)
+    python3 -m onescript market-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
     python3 -m onescript rules proposal:HASH # a sealed rules/*.md becomes rules rows, one @phase each
@@ -62,7 +65,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, deck, jeles_store, table, view
+from . import beacon, deck, jeles_store, market, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -312,6 +315,12 @@ def main(argv: list[str] | None = None) -> int:
         "checked). Without it the box is offline and a table outcome is "
         "`unreachable`, said (W4 break 1)",
     )
+    p.add_argument(
+        "--prices",
+        action="store_true",
+        help="read market calls' closes from stooq.com's daily CSV over HTTPS. "
+        "Without it no market call resolves, and its outcome is `unreachable`, said",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     ks = sub.add_parser("keys", help="the operator's keyring export (run off the box)")
     ksub = ks.add_subparsers(dest="keys_cmd", required=True)
@@ -450,6 +459,27 @@ def main(argv: list[str] | None = None) -> int:
         "--deck",
         type=Path,
         help="JSON {question, beacon_round}: one of the predictions deck's questions",
+    )
+    fc.add_argument(
+        "--market",
+        type=Path,
+        help="JSON {symbol, kind: up|above, close_date[, threshold]}: a market call",
+    )
+    # the honest forecast ledger: market calls (market.py)
+    mr = sub.add_parser(
+        "market-reveal",
+        aliases=["market_reveal"],
+        help="the closes for the symbols called on a date, as market rows",
+    )
+    mr.add_argument("close_date", help="YYYY-MM-DD, the close the calls name")
+    mo = sub.add_parser(
+        "market-outcome",
+        aliases=["market_outcome"],
+        help="read-only: a market call's outcome, proposed for the human to seal",
+    )
+    mo.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    mo.add_argument(
+        "--human-key", type=Path, help="the human's key, hex, outside the box"
     )
     # the predictions deck as a reader (flatten F6)
     dr = sub.add_parser(
@@ -614,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
         nestor_db=args.nestor_db,
         phone=args.phone,
         beacon=beacon.drand_reader if args.drand else None,
+        market=market.stooq_reader if args.prices else None,
         repos=dict(args.repos) or None,
         store_background=True,
         forge=FORGE,
@@ -635,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             tbl = json.loads(args.table.read_text()) if args.table else None
             dk = json.loads(args.deck.read_text()) if args.deck else None
+            mk = json.loads(args.market.read_text()) if args.market else None
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
@@ -646,12 +678,26 @@ def main(argv: list[str] | None = None) -> int:
             committed=committed,
             table=tbl,
             deck=dk,
+            market=mk,
             argv=raw,
         )
         if "refused" not in res:
             print(f"wager {res['subject']}")  # the subject an outcome seal names
             print(f"tip {res['tip']}")  # sign it to commit the forecast
             return 0
+    elif args.cmd in ("market-reveal", "market-outcome"):
+        if args.cmd == "market-reveal":
+            res = market.reveal(cfg, args.close_date, argv=raw)
+            for r in res.get("rows", []):
+                print(f"market {r['symbol']} {r['close_date']} closed {r['close']} "
+                      f"(before: {r['prev_close']}) row {r['n']}")  # fmt: skip
+        else:
+            res = market.outcome(cfg, args.wager, human_key=args.human_key, argv=raw)
+            if res.get("state") == "proposed":
+                print(f"seal {res['subject']}")  # the human signs it, or nothing counts
+        said = {k: v for k, v in res.items() if k != "rows"}
+        print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
+        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
     elif args.cmd in ("deck-reveal", "deck-outcome"):
         if args.cmd == "deck-reveal":
             res = deck.reveal(cfg, args.round, argv=raw)
