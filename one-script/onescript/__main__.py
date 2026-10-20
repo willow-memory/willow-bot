@@ -14,6 +14,9 @@
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
     python3 -m onescript decline KEY        # the human's No to an offer, recorded
     python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
+    python3 -m onescript forecast ID --dist FILE --deck FILE  # {question, beacon_round}
+    python3 -m onescript deck-reveal ROUND  # the beacon's answers as deck rows (--drand)
+    python3 -m onescript deck-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
     python3 -m onescript rules proposal:HASH # a sealed rules/*.md becomes rules rows, one @phase each
@@ -59,7 +62,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, jeles_store, table, view
+from . import beacon, deck, jeles_store, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -443,6 +446,27 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="JSON {world, sheets_sha}: the world a table forecast is about",
     )
+    fc.add_argument(
+        "--deck",
+        type=Path,
+        help="JSON {question, beacon_round}: one of the predictions deck's questions",
+    )
+    # the predictions deck as a reader (flatten F6)
+    dr = sub.add_parser(
+        "deck-reveal",
+        aliases=["deck_reveal"],
+        help="the beacon's answers to the deck questions wagered on a round",
+    )
+    dr.add_argument("round", type=int, help="the drand round the forecasts named")
+    do = sub.add_parser(
+        "deck-outcome",
+        aliases=["deck_outcome"],
+        help="read-only: a deck wager's outcome, proposed for the human to seal",
+    )
+    do.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    do.add_argument(
+        "--human-key", type=Path, help="the human's key, hex, outside the box"
+    )
     # the table's rows (SPEC-documented §9 J4, §12 J9; SPEC R9, R10)
     vd = sub.add_parser(
         "verdict", help="one code-written verdict row as the table identity"
@@ -610,16 +634,36 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             tbl = json.loads(args.table.read_text()) if args.table else None
+            dk = json.loads(args.deck.read_text()) if args.deck else None
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
         res = api.forecast(
-            cfg, args.id, dist, by=args.by, committed=committed, table=tbl, argv=raw
+            cfg,
+            args.id,
+            dist,
+            by=args.by,
+            committed=committed,
+            table=tbl,
+            deck=dk,
+            argv=raw,
         )
         if "refused" not in res:
             print(f"wager {res['subject']}")  # the subject an outcome seal names
             print(f"tip {res['tip']}")  # sign it to commit the forecast
             return 0
+    elif args.cmd in ("deck-reveal", "deck-outcome"):
+        if args.cmd == "deck-reveal":
+            res = deck.reveal(cfg, args.round, argv=raw)
+            for r in res.get("rows", []):
+                print(f"deck {r['question']} {r['verdict']} row {r['n']}")
+        else:
+            res = deck.outcome(cfg, args.wager, human_key=args.human_key, argv=raw)
+            if res.get("state") == "proposed":
+                print(f"seal {res['subject']}")  # the human signs it, or nothing counts
+        said = {k: v for k, v in res.items() if k != "rows"}
+        print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
+        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
     elif args.cmd == "seal-outcome":
         try:
             outcome = json.loads(args.outcome)

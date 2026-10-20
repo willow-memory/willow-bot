@@ -2147,6 +2147,31 @@ TABLE_KEYS = {"world", "sheets_sha"}  # a table forecast's world (SPEC W2 S2)
 TABLE_FORECAST_KEYS = TABLE_KEYS | {"beacon_round"}
 
 
+def _deck_problem(
+    deck_: object, distribution: list[dict], by: str, run: Run
+) -> tuple[str | None, int | None]:
+    """(why a deck forecast does not stand, None) or (None, the reader's
+    latest round): the question and paths (`deck.check_forecast`), a round
+    still ahead (`_future_round`), and one forecast per round, question and
+    role."""
+    from . import deck  # deck imports api
+
+    why = deck.check_forecast(deck_, distribution)
+    if why is not None:
+        return why, None
+    why, latest = _future_round(deck_["beacon_round"], run)
+    if why is not None:
+        return why, None
+    for r in run.rec.rows():
+        d = r.get("deck") if r["kind"] == "wager" else None
+        if isinstance(d, dict) and d == deck_ and r.get("by") == by:
+            return (
+                f"the {by} already forecast {deck_['question']!r} for round "
+                f"{deck_['beacon_round']}: one forecast per round, question and role"
+            ), None
+    return None, latest
+
+
 def _future_round(rnd: object, run: Run) -> tuple[str | None, int | None]:
     """(why `rnd` is not a drand round still ahead, None) or (None, the
     reader's latest round). Ahead means the operator's reader can NOT read it
@@ -2185,6 +2210,7 @@ def forecast(
     by: str = "desk",
     committed: dict | None = None,
     table: dict | None = None,
+    deck: dict | None = None,
     argv: Iterable[str] = ("forecast",),
 ) -> dict:
     """`forecast()` seals a prediction into the ledger before the outcome
@@ -2200,7 +2226,10 @@ def forecast(
     that has not fired yet by this box's clock, whose randomness must seed
     the session that answers it (rival R1, H7; W4 break 1). A table session
     on another world, other sheets or another seed can't supply its outcome
-    (`table.propose_outcome`)."""
+    (`table.propose_outcome`). `deck` names a deck forecast instead, exactly
+    {question, beacon_round} (flatten F6, `deck.py`): one of the predictions
+    game's questions, over the paths yes and no, and a round still ahead; one
+    forecast per round, question and role, so no role holds both sides."""
     run, info = _open(cfg, "forecast", argv)
     if run is None:
         return info
@@ -2238,6 +2267,10 @@ def forecast(
             f"a table forecast already names beacon round {table['beacon_round']}: "
             "one forecast per round"
         )
+    elif table is not None and deck is not None:
+        why = "a forecast is about a table world or a deck question, not both"
+    elif deck is not None and (got := _deck_problem(deck, distribution, by, run))[0]:
+        why = got[0]
     elif any(r["kind"] == "wager" and r.get("id") == wid for r in run.rec.rows()):
         why = f"a wager {wid!r} is already on record; a forecast stands"
     else:
@@ -2252,9 +2285,10 @@ def forecast(
         committed=committed,
         commit=reverse.COMMIT,
         table=table,
+        deck=deck,
         # R23a: the reader's newest round as the forecast was made, a fact
         # the reader checked; the round named must be after it
-        beacon_latest=got[1] if table is not None else None,
+        beacon_latest=got[1] if table is not None or deck is not None else None,
     )
     return {
         "row": row,
