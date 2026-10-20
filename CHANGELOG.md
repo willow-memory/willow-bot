@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.16.0](https://github.com/willow-memory/willow-bot/compare/v1.15.0...v1.16.0) (2026-10-20)
+
+
+### Added
+
+* **one-script:** an honest forecast ledger for market calls ([fa8aa87](https://github.com/willow-memory/willow-bot/commit/fa8aa870cfdeabc0552e6f7e385b7b9aaa99ad37))
+* **one-script:** an honest forecast ledger for market calls ([eceba16](https://github.com/willow-memory/willow-bot/commit/eceba1657e0575a9ec6de2fa96a62115ef46561d))
+
 ## [1.15.0](https://github.com/willow-memory/willow-bot/compare/v1.14.0...v1.15.0) (2026-10-20)
 
 
