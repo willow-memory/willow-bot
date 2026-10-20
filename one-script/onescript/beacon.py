@@ -92,6 +92,71 @@ def seed_id(randomness: str) -> str:
     return hashlib.sha256(bytes.fromhex(randomness)).hexdigest()[:16]
 
 
+# ── a day's round, and the u32 seed it gives (catgrid's daily board, F-14) ──
+def round_for(day: str) -> int:
+    """The round current at `day` (YYYY-MM-DD) 00:00 UTC. ValueError for a day
+    before the beacon's first round, or not a date."""
+    d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    t = int(d.timestamp())
+    if t < GENESIS:
+        raise ValueError(f"{day} is before the beacon's first round")
+    return (t - GENESIS) // PERIOD + 1
+
+
+def seed_u32(randomness: str) -> int:
+    """A u32 seed from a round's randomness: SHA-256's first four bytes, big
+    endian (the seed a xorshift32 board takes, `xorshift.Xorshift32`)."""
+    return int.from_bytes(hashlib.sha256(bytes.fromhex(randomness)).digest()[:4], "big")
+
+
+def day_stamp(day: str, read=None) -> tuple[dict | None, str]:
+    """(stamp, "") for `day`, or (None, why). A stamp is the day, its round,
+    the round's randomness, and the u32 seed and seed_id they give: all a
+    replay needs. A reader that fails, or answers for another round, gives no
+    stamp and says why; there is no fallback seed (one from the clock would be
+    one someone could know in advance)."""
+    read = read or drand_reader
+    try:
+        rnd = round_for(day)
+    except ValueError as e:
+        return None, str(e)
+    try:
+        got = read(rnd)
+    except Exception as e:  # any failure of the reader: said, never guessed
+        return None, f"the beacon could not be read: {type(e).__name__}: {e}"
+    if not isinstance(got, dict) or got.get("round") != rnd:
+        said = got.get("round") if isinstance(got, dict) else got
+        return None, f"the beacon answered for {said!r}, not round {rnd}"
+    r = got.get("randomness")
+    if not is_randomness(r):
+        return None, f"round {rnd} carries no randomness (64 hex)"
+    return {
+        "day": day,
+        "round": rnd,
+        "randomness": r,
+        "seed": seed_u32(r),
+        "seed_id": seed_id(r),
+        "bls": BLS_UNVERIFIED,
+    }, ""
+
+
+def check_day_stamp(st: dict) -> str:
+    """Why this stamp is not its day's, or "" when it holds together: the round
+    is the day's, and the seed is the randomness's."""
+    try:
+        if st["round"] != round_for(st["day"]):
+            return f"round {st['round']} is not {st['day']}'s ({round_for(st['day'])})"
+        if not is_randomness(st["randomness"]):
+            return "the stamp carries no randomness (64 hex)"
+        if st["seed"] != seed_u32(st["randomness"]) or st["seed_id"] != seed_id(
+            st["randomness"]
+        ):
+            return "the seed is not the randomness's: the board was not seeded by the beacon"
+    except (KeyError, TypeError, ValueError) as e:
+        return f"not a daily stamp ({type(e).__name__}: {e})"
+    return ""
+
+
 def drand_reader(rnd: int | str) -> dict:
     """Round `rnd` (or "latest") from drand over HTTPS (play.py:40-43). Raises
     on any failure, and for a round not out yet; the caller says
