@@ -4,10 +4,11 @@ and the toolchain gate says why; never a guessed `~`."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from onescript import __main__ as cli
-from onescript import api
+from onescript import api, boot
 
 
 def test_the_rule_is_the_bots(monkeypatch, tmp_path):
@@ -32,3 +33,13 @@ def test_the_gate_with_no_venv_says_why_and_finds_no_tool():
     g = api._gate_cfg(True, "pip install ruff==0.16.7", None, Path("/r"), Path("/g"))
     assert g["version_of"]("ruff") is None
     assert api.bot_paths().BOX_NOT_CONFIGURED in g["found_in"]
+
+
+def test_a_checkin_config_with_no_venv_does_not_raise_and_says_why(monkeypatch):
+    monkeypatch.delenv(api.NESTED, raising=False)
+    g = api._gate_cfg(False, "", None, Path("/r"), Path("/g"))
+    (suite,) = g["tests"]
+    assert suite["argv"][0] == sys.executable and "python" not in suite
+    assert api.bot_paths().BOX_NOT_CONFIGURED in suite["ran_on"]
+    (row,) = boot.tests_gate([{**suite, "needs": [], "cwd": "/nope"}])
+    assert api.bot_paths().BOX_NOT_CONFIGURED in row["why"]

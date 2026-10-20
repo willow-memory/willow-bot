@@ -329,8 +329,10 @@ def _gate_cfg(
     else:
         # The suite runs in the bot's venv when it has one (D2), and its needs
         # are asked of that interpreter; else this one, as before.
-        venv_py = venv / "bin" / "python"
-        py = str(venv_py) if venv_py.exists() else None
+        # No box (F-17) has no venv at all: the suite runs on this interpreter
+        # and the row says so, never a guessed path.
+        venv_py = venv / "bin" / "python" if venv is not None else None
+        py = str(venv_py) if venv_py is not None and venv_py.exists() else None
         # Set in the child's environment only. Setting it in this process
         # would make every later check-in in a long-lived process skip the gate.
         cfg["tests"] = [
@@ -352,6 +354,14 @@ def _gate_cfg(
                 "cwd": str(PKG.parent),
                 "needs": ["pytest"],
                 **({"python": py} if py else {}),
+                **(
+                    {
+                        "ran_on": f"{sys.executable}, in no venv: "
+                        f"{bot_paths().BOX_NOT_CONFIGURED}"
+                    }
+                    if venv is None
+                    else {}
+                ),
             }
         ]
     return cfg
