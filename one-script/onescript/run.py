@@ -607,6 +607,7 @@ class Run:
         committed: dict | None = None,
         commit: str | None = None,
         table: dict | None = None,
+        deck: dict | None = None,
         beacon_latest: int | None = None,
     ) -> dict:
         """Record a declared wager. Its row hash is the subject a human seal
@@ -622,6 +623,8 @@ class Run:
             extra = {"by": by, "committed": committed, "commit": commit}
         if table is not None:  # the world and sheets a table forecast is about
             extra["table"] = table
+        if deck is not None:  # the deck question and round it is about (F6)
+            extra["deck"] = deck
         if beacon_latest is not None:  # the reader's newest round then (R23a)
             extra["beacon_latest"] = beacon_latest
         return self.rec.append(
@@ -802,6 +805,7 @@ class Run:
         if any(
             (r["kind"] == "verdict" and r.get("who") == "table")
             or (r["kind"] == "wager" and isinstance(r.get("table"), dict))
+            or (r["kind"] == "wager" and isinstance(r.get("deck"), dict))
             for r in rows
         ):
             from . import table  # table imports api, which imports this module

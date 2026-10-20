@@ -64,8 +64,21 @@ ROOT = Path(os.environ.get("ONESCRIPT_ROOT", "~/github/willow-memory")).expandus
 DESIGN = ROOT / "willows-grove" / "docs" / "design"  # the docs stay in willows-grove
 RAT = ROOT / "ratatosk"
 BOT = ROOT / "willow-bot"
-_box = os.environ.get("WILLOW_HOME", "").strip()
-BOX = Path(_box).expanduser() if _box else None
+
+
+def _the_box() -> Path | None:
+    """The bot's box rule, one copy (flatten F-17): ``$WILLOW_HOME``, else
+    ``$WILLOW_VAULT_BOX``, an existing directory; else None."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from willow_bot import paths
+
+    try:
+        return paths.willow_home()
+    except paths.BoxNotConfigured:
+        return None
+
+
+BOX = _the_box()
 
 SKIP_DIRS = frozenset(
     {

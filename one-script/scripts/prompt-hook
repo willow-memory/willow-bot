@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Claude Code UserPromptSubmit: every prompt is a bite (willows-grove
+# one-script/workflow.md §2c). The prompt, on stdin, is looked up in the box
+# and what it finds is framed into the turn by prompt.py. Wired in willow-bot's
+# .claude/settings.json; the box is willow-bot's own .flow/onescript unless
+# ONESCRIPT_BOX and ONESCRIPT_KEYS name another. Exit 2 blocks the prompt.
+set -u
+here="$(cd "$(dirname "$0")/.." && pwd)"   # one-script/
+bot="$(dirname "$here")"                   # willow-bot/
+# The interpreter: ONESCRIPT_PYTHON, else the bot's venv by the bot's own rule
+# (`willow_bot.paths`, flatten F-17; the one script's `--venv` default,
+# `onescript.__main__._bot_venv`; seal D2: "all the .venv live in the bot"):
+# <box>/willow-bot/venvs/willow-bot, or the old <box>/venvs/willow-bot while only
+# that one exists (said on stderr), the box being $WILLOW_HOME, else
+# $WILLOW_VAULT_BOX, an existing directory. No box: no venv, said, and python3
+# runs the hook; never a guessed home. tests/test_prompt_hook.py holds the two
+# to the same answer. A venv without the embedder still runs: the served
+# document says the rung fell back to words, and why.
+py="${ONESCRIPT_PYTHON:-}"
+if [ -z "$py" ]; then
+  # willow_bot.paths.env_box: the first of WILLOW_HOME, WILLOW_VAULT_BOX set to a
+  # non-blank value (ends trimmed, ~ expanded) is the box, and it must be an
+  # existing absolute directory; a named box that is not one is refused, never
+  # passed over for the next name.
+  box=""
+  for v in "${WILLOW_HOME:-}" "${WILLOW_VAULT_BOX:-}"; do
+    v="${v#"${v%%[![:space:]]*}"}"
+    v="${v%"${v##*[![:space:]]}"}"
+    if [ -n "$v" ]; then box="${v/#\~/${HOME:-}}"; break; fi
+  done
+  if [ -z "$box" ] || [ "${box#/}" = "$box" ] || [ ! -d "$box" ]; then
+    echo "prompt-hook: no box (WILLOW_HOME, else WILLOW_VAULT_BOX, an existing absolute directory): no venv, python3 runs the hook" >&2
+  else
+    venv="$box/willow-bot/venvs/willow-bot"
+    if [ ! -d "$venv" ] && [ -d "$box/venvs/willow-bot" ]; then
+      venv="$box/venvs/willow-bot"
+      echo "prompt-hook: using the venv's old home $venv (D2: move it into the bot)" >&2
+    fi
+    [ -x "$venv/bin/python" ] && py="$venv/bin/python"
+  fi
+fi
+[ -n "$py" ] || py=python3
+args=()
+[ -n "${ONESCRIPT_BOX:-}" ] && args+=(--box "$ONESCRIPT_BOX")
+[ -n "${ONESCRIPT_KEYS:-}" ] && args+=(--keys "$ONESCRIPT_KEYS")
+cd "$here" && exec "$py" -m onescript ${args[@]+"${args[@]}"} prompt

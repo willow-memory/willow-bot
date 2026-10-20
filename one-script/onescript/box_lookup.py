@@ -30,7 +30,7 @@ from typing import Callable
 
 from . import pile as pile_mod
 
-POPULATED, EMPTY, UNREACHABLE = "populated", "empty", "unreachable"
+from .states import EMPTY, POPULATED, UNREACHABLE  # the three, once (F5, F-18)
 
 
 @dataclass(frozen=True)

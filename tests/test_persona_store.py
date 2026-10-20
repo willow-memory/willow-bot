@@ -205,11 +205,18 @@ def test_install_service_refuses_without_a_box(tmp_path):
     import subprocess
 
     root = Path(__file__).resolve().parents[1]
-    env = {k: v for k, v in os.environ.items() if k not in ("WILLOW_HOME", "WILLOW_BOT_VAULT_BOX")}
+    # every name the box rule reads (F-17: WILLOW_HOME, else WILLOW_VAULT_BOX)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("WILLOW_HOME", "WILLOW_BOT_VAULT_BOX", "WILLOW_VAULT_BOX")}
     r = subprocess.run(["bash", str(root / "scripts" / "install-service.sh"), "--print", "willow-bot"],
                        env=env, capture_output=True, text=True, timeout=30)
     assert r.returncode == 2 and "no box" in r.stderr and "provision.sh" in r.stderr
     env["WILLOW_BOT_VAULT_BOX"] = str(tmp_path)
     r = subprocess.run(["bash", str(root / "scripts" / "install-service.sh"), "--print", "willow-bot"],
                        env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and f"WILLOW_VAULT_BOX={tmp_path}" in r.stdout
+    fallback = {**{k: v for k, v in env.items() if k != "WILLOW_BOT_VAULT_BOX"},
+                "WILLOW_VAULT_BOX": str(tmp_path)}
+    r = subprocess.run(["bash", str(root / "scripts" / "install-service.sh"), "--print", "willow-bot"],
+                       env=fallback, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and f"WILLOW_VAULT_BOX={tmp_path}" in r.stdout

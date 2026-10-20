@@ -14,6 +14,9 @@
     python3 -m onescript needs              # the morning screen's NEEDS YOU lines, JSON
     python3 -m onescript decline KEY        # the human's No to an offer, recorded
     python3 -m onescript forecast ID --dist FILE [--by ROLE] [--committed FILE]
+    python3 -m onescript forecast ID --dist FILE --deck FILE  # {question, beacon_round}
+    python3 -m onescript deck-reveal ROUND  # the beacon's answers as deck rows (--drand)
+    python3 -m onescript deck-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
     python3 -m onescript rules proposal:HASH # a sealed rules/*.md becomes rules rows, one @phase each
@@ -50,6 +53,7 @@ so a turn proves the record's chain, not who sat at the keyboard.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import shlex
@@ -58,7 +62,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, jeles_store, table, view
+from . import beacon, deck, jeles_store, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -191,14 +195,64 @@ def _siblings(parent: Path) -> dict[str, Path]:
     return {d.name: d for d in kids if d.is_dir() and (d / ".git").exists()}
 
 
-def _bot_venv() -> Path:
-    """The bot's venv: ``$WILLOW_HOME/willow-bot/venvs/willow-bot`` (D2: the
-    venvs live in the bot), or the old ``$WILLOW_HOME/venvs/willow-bot`` while
-    only that one exists."""
-    box = Path(os.environ.get("WILLOW_HOME", "~")).expanduser()
-    new = box / "willow-bot" / "venvs" / "willow-bot"
-    old = box / "venvs" / "willow-bot"
+def _bot_venv() -> Path | None:
+    """The bot's venv by the bot's own rule (flatten F-17, `willow_bot.paths`):
+    ``<box>/willow-bot/venvs/willow-bot`` (D2: the venvs live in the bot), or
+    the old ``<box>/venvs/willow-bot`` while only that one exists, where the box
+    is ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX``. No box: None, and the
+    toolchain gate says why (`api._gate_cfg`); never a guessed path."""
+    paths = api.bot_paths()
+    try:
+        new, old = (
+            paths.venvs_dir() / "willow-bot",
+            paths.legacy_venvs_dir() / "willow-bot",
+        )
+    except paths.BoxNotConfigured:
+        return None
     return old if not new.is_dir() and old.is_dir() else new
+
+
+def _frame():
+    """prompt.py, the one frame both seats use (Rat's and this hook): the
+    named middle, so what the model is shown can't drift between them."""
+    import importlib.util  # noqa: PLC0415
+
+    spec = importlib.util.spec_from_file_location(
+        "onescript_prompt", ROOT / "one-script" / "prompt.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _prompt_hook(cfg, args, raw) -> int:
+    """Every prompt is a bite (willows-grove one-script/workflow.md §2c): the
+    hook's event on stdin, its prompt looked up in the box, the result framed
+    by prompt.py into the turn. The prompt's words never reach argv or the
+    record (the `lookup` row keeps its hash). A crash exits 2, which blocks
+    the prompt: it never fails open."""
+    try:
+        event = json.load(sys.stdin)
+        text = event.get("prompt", "") if isinstance(event, dict) else ""
+        frame = _frame()
+        cap = args.max_chars
+        if cap is None:
+            cap = frame.cap_from(os.environ.get("ONESCRIPT_MAX_CHARS"))
+        elif cap < 1:
+            raise ValueError("cap must be positive")
+        where = args.embed or os.environ.get("ONESCRIPT_EMBED") or None
+        cfg = dataclasses.replace(
+            cfg, embed=Path(where).expanduser() if where else None
+        )
+        res = api.prompt(cfg, text if isinstance(text, str) else "", cap, argv=raw)
+        out = {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": frame.context(res["doc"]),
+        }
+        print(json.dumps({"hookSpecificOutput": out}))
+        return 0
+    except Exception:  # noqa: BLE001 — any failure blocks; it never fails open
+        return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -306,6 +360,22 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument(
         "--other", action="append", default=[], type=Path, help="another session's box"
     )
+    pr = sub.add_parser(
+        "prompt",
+        help="Claude Code UserPromptSubmit: the prompt (stdin) as a bite, served into the turn",
+    )
+    pr.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help="the cap on the served text (default: $ONESCRIPT_MAX_CHARS, else none)",
+    )
+    pr.add_argument(
+        "--embed",
+        type=Path,
+        default=None,
+        help="WordLlama's local file dir: fuse the embedder rung (default: $ONESCRIPT_EMBED)",
+    )
     dc = sub.add_parser(
         "decline", help="the human's No to an offer: not offered again for that key"
     )
@@ -375,6 +445,27 @@ def main(argv: list[str] | None = None) -> int:
         "--table",
         type=Path,
         help="JSON {world, sheets_sha}: the world a table forecast is about",
+    )
+    fc.add_argument(
+        "--deck",
+        type=Path,
+        help="JSON {question, beacon_round}: one of the predictions deck's questions",
+    )
+    # the predictions deck as a reader (flatten F6)
+    dr = sub.add_parser(
+        "deck-reveal",
+        aliases=["deck_reveal"],
+        help="the beacon's answers to the deck questions wagered on a round",
+    )
+    dr.add_argument("round", type=int, help="the drand round the forecasts named")
+    do = sub.add_parser(
+        "deck-outcome",
+        aliases=["deck_outcome"],
+        help="read-only: a deck wager's outcome, proposed for the human to seal",
+    )
+    do.add_argument("wager", help="the wager row's hash, as forecast printed it")
+    do.add_argument(
+        "--human-key", type=Path, help="the human's key, hex, outside the box"
     )
     # the table's rows (SPEC-documented §9 J4, §12 J9; SPEC R9, R10)
     vd = sub.add_parser(
@@ -475,7 +566,8 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("seal")
     sl.add_argument(
         "subject",
-        help="serve:<hash> (a scope), proposal:<hash> or session:<hash> (a session)",
+        help="serve:<hash> (a scope), proposal:<hash>, reject:proposal:<hash> (the "
+        "human's rejection of a proposal) or session:<hash> (a session)",
     )
     sl.add_argument("--proof", help="the human's HMAC proof over the subject")
     sl.add_argument(
@@ -542,16 +634,36 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         try:
             tbl = json.loads(args.table.read_text()) if args.table else None
+            dk = json.loads(args.deck.read_text()) if args.deck else None
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
         res = api.forecast(
-            cfg, args.id, dist, by=args.by, committed=committed, table=tbl, argv=raw
+            cfg,
+            args.id,
+            dist,
+            by=args.by,
+            committed=committed,
+            table=tbl,
+            deck=dk,
+            argv=raw,
         )
         if "refused" not in res:
             print(f"wager {res['subject']}")  # the subject an outcome seal names
             print(f"tip {res['tip']}")  # sign it to commit the forecast
             return 0
+    elif args.cmd in ("deck-reveal", "deck-outcome"):
+        if args.cmd == "deck-reveal":
+            res = deck.reveal(cfg, args.round, argv=raw)
+            for r in res.get("rows", []):
+                print(f"deck {r['question']} {r['verdict']} row {r['n']}")
+        else:
+            res = deck.outcome(cfg, args.wager, human_key=args.human_key, argv=raw)
+            if res.get("state") == "proposed":
+                print(f"seal {res['subject']}")  # the human signs it, or nothing counts
+        said = {k: v for k, v in res.items() if k != "rows"}
+        print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
+        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
     elif args.cmd == "seal-outcome":
         try:
             outcome = json.loads(args.outcome)
@@ -677,6 +789,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.cmd == "lookup":
         res = api.lookup(cfg, args.bite, args.other, argv=raw)
+    elif args.cmd == "prompt":
+        return _prompt_hook(cfg, args, raw)
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)
@@ -713,7 +827,9 @@ def main(argv: list[str] | None = None) -> int:
         res = api.serve(cfg, spec, max_chars=args.max_chars, argv=raw)
     else:
         seal = (
-            api.seal_proposal
+            api.reject_proposal
+            if args.subject.startswith(api.REJECT + "proposal:")
+            else api.seal_proposal
             if args.subject.startswith("proposal:")
             else api.seal_session
             if args.subject.startswith("session:")

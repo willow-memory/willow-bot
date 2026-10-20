@@ -69,7 +69,7 @@ import unicodedata
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import api, beacon, gate, proposals, record, reverse
+from . import api, beacon, gate, odds, proposals, record, reverse
 from . import serve as served
 from .record import canon
 
@@ -81,7 +81,7 @@ LEDGER = "ai-game-master"
 #: SPEC R9 names the head row `agm_head`; R12 adds `escalate`: a model's
 #: move pick that code refused (off the menu, ESCALATE, or unreachable) and
 #: fell back from, recorded so the human sees it; never a seal).
-WHATS = ("open", "roll", "step", "decision", "result", "agm_head", "escalate")
+WHATS = ("open", "roll", "step", "decision", "result", "agm_head", "escalate", "deck")
 
 #: A verdict row carries none of these. The stamp is the record's own; the rest
 #: are what a seal reader reads (`reverse._outcome_row`, `serve.sealed_verified`,
@@ -322,6 +322,8 @@ def beat_seal(
     `unsealed` (A5). A `sealed` answer names what was sealed (B2): the stored
     proposal that really hashes to `subject` (`Run.find_proposal`), its
     `path` and `data`, so a caller can refuse a seal over another beat.
+    `rejected` is the same answer for the human's rejection (`api.REJECT`,
+    a seal over `reject:<subject>`); both on record is `unsealed`.
     Read-only: an `invocation` row and nothing else."""
     run, info = api._open(cfg, "beat-seal", argv)
     if run is None:
@@ -330,13 +332,28 @@ def beat_seal(
     good, unchecked = run.seal_rows(rows)
     over = [r for r in rows if r["kind"] == "seal" and r.get("subject") == subject]
     ok = [r for r in over if r["n"] in good]
-    if ok:
+    no = [
+        r
+        for r in rows
+        if r["kind"] == "seal"
+        and r.get("subject") == api.REJECT + subject
+        and r["n"] in good
+    ]
+    if ok and no:
+        # the api refuses the second of the two; both on record means one was
+        # written around it: neither is taken
+        return {
+            "state": "unsealed",
+            "why": "the human's seal and their rejection are both on record",
+            "code": 1,
+        }
+    if ok or no:
         prop, why = run.find_proposal(subject)
         if prop is None:
             return {"state": "unsealed", "why": f"sealed, but {why}", "code": 1}
-        r = ok[-1]
+        r = (ok or no)[-1]
         return {
-            "state": "sealed",
+            "state": "sealed" if ok else "rejected",
             "by": r.get("verifier") or "human",
             "seal": r["n"],
             "path": prop["path"],
@@ -385,10 +402,9 @@ def path_of(srows: list[dict]) -> tuple[str | None, str | None]:
     )
 
 
-def bucket(total: int) -> str:
-    """StorySession's read of a 2d6+stat sum: strong 10+, weak 7-9, miss 6-
-    (`the_table/story_session.py`, restated: onescript imports no table code)."""
-    return "strong" if total >= 10 else "weak" if total >= 7 else "miss"
+# StorySession's read of a 2d6+stat sum (strong 10+, weak 7-9, miss 6-): the
+# one copy is the odds' (flatten F5; it was restated here before F-14).
+bucket = odds.bucket
 
 
 def _int(v: object) -> bool:
@@ -541,6 +557,7 @@ def beacon_problem(
     tip_seal: dict,
     read: Callable[[int], dict] | None,
     seal_latest: object = None,
+    rnd: object = None,
 ) -> tuple[str, str] | None:
     """(state, why) when the session's seed is not shown to be the forecast's
     beacon, or None. The round is the one the wager committed to; the
@@ -554,8 +571,12 @@ def beacon_problem(
     clock set back passes it, so the reader's rounds carry the order. No
     reader, or one that fails: `unreachable`. Trusted, said: the reader
     (BLS not checked, T10), which must never report a `latest` older than a
-    round it serves (`api._future_round` also asks `read(rnd)`)."""
-    rnd = (w.get("table") or {}).get("beacon_round")
+    round it serves (`api._future_round` also asks `read(rnd)`). `rnd` is
+    the round when the forecast names it elsewhere than `table` (a deck
+    forecast's `deck`, `deck.propose_outcome`); `opened` is then the deck
+    verdict row, which carries the round and its randomness the same way."""
+    if rnd is None:
+        rnd = (w.get("table") or {}).get("beacon_round")
     if not _int(rnd):
         return "escalate", "the forecast names no beacon round (W4 break 1)"
     if opened.get("beacon_round") != rnd:
@@ -795,6 +816,24 @@ def basis(
     score stands (round 3 N4). Returns why (str), a note (dict) or None."""
 
     def check(wager: dict, rows: list[dict], outcome: dict) -> str | dict | None:
+        if isinstance(wager.get("deck"), dict):
+            # a deck forecast (flatten F6): its outcome is the deck row's
+            from . import deck  # deck imports table
+
+            got = deck.propose_outcome(
+                rows, wager["hash"], human_key, read_beacon, seal_rounds
+            )
+            if got["state"] == "unreachable":
+                return {"unreachable": str(got.get("reason"))}
+            if got["state"] != "proposed":
+                return str(got.get("reason", got["state"]))
+            idx, _ = reverse._match_distribution(wager, outcome)
+            if idx != got["path_index"]:
+                return (
+                    f"the sealed outcome {outcome} is not what the deck row says "
+                    f"({got['outcome']['path']!r})"
+                )
+            return None
         claimed = bool(claimed_by(rows, wager["hash"]))
         if not isinstance(wager.get("table"), dict):
             # not a table forecast: a session's claim is noted, never counted,

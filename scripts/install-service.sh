@@ -15,7 +15,8 @@
 #                           $VAULT_BOX/venvs/willow-bot exists, that one, with a warning)
 #   WILLOW_BOT_VAULT_BOX  — WILLOW_HOME / vault box root (REQUIRED; no default —
 #                           the box willow-data-vault's bootstrap/provision.sh made.
-#                           Falls back to an exported WILLOW_HOME, never a guess)
+#                           Falls back to the bot's own box rule, willow_bot.paths:
+#                           WILLOW_HOME, else WILLOW_VAULT_BOX; never a guess)
 #   WILLOW_BOT_WORKDIR    — repo checkout the service cd's into
 #                           (default: $HOME/github/willow-memory/willow-bot)
 #
@@ -25,9 +26,9 @@
 #   scripts/install-service.sh --all             # render + install every template
 set -euo pipefail
 
-VAULT_BOX="${WILLOW_BOT_VAULT_BOX:-${WILLOW_HOME:-}}"
+VAULT_BOX="${WILLOW_BOT_VAULT_BOX:-${WILLOW_HOME:-${WILLOW_VAULT_BOX:-}}}"
 if [[ -z "$VAULT_BOX" ]]; then
-    echo "install-service.sh: no box: set WILLOW_BOT_VAULT_BOX (or WILLOW_HOME) to the data-vault box" >&2
+    echo "install-service.sh: no box: set WILLOW_BOT_VAULT_BOX (or WILLOW_HOME, or WILLOW_VAULT_BOX) to the data-vault box" >&2
     echo "  (willow-data-vault: bootstrap/provision.sh <box>). There is no default." >&2
     exit 2
 fi

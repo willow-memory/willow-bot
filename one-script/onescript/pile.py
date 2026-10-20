@@ -1101,12 +1101,30 @@ def merge(stores: dict, bite: str) -> dict:
     return {"sessions": states, "hits": hits, "quotes": quotes}
 
 
+def _bundled_tokenizers(wordllama, cache: Path) -> None:
+    """WordLlama 0.4 ships its tokenizer configs in its package's `tokenizers/`
+    but looks for them in its own `tokenizer/` or in the cache's tokenizer dir,
+    so with downloads off the bundled model can't load. Copy the bundled
+    configs into the cache, once: still local files only, nothing fetched."""
+    import shutil  # noqa: PLC0415
+
+    shipped = Path(sys.modules[wordllama.__module__].__file__).parent / "tokenizers"
+    dst = wordllama.get_file_path("tokenizer", cache)
+    for f in (
+        sorted(shipped.glob("*_tokenizer_config.json")) if shipped.is_dir() else ()
+    ):
+        if not (dst / f.name).exists():
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy(f, dst / f.name)
+
+
 def wordllama_embed(cache: Path):
     """Rung 3, from local files only: WordLlama's bundled table, no download.
     Returns None (and the rank stays rung 1 alone) when it can't load."""
     try:
         from wordllama import WordLlama  # noqa: PLC0415
 
+        _bundled_tokenizers(WordLlama, Path(cache))
         wl = WordLlama.load(cache_dir=cache, disable_download=True)
     except Exception as e:  # noqa: BLE001 — absent is a state, said
         print(f"embed unreachable: {type(e).__name__}", file=sys.stderr)

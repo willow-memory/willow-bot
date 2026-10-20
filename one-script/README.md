@@ -22,6 +22,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `onescript/jeles_store.py` | Jeles's verified corpus as the pile's escalation rung: asked at seed only when the pile doesn't hold the bite, then proposed, sealed and served like any chunk |
 | `onescript/tests/` | Its tests |
 | `prompt.py` | The served tables, put into a prompt as framed data, so the model never holds a path |
+| `scripts/prompt-hook` | Claude Code UserPromptSubmit: every prompt a bite, served into the turn (`onescript prompt`) |
 | `foundation/` | `prompt.py`'s tests run on a bare interpreter, without pytest |
 | `scripts/scan/` | `script_match.py` (the gate's script index) and the table scans |
 | `scripts/flow/` | The view drafts: session maps and their merge |
@@ -55,6 +56,49 @@ and this repo agree on what the model is shown. Rat owns them from here:
 | An error in `prompt.py` itself, or a cap that isn't a positive whole number | Exit 2: the caller blocks the prompt |
 
 The model never sees a path, so it never learns that a box or a file exists.
+
+## Every prompt is a bite
+
+Back in a Claude Code seat (2026-10-19, the operator: "Build it, and in
+leaning towards the bot"). On 2026-10-07 the container seat and its hook went
+with Docker, and the per-prompt pass moved to Rat with the seat. A Claude Code
+session outside Rat then had no per-prompt pass at all. It has one again:
+
+- `.claude/settings.json` (committed; the rest of `.claude/` stays local) runs
+  `scripts/prompt-hook` on UserPromptSubmit, with a 60 s timeout.
+- The hook runs `python -m onescript prompt`: the prompt arrives on stdin and
+  is looked up in the box, so the record gets one `lookup` row holding the
+  bite's hash, never its words, and argv never carries them. Its top chunks
+  are re-read at their indexed blobs and served untrusted, the document marked
+  `unsealed: this session`.
+- `prompt.py`'s frame puts it into the turn: the one frame Rat uses too, so
+  the two seats can't drift in what the model is shown.
+- Three states, never collapsed: no open check-in is `unreachable` (and a
+  `refused` row), a bite that finds nothing is `empty`, over the cap is
+  `empty` ("narrow the stack"). A crash exits 2, which blocks the prompt.
+- The box is willow-bot's `.flow/onescript/` unless `ONESCRIPT_BOX` and
+  `ONESCRIPT_KEYS` name another. The cap is `ONESCRIPT_MAX_CHARS`.
+- The interpreter is `ONESCRIPT_PYTHON`, else the bot's venv found the way
+  the one script's own `--venv` default finds it (`_bot_venv`, D2):
+  `$WILLOW_HOME/willow-bot/venvs/willow-bot`, or the old
+  `$WILLOW_HOME/venvs/willow-bot` while only that one exists (said on stderr),
+  `$WILLOW_HOME` defaulting to `~`; else `python3`. A test holds the script
+  and `_bot_venv` to the same answer.
+- The embedder rung (the pile's rung 3) fuses in when `ONESCRIPT_EMBED` (or
+  `--embed`) names WordLlama's local file dir: the words' top `EMBED_POOL`
+  (100) candidates, re-read at their indexed blobs, ranked by the embedder and
+  fused by RRF, the way `pile.score_grams` fuses. Install it with
+  `pip install -e ".[embed]"`; the model is the one WordLlama bundles, never
+  downloaded (its tokenizer config is copied into the cache dir, since 0.4
+  ships it where its own lookup doesn't look). The served document's `rung`
+  says `fused` or `words`, and why. The lookup row still keeps SEED_TOP.
+- Cost: about 11–14 s a prompt on a warm store, about 1 s more with the
+  embedder. The check-in stays once a session.
+
+Said, not hidden: `prompt.py`'s frame opens with "data the human's sealed
+scope allows you to read". A per-prompt document is not sealed; its own
+`seal` field says so. The frame is Rat's contract and pinned by its tests, so
+its wording is left for the operator to change.
 
 ## The Write is a proposal
 
