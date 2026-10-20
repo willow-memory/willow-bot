@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here.
 
+## [1.15.0](https://github.com/willow-memory/willow-bot/compare/v1.14.0...v1.15.0) (2026-10-20)
+
+
+### Added
+
+* **one-script:** every prompt is a bite again, through a UserPromptSubmit hook ([71c2b05](https://github.com/willow-memory/willow-bot/commit/71c2b05fae8ff7011e963fcf95e175fb21a5426f))
+* **one-script:** one venv rule, the bot's (flatten F5, F-17) ([2e76e95](https://github.com/willow-memory/willow-bot/commit/2e76e951351df78831ee2815cbdaf46c8cc9fe0c))
+* **one-script:** the dice, with the engine handed in (flatten R-b) ([860b66a](https://github.com/willow-memory/willow-bot/commit/860b66a0909d729aa006d95dc127f9bb5713567f))
+* **one-script:** the fleet flattens into one pile (flatten F1 to F6) ([7e710a0](https://github.com/willow-memory/willow-bot/commit/7e710a0b6a2b88312897f3f4aa390dc230074bee))
+* **one-script:** the human's rejection of a proposal (flatten F3) ([5c1cd1e](https://github.com/willow-memory/willow-bot/commit/5c1cd1e72da4711cdc60b3cd08d9d36609d8e77b))
+* **one-script:** the odds, the pools and a day's seed (flatten R-c, R-d) ([d497c59](https://github.com/willow-memory/willow-bot/commit/d497c59c92d5d892a8322b842005586d2180e3bb))
+* **one-script:** the one stream lives in the pile (flatten F1) ([1e6ce9d](https://github.com/willow-memory/willow-bot/commit/1e6ce9d3a4d31008d21f7e5d0fbdb5132f3bdb3f))
+* **one-script:** the per-prompt hook fuses the embedder rung ([ab9f26e](https://github.com/willow-memory/willow-bot/commit/ab9f26e5a04fd5e1203216a5f5e7448ff7c1e94f))
+* **one-script:** the stream's table side and the second generator (flatten R-a) ([0743679](https://github.com/willow-memory/willow-bot/commit/07436798faa74178aa46f22915a99e8d48336dff))
+* **one-script:** the three states, once (flatten F5, F-18) ([e9bc096](https://github.com/willow-memory/willow-bot/commit/e9bc0962dad2015e2f69e00b517e4f67208b180f))
+* **paths:** the box rule reads a given environment (flatten F-17) ([cec4117](https://github.com/willow-memory/willow-bot/commit/cec4117b4712848a72cd0a5b6662e39ae9a06508))
+
+
+### Fixed
+
+* **one-script:** the prompt hook finds the bot venv in its D2 home ([2d591f0](https://github.com/willow-memory/willow-bot/commit/2d591f0ff5474785a12092ed6b0f6597bd706380))
+
+
+### Changed
+
+* **one-script:** restated rules become imports (flatten F5) ([fd4abe4](https://github.com/willow-memory/willow-bot/commit/fd4abe41149d3644f1c7ecf7153044d4e9899865))
+
 ## [1.14.0](https://github.com/willow-memory/willow-bot/compare/v1.13.0...v1.14.0) (2026-10-19)
 
 
