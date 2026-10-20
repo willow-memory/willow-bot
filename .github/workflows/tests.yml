@@ -46,18 +46,44 @@ jobs:
         with:
           path: willow-bot
 
+      # A change that spans repos rides one branch name in each: take
+      # willow-memory/willows-grove's branch of this PR's name when it has one, else master.
+      - name: Which willows-grove
+        id: grove_ref
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/willow-memory/willows-grove "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v7
         with:
           repository: willow-memory/willows-grove
-          ref: master
+          ref: ${{ steps.grove_ref.outputs.ref }}
           path: willows-grove
 
       # The one stream's parity and seam tests (flatten F1) drive the-table's
       # games; without safe-app-store beside, they skip.
+      # A change that spans repos rides one branch name in each: take
+      # rudi193-cmd/safe-app-store's branch of this PR's name when it has one, else master.
+      - name: Which safe-app-store
+        id: store_ref
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/rudi193-cmd/safe-app-store "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v7
         with:
           repository: rudi193-cmd/safe-app-store
-          ref: master
+          ref: ${{ steps.store_ref.outputs.ref }}
           path: safe-app-store
 
       - uses: actions/setup-python@v7
