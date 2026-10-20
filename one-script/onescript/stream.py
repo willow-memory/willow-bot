@@ -18,6 +18,12 @@ runs on this stream only when a caller hands it ``rng_factory``.
 (``randint``, ``choice``, in-place ``shuffle``, ``random``), with
 ``counter``, ``seed_id`` and ``generator_id`` so a draw can be recorded and
 replayed.
+
+The table's side came in with flatten F-14 (from the-table's
+``the_table/stream.py``, which now imports it): ``LEGACY``, the opt-out to the
+generator a recorded run was made with (C9); ``resolve_factory`` (None -> the
+stream); ``seed_label``; and ``replay``, which refuses a record made by any
+other generator or seed.
 """
 
 from __future__ import annotations
@@ -129,3 +135,83 @@ class StreamRandom:
             "generator_id": self.generator_id,
             "counter": self.counter,
         }
+
+
+# ── the table's side (flatten F-14): which generator a game gets, and replay ──
+class _Legacy:
+    """Opt-out marker: ``rng_factory=LEGACY`` keeps the old global-``random``
+    path so recorded runs can still be reproduced (C9)."""
+
+    generator_id = "random/global"
+
+    def __repr__(self) -> str:
+        return "LEGACY"
+
+
+LEGACY = _Legacy()
+LEGACY_ID = _Legacy.generator_id
+
+
+def default_factory(seed):
+    return StreamRandom.from_seed(seed)
+
+
+def resolve_factory(rng_factory):
+    """None -> the stream (the default); LEGACY -> None (global random);
+    else the caller's factory."""
+    if rng_factory is None:
+        return default_factory
+    if rng_factory is LEGACY:
+        return None
+    return rng_factory
+
+
+class ReplayRefused(ValueError):
+    """A record cannot be replayed as written."""
+
+
+class GeneratorMismatch(ReplayRefused):
+    """A record names a generator other than the one asked to replay it."""
+
+
+class EngineMismatch(ReplayRefused):
+    """A record was rolled by a different engine source than the one loaded."""
+
+
+def seed_label(rng, seed) -> str:
+    """What a reset may narrate about its seed: the stream's hashed ``seed_id``
+    (a beacon seed fixes every later die, so it is never narrated); a legacy
+    or plain ``random.Random`` run keeps the old ``seed=<n>`` text."""
+    if isinstance(rng, StreamRandom):
+        return f"seed_id={rng.seed_id}"
+    return f"seed={seed}"
+
+
+def replay(seed: int | bytes | str, record: dict, label: bytes = b"") -> StreamRandom:
+    """Rebuild the stream a recorded roll came from, positioned at
+    ``record["counter_before"]``.
+
+    Refuses (``ReplayRefused``) a record without ``seed_id``, with a counter
+    that is not a non-negative int or has ``before > after``; refuses
+    (``GeneratorMismatch``) a ``generator_id`` other than this one's and a seed
+    whose id differs from the record's (C9, T16)."""
+    got = record.get("generator_id")
+    if got != GENERATOR_ID:
+        raise GeneratorMismatch(
+            f"record was made by generator {got!r}; this is {GENERATOR_ID!r} -- not replayed"
+        )
+    if "seed_id" not in record:
+        raise ReplayRefused("record has no seed_id -- not replayed")
+    before, after = record.get("counter_before"), record.get("counter")
+    for name, v in (("counter_before", before), ("counter", after)):
+        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+            raise ReplayRefused(f"record {name} must be a non-negative int, got {v!r}")
+    if before > after:
+        raise ReplayRefused(f"record counter_before {before} is after counter {after}")
+    rng = StreamRandom.from_seed(seed, label)
+    if record["seed_id"] != rng.seed_id:
+        raise GeneratorMismatch(
+            f"seed id {rng.seed_id!r} does not match the record's {record['seed_id']!r}"
+        )
+    rng.stream.n = before
+    return rng

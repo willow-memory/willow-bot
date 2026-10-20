@@ -140,6 +140,17 @@ def _script(rng) -> list:
 
 
 @needs_table
+def test_the_tables_stream_is_this_one(table):
+    """F-14/F-16: the-table imports the one script's stream and its table
+    side; the names are this module's objects, not copies."""
+    from onescript import stream as one
+
+    for name in ("Stream", "StreamRandom", "seed_bytes", "LEGACY", "resolve_factory",
+                 "replay", "seed_label", "ReplayRefused", "GeneratorMismatch"):  # fmt: skip
+        assert getattr(table, name) is getattr(one, name), name
+
+
+@needs_table
 @pytest.mark.parametrize("seed", SEEDS)
 @pytest.mark.parametrize("label", [b"", b"q7"])
 def test_parity_with_the_tables_stream_draw_for_draw(table, seed, label):
