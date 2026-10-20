@@ -329,10 +329,24 @@ class TestTheHookFindsItsPython:
         out, err = self.run(tmp_path, WILLOW_HOME=str(tmp_path / "wh"))
         assert out == str(old) and "old home" in err
 
-    def test_no_willow_home_means_home(self, tmp_path):
-        d2 = self.stub(tmp_path / "home" / "willow-bot" / "venvs" / "willow-bot")
-        out, _ = self.run(tmp_path)
+    def test_no_box_means_no_venv_said_never_home(self, tmp_path):
+        """F-17: no box configured is no venv, said; ~ is never guessed."""
+        home = self.stub(tmp_path / "home" / "willow-bot" / "venvs" / "willow-bot")
+        out, err = self.run(tmp_path)
+        assert out != str(home) and "no box" in err
+
+    def test_the_vault_box_is_the_box_when_willow_home_is_unset(self, tmp_path):
+        d2 = self.stub(tmp_path / "vb" / "willow-bot" / "venvs" / "willow-bot")
+        out, _ = self.run(tmp_path, WILLOW_VAULT_BOX=str(tmp_path / "vb"))
         assert out == str(d2)
+
+    def test_a_named_box_that_is_not_one_is_refused_not_passed_over(self, tmp_path):
+        self.stub(tmp_path / "vb" / "willow-bot" / "venvs" / "willow-bot")
+        for bad in ("relative/box", str(tmp_path / "nowhere")):
+            out, err = self.run(
+                tmp_path, WILLOW_HOME=bad, WILLOW_VAULT_BOX=str(tmp_path / "vb")
+            )
+            assert str(tmp_path / "vb") not in out and "no box" in err
 
     def test_onescript_python_overrides_every_home(self, tmp_path):
         self.stub(tmp_path / "wh" / "willow-bot" / "venvs" / "willow-bot")
@@ -343,16 +357,37 @@ class TestTheHookFindsItsPython:
         assert out == str(mine)
 
     @pytest.mark.parametrize("layout", ["both", "new", "old", "none"])
-    def test_the_script_and_the_one_script_agree(self, tmp_path, monkeypatch, layout):
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {"WILLOW_HOME": "{wh}"},
+            {"WILLOW_VAULT_BOX": "{wh}"},
+            {"WILLOW_HOME": "  ", "WILLOW_VAULT_BOX": " {wh} "},
+            {"WILLOW_HOME": "{wh}/missing", "WILLOW_VAULT_BOX": "{wh}"},
+            {"WILLOW_HOME": "rel/box"},
+            {},
+        ],
+    )
+    def test_the_script_and_the_one_script_agree(
+        self, tmp_path, monkeypatch, layout, env
+    ):
+        """F-17: the hook's shell rule and `_bot_venv` (the bot's
+        `willow_bot.paths`) pick the same venv, or none, every time."""
         wh = tmp_path / "wh"
+        wh.mkdir()
         if layout in ("both", "new"):
             self.stub(wh / "willow-bot" / "venvs" / "willow-bot")
         if layout in ("both", "old"):
             self.stub(wh / "venvs" / "willow-bot")
-        monkeypatch.setenv("WILLOW_HOME", str(wh))
-        want = cli._bot_venv() / "bin" / "python"
-        out, _ = self.run(tmp_path, WILLOW_HOME=str(wh))
-        if want.exists():
+        env = {k: v.format(wh=wh) for k, v in env.items()}
+        for k in ("WILLOW_HOME", "WILLOW_VAULT_BOX"):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        venv = cli._bot_venv()
+        want = venv / "bin" / "python" if venv is not None else None
+        out, _ = self.run(tmp_path, **env)
+        if want is not None and want.exists():
             assert out == str(want)
-        else:  # neither home: no venv chosen, python3 runs the hook itself
+        else:  # no box, or no venv in it: python3 runs the hook itself
             assert str(wh) not in out

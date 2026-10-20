@@ -73,6 +73,18 @@ SERVE_KEY = "serve.key"  # this session's id key, beside the keys: outside the b
 #: Z7X2TJQX, a mutant with the keys refusal removed).
 NESTED = "ONESCRIPT_IN_TESTS_GATE"
 
+
+def bot_paths():
+    """The bot's box rule, one copy (flatten F-17): ``willow_bot.paths`` from
+    the willow-bot checkout the one script lives in."""
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from willow_bot import paths  # noqa: PLC0415
+
+    return paths
+
+
 _STAMP = {"n", "kind", "who", "family", "standing", "version", "ts", "prev", "hash"}
 
 
@@ -84,7 +96,7 @@ class Config:
     ci: Path
     root: Path
     grove: Path
-    venv: Path
+    venv: Path | None  # None: no box configured (F-17); the gate says why
     now: str | None = None  # a fixed clock, for replays and tests
     no_tests: bool = False
     #: The operator's keyring of public keys, fixed here and resolved outside the
@@ -260,11 +272,15 @@ def _from_record(run: Run) -> None:
     ]
 
 
-def _in_venv(venv: Path):
+def _in_venv(venv: Path | None):
     """The toolchain gate reads the bot's venv, where the one script's tools
-    live (D2), never whatever happens to be first on PATH."""
+    live (D2), never whatever happens to be first on PATH. No venv (no box
+    configured, F-17): every tool reads as missing, and the gate says where it
+    looked."""
 
     def version_of(tool: str) -> str | None:
+        if venv is None:
+            return None
         exe = venv / "bin" / tool
         if not exe.exists():
             return None
@@ -278,7 +294,7 @@ def _in_venv(venv: Path):
 def _gate_cfg(
     no_tests: bool,
     ci_text: str,
-    venv: Path,
+    venv: Path | None,
     root: Path,
     grove: Path,
     phone: bool = False,
@@ -287,7 +303,11 @@ def _gate_cfg(
     cfg: dict = {
         "pins": {"tools": {"ruff": pin.group(1)}} if pin else {},
         "version_of": _in_venv(venv),
-        "found_in": f"in {venv}",
+        "found_in": (
+            f"in {venv}"
+            if venv is not None
+            else f"in no venv: {bot_paths().BOX_NOT_CONFIGURED}"
+        ),
         "repos": [str(root), str(grove)],
         "phone": phone,
     }
@@ -383,7 +403,7 @@ def _open(
         root=str(cfg.root),
         grove=str(cfg.grove),
         box=str(cfg.box),
-        venv=str(cfg.venv),
+        venv=str(cfg.venv) if cfg.venv is not None else None,
         phone=cfg.phone,
         no_tests=cfg.no_tests,
         keyring=str(cfg.keyring) if cfg.keyring else None,

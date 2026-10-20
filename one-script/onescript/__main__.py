@@ -192,13 +192,20 @@ def _siblings(parent: Path) -> dict[str, Path]:
     return {d.name: d for d in kids if d.is_dir() and (d / ".git").exists()}
 
 
-def _bot_venv() -> Path:
-    """The bot's venv: ``$WILLOW_HOME/willow-bot/venvs/willow-bot`` (D2: the
-    venvs live in the bot), or the old ``$WILLOW_HOME/venvs/willow-bot`` while
-    only that one exists."""
-    box = Path(os.environ.get("WILLOW_HOME", "~")).expanduser()
-    new = box / "willow-bot" / "venvs" / "willow-bot"
-    old = box / "venvs" / "willow-bot"
+def _bot_venv() -> Path | None:
+    """The bot's venv by the bot's own rule (flatten F-17, `willow_bot.paths`):
+    ``<box>/willow-bot/venvs/willow-bot`` (D2: the venvs live in the bot), or
+    the old ``<box>/venvs/willow-bot`` while only that one exists, where the box
+    is ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX``. No box: None, and the
+    toolchain gate says why (`api._gate_cfg`); never a guessed path."""
+    paths = api.bot_paths()
+    try:
+        new, old = (
+            paths.venvs_dir() / "willow-bot",
+            paths.legacy_venvs_dir() / "willow-bot",
+        )
+    except paths.BoxNotConfigured:
+        return None
     return old if not new.is_dir() and old.is_dir() else new
 
 
