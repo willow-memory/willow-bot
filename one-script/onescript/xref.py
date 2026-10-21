@@ -48,14 +48,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
+from . import canon as _canon
+
 TEXT_SUFFIXES = (".md", ".py")
 MAX_BYTES = 5_000_000
 EXTRACT_VERSION = 1  # bump when extract() changes, so the cache misses
 FAMILIES = ("Q", "D", "OW", "F", "CONST", "INV", "PR")
 
 
-def canon(obj) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+#: Family A (`onescript/canon.py`, flatten-2 F7): sorted, compact, non-ASCII literal.
+canon = _canon.sorted_compact_utf8
 
 
 # ── git ──────────────────────────────────────────────────────────────────────

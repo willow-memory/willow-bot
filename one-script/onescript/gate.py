@@ -12,14 +12,13 @@ job, and only the human's seal makes it so.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import graph, nestor_seal
+from . import sign as _sign
 from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
@@ -48,7 +47,9 @@ def token() -> object:
 
 
 def sign(key: bytes, *parts: str) -> str:
-    return hmac.new(key, "\x1f".join(parts).encode(), hashlib.sha256).hexdigest()
+    """The gate's HMAC seal; the one HMAC helper is `sign.hmac_parts`
+    (flatten-2 F14), the bytes are unchanged."""
+    return _sign.hmac_parts(key, *parts)
 
 
 def verify(identity: dict, keys: dict[str, bytes]) -> Verified:
@@ -59,7 +60,7 @@ def verify(identity: dict, keys: dict[str, bytes]) -> Verified:
         identity.get("sig", ""),
     )
     key = keys.get(who or "")
-    if key is None or not hmac.compare_digest(sign(key, who, family), sig):
+    if key is None or not _sign.hmac_equal(sign(key, who, family), sig):
         raise Refused(f"unsigned agent at the door: {who!r}")
     if who == HUMAN:
         raise Refused(
@@ -75,9 +76,7 @@ def system() -> Verified:
 
 def verify_seal(subject: str, proof: str, human_key: bytes) -> bool:
     """Only the human's key produces this. Presence is a label; this is authority."""
-    return hmac.compare_digest(
-        sign(human_key, "seal", subject).encode(), proof.encode("utf-8", "replace")
-    )
+    return _sign.hmac_equal(sign(human_key, "seal", subject), proof)
 
 
 def human(subject: str, proof: str, human_key: bytes) -> Verified:

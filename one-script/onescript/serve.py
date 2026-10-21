@@ -45,12 +45,11 @@ Home: willow-bot (D2, sealed), with the rest of the skeleton.
 
 from __future__ import annotations
 
-import hmac
 import os
 import re
 import unicodedata
 
-from . import gate, lore, nestor_seal, rules
+from . import gate, lore, nestor_seal, rules, sign
 from .record import Record, canon, h256
 
 OUT = "served.json"
@@ -723,5 +722,5 @@ def check_cites(doc: dict, cited: list[str]) -> list[dict]:
     return [
         {"cite": c, "verdict": "link_fail", "why": "not in the served file"}
         for c in cited
-        if not any(hmac.compare_digest(c.encode(errors="replace"), k) for k in known)
+        if not any(sign.hmac_equal(c, k) for k in known)
     ]

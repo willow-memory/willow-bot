@@ -36,6 +36,7 @@ try:
 except ImportError:  # not POSIX: no flock; _locked() says so and runs unlocked
     fcntl = None  # type: ignore[assignment]
 
+from . import canon as _canon
 from . import mai_shape
 
 GENESIS = "0" * 64
@@ -47,8 +48,8 @@ ROW_KEYS = frozenset(
 TIP = "tip:"
 
 
-def canon(obj) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+#: Family A (`onescript/canon.py`, flatten-2 F7): sorted, compact, non-ASCII literal.
+canon = _canon.sorted_compact_utf8
 
 
 def h256(data: bytes | str) -> str:
