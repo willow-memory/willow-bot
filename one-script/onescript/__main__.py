@@ -66,26 +66,39 @@ import shlex
 import sys
 from pathlib import Path
 
-from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
-from . import escalate as escalate_mod
-from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
-from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
+from . import opening, prompt_path
+from .opening import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
     NESTED,
+    PKG,
     KeysExposed,
     _keys,
-    _last_boot,
     _law,
 )
-from .run import PKG
 from .states import EMPTY, POPULATED
-from .writeback import PROPOSED
 
-# A success is a reader's state (populated or empty) or a proposal's standing
-# (proposed): two vocabularies mixed on purpose, since these commands either
-# read rows or write a proposal for the human to seal.
-OK_STATES = (POPULATED, EMPTY, PROPOSED)
+
+def _load_everything() -> None:
+    """Every verb but `prompt` needs the whole one script; `prompt` runs on
+    every Enter and loads only its own path (`prompt_path.py`), so these load
+    here: on import (the tests patch `cli.boot`, `cli.api`, `cli.beacon`...)
+    and in `main` for any verb but the hook's. Idempotent."""
+    global api, boot, nestor_seal, escalate_mod, beacon, deck, diverge
+    global jeles_store, market, merge_check, table, view, _last_boot, OK_STATES
+    if "api" in globals():
+        return
+    from . import api, boot, nestor_seal  # noqa: F401  (tests patch cli.boot.probes)
+    from . import escalate as escalate_mod
+    from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
+    from .api import _last_boot  # noqa: F401  (re-exported: the tests read it)
+    from .writeback import PROPOSED
+
+    # A success is a reader's state (populated or empty) or a proposal's
+    # standing (proposed): two vocabularies mixed on purpose, since these
+    # commands either read rows or write a proposal for the human to seal.
+    OK_STATES = (POPULATED, EMPTY, PROPOSED)
+
 
 ROOT = PKG.parents[1]  # onescript -> one-script -> willow-bot
 GROVE = Path(
@@ -214,7 +227,7 @@ def _bot_venv() -> Path | None:
     the old ``<box>/venvs/willow-bot`` while only that one exists, where the box
     is ``$WILLOW_HOME``, else ``$WILLOW_VAULT_BOX``. No box: None, and the
     toolchain gate says why (`api._gate_cfg`); never a guessed path."""
-    paths = api.bot_paths()
+    paths = opening.bot_paths()
     try:
         new, old = (
             paths.venvs_dir() / "willow-bot",
@@ -257,7 +270,9 @@ def _prompt_hook(cfg, args, raw) -> int:
         cfg = dataclasses.replace(
             cfg, embed=Path(where).expanduser() if where else None
         )
-        res = api.prompt(cfg, text if isinstance(text, str) else "", cap, argv=raw)
+        res = prompt_path.prompt(
+            cfg, text if isinstance(text, str) else "", cap, argv=raw
+        )
         out = {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": frame.context(res["doc"]),
@@ -268,8 +283,8 @@ def _prompt_hook(cfg, args, raw) -> int:
         return 2
 
 
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
+def _add_globals(p: argparse.ArgumentParser) -> None:
+    """The options every verb takes, the prompt hook's fast path included."""
     p.add_argument("--box", type=Path, default=ROOT / ".flow" / "onescript")
     p.add_argument(
         "--repo",
@@ -306,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--keyring",
         type=Path,
-        default=api.default_keyring(),
+        default=opening.default_keyring(),
         help="the public-only export of the operator's keyring ($WILLOW_KEYRING, "
         "else $WILLOW_HOME/config/verifiers.public.json); a Nestor seal is "
         "checked by it. Make it with `keys export`",
@@ -314,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--nestor-db",
         type=Path,
-        default=api.default_nestor_db(),
+        default=opening.default_nestor_db(),
         help="Nestor's store, read-only ($WILLOW_NESTOR_DB, else $NESTOR_DB): a "
         "pair seals only while it is sealed there",
     )
@@ -331,6 +346,80 @@ def main(argv: list[str] | None = None) -> int:
         help="read market calls' closes from stooq.com's daily CSV over HTTPS. "
         "Without it no market call resolves, and its outcome is `unreachable`, said",
     )
+
+
+def _add_prompt_args(pr: argparse.ArgumentParser) -> None:
+    pr.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help="the cap on the served text (default: $ONESCRIPT_MAX_CHARS, else none)",
+    )
+    pr.add_argument(
+        "--embed",
+        type=Path,
+        default=None,
+        help="WordLlama's local file dir: fuse the embedder rung (default: $ONESCRIPT_EMBED)",
+    )
+
+
+def _prompt_only(argv: list[str]) -> bool:
+    """Whether this command line is the hook's: `prompt`, after the global
+    options. Anything that doesn't parse is not, and takes the full path."""
+    p = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    _add_globals(p)
+    p.add_argument("cmd", nargs="?")
+    try:
+        ns, _ = p.parse_known_args(argv)
+    except SystemExit:
+        return False
+    return ns.cmd == "prompt"
+
+
+def _config(args, **more) -> opening.Config:
+    """The box's config from the global options; `more` adds what a verb
+    beyond the hook's needs (the drand and price readers, Jeles)."""
+    return opening.Config(
+        box=args.box,
+        keys=args.keys,
+        constitution=CONSTITUTION,
+        ci=CI,
+        root=ROOT,
+        grove=GROVE,
+        venv=args.venv,
+        now=args.now,
+        no_tests=args.no_tests,
+        keyring=args.keyring,
+        nestor_db=args.nestor_db,
+        phone=args.phone,
+        repos=dict(args.repos) or None,
+        store_background=True,
+        forge=FORGE,
+        index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
+        seal_at_end=True,
+        **more,
+    )
+
+
+def _prompt_main(argv: list[str]) -> int:
+    """The hook's path: the same global options and the same `prompt` verb,
+    on `prompt_path` alone; nothing else of the one script is loaded."""
+    p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
+    _add_globals(p)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    _add_prompt_args(sub.add_parser("prompt"))
+    raw = list(argv)
+    args = p.parse_args(raw)
+    return _prompt_hook(_config(args), args, raw)
+
+
+def main(argv: list[str] | None = None) -> int:
+    given = list(argv if argv is not None else sys.argv[1:])
+    if _prompt_only(given):
+        return _prompt_main(given)
+    _load_everything()
+    p = argparse.ArgumentParser(prog="onescript", allow_abbrev=False)
+    _add_globals(p)
     sub = p.add_subparsers(dest="cmd", required=True)
     ks = sub.add_parser("keys", help="the operator's keyring export (run off the box)")
     ksub = ks.add_subparsers(dest="keys_cmd", required=True)
@@ -342,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         "--to",
         dest="dst",
         type=Path,
-        default=api.default_keyring(),
+        default=opening.default_keyring(),
         help="default: the box's keyring path (verifiers.public.json)",
     )
     mc = sub.add_parser(
@@ -452,18 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         "prompt",
         help="Claude Code UserPromptSubmit: the prompt (stdin) as a bite, served into the turn",
     )
-    pr.add_argument(
-        "--max-chars",
-        type=int,
-        default=None,
-        help="the cap on the served text (default: $ONESCRIPT_MAX_CHARS, else none)",
-    )
-    pr.add_argument(
-        "--embed",
-        type=Path,
-        default=None,
-        help="WordLlama's local file dir: fuse the embedder rung (default: $ONESCRIPT_EMBED)",
-    )
+    _add_prompt_args(pr)
     dc = sub.add_parser(
         "decline", help="the human's No to an offer: not offered again for that key"
     )
@@ -737,26 +815,10 @@ def main(argv: list[str] | None = None) -> int:
             python={k: str(v) for k, v in args.mc_python},
         )
 
-    cfg = api.Config(
-        box=args.box,
-        keys=args.keys,
-        constitution=CONSTITUTION,
-        ci=CI,
-        root=ROOT,
-        grove=GROVE,
-        venv=args.venv,
-        now=args.now,
-        no_tests=args.no_tests,
-        keyring=args.keyring,
-        nestor_db=args.nestor_db,
-        phone=args.phone,
+    cfg = _config(
+        args,
         beacon=beacon.drand_reader if args.drand else None,
         market=market.stooq_reader if args.prices else None,
-        repos=dict(args.repos) or None,
-        store_background=True,
-        forge=FORGE,
-        index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
-        seal_at_end=True,
         jeles=jeles_store.default_store(),
     )
 
@@ -1033,6 +1095,9 @@ def main(argv: list[str] | None = None) -> int:
         _print_json({k: v for k, v in res.items() if k != "code"})
     return res["code"]
 
+
+if __name__ != "__main__" or not _prompt_only(sys.argv[1:]):
+    _load_everything()
 
 if __name__ == "__main__":
     sys.exit(main())

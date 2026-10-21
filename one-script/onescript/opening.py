@@ -24,6 +24,17 @@ from . import gate, record
 PKG = Path(__file__).resolve().parent  # the version every row carries (run.PKG)
 
 
+def bot_paths():
+    """The bot's box rule, one copy (flatten F-17): ``willow_bot.paths`` from
+    the willow-bot checkout the one script lives in."""
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from willow_bot import paths  # noqa: PLC0415
+
+    return paths
+
+
 def _run(
     argv: list[str],
     cwd: str,
