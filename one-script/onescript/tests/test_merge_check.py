@@ -943,3 +943,118 @@ def test_the_verb_leaves_the_live_box_alone(world, tmp_path, capsys):
         ]
     )
     assert not box.exists()
+
+
+def test_gate5_a_kernel_internal_copy_needs_no_absent_test(world):
+    kernel_put(
+        world, {"onescript/user.py": "from . import canon\n\nY = canon.h256(1)\n"}
+    )
+    a = att(
+        copies=[
+            {
+                "repo": "willow-bot",
+                "path": "one-script/onescript/user.py",
+                "kind": "import",
+            }
+        ],
+        absent=[],
+    )
+    ok, d = run(world, 5, a)
+    assert ok and "no consumer outside the kernel" in d
+    # but a consumer outside it, with no absent test, still fails
+    a["copies"].append(
+        {
+            "repo": "willow-mcp",
+            "path": "src/willow_mcp/bound_receipt.py",
+            "kind": "import",
+        }
+    )
+    assert not run(world, 5, a)[0]
+
+
+def test_a_checked_repo_never_inherits_the_callers_pythonpath(world, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/somewhere/else")
+    repo = world / "willow-mcp"
+    e = pl(world).env(repo=repo)
+    assert "/somewhere/else" not in e["PYTHONPATH"].split(":")
+    assert e["ONESCRIPT_HOME"] == str(world / "willow-bot" / "one-script")
+
+
+def test_a_failing_test_is_named_in_the_detail(world):
+    mcp_put(
+        world,
+        {
+            "tests/test_parity.py": """
+        def test_parity():
+            assert False
+    """
+        },
+    )
+    ok, d = run(world, 3)
+    assert not ok and "FAILED tests/test_parity.py::test_parity" in d
+
+
+def test_gate4_a_kernel_wrapper_through_the_home_module_is_not_a_copy(world):
+    kernel_put(
+        world,
+        {
+            "onescript/user.py": "from .canon import canonical as _c\n\n\ndef canonical(x):\n    return _c(x)\n"
+        },
+    )
+    a = att(
+        copies=[
+            {
+                "repo": "willow-bot",
+                "path": "one-script/onescript/user.py",
+                "kind": "import",
+            }
+        ]
+    )
+    assert run(world, 4, a)[0]
+    kernel_put(
+        world,
+        {
+            "onescript/user.py": "from . import canon\n\n\ndef canonical(x):\n    return repr(x)\n"
+        },
+    )
+    ok, d = run(world, 4, a)
+    assert not ok and "canonical" in d
+
+
+def test_gate4_a_lookalike_is_exempt_only_with_a_why(world):
+    kernel_put(
+        world,
+        {
+            "onescript/user.py": "from . import canon\n\n\ndef canonical(x):\n    return repr(x)\n"
+        },
+    )
+    look = {
+        "repo": "willow-bot",
+        "path": "one-script/onescript/user.py",
+        "name": "canonical",
+    }
+    a = att(
+        copies=[
+            {
+                "repo": "willow-bot",
+                "path": "one-script/onescript/user.py",
+                "kind": "import",
+            }
+        ],
+        lookalikes=[look],
+    )
+    assert not run(world, 4, a)[0]
+    look["why"] = "a different rule that shares a name"
+    assert run(world, 4, a)[0]
+
+
+def test_gate3_only_tests_in_a_tests_directory_count_as_callers(world):
+    mcp_put(
+        world,
+        {
+            "scratch/test_x.py": "from willow_mcp import bound_receipt\n\nraise SystemExit(9)\n",
+            "tests/test_bound.py": "def test_bound():\n    assert True\n",
+        },
+    )
+    ok, d = run(world, 3)
+    assert not ok and "no test in the repo imports bound_receipt" in d

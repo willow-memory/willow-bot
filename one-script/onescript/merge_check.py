@@ -50,8 +50,10 @@ that is not beside the others FAILS the gate that needs it.
 dry run and in ``--record`` alike, so a skipped gate can never mint a record.
 
 Known limits, said once: gate 4's "no local version" is by name (the public
-top-level defs of ``home``, plus ``rule_names``), and a def that delegates into the
-reach is a wrapper, not a copy; gate 6's walk follows literal ``import_module``
+top-level defs of ``home``, plus ``rule_names``); a def that delegates into the
+reach (or, inside the kernel, the home module) is a wrapper, not a copy; a def that
+only looks alike is named in ``lookalikes`` (repo, path, name, and a ``why``);
+gate 6's walk follows literal ``import_module``
 names only (the closure test it takes its seeds from does the same).
 
 Stdlib only; the suite and the other repos' tests run in subprocesses.
@@ -158,8 +160,8 @@ class Places:
             paths.append(str(repo))
         else:
             paths.append(str(self.kernel))
-        if e.get("PYTHONPATH"):
-            paths.append(e["PYTHONPATH"])
+        # never the caller's PYTHONPATH: a checked repo must find the one script
+        # the attestation names (the reach), not whichever copy the caller has
         e["PYTHONPATH"] = os.pathsep.join(paths)
         e.update(extra or {})
         return e
@@ -276,13 +278,15 @@ def _counts(out: str) -> dict:
 def _pytest(py, cwd, env, targets, strict_skip: bool) -> tuple[bool, str]:
     """Green means: rc 0, something passed, and (strict) nothing skipped. A
     skipped parity or absent test is not a proof."""
-    cmd = [py, "-m", "pytest", "-q", "-rs", "-p", "no:cacheprovider", *targets]
+    cmd = [py, "-m", "pytest", "-q", "-rsfE", "-p", "no:cacheprovider", *targets]
     rc, out = _run(cmd, cwd, env)
     c = _counts(out)
     shown = ", ".join(f"{v} {k}" for k, v in c.items()) or "no summary"
     if rc != 0:
-        tail = " | ".join(x for x in out.strip().splitlines()[-3:])
-        return False, f"pytest exit {rc} ({shown}): {tail[:300]}"
+        lines = out.strip().splitlines()
+        bad = [x for x in lines if x.startswith(("FAILED ", "ERROR "))]
+        tail = " | ".join(bad[:5] if bad else lines[-3:])
+        return False, f"pytest exit {rc} ({shown}): {tail[:600]}"
     if not c.get("passed"):
         return False, f"nothing passed ({shown})"
     if strict_skip and c.get("skipped"):
@@ -519,7 +523,10 @@ def _tests_importing(repo: Path, stem: str) -> list[Path]:
     out = []
     skip = {".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"}
     for p in sorted(repo.rglob("test_*.py")):
-        if skip & set(p.relative_to(repo).parts):
+        parts = set(p.relative_to(repo).parts)
+        # a test the repo's CI runs lives in a tests/ directory; an experiment
+        # or a scratch test beside code is not a caller's proof
+        if skip & parts or not ({"tests", "test"} & parts):
             continue
         try:
             names = _import_names(_parse(p))
@@ -634,9 +641,11 @@ def _names_in(node) -> set[str]:
     return {x.id for x in ast.walk(node) if isinstance(x, ast.Name)}
 
 
-def _reach_names(tree) -> set[str]:
+def _reach_names(tree, home_stem: str | None = None) -> set[str]:
     """The names a file binds from a reach (``import onescript_reach``,
-    ``from . import onescript_canon as c``), and what it assigns from them."""
+    ``from . import onescript_canon as c``) or, inside the kernel, from the home
+    module (``from .words import words as _words``), and what it assigns from
+    them. A def that calls through one of these is a wrapper, not a copy."""
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -645,8 +654,18 @@ def _reach_names(tree) -> set[str]:
                     names.add((a.asname or a.name).split(".")[0])
         elif isinstance(node, ast.ImportFrom):
             prefix = "." * node.level + (node.module or "")
+            home = home_stem is not None and (
+                (node.level and (node.module or "").split(".")[-1] == home_stem)
+                or (node.module or "").split(".")[:2] == ["onescript", home_stem]
+            )
             for a in node.names:
-                if _is_reach(prefix) or _is_reach(a.name):
+                if _is_reach(prefix) or _is_reach(a.name) or home:
+                    names.add(a.asname or a.name)
+                elif (
+                    home_stem is not None
+                    and a.name == home_stem
+                    and (node.level or node.module == "onescript")
+                ):
                     names.add(a.asname or a.name)
     changed = True
     while changed:
@@ -667,9 +686,9 @@ def _reach_names(tree) -> set[str]:
     return names
 
 
-def _local_rules(tree, rule_names: set[str]) -> list[str]:
+def _local_rules(tree, rule_names: set[str], home_stem: str | None = None) -> list[str]:
     """Rule names the file defines itself rather than through the reach."""
-    reach = _reach_names(tree)
+    reach = _reach_names(tree, home_stem)
     out = []
     for d in _toplevel_defs(tree):
         if d.name in rule_names and d.name not in reach:
@@ -698,6 +717,12 @@ def _gate4(att, pl: Places) -> Result:
     for hf in home_files:
         rules |= _public_defs(hf)
     home_stem = home_files[0].stem
+    # a rule that only looks alike stays, with the one line naming why
+    looks = {
+        (x["repo"], x["path"], x["name"])
+        for x in att.get("lookalikes", [])
+        if isinstance(x, dict) and str(x.get("why", "")).strip()
+    }
     why, ok_n = [], 0
     for c in att["copies"]:
         label = f"{c['repo']}:{c['path']}"
@@ -727,16 +752,15 @@ def _gate4(att, pl: Places) -> Result:
             why.append(f"{label} does not parse: {e}")
             continue
         names = _import_names(tree)
-        in_kernel = repo.resolve() == pl.kernel.parent.resolve() and str(
-            f.resolve()
-        ).startswith(str(pl.kernel.resolve()))
+        in_kernel = _in_kernel(pl, c)
         if not (
             any(_is_reach(n) for n in names)
             or (in_kernel and _imports_kernel_home(names, home_stem))
         ):
             why.append(f"{label}: an import copy that imports no onescript_* reach")
             continue
-        local = _local_rules(tree, rules)
+        local = _local_rules(tree, rules, home_stem if in_kernel else None)
+        local = [n for n in local if (c["repo"], c["path"], n) not in looks]
         if local:
             why.append(f"{label}: defines the rule locally: {', '.join(local)}")
             continue
@@ -750,9 +774,26 @@ def _gate4(att, pl: Places) -> Result:
     )
 
 
+def _in_kernel(pl: Places, c: dict) -> bool:
+    """Is this copy a file inside the one script itself?"""
+    repo = pl.repo(c["repo"])
+    if repo is None or repo.resolve() != pl.kernel.parent.resolve():
+        return False
+    f = _within(repo, c["path"])
+    return f is not None and f.is_relative_to(pl.kernel.resolve())
+
+
 def _gate5(att, pl: Places) -> Result:
     g = GATE_NAMES[4]
-    need = sorted({c["repo"] for c in att["copies"] if c["kind"] == "import"})
+    # absence is said by a consumer outside the kernel; a copy inside the kernel
+    # imports its sibling module, and the kernel cannot be absent from itself
+    need = sorted(
+        {
+            c["repo"]
+            for c in att["copies"]
+            if c["kind"] == "import" and not _in_kernel(pl, c)
+        }
+    )
     have = {a["repo"] for a in att["absent"]}
     why = [f"{r}: an import copy and no absent test" for r in need if r not in have]
     ran = []
@@ -776,10 +817,10 @@ def _gate5(att, pl: Places) -> Result:
             why.append(f"{a['repo']}:{a['test']}: {d}")
             continue
         ran.append(f"{a['repo']}:{a['test'].split('::')[-1]}")
-    if not att["absent"] and not need:
-        why.append("no absent test attested: absence is not said anywhere")
     if why:
         return g, False, "; ".join(why)
+    if not ran:
+        return g, True, "no consumer outside the kernel, so no absence to say"
     return g, True, "absent tests green: " + ", ".join(ran)
 
 

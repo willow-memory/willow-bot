@@ -1,0 +1,31 @@
+{
+  "chunk": "words",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/words.py",
+  "goldens": "onescript/tests/test_words.py",
+  "copies": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/pile.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/seed.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/ladder.py",
+      "kind": "import"
+    }
+  ],
+  "absent": [],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}
