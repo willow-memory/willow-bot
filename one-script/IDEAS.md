@@ -313,14 +313,17 @@ print(runes.cast(subject.removeprefix("session:")))
 files; the index was built before this file existed, so the list can't find
 itself). One `seed` bite holding every idea's key words.
 
-**38 words the pile holds nowhere: real gaps.**
+**40 words the pile holds nowhere: real gaps.**
 algolia, bm25s, ctags, datasette, duckdb, ephemeris, flashrank, fts5,
 gharchive, gource, hexagram, inkle, kiwix, levenshtein, libzim, lichess,
 manifold, model2vec, mutmut, opentimestamps, owid, pagefind, pageviews,
 pymerkle, rapidfuzz, rfc3161, ripgrep, scc, scip, serendipity, skyfield,
 tantivy, tarot, tatoeba, theseus, tracery, vec, wordfreq, wordnet, zim.
 They were written as one `miss` row of keyed hashes (row 32), so they will
-show up in the misses map (3) once it's built.
+show up in the misses map (3) once it's built. That row counts 38, not 40:
+two of the words the seed called missed weren't logged as misses. The row
+holds hashes only, so which two can't be read back; worth a look, since a
+miss that isn't logged never reaches the map.
 
 **Words that hit, but the idea isn't there:**
 - *earthquake*: only the shoebox demo's "mi terremoto". Nothing about USGS.
