@@ -104,7 +104,7 @@ def turns_from(flow: dict) -> tuple[list[dict], int]:
 def drawio(flow_json: Path, out_dir: Path) -> dict:
     import side_runner
 
-    flow = json.loads(flow_json.read_text())
+    flow = json.loads(flow_json.read_text(encoding="utf-8"))
     session_id = flow.get("transcript_sha256_16") or flow_json.parent.name
     out_dir.mkdir(parents=True, exist_ok=True)
     record = out_dir / f"session-{session_id}.json"

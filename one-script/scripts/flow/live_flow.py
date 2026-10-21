@@ -61,7 +61,7 @@ PENDING_WARN = 5000
 def _log(path: Path, msg: str) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
+        with path.open("a", encoding="utf-8") as f:
             f.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + msg.rstrip() + "\n")
     except OSError:
         pass
@@ -114,7 +114,7 @@ def work(sid: str, transcript: str, flush: bool = False) -> None:
         out.mkdir(parents=True, exist_ok=True)
         if out.resolve().parent != LIVE.resolve():
             raise RuntimeError(f"session dir escapes .flow/live: {out.resolve()}")
-        with (out / ".lock").open("w") as lock:
+        with (out / ".lock").open("w", encoding="utf-8") as lock:
             deadline = time.monotonic() + LOCK_WAIT_S
             while True:
                 try:
@@ -135,7 +135,7 @@ def work(sid: str, transcript: str, flush: bool = False) -> None:
 
 def _save(path: Path, st: dict) -> None:
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, sort_keys=True))
+    tmp.write_text(json.dumps(st, sort_keys=True), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -147,7 +147,11 @@ def advance(transcript: Path, out: Path, sid: str, flush: bool = False) -> None:
     from flow import turns_from
 
     state_path = out / "state.json"
-    st = json.loads(state_path.read_text()) if state_path.exists() else {}
+    st = (
+        json.loads(state_path.read_text(encoding="utf-8"))
+        if state_path.exists()
+        else {}
+    )
     st = {
         "offset": 0,
         "turn": 0,

@@ -32,9 +32,9 @@ def kind(x: str) -> str:
 
 
 def main(a_path, b_path, cases_path="cases.pkl"):
-    with open(a_path) as f:
+    with open(a_path, encoding="utf-8") as f:
         a = json.load(f)
-    with open(b_path) as f:
+    with open(b_path, encoding="utf-8") as f:
         b = json.load(f)
     with open(cases_path, "rb") as f:
         cases = pickle.load(f)
