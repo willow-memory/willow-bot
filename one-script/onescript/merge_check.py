@@ -59,6 +59,10 @@ and does not fail: the gate is new. It runs ahead of the eight and is kept apart
 ``--skip-suite`` exists for a quick look: gate 1 then FAILS as ``not run``, in a
 dry run and in ``--record`` alike, so a skipped gate can never mint a record.
 
+A named copy may carry ``"parity_repo"``: the repo its parity test lives in when it is not
+the copy's own (a stdlib-only device app held from the kernel's side); the test must still
+exist there and run green and unskipped.
+
 A copy may carry ``"via": "grove/seat_boxes.py:one_script_module"`` (``path:function``
 in the copy's own repo): it reaches the kernel through that repo-local helper, not
 through a reach import of its own. Gate 4 then verifies the chain by AST, and every
@@ -513,6 +517,10 @@ def _shape(att: dict) -> str | None:
         ):
             return f"a copy needs repo, path and kind: {c!r}"
     for c in att["copies"]:
+        if "parity_repo" in c and not (
+            isinstance(c["parity_repo"], str) and c["parity_repo"]
+        ):
+            return f"a copy's 'parity_repo' must be a repo name: {c!r}"
         if "via" in c and not (isinstance(c["via"], str) and c["via"]):
             return f"a copy's 'via' must be 'path:function': {c!r}"
     for a in att["absent"]:
@@ -858,6 +866,15 @@ def _tests_importing(repo: Path, stem: str) -> list[Path]:
     return out
 
 
+def _parity_home(pl: Places, c: dict):
+    """(repo name, repo path or None) of the repo a named copy's parity test lives
+    in: the copy's own, or the ``parity_repo`` it names (a copy that cannot carry
+    a test of its own, e.g. a stdlib-only device app held from the kernel's side).
+    The test must still exist and run green there."""
+    name = c.get("parity_repo") or c["repo"]
+    return name, pl.repo(name) if isinstance(name, str) else None
+
+
 def _gate3(att, pl: Places) -> Result:
     g = GATE_NAMES[2]
     if not att["copies"]:
@@ -869,23 +886,31 @@ def _gate3(att, pl: Places) -> Result:
         if bad:
             why.append(bad)
             continue
-        targets = by_repo.setdefault(c["repo"], set())
+        targets = set()
         if c["kind"] == "named-copy":
             if not c.get("parity"):
                 why.append(
                     f"{c['repo']}:{c['path']} is a named copy with no parity test"
                 )
                 continue
-            tf, name, _ = _test_node(repo, c["parity"])
-            if tf is None:
-                why.append(f"{c['repo']}: parity test: {name}")
+            pname, prepo = _parity_home(pl, c)
+            if prepo is None:
+                why.append(f"parity test: {_repo_missing(str(pname))}")
                 continue
-            targets.add(c["parity"])
+            tf, name, _ = _test_node(prepo, c["parity"])
+            if tf is None:
+                why.append(f"{pname}: parity test: {name}")
+                continue
+            by_repo.setdefault(pname, set()).add(c["parity"])
         stem = f.stem if f.stem != "__init__" else f.parent.name
         found = _tests_importing(repo, stem)
         if not found and c["kind"] == "import":
             why.append(f"{c['repo']}:{c['path']}: no test in the repo imports {stem}")
-        targets.update(str(p.relative_to(repo.resolve())) for p in found)
+        targets.update(os.path.relpath(p, repo) for p in found)
+        if targets:
+            by_repo.setdefault(c["repo"], set()).update(targets)
+        elif c["repo"] not in by_repo and not c.get("parity_repo"):
+            by_repo.setdefault(c["repo"], set())
     if why:
         return g, False, "; ".join(why)
     ran = []
@@ -1120,7 +1145,11 @@ def _gate4(att, pl: Places) -> Result:
             if not c.get("parity"):
                 why.append(f"{label}: a named copy needs a parity test")
                 continue
-            tf, name, _ = _test_node(repo, c["parity"])
+            pname, prepo = _parity_home(pl, c)
+            if prepo is None:
+                why.append(f"{label}: parity test: {_repo_missing(str(pname))}")
+                continue
+            tf, name, _ = _test_node(prepo, c["parity"])
             if tf is None:
                 why.append(f"{label}: parity test: {name}")
                 continue

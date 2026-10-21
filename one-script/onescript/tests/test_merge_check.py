@@ -1324,3 +1324,72 @@ def test_nonroot_a_real_run_is_unprivileged_and_cleans_up(world, monkeypatch):
     ok3, d3 = by[mc.GATE_NAMES[2]]
     assert ok3 and f"uid {pwd.getpwnam('nobody').pw_uid}" in d3, d3
     assert _tmp_jails() == before, "the temp dir is removed"
+
+
+# -- a named copy whose parity test lives in another repo (``parity_repo``) -------
+
+
+def device_att(**over) -> dict:
+    c = {
+        "repo": "device",
+        "path": "canon.py",
+        "kind": "named-copy",
+        "parity": "tests/test_parity.py::test_parity",
+        "parity_repo": "willow-mcp",
+        "why": "a stdlib-only device app held from the kernel's side",
+    }
+    c.update(over)
+    return att(copies=[c], absent=[])
+
+
+def test_gates_3_4_parity_repo_holds_a_copy_that_carries_no_test(world):
+    put(world / "device", {"canon.py": "def canonical(x):\n    return repr(x)\n"})
+    a = device_att()
+    for n in (3, 4):
+        ok, d = run(world, n, a)
+        assert ok, d
+    # without the parity_repo the test is looked for in the device repo, and is not there
+    a = device_att()
+    del a["copies"][0]["parity_repo"]
+    for n in (3, 4):
+        ok, d = run(world, n, a)
+        assert not ok and "not a file in device" in d, d
+
+
+def test_gates_3_4_parity_repo_refuses_a_missing_repo_or_test(world):
+    put(world / "device", {"canon.py": "x = 1\n"})
+    for n in (3, 4):
+        ok, d = run(world, n, device_att(parity_repo="nowhere"))
+        assert not ok and "not beside" in d, d
+        ok, d = run(world, n, device_att(parity="tests/test_parity.py::test_gone"))
+        assert not ok and "test_gone" in d, d
+
+
+def test_gate3_parity_repo_still_refuses_a_failing_parity_test(world):
+    put(world / "device", {"canon.py": "x = 1\n"})
+    mcp_put(world, {"tests/test_parity.py": "def test_parity():\n    assert False\n"})
+    ok, d = run(world, 3, device_att())
+    assert not ok and "willow-mcp parity" in d, d
+
+
+def test_parity_repo_must_be_a_string(world):
+    r = mc.check(write_att(world, device_att(parity_repo=3)), pl(world))
+    assert r[0][0] == "attestation" and "parity_repo" in r[0][2]
+
+
+def test_gate3_a_symlinked_repo_is_found_and_its_tests_run(world, tmp_path):
+    """The calibration repo sits beside the others as a symlink to its clone."""
+    clone = tmp_path / "elsewhere" / "device"
+    put(
+        clone,
+        {
+            "canon.py": "def canonical(x):\n    return repr(x)\n",
+            "tests/test_canon.py": "import canon\n\n\ndef test_it():\n    assert canon.canonical(1) == '1'\n",
+        },
+    )
+    (world / "device").symlink_to(clone)
+    p = pl(world)
+    p.python["device"] = sys.executable
+    g, ok, d = mc._gate3(device_att(), p)
+    assert ok, d
+    assert "device: 1 passed" in d
