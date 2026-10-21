@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.17.1](https://github.com/willow-memory/willow-bot/compare/v1.17.0...v1.17.1) (2026-10-21)
+
+
+### Fixed
+
+* **deps:** PyJWT 2.15.1 and requests 2.34.2; Release workflow reads only ([33c933d](https://github.com/willow-memory/willow-bot/commit/33c933d0b4b16c40623be9774b94e23acc65cc7a))
+
 ## [1.17.0](https://github.com/willow-memory/willow-bot/compare/v1.16.0...v1.17.0) (2026-10-21)
 
 
