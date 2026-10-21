@@ -7,6 +7,11 @@ from drifting: where the Forge is in reach, both give the same numbers on a
 grid. The Forge is found at $ONESCRIPT_FORGE, else beside willow-bot
 (../Forge), and loaded from that file by path, never from whatever `forge`
 happens to be installed.
+
+The Forge is not touched and is not a dependency (flatten-2 F10, D9): where it
+is not beside (CI checks out only willow-bot and willows-grove), the parity
+tests skip, by design, and `test_the_vendored_sources_are_the_pinned_forge_sources`
+still holds the copy to the Forge's pinned text, so a drift cannot go unseen.
 """
 
 from __future__ import annotations
@@ -61,6 +66,18 @@ def test_bins_match_the_forges():
     pairs = [(p, i % 3 == 0) for i, p in enumerate(GRID) if p >= 0.5]
     assert calibration.bins(pairs) == forge.bins(pairs)
     assert calibration.bins([]) == forge.bins([])
+
+
+@pytest.mark.parametrize("p", [0.0, 1.0])
+@pytest.mark.parametrize("outcome", [True, False])
+def test_log_score_is_finite_at_certainty(p, outcome):
+    """Forecast-ledger point (flatten-2 F10): `log_score` clamps with `_EPS`,
+    so a wager stated at exactly 0 or 1 and wrong scores a large finite number,
+    never `inf` (which would poison a mean). Holds for the Forge's too."""
+    assert math.isfinite(calibration.log_score(p, outcome))
+    assert calibration.log_score(p, outcome) <= -math.log(calibration._EPS)
+    if forge is not None:
+        assert calibration.log_score(p, outcome) == forge.log_score(p, outcome)
 
 
 def test_the_vendored_copy_names_its_source():
