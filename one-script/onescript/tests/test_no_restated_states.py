@@ -7,11 +7,20 @@ The operator: "Using the onescript at every path." A state word the code
 writes, compares or keys on is ``states.POPULATED`` / ``EMPTY`` /
 ``UNREACHABLE``, so a typo cannot make a fourth state and a rename is one edit.
 
+The fleet writes these words in four vocabularies, each with one home or one
+reason: the states (``POPULATED`` / ``EMPTY`` / ``UNREACHABLE``) and their
+VARIANTS (``RANKED``, ``HELD``, ``NONE``); the STEP (``STEP_ESCALATED_COLD_START``);
+the REPORT KEYS (``REPORT_POPULATED`` / ``REPORT_EMPTY`` / ``REPORT_UNREACHABLE``,
+the same words as field names in a tally or report; the operator, 2026-10-21:
+"make them constants, a named fourth vocabulary"); and the allowlisted others
+below (a seal's values, the check callback's protocol key, why-prose, the needs
+flag), each with its reason.
+
 The lint: no string constant equal to a state word anywhere in ``onescript/*.py``
 except a bare string statement (a docstring) and the two files that cannot
 import ``states`` (``states.py`` itself; ``reach_bootstrap.py``, a byte-copied
 template). A constant that is NOT a reader's state but reuses the word (a seal's
-``unreachable``, a report field that lists the unreachable items, the `empty`
+``unreachable``, the `empty`
 flag of ``needs``) goes on ``ALLOW`` below with the one-line reason. An entry is
 ``(file, enclosing function, the source line, how many)``; one that no longer
 matches fails, so the list cannot rot (the model is F17's listing lint).
@@ -44,14 +53,7 @@ _allow(
     "api.py",
     "peek",
     'return {"needs": [], "count": 0, "empty": True, "code": 0}',
-    "`empty` is the needs answer's boolean flag, not a state word",
-)
-_allow(
-    "api.py",
-    "reconcile",
-    '"unreachable": rep["wagers"]["unreachable"],',
-    "a report field naming the list of unreachable seals (and the tally key it reads), not a state value",
-    2,
+    "`empty` is the needs answer's boolean flag (True: the box has no record), not a state word and not a tally of readers by state, so not a report key",
 )
 _allow(
     "api.py",
@@ -66,35 +68,10 @@ _allow(
     "fallback words in a why sentence, not a state value",
 )
 _allow(
-    "market.py",
-    "reveal",
-    'return {**out, "unreachable": missing} if missing else out',
-    "a report field listing the symbols that could not be read",
-)
-_allow(
-    "pile.py",
-    "counts",
-    '"unreachable": t["unreachable"] or {},',
-    "a report field (and the meta key it reads) holding the unreachable repos by why",
-    2,
-)
-_allow(
-    "pile.py",
-    "tally",
-    'for k in ("repos", "files_read", "skipped", "unreachable"):',
-    "the meta keys of the build's tally; `unreachable` is the stored field name (D-e: stored keys never change)",
-)
-_allow(
     "reverse.py",
     "_marked",
     'return item if why is None else {**item, "seal": "unreachable", "seal_why": why}',
     "a seal's own vocabulary (checked or unreachable), not a reader's state",
-)
-_allow(
-    "reverse.py",
-    "reconcile_wagers",
-    '"unreachable": {r["id"]: r["why"] for r in out if r["state"] == UNREACHABLE},',
-    "a report field listing the unreachable rows by why",
 )
 _allow(
     "reverse.py",
@@ -113,19 +90,6 @@ _allow(
     "pooled",
     'item |= {"seal": "unreachable", "why": unchecked[s]}',
     "a seal's own vocabulary (checked or unreachable), not a reader's state",
-)
-_allow(
-    "seed.py",
-    "scan",
-    '"unreachable": texts.tally()["unreachable"],',
-    "a report field (and the tally key it reads) holding the unreachable repos by why",
-    2,
-)
-_allow(
-    "seed.py",
-    "tally",
-    '"unreachable": dict(sorted(self.unreachable.items())),',
-    "the tally's stored field name for the unreachable repos",
 )
 _allow(
     "table.py",
@@ -239,3 +203,16 @@ def test_the_lint_flags_an_allowlisted_line_that_appears_twice(tmp_path):
     f.write_text('def a(x):\n    x = "empty"\n    x = "empty"\n')
     left, stale = _leftover([f], {("m.py", "a", 'x = "empty"'): (1, "once")})
     assert not left and len(stale) == 1
+
+
+def test_the_report_keys_are_the_state_words_under_their_own_names():
+    assert states.REPORT_KEYS == states.STATES
+    assert (
+        states.REPORT_POPULATED,
+        states.REPORT_EMPTY,
+        states.REPORT_UNREACHABLE,
+    ) == (
+        "populated",
+        "empty",
+        "unreachable",
+    )

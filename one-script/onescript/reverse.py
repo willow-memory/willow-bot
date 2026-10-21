@@ -18,7 +18,7 @@ from typing import Callable
 from . import calibration, ladder
 from .gate import verify_seal
 from .record import TIP, canon, h256, tip_subject
-from .states import UNREACHABLE
+from .states import REPORT_UNREACHABLE, UNREACHABLE
 
 WAGER = "wager:"
 
@@ -575,7 +575,9 @@ def reconcile_wagers(
         "reconciled": [r["id"] for r in out if r["state"] == "reconciled"],
         "escalate": [r["id"] for r in out if r["state"] == "escalate"],
         "escalate_to": "human" if any(r["state"] == "escalate" for r in out) else None,
-        "unreachable": {r["id"]: r["why"] for r in out if r["state"] == UNREACHABLE},
+        REPORT_UNREACHABLE: {
+            r["id"]: r["why"] for r in out if r["state"] == UNREACHABLE
+        },
         "breaks": list(breaks or []),
         "rows": out,
     }

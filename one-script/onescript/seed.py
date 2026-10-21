@@ -31,7 +31,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .states import STEP_ESCALATED_COLD_START, UNREACHABLE
+from .states import REPORT_UNREACHABLE, STEP_ESCALATED_COLD_START, UNREACHABLE
 from .words import WORD  # noqa: F401  (the one word rule; re-exported)
 from .words import words as _words
 from .xref import GitError, git
@@ -163,7 +163,7 @@ class Texts:
             "repos": sorted(self.repos_read),
             "files_read": self.read,
             "skipped": dict(sorted(self.skipped.items())),
-            "unreachable": dict(sorted(self.unreachable.items())),
+            REPORT_UNREACHABLE: dict(sorted(self.unreachable.items())),
         }
 
 
@@ -205,7 +205,7 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
         "missed": missed,
         "files_read": read,
         "skipped": texts.tally()["skipped"],
-        "unreachable": texts.tally()["unreachable"],
+        REPORT_UNREACHABLE: texts.tally()[REPORT_UNREACHABLE],
     }
 
 

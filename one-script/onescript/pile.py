@@ -48,6 +48,7 @@ from .states import (
     EMPTY,
     POPULATED,
     RANKED,
+    REPORT_UNREACHABLE,
     STEP_ESCALATED_COLD_START,
     UNREACHABLE,
 )
@@ -843,7 +844,7 @@ class Cached:
     def tally(self) -> dict:
         """What the build reached, as its meta says."""
         out = {}
-        for k in ("repos", "files_read", "skipped", "unreachable"):
+        for k in ("repos", "files_read", "skipped", REPORT_UNREACHABLE):
             try:
                 out[k] = json.loads(self.meta[k])
             except (KeyError, ValueError):
@@ -919,7 +920,7 @@ class Cached:
             "missed": missed,
             "files_read": t["files_read"],
             "skipped": t["skipped"] or {},
-            "unreachable": t["unreachable"] or {},
+            REPORT_UNREACHABLE: t[REPORT_UNREACHABLE] or {},
         }
 
     def repair(self, bite: str) -> dict:

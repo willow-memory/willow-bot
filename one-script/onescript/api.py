@@ -66,6 +66,7 @@ from .states import (
     EMPTY,
     POPULATED,
     RANKED,
+    REPORT_UNREACHABLE,
     STEP_ESCALATED_COLD_START,
     UNREACHABLE,
 )
@@ -2686,7 +2687,7 @@ def reconcile(
         "tip": record.tip_subject(tip) if tip else None,
         # INVARIANTS §1: a broken record and an unchecked seal are said apart
         "record": {"breaks": rep["wagers"]["breaks"]},
-        "unreachable": rep["wagers"]["unreachable"],
+        REPORT_UNREACHABLE: rep["wagers"][REPORT_UNREACHABLE],
         "code": 0,
     }
     if key is None:
