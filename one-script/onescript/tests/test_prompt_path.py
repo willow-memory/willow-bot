@@ -17,9 +17,9 @@ from pathlib import Path
 PKG = Path(__file__).resolve().parent.parent
 ONE = PKG.parent  # one-script/
 
-# The record and its stamp (record, canon, sign, gate: only the gate mints the
-# token a row is written with, so the prompt path keeps it, and what it
-# imports), the front door, the store and its lookup, the chunk serving.
+# The record and its stamp (record, canon, sign, and stamp.py, the write
+# token's home: the gate re-exports the same objects), the front door, the
+# store and its lookup, the chunk serving.
 ALLOWED = {
     "prompt_path",
     "opening",
@@ -28,10 +28,7 @@ ALLOWED = {
     "record",
     "canon",
     "sign",
-    "gate",
-    "graph",
-    "nestor_seal",
-    "mai_shape",
+    "stamp",
     "clock",
     "states",
     "scrub",
@@ -39,8 +36,19 @@ ALLOWED = {
     "seed",
     "words",
     "xref",
+    "mai_shape",  # xref's write-shape check, a leaf
 }
-NEVER = {"api", "run", "boot", "reverse", "resolve", "ladder", "view", "writeback"}
+NEVER = {
+    "api",
+    "run",
+    "gate",
+    "boot",
+    "reverse",
+    "resolve",
+    "ladder",
+    "view",
+    "writeback",
+}
 
 
 def _type_only(node: ast.AST) -> bool:
@@ -111,3 +119,26 @@ def test_any_other_verb_still_loads_the_whole_one_script():
     assert cli._prompt_only(["--box", "b", "prompt", "--max-chars", "9"])
     assert not cli._prompt_only(["checkin"])
     assert not cli._prompt_only(["lookup", "prompt"])
+
+
+def test_the_stamp_is_the_gates_own():
+    """One token, two names: what the prompt path writes with is what the gate
+    mints with, and the record refuses a stamp made with any other."""
+    import pytest
+
+    from onescript import gate, stamp
+    from onescript.record import Verified
+
+    assert gate.token() is stamp.token() and gate._TOKEN is stamp._TOKEN
+    assert gate.system()._token is stamp.system()._token is stamp.token()
+    rec_kw = {"box": None, "clock": lambda: "t", "version": "v", "token": stamp.token()}
+    from onescript.record import Record
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        rec = Record(Path(d) / "box", rec_kw["clock"], "v", stamp.token())
+        rec.append("note", gate.system())
+        with pytest.raises(Exception):
+            rec.append("note", Verified("run", "python", object()))

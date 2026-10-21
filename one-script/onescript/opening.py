@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import clock as clock_mod
-from . import gate, record
+from . import record, stamp
 
 PKG = Path(__file__).resolve().parent  # the version every row carries (run.PKG)
 
@@ -319,9 +319,9 @@ class Opened:
         self.keys, self.law = keys, law
         self.version = record.version_of(PKG)
         self.rec = record.Record(
-            cfg.box, clock, self.version, gate.token(), cfg.keys.parent / ANCHOR
+            cfg.box, clock, self.version, stamp.token(), cfg.keys.parent / ANCHOR
         )
-        self.sys = gate.system()
+        self.sys = stamp.system()
         self.serve_key = _load_serve_key(cfg)
 
 

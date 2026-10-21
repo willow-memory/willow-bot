@@ -6,7 +6,7 @@ which re-exports every name, so `prompt` serves its chunks the same way
 
 from __future__ import annotations
 
-from . import gate, scrub
+from . import scrub, sign
 from .states import UNREACHABLE
 
 
@@ -37,7 +37,7 @@ def chunk_name(table: dict) -> str:
 
 
 def served_id(serve_key: bytes, tid: str) -> str:
-    return gate.sign(serve_key, "served", tid)
+    return sign.hmac_parts(serve_key, "served", tid)  # gate.sign's bytes
 
 
 #: What a scope served with no seal says of itself (`Config.seal_at_end`).
