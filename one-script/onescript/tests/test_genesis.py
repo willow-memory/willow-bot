@@ -44,7 +44,11 @@ def test_its_rows_verify_under_the_one_script_record(tmp_path):
 def test_the_exit_codes_and_why_42_are_said():
     g = load()
     assert (g.ALIVE, g.ESCALATE, g.REFUSED) == (0, 42, 2)
-    for words in ("sum of acknowledged gaps", "what the judge cannot evaluate"):
+    for words in (
+        "sum of acknowledged gaps",
+        "what the judge cannot evaluate",
+        "enough information to say a human said this was true",
+    ):
         assert words in g.__doc__
 
 

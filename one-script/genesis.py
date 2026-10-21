@@ -13,14 +13,15 @@ A: sorted, compact, non-ASCII literal), hash = SHA-256 of the row without
 
 Exit codes:
     0   alive: the record verifies and every check passed.
-    42  escalate: a check failed, or couldn't run. The row says which; the
-        human answers it. Escalating is a step, the return to 0 for the next
-        tier, never a state (ruling, 2026-10-21).
+    42  not enough information to say a human said this was true: a check
+        failed, or couldn't run. The row says which. Escalating is the step a
+        42 asks for, the return to 0 for the next tier, never a state.
     2   refused: the record doesn't verify, or ends in a torn line. Nothing is
         appended, and the chain never restarts from GENESIS to get past it.
 
 Why 42. The operator chose it; 520 documents across the repos carry the stamp
-`ΔΣ=42`. In their own words:
+`ΔΣ=42`. What it means, in their words (2026-10-21): "42 just means I don't
+have enough information to say a human said this was true." And before:
   * "ΔΣ=42 — the sum of acknowledged gaps. Zero gaps means lying. A system that
     reports no unknowns has stopped looking." (willow-mcp
     docs/repatriation/VOICES.md)
@@ -32,8 +33,9 @@ Why 42. The operator chose it; 520 documents across the repos carry the stamp
     that the sum of all changes (Δ, delta) aggregated (Σ, sigma) resolves to a
     fixed invariant constant — every change accounted-for and verifiable"
     (willows-grove governance/CONSTITUTION.md, Open Operator Decisions #3).
-So exit 42 is the gap acknowledged: what this run can't evaluate goes to the
-human, never reported as nothing. The row's hash is the checksum over change.
+So exit 42 is the gap acknowledged, never reported as nothing; the row's hash
+is the checksum over change. Open: a 0 here says the checks passed, not that a
+human said so; what a human said is a seal (`onescript`'s, or Nestor's).
 Open: how 42 is stamped on documents (the constitution's enforcing artifact
 "remains to be located or built"), and the stamp for a finished document.
 """
