@@ -721,7 +721,9 @@ def test_the_cli_walks_the_same_path(cfg, tmp_path, capsys, monkeypatch):
 
     f = tmp_path / "f.jsonl"
     f.write_text(line(cites=ids) + "\n" + line("x.md", "no", ["0" * 64]) + "\nnope\n")
-    out = js("turn", "the bite", "--proposal", str(f))
+    rc, raw = go("turn", "the bite", "--proposal", str(f))
+    assert rc == api.ESCALATE, raw  # the model's proposals: 42 until sealed
+    out = json.loads(raw)
     assert [p["verdict"] for p in out["proposals"]] == ["pass", "link_fail", "refused"]
     subject = out["proposals"][0]["subject"]
 
@@ -864,7 +866,7 @@ def test_the_cli_turn_output_leads_each_proposal_row_with_own_idea(
     f = tmp_path / "f.jsonl"
     f.write_text(line(cites=[]) + "\nnope\n")
     base = ["--box", str(cfg.box), "--keys", str(cfg.keys), "--no-tests"]
-    assert cli.main([*base, "turn", "the bite", "--proposal", str(f)]) == 0
+    assert cli.main([*base, "turn", "the bite", "--proposal", str(f)]) == api.ESCALATE
     props = json.loads(capsys.readouterr().out)["proposals"]
     assert [next(iter(p)) for p in props] == ["own_idea", "own_idea"]
     assert [p["own_idea"] for p in props] == [True, None]

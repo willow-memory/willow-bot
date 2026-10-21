@@ -161,6 +161,16 @@ def test_no_served_file_escalates_straight_up(cfg):
     assert res["card"]["route"] == "willow" and res["card"]["kind"] == "review"
 
 
+# ── exit 42: a card for the human is said in the code, not only the output ──
+def test_a_card_for_the_human_is_code_42_and_none_is_0(cfg):
+    assert api.checkin(cfg)["code"] == 0
+    res = go(cfg, Stub(never))  # no served file: straight to the human card
+    assert res["card"] is not None and res["code"] == api.ESCALATE == 42
+    served(cfg)
+    res = go(cfg, Stub(never), "Route this review to its owner")  # D0 closes it
+    assert res["card"] is None and res["code"] == 0
+
+
 def test_an_empty_served_state_escalates_straight_up(cfg):
     doc = served(cfg, max_chars=1)  # over the cap: serve says empty
     assert doc["state"] == "empty"

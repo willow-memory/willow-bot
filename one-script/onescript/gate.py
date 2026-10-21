@@ -20,12 +20,12 @@ from pathlib import Path
 from . import graph, nestor_seal
 from . import sign as _sign
 from .record import Verified
+from .stamp import _TOKEN, system, token  # noqa: F401  (the token's home is stamp.py)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
 import script_match as sm  # noqa: E402  (adopt, don't rewrite: checks 1-4 live there)
 from .states import EMPTY, POPULATED, UNREACHABLE
 
-_TOKEN = object()  # the only key that mints a Verified; the record checks for it
 HUMAN = "human"
 
 
@@ -41,10 +41,6 @@ class Decision:
     reason: str = ""
     card: dict = field(default_factory=dict)  # a grant or seal card, when one is needed
     match: dict = field(default_factory=dict)  # a script-match result, when relevant
-
-
-def token() -> object:
-    return _TOKEN
 
 
 def sign(key: bytes, *parts: str) -> str:
@@ -68,11 +64,6 @@ def verify(identity: dict, keys: dict[str, bytes]) -> Verified:
             "the human seat is not entered by signature; it is a key in a hand"
         )
     return Verified(who, family, _TOKEN)
-
-
-def system() -> Verified:
-    """The run itself, for the rows it writes about its own steps."""
-    return Verified("run", "python", _TOKEN)
 
 
 def verify_seal(subject: str, proof: str, human_key: bytes) -> bool:

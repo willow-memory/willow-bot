@@ -88,7 +88,7 @@ def _open_store(cfg: Config, box: Path, run: Run | None = None):
     box = Path(box)
     if run is not None:
         rec = run.rec
-        rows = seed_mod.since_boot(rec.rows())
+        rows = rec.since_last("boot")[1]  # seed.since_boot, read from the tip on
     else:
         if not (box / "record.jsonl").is_file():
             return None, "no record in that box"

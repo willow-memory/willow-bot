@@ -548,16 +548,16 @@ def report(index: dict) -> str:
 # ── 4 record and the slice ───────────────────────────────────────────────────
 def record_outputs(box: Path, index_bytes: bytes, report_bytes: bytes, inputs) -> dict:
     """Writes both outputs through the record. Unattested until sealed."""
-    from . import gate, record
+    from . import record, stamp  # the gate's token, without the gate
 
     pkg = Path(__file__).resolve().parent
     rec = record.Record(
         box,
         clock.isoformat_seconds_utc,
         record.version_of(pkg),
-        gate.token(),
+        stamp.token(),
     )
-    who = gate.system()
+    who = stamp.system()
     rec.write_file(
         who,
         "xref/index.json",

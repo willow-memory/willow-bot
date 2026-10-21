@@ -122,6 +122,12 @@ class Record:
         # would block on the first: one lock, counted, and a thread lock beside it.
         self._tlock = threading.RLock()
         self._depth = 0
+        # The last full parse, keyed by the file's (inode, size, mtime): one
+        # verb reads the record several times, and a parse costs per row.
+        self._parsed: tuple | None = None
+        # The last read from the sealed tip, keyed by the record's and the
+        # anchor's stat: what one verb's several reads share.
+        self._tipped: tuple | None = None
         box.mkdir(parents=True, exist_ok=True)
 
     # ── rows ────────────────────────────────────────────────────────────────
@@ -152,10 +158,31 @@ class Record:
                     self._depth = 0
                     fcntl.flock(lock, fcntl.LOCK_UN)
 
-    def _scan(self) -> tuple[list[dict], list[int], int | None]:
+    def _stat_key(self) -> tuple | None:
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+    def _scan(self, fresh: bool = False) -> tuple[list[dict], list[int], int | None]:
         """The rows, the 1-based line numbers of every garbled line, and the
         line number of an unterminated last line (None when the file ends in a
-        newline or is empty). The unterminated line is in neither of the others."""
+        newline or is empty). The unterminated line is in neither of the others.
+
+        Reused from the last parse while the file's (inode, size, mtime) is
+        what it was then, or what this record's own append left it (under the
+        lock); `fresh` always reads the file. Callers get their own copies."""
+        key = self._stat_key()
+        if not fresh and key is not None and self._parsed and self._parsed[0] == key:
+            _, rows, garbled, torn = self._parsed
+            return [dict(r) for r in rows], list(garbled), torn
+        got = self._scan_file()
+        self._parsed = (key, *got) if key is not None else None
+        rows, garbled, torn = got
+        return [dict(r) for r in rows], list(garbled), torn
+
+    def _scan_file(self) -> tuple[list[dict], list[int], int | None]:
         if not self.path.exists():
             return [], [], None
         rows, garbled, torn = [], [], None
@@ -179,16 +206,152 @@ class Record:
                 garbled.append(i)
         return rows, garbled, torn
 
-    def _read(self) -> tuple[list[dict], list[int]]:
+    @staticmethod
+    def _row_of(line: str) -> dict | None:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            return None
+        return row if isinstance(row, dict) and ROW_KEYS <= row.keys() else None
+
+    def _anchor_key(self) -> tuple | None:
+        try:
+            st = self.anchor_path.stat() if self.anchor_path else None
+        except OSError:
+            return None
+        return None if st is None else (st.st_ino, st.st_size, st.st_mtime_ns)
+
+    def _from_tip(self):
+        """`_read_from_tip`, remembered while neither file has changed."""
+        key = (self._stat_key(), self._anchor_key())
+        if None in key:
+            return None
+        if self._tipped is not None and self._tipped[0] == key:
+            return self._tipped[1]
+        view = self._read_from_tip()
+        self._tipped = (key, view)
+        return view
+
+    def _read_from_tip(self):
+        """The record read from the human's sealed tip on, or None.
+
+        The anchor (outside the box) names the tip row, {n, hash}. Its line is
+        found by counting lines, not parsing them; it must be the n-th
+        non-blank line and parse to that very row, or this is None and the
+        caller reads the whole file. What comes back: the tip row, the rows
+        after it, the raw lines before it (unparsed) and the torn tail's text,
+        if any. The rows before the tip are taken to be the n rows the human
+        sealed; `verify_chain` (and so every check-in) still reads them all."""
+        try:
+            a = self.anchor()
+            data = self.path.read_bytes()
+        except (ValueError, OSError):
+            return None
+        if not a or not isinstance(a.get("n"), int) or isinstance(a.get("n"), bool):
+            return None
+        lines = data.split(b"\n")
+        tail = lines.pop()
+        seen, at = -1, None
+        for i, raw in enumerate(lines):
+            if raw.strip():
+                seen += 1
+                if seen == a["n"]:
+                    at = i
+                    break
+        if at is None:
+            return None
+        tip = self._row_of(lines[at].decode("utf-8", errors="replace"))
+        if tip is None or tip.get("n") != a["n"] or tip.get("hash") != a["hash"]:
+            return None
+        after = []
+        for raw in lines[at + 1 :]:
+            text = raw.decode("utf-8", errors="replace")
+            if text.strip() and (row := self._row_of(text)) is not None:
+                after.append(row)
+        torn = tail.decode("utf-8", errors="replace") if tail.strip() else None
+        return tip, after, lines[:at], torn
+
+    def _cached(self) -> tuple[list[dict], list[int], int | None] | None:
+        """The remembered parse, while the file is still what it parsed."""
+        key = self._stat_key()
+        if key is not None and self._parsed and self._parsed[0] == key:
+            return self._parsed[1], self._parsed[2], self._parsed[3]
+        return None
+
+    def tail_state(self) -> tuple[int, str, bool]:
+        """(rows on record, the last row's hash or GENESIS, a torn tail?): what
+        an append needs, from the remembered parse, else from the sealed tip,
+        else from the whole file."""
+        got = self._cached()
+        if got is None and (view := self._from_tip()) is not None:
+            tip, after, _, torn = view
+            last = after[-1]["hash"] if after else tip["hash"]
+            return tip["n"] + 1 + len(after), last, torn is not None
+        rows, _, torn = got if got is not None else self._scan()
+        return len(rows), rows[-1]["hash"] if rows else GENESIS, torn is not None
+
+    def since_last(self, kind: str) -> tuple[dict | None, list[dict]]:
+        """The last `kind` row and every row after it ((None, all rows) when
+        there is none): from the remembered parse, else from the sealed tip
+        when that row is after the tip, else from the whole file."""
+        got = self._cached()
+        if got is None and (view := self._from_tip()) is not None:
+            tip, after, before, _ = view
+            i = max((k for k, r in enumerate(after) if r["kind"] == kind), default=-1)
+            if i >= 0:
+                return after[i], [dict(r) for r in after[i + 1 :]]
+            if tip["kind"] == kind:
+                return tip, [dict(r) for r in after]
+            # before the tip: back from it, parsing only lines that carry the
+            # kind's own bytes, then the rows from that one on (this session's)
+            needle = canon({"kind": kind})[1:-1].encode()
+            for j in range(len(before) - 1, -1, -1):
+                if needle not in before[j]:
+                    continue
+                row = self._row_of(before[j].decode("utf-8", errors="replace"))
+                if row is None or row["kind"] != kind:
+                    continue
+                between = [
+                    r
+                    for raw in before[j + 1 :]
+                    if raw.strip()
+                    and (r := self._row_of(raw.decode("utf-8", errors="replace")))
+                    is not None
+                ]
+                return row, [dict(r) for r in [*between, tip, *after]]
+        rows = [dict(r) for r in got[0]] if got is not None else self.rows()
+        i = max((k for k, r in enumerate(rows) if r["kind"] == kind), default=-1)
+        return (rows[i] if i >= 0 else None), rows[i + 1 :]
+
+    def has_kind(self, kind: str) -> bool:
+        """Whether any row is of `kind`: the remembered parse, else the tail
+        after the sealed tip and, before it, only the lines that hold the
+        kind's own text (canon writes it as one run of bytes), else the file."""
+        got = self._cached()
+        if got is None and (view := self._from_tip()) is not None:
+            tip, after, before, _ = view
+            if any(r["kind"] == kind for r in [tip, *after]):
+                return True
+            needle = canon({"kind": kind})[1:-1].encode()  # "kind":"<kind>"
+            return any(
+                (row := self._row_of(raw.decode("utf-8", errors="replace"))) is not None
+                and row["kind"] == kind
+                for raw in before
+                if needle in raw
+            )
+        rows = got[0] if got is not None else self.rows()
+        return any(r["kind"] == kind for r in rows)
+
+    def _read(self, fresh: bool = False) -> tuple[list[dict], list[int]]:
         """The rows, and the line numbers (1-based) of every line that isn't one.
         An unterminated last line is neither: see torn_tail()."""
-        rows, garbled, _ = self._scan()
+        rows, garbled, _ = self._scan(fresh)
         return rows, garbled
 
     def torn_tail(self) -> str | None:
         """Says so when the record ends in an unterminated line (a crash cut an
         append short): not yet written, left out of rows(), not a break."""
-        torn = self._scan()[2]
+        torn = self._scan(fresh=True)[2]
         return (
             None
             if torn is None
@@ -212,15 +375,18 @@ class Record:
                 "record: unverified identity; the stamp comes from the gate"
             )
         with self._locked():
-            rows, _, torn = self._scan()  # the true tail, read under the lock
-            if torn is not None:
+            # the true tail, read under the lock: count, last hash, torn
+            count, last, torn = self.tail_state()
+            base = self._cached()  # the remembered parse this append extends
+            pre = (self._stat_key(), self._anchor_key())  # the file this row joins
+            if torn:
                 raise TornTail(
                     f"record: {self.torn_tail()}. Refusing to append after it; "
                     "a human truncates the fragment (or restores it) first."
                 )
             created = not self.path.exists()
             row = {
-                "n": len(rows),
+                "n": count,
                 "kind": kind,
                 "who": who.who,
                 "family": who.family,
@@ -229,15 +395,30 @@ class Record:
                 else "unattested",
                 "version": self.version,
                 "ts": self.clock(),
-                "prev": rows[-1]["hash"] if rows else GENESIS,
+                "prev": last,
                 "where": where,
                 **fields,
             }
             row["hash"] = h256(canon(row))
+            line = canon(row)
             with self.path.open("a", encoding="utf-8") as f:
-                f.write(canon(row) + "\n")
+                f.write(line + "\n")
                 f.flush()
                 os.fsync(f.fileno())  # an error raises; never retried (fsyncgate)
+            # Under the lock the file is what was read plus this line: the
+            # remembered parse grows by the row as a reader would parse it.
+            tipped = self._tipped  # extended only if it was read of this very file
+            if tipped is not None and tipped[0] == pre and tipped[1] is not None:
+                tip, after, before, _ = tipped[1]
+                key = (self._stat_key(), self._anchor_key())
+                self._tipped = (key, (tip, [*after, json.loads(line)], before, None))
+            if base is not None:
+                self._parsed = (
+                    self._stat_key(),
+                    [*base[0], json.loads(line)],
+                    list(base[1]),
+                    None,
+                )
             if created:
                 _fsync_dir(self.box)  # the new file's name must survive a crash
         return row
@@ -251,7 +432,7 @@ class Record:
         hash chain alone only binds `n` to the bytes, not to the place. Rows
         after the sealed tip can be rewritten and re-hashed; a row whose label
         says it came earlier than it did would otherwise read as earlier."""
-        rows, garbled = self._read()
+        rows, garbled = self._read(fresh=True)  # the file, never a remembered parse
         breaks = [f"line {i}: garbled, not a record row" for i in garbled]
         prev = GENESIS
         for i, row in enumerate(rows):

@@ -102,22 +102,32 @@ class Texts:
     with no checkout, or whose git fails, is `unreachable`, said, never
     silently left out. `only` = (repo, path) reads that one file."""
 
-    def __init__(self, index: dict, repos: dict, only: tuple[str, str] | None = None):
-        self.index, self.repos, self.only = index, repos, only
+    def __init__(self, index: dict, repos: dict, only=None):
+        """`only`: one (repo, path), or a set of them read in one pass (one
+        `cat-file --batch` per repo, however many files)."""
+        self.index, self.repos = index, repos
+        if only is not None and isinstance(only, tuple) and len(only) == 2:
+            only = {only}
+        self.only = None if only is None else {tuple(o) for o in only}
         self.skipped: dict[str, int] = {}
+        #: why each (repo, path) read was skipped, so a reader of many files
+        #: can say each one's reason as a reader of one would
+        self.skip_of: dict[tuple[str, str], str] = {}
         self.unreachable: dict[str, str] = {}
         self.repos_read: list[str] = []
         self.read = 0
 
-    def _skip(self, why: str) -> None:
+    def _skip(self, why: str, where: tuple[str, str] | None = None) -> None:
         self.skipped[why] = self.skipped.get(why, 0) + 1
+        if where is not None:
+            self.skip_of.setdefault(where, why)
 
     def __iter__(self):
         arrivals = self.index.get("arrival", {})
         for name, arrival in sorted(
             arrivals.items() if isinstance(arrivals, dict) else ()
         ):
-            if self.only is not None and name != self.only[0]:
+            if self.only is not None and name not in {r for r, _ in self.only}:
                 continue
             path = self.repos.get(name)
             if path is None or not Path(path).is_dir():
@@ -129,7 +139,7 @@ class Texts:
                 if isinstance(f, dict)
                 and f.get("state") == "present"
                 and f.get("blob_match")
-                and (self.only is None or f.get("path") == self.only[1])
+                and (self.only is None or (name, f.get("path")) in self.only)
             ]
             try:
                 blobs = _blobs(Path(path), sorted({str(f["git_blob"]) for f in files}))
@@ -140,18 +150,18 @@ class Texts:
             for f in files:
                 data = blobs.get(str(f["git_blob"]))
                 if data is None:
-                    self._skip("blob not in the checkout")
+                    self._skip("blob not in the checkout", (name, f.get("path")))
                     continue
                 if hashlib.sha256(data).hexdigest() != f.get("sha256"):
-                    self._skip("bytes don't hash to the index")
+                    self._skip("bytes don't hash to the index", (name, f.get("path")))
                     continue
                 if b"\0" in data:
-                    self._skip("binary")
+                    self._skip("binary", (name, f.get("path")))
                     continue
                 try:
                     text = data.decode("utf-8")
                 except UnicodeDecodeError:
-                    self._skip("not utf-8")
+                    self._skip("not utf-8", (name, f.get("path")))
                     continue
                 self.read += 1
                 yield name, f, text

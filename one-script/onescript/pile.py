@@ -811,35 +811,144 @@ def _clean(s: object) -> str:
     """A name a store hands back: printable, and capped."""
     if not isinstance(s, str):
         return "?"
+    if s.isprintable():  # nearly every name: no per-character pass
+        return s[:PATH_CAP]
     return "".join(ch if ch.isprintable() else "?" for ch in s)[:PATH_CAP]
+
+
+#: A chunk row the store may hold: a 64-hex SHA-256 and whole numbers. One
+#: pass in SQLite over the whole table, as the loader's row check was;
+#: `unhex` (SQLite 3.41) is the fast hex test, the GLOB the same test without.
+_ROW_OK = (
+    "typeof(sha) = 'text' AND length(sha) = 64 AND {hex}"
+    " AND typeof(id) = 'integer' AND typeof(n) = 'integer'"
+    " AND typeof(copies) = 'integer' AND typeof(line) = 'integer'"
+)
+_HEX = ("sha = lower(sha) AND unhex(sha) IS NOT NULL", "sha NOT GLOB '*[^0-9a-f]*'")
+
+
+def _bad_rows(db) -> int:
+    """How many chunk rows aren't a 64-hex SHA-256 with whole numbers."""
+    fast, glob = _HEX
+    q = "SELECT count(*) FROM chunk WHERE NOT ({})"
+    try:
+        return db.execute(q.format(_ROW_OK.format(hex=fast))).fetchone()[0]
+    except sqlite3.OperationalError:  # no unhex: an older SQLite
+        return db.execute(q.format(_ROW_OK.format(hex=glob))).fetchone()[0]
+
+
+_BATCH = 900  # ids per IN (...): under SQLite's bound-parameter limit
+
+
+class _Rows:
+    """One field of the chunk rows (`where`, `n`), read on demand by id: a
+    store's 800,000 rows are never all loaded to answer one bite."""
+
+    def __init__(self, cached: "Cached", field: int):
+        self._c, self._f = cached, field
+
+    def __getitem__(self, cid):
+        row = self._c._rows.get(cid)
+        if row is None:
+            self._c._fetch((cid,))
+            try:
+                row = self._c._rows[cid]
+            except KeyError:
+                raise KeyError(cid) from None
+        return row[self._f]
+
+    def __contains__(self, cid) -> bool:
+        return self._c._has(cid)
+
+    def values(self):
+        """Every row's field: the whole table, read (`ladder.forward`)."""
+        self._c._fetch_all()
+        return [r[self._f] for _, r in sorted(self._c._rows.items())]
+
+
+class _Copies:
+    """A chunk's copies, by its SHA-256, from the rows read so far: every row
+    of one SHA carries the same count (`build_cache`)."""
+
+    def __init__(self, cached: "Cached"):
+        self._c = cached
+
+    def __getitem__(self, sha):
+        return self._c._copies[sha]
 
 
 class Cached:
     """Rung 1's statistics from the cache, for `score`. `rank` and `quotes`
-    answer with a state, never an exception."""
+    answer with a state, never an exception.
+
+    Read lazily: the totals and the rows' validity come from SQLite over the
+    whole table at open (a bad row still makes the store unreadable); a
+    chunk's place, length and copies are read only for the chunks a bite
+    touches. The answers are the ones the whole table, loaded, gave."""
 
     def __init__(self, db, key: bytes, meta: dict | None = None):
         import array
 
         self.db, self.key, self._array = db, key, array
         self.meta = read_meta(db) if meta is None else meta
-        rows = db.execute("SELECT id, sha, n, copies, repo, path, line FROM chunk")
-        self.where, self.n, self.copies, self._cid = {}, {}, {}, {}
-        total = 0
-        for cid, sha, n, cp, repo, path, line in rows:
-            if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
-                raise ValueError("a chunk without a SHA-256")
-            if not all(isinstance(x, int) for x in (cid, n, cp, line)):
-                raise ValueError("a chunk row that isn't whole numbers")
-            self.where[cid] = (_clean(repo), _clean(path), line, sha)
-            self._cid[self.where[cid]] = cid
-            self.n[cid] = n
-            self.copies[sha] = cp
-            total += cp
-        self.n_all = len(self.n)
-        self.avg = sum(self.n.values()) / self.n_all if self.n_all else 0.0
-        self.extra = total - self.n_all
+        if _bad_rows(db):
+            raise ValueError("a chunk row without a SHA-256 or whole numbers")
+        n_all, sum_n, sum_cp, lo, hi = db.execute(
+            "SELECT count(*), coalesce(sum(n), 0), coalesce(sum(copies), 0),"
+            " min(id), max(id) FROM chunk"
+        ).fetchone()
+        self.n_all = n_all
+        self.avg = sum_n / n_all if n_all else 0.0
+        self.extra = sum_cp - n_all
+        # ids are the table's primary key: contiguous, membership is a range
+        self._span = (lo, hi) if n_all and hi - lo + 1 == n_all else None
+        self._ids: set | None = None
+        self._rows: dict = {}  # cid -> (where, n, copies)
+        self._cid: dict = {}  # where -> cid
+        self._copies: dict = {}  # sha -> copies
+        self.where, self.n, self.copies = _Rows(self, 0), _Rows(self, 1), _Copies(self)
         self._memo: dict = {}
+
+    def _has(self, cid) -> bool:
+        if self._span is not None:
+            return isinstance(cid, int) and self._span[0] <= cid <= self._span[1]
+        if self._ids is None:
+            self._ids = {r[0] for r in self.db.execute("SELECT id FROM chunk")}
+        return cid in self._ids
+
+    def _all_known(self, cids) -> bool:
+        if self._span is not None:
+            return not cids or (
+                self._span[0] <= min(cids) and max(cids) <= self._span[1]
+            )
+        return all(self._has(c) for c in set(cids))
+
+    def _keep(self, rows) -> None:
+        for cid, sha, n, cp, repo, path, line in rows:
+            where = (_clean(repo), _clean(path), line, sha)
+            self._rows[cid] = (where, n, cp)
+            self._cid[where] = cid
+            self._copies[sha] = cp
+
+    def _fetch(self, cids) -> None:
+        """Read the rows of these ids not read yet, in batches."""
+        want = sorted({c for c in cids if c not in self._rows})
+        for i in range(0, len(want), _BATCH):
+            part = want[i : i + _BATCH]
+            self._keep(
+                self.db.execute(
+                    "SELECT id, sha, n, copies, repo, path, line FROM chunk"
+                    f" WHERE id IN ({','.join('?' * len(part))}) ORDER BY id",
+                    part,
+                )
+            )
+
+    def _fetch_all(self) -> None:
+        self._keep(
+            self.db.execute(
+                "SELECT id, sha, n, copies, repo, path, line FROM chunk ORDER BY id"
+            )
+        )
 
     def tally(self) -> dict:
         """What the build reached, as its meta says."""
@@ -870,7 +979,7 @@ class Cached:
                 self._memo[w] = []
             else:
                 a, b = self._inflate(row[0]), self._inflate(row[1])
-                if len(a) != len(b) or not set(a) <= self.n.keys():
+                if len(a) != len(b) or not self._all_known(a):
                     raise ValueError("a posting that names no chunk")
                 if any(p & 3 == 3 for p in b):
                     raise ValueError("a posting in no field")
@@ -890,7 +999,9 @@ class Cached:
         keys, missed = [], []
         try:
             for w in words:
-                at = sorted({self.where[c][:3] for c, _, _ in self.postings(w)})
+                hits = self.postings(w)
+                self._fetch(c for c, _, _ in hits)
+                at = sorted({self.where[c][:3] for c, _, _ in hits})
                 if not at:
                     missed.append(w)
                     continue
@@ -978,9 +1089,10 @@ class Cached:
                 k = counts.setdefault(c, [0, 0, 0])
                 k[f] += 1
             if counts:
-                where = self.where
+                self._fetch(counts)  # the rows these hits name, in batches
+                rows = self._rows
                 grams[x] = {
-                    where[c]: k[0] * weight[0] + weight[1] * k[1] + weight[2] * k[2]
+                    rows[c][0]: k[0] * weight[0] + weight[1] * k[1] + weight[2] * k[2]
                     for c, k in counts.items()
                 }
                 df_raw[x] = len(counts)
@@ -997,7 +1109,8 @@ class Cached:
             if nxt is None:
                 nxt = nexts[b] = {(c, pos) for c, pos, _ in self.postings(b)}
             add(p, ((c, f) for c, pos, f in first if (c, pos + 1) in nxt))
-        n_of = {w: self.n[self._cid[w]] for d in grams.values() for w in d}
+        rows, cid = self._rows, self._cid
+        n_of = {w: rows[cid[w]][1] for d in grams.values() for w in d}
         return score_grams(
             bite,
             words,
@@ -1053,25 +1166,58 @@ def store_path(box: Path, limit: int = MAX) -> Path:
     return box.with_name(box.name + "-store") / f"pile-{limit}.sqlite"
 
 
+def _indexed(index: dict, chunk: dict) -> bool:
+    name, path = chunk.get("repo"), chunk.get("path")
+    arrival = index.get("arrival", {}).get(name, {})
+    f = next((x for x in arrival.get("files", []) if x.get("path") == path), None)
+    return f is not None and f.get("state") == "present" and bool(f.get("blob_match"))
+
+
+class ChunkReader:
+    """`read_chunk` for many chunks at once: every file they sit in read in one
+    pass (`seed.Texts`: one `cat-file --batch` per repo, not one per chunk),
+    then each chunk answered exactly as `read_chunk` answers it alone, the
+    same text and the same why. A chunk it wasn't built for is read alone."""
+
+    def __init__(self, index: dict, repos: dict, chunks, limit: int = MAX):
+        self.index, self.repos, self.limit = index, repos, limit
+        want = {(c.get("repo"), c.get("path")) for c in chunks if _indexed(index, c)}
+        self.files: dict[tuple[str, str], str] = {}
+        self.texts = seed.Texts(index, repos, only=want) if want else None
+        if self.texts is not None:
+            for name, f, text in self.texts:
+                self.files.setdefault(
+                    (name, f.get("path")), text
+                )  # the first, as alone
+        self.want = want
+
+    def __call__(self, chunk: dict):
+        """(text, None) for a chunk read at its indexed blob, or (None, why)."""
+        if not _indexed(self.index, chunk):
+            return None, "not in the index"
+        name, path = chunk.get("repo"), chunk.get("path")
+        if (name, path) not in self.want:
+            return ChunkReader(self.index, self.repos, [chunk], self.limit)(chunk)
+        text = self.files.get((name, path))
+        if text is not None:
+            for line, s, _ in chunks(text, self.limit):
+                if line == chunk.get("line") and hashlib.sha256(
+                    s.encode()
+                ).hexdigest() == chunk.get("sha256"):
+                    return s, None
+            return None, "the chunk isn't at that line with that hash"
+        t = self.texts
+        return None, (
+            t.unreachable.get(name) or t.skip_of.get((name, path)) or "not read"
+        )
+
+
 def read_chunk(index: dict, repos: dict, chunk: dict, limit: int = MAX):
     """(text, None) for a chunk read at its indexed blob, or (None, why).
     Content stays where it lives: the text is re-read here (`seed.Texts`), and
     only while the blob hashes to the index and the chunk hashes to its own
-    SHA-256."""
-    name, path = chunk.get("repo"), chunk.get("path")
-    arrival = index.get("arrival", {}).get(name, {})
-    f = next((x for x in arrival.get("files", []) if x.get("path") == path), None)
-    if f is None or f.get("state") != "present" or not f.get("blob_match"):
-        return None, "not in the index"
-    texts = seed.Texts(index, repos, only=(name, path))
-    for _, _, text in texts:
-        for line, s, _ in chunks(text, limit):
-            if line == chunk.get("line") and hashlib.sha256(
-                s.encode()
-            ).hexdigest() == chunk.get("sha256"):
-                return s, None
-        return None, "the chunk isn't at that line with that hash"
-    return None, texts.unreachable.get(name) or next(iter(texts.skipped), "not read")
+    SHA-256. One chunk through the one reader (`ChunkReader`)."""
+    return ChunkReader(index, repos, [chunk], limit)(chunk)
 
 
 # ── across sessions: piles merged by hash, a view rebuilt on demand ─────────

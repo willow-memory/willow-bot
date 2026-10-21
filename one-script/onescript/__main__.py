@@ -38,6 +38,12 @@
 The app calls the functions in `onescript.api`; this file only reads argv,
 builds the `Config`, calls one of them and prints. Nothing here needs a tty.
 
+Exit codes: 0 a human said it (the pile, a seal, a public-record nugget);
+42 not enough information to say a human said this was true (ΔΣ=42, the
+operator's words; which verbs, `onescript.api`); 1 refused or unreachable;
+2 a bad command line, or a verb that can't run (no human key, the chain
+unavailable); 3 the box won't open.
+
 The box defaults to willow-bot's `.flow/onescript/` (excluded from git). The
 record persists there between commands, so check-in, turns and check-out are
 one run across several invocations.
@@ -392,7 +398,8 @@ def _config(args, **more) -> opening.Config:
         keyring=args.keyring,
         nestor_db=args.nestor_db,
         phone=args.phone,
-        repos=dict(args.repos) or None,
+        # no --repo: the repos the last check-in named (the hook passes none)
+        repos=dict(args.repos) or opening.load_repos(args.keys),
         store_background=True,
         forge=FORGE,
         index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
