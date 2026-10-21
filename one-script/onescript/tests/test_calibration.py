@@ -136,3 +136,43 @@ def test_the_forges_sources_are_still_the_pinned_ones():
     for name, sha in FORGE_SOURCES.items():
         assert _source_sha(getattr(forge, name)) == sha, name
     assert forge.BIN_EDGES == calibration.BIN_EDGES and forge._EPS == calibration._EPS
+
+
+# oakenscrolls-office keeps its own copy on purpose (the operator, 2026-10-21:
+# "1 revert"): its calibration is "dependency-free, stdlib-only, in the
+# no-egress zone ... small enough to audit in one sitting", a device app with
+# nothing beside it, so it can't import the one script. The copy is held here,
+# value for value, where it is in reach: $ONESCRIPT_OAKENSCROLLS, else a clone
+# of hornbook-knowledge/oakenscrolls-office beside willow-bot.
+OAKEN = Path(
+    os.environ.get("ONESCRIPT_OAKENSCROLLS")
+    or WILLOW_BOT.parent / "oakenscrolls-office"
+).expanduser()
+OAKEN_CAL = OAKEN / "calibration.py"
+
+
+def _oaken():
+    if not OAKEN_CAL.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_oaken_calibration", OAKEN_CAL)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+oaken = _oaken()
+
+
+@pytest.mark.skipif(
+    oaken is None, reason=f"oakenscrolls is not in reach at {OAKEN_CAL}"
+)
+def test_oakenscrolls_keeps_the_same_math():
+    assert oaken._EPS == calibration._EPS
+    assert tuple(oaken.BIN_EDGES) == tuple(calibration.BIN_EDGES)
+    pairs = []
+    for p in GRID:
+        for outcome in (True, False):
+            assert oaken.brier(p, outcome) == calibration.brier(p, outcome)
+            assert oaken.log_score(p, outcome) == calibration.log_score(p, outcome)
+            pairs.append((p, outcome))
+    assert oaken.bins(pairs) == calibration.bins(pairs)
