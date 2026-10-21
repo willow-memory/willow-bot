@@ -9,8 +9,9 @@
       "repo": "oakenscrolls-office",
       "path": "calibration.py",
       "kind": "named-copy",
-      "parity": "onescript/tests/test_calibration.py::test_oakenscrolls_keeps_the_same_math",
-      "why": "dependency-free stdlib-only no-egress device app (operator: 1 revert)"
+      "parity": "one-script/onescript/tests/test_calibration.py::test_oakenscrolls_keeps_the_same_math",
+      "why": "dependency-free stdlib-only no-egress device app (operator: 1 revert)",
+      "parity_repo": "willow-bot"
     }
   ],
   "absent": [],

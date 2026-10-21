@@ -103,8 +103,10 @@
     },
     {
       "repo": "willow-bot",
-      "path": "willow_bot/deterministic/runner.py",
-      "kind": "import"
+      "path": "willow_bot/_carried/clock.py",
+      "kind": "named-copy",
+      "parity": "tests/test_carried_parity.py::test_the_carried_copy_is_the_one_scripts_bytes",
+      "why": "the willow_bot wheel ships without the one script and must not import it (operator: carry copies); byte copy, parity-tested"
     }
   ],
   "absent": [

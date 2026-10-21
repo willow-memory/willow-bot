@@ -68,6 +68,10 @@
     {
       "repo": "willows-grove",
       "test": "tests/test_onescript_sign.py::test_unreachable_names_onescript_home"
+    },
+    {
+      "repo": "willow-mcp",
+      "test": "tests/test_onescript_sign_reach.py::test_the_sign_reach_says_unreachable_with_why_and_never_signs_another_way"
     }
   ],
   "never_reach": [

@@ -25,13 +25,6 @@
       "kind": "named-copy",
       "parity": "tests/test_onescript_reach.py::test_the_copy_is_the_template_byte_for_byte",
       "why": "the bootstrap cannot import the reach before it has found the one script: a byte copy held to the template"
-    },
-    {
-      "repo": "willow-bot",
-      "path": "willow_bot/onescript_reach.py",
-      "kind": "named-copy",
-      "parity": "one-script/onescript/tests/test_reach.py::test_every_consumers_copy_is_the_template_byte_for_byte",
-      "why": "the bootstrap cannot import the reach before it has found the one script: a byte copy held to the template"
     }
   ],
   "absent": [
