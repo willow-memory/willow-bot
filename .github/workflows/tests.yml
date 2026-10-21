@@ -123,6 +123,26 @@ jobs:
           ref: ${{ steps.rat_ref.outputs.ref }}
           path: ratatosk
 
+      # Nestor beside the bot, so onescript/tests/test_nestor_parity.py holds the
+      # one script to Nestor's frozen encodings (flatten-2 LE7; the operator:
+      # "1 add the step"). Read only: nothing here installs or runs Nestor.
+      - name: Which nestor
+        id: nestor_ref
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/Die-Namic-Systems/Nestor "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          repository: Die-Namic-Systems/Nestor
+          ref: ${{ steps.nestor_ref.outputs.ref }}
+          path: nestor
+
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
