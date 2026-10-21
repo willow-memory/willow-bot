@@ -51,6 +51,7 @@ import unicodedata
 
 from . import gate, lore, nestor_seal, rules, scrub, sign
 from .record import Record, canon, h256
+from .states import EMPTY, POPULATED, UNREACHABLE
 
 OUT = "served.json"
 WS = ("who", "what", "when", "where")
@@ -477,7 +478,7 @@ def serve(
         doc = _serve(
             rows, tables, scope, serve_key, max_chars, seals, read_chunk, session
         )
-        if doc["state"] == "populated" and _has_lore(doc, tables, scope):
+        if doc["state"] == POPULATED and _has_lore(doc, tables, scope):
             # lore rests on the stored proposal bytes: a rewritten record serves none
             broken = rec.verify_chain()
             if broken:
@@ -498,13 +499,13 @@ def serve(
                     else "lore"
                 )
                 doc = _nothing(
-                    "unreachable",
+                    UNREACHABLE,
                     f"the record's chain is broken ({broken[0]}); no {what} is served",
                 )
     except gate.Refused as e:
-        doc = _nothing("empty", str(e))
+        doc = _nothing(EMPTY, str(e))
     except Exception as e:  # serve that can't think clearly serves nothing
-        doc = _nothing("empty", f"serve error, failing closed: {type(e).__name__}")
+        doc = _nothing(EMPTY, f"serve error, failing closed: {type(e).__name__}")
     data = (canon(doc) + "\n").encode()
     untrusted = any(t["trust"] == "untrusted" for t in doc["tables"])
     rec.write_file(
@@ -557,25 +558,25 @@ def _serve(
 ) -> dict:
     if max_chars is None:
         return _nothing(
-            "empty", "no max_chars given; the caller sizes the cap, nothing is uncapped"
+            EMPTY, "no max_chars given; the caller sizes the cap, nothing is uncapped"
         )
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars < 1:
-        return _nothing("empty", "max_chars must be a positive whole number")
+        return _nothing(EMPTY, "max_chars must be a positive whole number")
     if not serve_key:
-        return _nothing("empty", "no serve key; ids are made only after check-in")
+        return _nothing(EMPTY, "no serve key; ids are made only after check-in")
     if not scope:
-        return _nothing("empty", "no scope given; nothing is served without one")
+        return _nothing(EMPTY, "no scope given; nothing is served without one")
     seals, unchecked = seals if seals is not None else (set(), {})
     sealed_scope = scope_subject(scope) in seals
     if not sealed_scope and session is None:
         if scope_subject(scope) in unchecked:
             return _nothing(
-                "unreachable",
+                UNREACHABLE,
                 "the scope's seal can't be checked here "
                 f"({unchecked[scope_subject(scope)]})",
             )
         return _nothing(
-            "empty", "the scope has no human seal over this exact set; nothing served"
+            EMPTY, "the scope has no human seal over this exact set; nothing served"
         )
     in_session = (lambda r: True) if sealed_scope else (lambda r: session(r["n"]))
     by_id = {}
@@ -587,7 +588,7 @@ def _serve(
         by_id[table_id(t)] = t
     missing = set(scope) - set(by_id)
     if missing:  # in scope, so a count is no leak; the plain hashes are
-        return _nothing("unreachable", f"{len(missing)} sealed table(s) not found")
+        return _nothing(UNREACHABLE, f"{len(missing)} sealed table(s) not found")
     ctx = rules.Index(rows)  # once per serve, not once per row; lore reads it too
     served = []
     for tid in sorted(set(scope)):
@@ -618,7 +619,7 @@ def _serve(
         if (
             stuck or stuck_rules
         ):  # said on the table, never shown as empty (INVARIANTS section 1)
-            entry["state"] = "unreachable"
+            entry["state"] = UNREACHABLE
             kind = (
                 "lore"
                 if stuck and not stuck_rules
@@ -631,16 +632,14 @@ def _serve(
             )
         served.append(entry)
     served.sort(key=lambda t: t["id"])
-    doc = {"state": "populated", "why": "", "return": RETURN, "tables": served}
+    doc = {"state": POPULATED, "why": "", "return": RETURN, "tables": served}
     if not sealed_scope:
         doc["seal"] = UNSEALED
-    if served and all(
-        t.get("state") == "unreachable" and not t["rows"] for t in served
-    ):
-        doc["state"], doc["why"] = "unreachable", served[0]["why"]
+    if served and all(t.get("state") == UNREACHABLE and not t["rows"] for t in served):
+        doc["state"], doc["why"] = UNREACHABLE, served[0]["why"]
     if len(canon(doc)) > max_chars:
         return _nothing(
-            "empty", "the scope is too large for this model; narrow the stack"
+            EMPTY, "the scope is too large for this model; narrow the stack"
         )
     return doc
 
@@ -662,7 +661,7 @@ def _chunk_entry(t: dict, tid: str, serve_key: bytes, seals, read_chunk) -> dict
     else:
         text, why = read_chunk(t["source"]["chunk"])
     if text is None:
-        entry["state"], entry["why"] = "unreachable", f"{where}: {why}"
+        entry["state"], entry["why"] = UNREACHABLE, f"{where}: {why}"
     else:
         entry["rows"] = [
             {"what": "chunk", "where": _scrub(where), "text": _scrub(text)}

@@ -21,7 +21,25 @@ STATES = (POPULATED, EMPTY, UNREACHABLE)
 RANKED = "ranked"  # a ranker found hits: populated
 HELD = "held"  # a write-back with a verifying seal: populated
 NONE = "none"  # no write-back answers the bite: empty
+# A STEP, not a state and not a variant: the return to 0 for the next tier.
+# The operator (2026-10-21): "escalated is a step, not a state, and it's just
+# the return to 0 for the next tier." It stays out of STATES and VARIANTS. Pile
+# and seed write it as the answer of a bite whose box was read and holds none
+# of the words; lookup carries it through.
+STEP_ESCALATED_COLD_START = "escalated:cold_start"
 VARIANTS = {RANKED: POPULATED, HELD: POPULATED, NONE: EMPTY}
+
+# A FOURTH VOCABULARY, not a reader's answer (flatten-2 reverse pass). The
+# operator (2026-10-21): "make them constants, a named fourth vocabulary." The
+# same three words, used as FIELD NAMES in a tally or report (counts or lists
+# of readers grouped by state, e.g. a report's ``unreachable`` listing the
+# items that could not be read). A field name is never a state value: nothing
+# here is compared with ``STATES``, and ``checked``/``base_of`` do not take it.
+# The strings are the same, so every stored and printed key keeps its bytes
+# (D-e). Code names a report field with these, as it names a state with the
+# three above, so a typo cannot make a fourth key and a rename is one edit.
+REPORT_POPULATED, REPORT_EMPTY, REPORT_UNREACHABLE = "populated", "empty", "unreachable"
+REPORT_KEYS = (REPORT_POPULATED, REPORT_EMPTY, REPORT_UNREACHABLE)
 
 
 def base_of(word: object) -> str:

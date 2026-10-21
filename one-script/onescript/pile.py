@@ -44,7 +44,14 @@ import zlib
 from pathlib import Path
 
 from . import seed
-from .states import EMPTY, POPULATED, UNREACHABLE
+from .states import (
+    EMPTY,
+    POPULATED,
+    RANKED,
+    REPORT_UNREACHABLE,
+    STEP_ESCALATED_COLD_START,
+    UNREACHABLE,
+)
 from .words import WORD as _WORD
 
 WORD = _WORD  # one word, for seed and the pile alike (flatten-2 F11)
@@ -286,11 +293,11 @@ def nothing(tally: dict) -> dict:
     `unreachable` when no repo could be read, or every file read was refused
     (INVARIANTS section 1: the two are never collapsed)."""
     if not tally.get("repos"):
-        state, why = "unreachable", "no indexed repo could be read"
+        state, why = UNREACHABLE, "no indexed repo could be read"
     elif not tally.get("files_read") and tally.get("skipped"):
-        state, why = "unreachable", "no indexed file could be read as text"
+        state, why = UNREACHABLE, "no indexed file could be read as text"
     else:
-        state, why = "empty", "the pile was read and holds no chunk"
+        state, why = EMPTY, "the pile was read and holds no chunk"
     return {"state": state, "why": why, "fused": False, "hits": []}
 
 
@@ -405,7 +412,7 @@ def score_grams(
     order = [w for _, w in scored]
     by_where = {w: sc for sc, w in scored}
     out = {
-        "state": "ranked" if scored else "escalated:cold_start",
+        "state": RANKED if scored else STEP_ESCALATED_COLD_START,
         "why": "",
         "chunks": n_all,
         "copies": extra,
@@ -837,7 +844,7 @@ class Cached:
     def tally(self) -> dict:
         """What the build reached, as its meta says."""
         out = {}
-        for k in ("repos", "files_read", "skipped", "unreachable"):
+        for k in ("repos", "files_read", "skipped", REPORT_UNREACHABLE):
             try:
                 out[k] = json.loads(self.meta[k])
             except (KeyError, ValueError):
@@ -901,11 +908,11 @@ class Cached:
         keys.sort(key=lambda k: (k["files"], k["chunks"], k["word"]))
         t = self.tally()
         state = (
-            "unreachable"
+            UNREACHABLE
             if not self.n_all
             else "seeded"
             if keys
-            else "escalated:cold_start"
+            else STEP_ESCALATED_COLD_START
         )
         return {
             "state": state,
@@ -913,7 +920,7 @@ class Cached:
             "missed": missed,
             "files_read": t["files_read"],
             "skipped": t["skipped"] or {},
-            "unreachable": t["unreachable"] or {},
+            REPORT_UNREACHABLE: t[REPORT_UNREACHABLE] or {},
         }
 
     def repair(self, bite: str) -> dict:
@@ -1080,7 +1087,7 @@ def merge(stores: dict, bite: str) -> dict:
     for name in sorted(stores):
         c = stores[name]
         r, q = c.rank(bite), c.quotes(bite)
-        if "unreachable" in (r["state"], q["state"]):
+        if UNREACHABLE in (r["state"], q["state"]):
             bad = r if r["state"] == UNREACHABLE else q
             states[name] = {"state": UNREACHABLE, "why": bad["why"]}
             continue

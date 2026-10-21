@@ -79,6 +79,13 @@ from .api import (  # noqa: F401  (re-exported: the tests and callers read these
     _law,
 )
 from .run import PKG
+from .states import EMPTY, POPULATED
+from .writeback import PROPOSED
+
+# A success is a reader's state (populated or empty) or a proposal's standing
+# (proposed): two vocabularies mixed on purpose, since these commands either
+# read rows or write a proposal for the human to seal.
+OK_STATES = (POPULATED, EMPTY, PROPOSED)
 
 ROOT = PKG.parents[1]  # onescript -> one-script -> willow-bot
 GROVE = Path(
@@ -773,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"seal {res['subject']}")  # the human signs it, or nothing counts
         said = {k: v for k, v in res.items() if k != "rows"}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
-        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
+        return 0 if res.get("state") in OK_STATES else 1
     elif args.cmd in ("deck-reveal", "deck-outcome"):
         if args.cmd == "deck-reveal":
             res = deck.reveal(cfg, args.round, argv=raw)
@@ -785,7 +792,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"seal {res['subject']}")  # the human signs it, or nothing counts
         said = {k: v for k, v in res.items() if k != "rows"}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
-        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
+        return 0 if res.get("state") in OK_STATES else 1
     elif args.cmd == "seal-outcome":
         try:
             outcome = json.loads(args.outcome)

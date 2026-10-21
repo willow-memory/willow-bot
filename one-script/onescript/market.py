@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from . import api, beacon, reverse, table
-from .states import EMPTY, POPULATED, UNREACHABLE
+from .states import EMPTY, POPULATED, REPORT_UNREACHABLE, UNREACHABLE
 
 YES, NO = "yes", "no"
 KINDS = ("up", "above")  # up: close > the close before it; above: close > threshold
@@ -206,7 +206,7 @@ def reveal(
             "code": 1,
         }
     out = {"state": POPULATED, "rows": written, "code": 0}
-    return {**out, "unreachable": missing} if missing else out
+    return {**out, REPORT_UNREACHABLE: missing} if missing else out
 
 
 # ── the outcome code proposes; the human seals it ──────────────────────────

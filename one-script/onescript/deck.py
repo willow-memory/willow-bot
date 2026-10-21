@@ -34,6 +34,7 @@ from fractions import Fraction
 from itertools import product
 
 from . import api, beacon, reverse, table
+from .states import EMPTY, POPULATED, UNREACHABLE
 from .stream import Stream
 
 YES, NO = "yes", "no"
@@ -215,18 +216,18 @@ def reveal(
         return api._refused("a reveal names a drand round number", 1)
     if cfg.beacon is None:
         return {
-            "state": "unreachable",
+            "state": UNREACHABLE,
             "why": "no beacon reader on this box",
             "code": 1,
         }
     try:
         got = cfg.beacon(rnd)
     except Exception as e:  # any failure of the reader: said, never guessed
-        return {"state": "unreachable", "why": f"round {rnd} could not be read: "
+        return {"state": UNREACHABLE, "why": f"round {rnd} could not be read: "
                 f"{type(e).__name__}: {e}", "code": 1}  # fmt: skip
     rand = got.get("randomness") if isinstance(got, dict) else None
     if not beacon.is_randomness(rand) or got.get("round") not in (rnd, None):
-        return {"state": "unreachable", "why": f"the reader gave no randomness for "
+        return {"state": UNREACHABLE, "why": f"the reader gave no randomness for "
                 f"round {rnd}", "code": 1}  # fmt: skip
     run, info = api._open(cfg, "deck-reveal", argv, write=False)
     if run is None:
@@ -240,7 +241,7 @@ def reveal(
             if not asked
             else "every question is answered"
         )
-        return {"state": "empty", "why": why, "rows": [], "code": 0}
+        return {"state": EMPTY, "why": why, "rows": [], "code": 0}
     written = []
     for q in todo:
         a = YES if answer(rand, q) else NO
@@ -252,7 +253,7 @@ def reveal(
         if res.get("code") != 0:
             return {**res, "state": "refused", "rows": written}
         written.append(res["row"])
-    return {"state": "populated", "rows": written, "code": 0}
+    return {"state": POPULATED, "rows": written, "code": 0}
 
 
 # ── the outcome code proposes; the human seals it ──────────────────────────
@@ -297,7 +298,7 @@ def propose_outcome(
             "wager.n < verdict.n is broken (T4)"
         )
     if human_key is None:
-        return {"state": "unreachable",
+        return {"state": UNREACHABLE,
                 "reason": "no human key handed over: the tip seal can't be checked"}  # fmt: skip
     tips = [(t, tn) for t, tn in reverse.tip_seals(rows, human_key) if w["n"] <= tn]
     under = next(((t, tn) for t, tn in sorted(tips) if t < v["n"]), None)
@@ -313,8 +314,8 @@ def propose_outcome(
     )
     if seeded is not None:
         state, why = seeded
-        if state == "unreachable":
-            return {"state": "unreachable", "reason": why}
+        if state == UNREACHABLE:
+            return {"state": UNREACHABLE, "reason": why}
         return table._escalate(why)
     a = YES if answer(v["randomness"], q) else NO
     if v.get("verdict") != a:

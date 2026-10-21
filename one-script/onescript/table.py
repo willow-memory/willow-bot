@@ -586,7 +586,7 @@ def beacon_problem(
     if not _int(seal_latest):
         # INVARIANTS §1: the anchor holds no reader round for this tip (missing,
         # unreadable, or sealed with no reader): unchecked here, not a finding
-        return "unreachable", (
+        return UNREACHABLE, (
             f"the anchor holds no reader round for the tip seal: round {rnd} "
             "can't be shown to have been ahead of it (R23a)"
         )
@@ -612,17 +612,17 @@ def beacon_problem(
             "may have been known"
         )
     if read is None:
-        return "unreachable", (
+        return UNREACHABLE, (
             f"no beacon reader on this box: round {rnd}'s randomness can't be "
             f"checked; {beacon.BLS_UNVERIFIED}"
         )
     try:
         got = read(rnd)
     except Exception as e:  # any failure of the reader is unreachable, said
-        return "unreachable", f"round {rnd} could not be read: {type(e).__name__}: {e}"
+        return UNREACHABLE, f"round {rnd} could not be read: {type(e).__name__}: {e}"
     fetched = got.get("randomness") if isinstance(got, dict) else None
     if not beacon.is_randomness(fetched):
-        return "unreachable", f"the reader gave no randomness for round {rnd}"
+        return UNREACHABLE, f"the reader gave no randomness for round {rnd}"
     if fetched != opened.get("randomness"):
         return "escalate", (
             f"the session's randomness is not round {rnd}'s: the seed was not the "
