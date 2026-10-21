@@ -31,6 +31,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from .states import UNREACHABLE
 from .words import WORD  # noqa: F401  (the one word rule; re-exported)
 from .words import words as _words
 from .xref import GitError, git
@@ -193,7 +194,7 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
     keys.sort(key=lambda k: (k["files"], k["lines"], k["word"]))
     missed = [w for w in bite_words if not hits[w]]
     if not read:
-        state = "unreachable"
+        state = UNREACHABLE
     elif keys:
         state = "seeded"
     else:

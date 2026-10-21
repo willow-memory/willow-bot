@@ -23,7 +23,7 @@ from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
 import script_match as sm  # noqa: E402  (adopt, don't rewrite: checks 1-4 live there)
-from .states import EMPTY, POPULATED
+from .states import EMPTY, POPULATED, UNREACHABLE
 
 _TOKEN = object()  # the only key that mints a Verified; the record checks for it
 HUMAN = "human"
@@ -463,7 +463,7 @@ def _symbol_row(c: dict, entry: object) -> dict:
     if not isinstance(entry, dict) or "state" not in entry:
         return {**base, "verdict": "unchecked", "record": "the graph was not asked"}
     state = entry["state"]
-    if state in ("stale", "unreachable"):
+    if state in ("stale", UNREACHABLE):
         return {
             **base,
             "verdict": "unchecked",

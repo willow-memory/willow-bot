@@ -286,11 +286,11 @@ def nothing(tally: dict) -> dict:
     `unreachable` when no repo could be read, or every file read was refused
     (INVARIANTS section 1: the two are never collapsed)."""
     if not tally.get("repos"):
-        state, why = "unreachable", "no indexed repo could be read"
+        state, why = UNREACHABLE, "no indexed repo could be read"
     elif not tally.get("files_read") and tally.get("skipped"):
-        state, why = "unreachable", "no indexed file could be read as text"
+        state, why = UNREACHABLE, "no indexed file could be read as text"
     else:
-        state, why = "empty", "the pile was read and holds no chunk"
+        state, why = EMPTY, "the pile was read and holds no chunk"
     return {"state": state, "why": why, "fused": False, "hits": []}
 
 
@@ -901,7 +901,7 @@ class Cached:
         keys.sort(key=lambda k: (k["files"], k["chunks"], k["word"]))
         t = self.tally()
         state = (
-            "unreachable"
+            UNREACHABLE
             if not self.n_all
             else "seeded"
             if keys
@@ -1080,7 +1080,7 @@ def merge(stores: dict, bite: str) -> dict:
     for name in sorted(stores):
         c = stores[name]
         r, q = c.rank(bite), c.quotes(bite)
-        if "unreachable" in (r["state"], q["state"]):
+        if UNREACHABLE in (r["state"], q["state"]):
             bad = r if r["state"] == UNREACHABLE else q
             states[name] = {"state": UNREACHABLE, "why": bad["why"]}
             continue

@@ -53,6 +53,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .states import EMPTY, POPULATED, UNREACHABLE
+
 DEFAULT_CACHE = "~/.cache/codebase-memory-mcp"
 TIMEOUT = 60
 
@@ -331,17 +333,15 @@ def graph_read(
 ) -> dict:
     """One graph read, stamped. Never raises; never collapses the states."""
     if tool not in READ_TOOLS:
-        return _out(
-            "unreachable", f"'{tool}' is not a graph read this seam makes", None
-        )
+        return _out(UNREACHABLE, f"'{tool}' is not a graph read this seam makes", None)
     need = MISS_IS_SILENT.get(tool)
     if need and not (args or {}).get(need):
-        return _out("unreachable", f"refused: {tool} needs '{need}'", None)
+        return _out(UNREACHABLE, f"refused: {tool} needs '{need}'", None)
     try:
         run = runner or cbm_runner()
         found = [p for p in _projects(run) if p.get("name") == project]
         if not found:
-            return _out("empty", f"project '{project}' is not in the graph", None)
+            return _out(EMPTY, f"project '{project}' is not in the graph", None)
         p = found[0]
         root = p.get("root_path")
         if not isinstance(root, str) or not os.path.isdir(root):
@@ -385,10 +385,10 @@ def graph_read(
                 )
         total, rows = parse(tool, run(tool, {**(args or {}), "project": project}))
     except Unreachable as e:
-        return _out("unreachable", str(e), None)
+        return _out(UNREACHABLE, str(e), None)
     if total == 0:
-        return _out("empty", f"not in the graph at {_said(stamp)}", stamp)
-    return _out("populated", "", stamp, rows, total)
+        return _out(EMPTY, f"not in the graph at {_said(stamp)}", stamp)
+    return _out(POPULATED, "", stamp, rows, total)
 
 
 def reindex(root: str | os.PathLike, *, runner: Runner | None = None) -> dict:
@@ -397,8 +397,8 @@ def reindex(root: str | os.PathLike, *, runner: Runner | None = None) -> dict:
     try:
         out = (runner or cbm_runner())("index_repository", {"repo_path": str(root)})
     except Unreachable as e:
-        return {"state": "unreachable", "why": str(e)}
-    return {"state": "populated", "why": out.strip()[:200]}
+        return {"state": UNREACHABLE, "why": str(e)}
+    return {"state": POPULATED, "why": out.strip()[:200]}
 
 
 # ── T-cbm-1: the symbols a sentence cites, read from the graph ────────────────
@@ -461,7 +461,7 @@ def _symbols_read(
     for f in files:
         if not CITE.fullmatch(f"{f}:1"):
             return {
-                x: _sym_entry("unreachable", f"'{f}' is not a qualified file", None)
+                x: _sym_entry(UNREACHABLE, f"'{f}' is not a qualified file", None)
                 for x in files
             }
     labels = " OR ".join(f"n:{x}" for x in SYMBOL_LABELS)
@@ -473,15 +473,13 @@ def _symbols_read(
         "RETURN n.name, n.file_path, n.start_line, n.end_line, n.label LIMIT 5000"
     )
     got = graph_read(project, "query_graph", {"query": cy}, runner=runner, cache=cache)
-    if got["state"] != "populated":
+    if got["state"] != POPULATED:
         return {f: _sym_entry(got["state"], got["why"], got["stamp"]) for f in files}
     found: dict[str, tuple[set, dict, dict]] = {f: (set(), {}, {}) for f in files}
     for ln in got["rows"]:
         m = _ROW.match(ln)
         if not m or int(m[3]) > int(m[4]):
-            bad = _sym_entry(
-                "unreachable", "a graph row could not be read", got["stamp"]
-            )
+            bad = _sym_entry(UNREACHABLE, "a graph row could not be read", got["stamp"])
             return {f: bad for f in files}
         for f in files:
             if m[2] == f or m[2].endswith("/" + f):
@@ -492,10 +490,10 @@ def _symbols_read(
     out = {}
     for f, (paths, names, by_path) in found.items():
         if paths:
-            out[f] = _sym_entry("populated", "", got["stamp"], paths, names, by_path)
+            out[f] = _sym_entry(POPULATED, "", got["stamp"], paths, names, by_path)
         else:
             out[f] = _sym_entry(
-                "empty", f"not in the graph at {_said(got['stamp'])}", got["stamp"]
+                EMPTY, f"not in the graph at {_said(got['stamp'])}", got["stamp"]
             )
     return out
 

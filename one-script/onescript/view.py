@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from . import ladder
+from .states import UNREACHABLE
 
 
 def proposal_line(row: dict) -> str:
@@ -73,7 +74,7 @@ def wager_line(w: dict) -> str:
             if "beacon_then" in w:
                 what += f" · beacon then {w['beacon_then']}"
         return f"wager {w['id']} reconciled · {what} · grade is yours"
-    if w["state"] == "unreachable":  # a seal on record, unchecked here
+    if w["state"] == UNREACHABLE:  # a seal on record, unchecked here
         return f"wager {w['id']} seal unreachable · {w['why']}"
     return f"wager {w['id']} escalate to human · {w['reason']}"
 
@@ -85,7 +86,7 @@ def table_lines(report: dict) -> list[str]:
     t = report.get("table")
     if not t:
         return []
-    if t.get("state") == "unreachable":  # B1: a broken record decides nothing
+    if t.get("state") == UNREACHABLE:  # B1: a broken record decides nothing
         return [f"table unreachable · {t['why']}"]
     out = []
     for s in t["sessions"]:

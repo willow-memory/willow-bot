@@ -21,6 +21,11 @@ STATES = (POPULATED, EMPTY, UNREACHABLE)
 RANKED = "ranked"  # a ranker found hits: populated
 HELD = "held"  # a write-back with a verifying seal: populated
 NONE = "none"  # no write-back answers the bite: empty
+# Not a state and not (yet) a variant: the operator is deciding whether
+# "escalated" is a fourth outcome or a step after a state, so it is NAMED here
+# and kept out of STATES and VARIANTS until that is ruled. Pile and seed write
+# it as the answer of a bite with no key; lookup carries it through.
+ESCALATED_COLD_START = "escalated:cold_start"
 VARIANTS = {RANKED: POPULATED, HELD: POPULATED, NONE: EMPTY}
 
 

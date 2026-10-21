@@ -62,7 +62,13 @@ from . import serve as served
 from . import session as session_mod
 from . import writeback as wb_mod
 from .run import PKG, Run
-from .states import EMPTY, POPULATED, UNREACHABLE
+from .states import (
+    EMPTY,
+    ESCALATED_COLD_START,
+    POPULATED,
+    RANKED,
+    UNREACHABLE,
+)
 
 DESK = ("desk", "claude")
 ANCHOR = "anchor.json"  # the sealed tip, beside the keys: outside the box
@@ -937,7 +943,7 @@ def _seed_from_store(cfg: Config, run: Run, bite: str, ws: list[str]) -> dict:
         n = c.counts(ws)
     finally:
         c.db.close()
-    if "unreachable" in (r["state"], q["state"], fix["state"], n["state"]):
+    if UNREACHABLE in (r["state"], q["state"], fix["state"], n["state"]):
         bad = next(x for x in (fix, r, q, n) if x["state"] == UNREACHABLE)
         return {"store": {"state": UNREACHABLE, "why": bad.get("why", "")}}
     return {
@@ -1134,7 +1140,10 @@ def decline_offer(
 
 
 # ── lookup: across sessions, merged by hash ─────────────────────────────────
-STATE_WORDS = ("ranked", "escalated:cold_start", "empty", "unreachable")
+# What a session's lookup answer may say and keep: the ranker's variant, the
+# named cold-start step (NOT a state; see states.ESCALATED_COLD_START), and two
+# of the three states. Anything else is recorded as unreachable.
+STATE_WORDS = (RANKED, ESCALATED_COLD_START, EMPTY, UNREACHABLE)
 
 
 def _session_tag(key: bytes, box: Path) -> str:
@@ -1200,7 +1209,7 @@ def _lookup(
         run.sys,
         bite_hash=record.h256(bite),
         sessions={
-            tags[n]: s["state"] if s["state"] in STATE_WORDS else "unreachable"
+            tags[n]: s["state"] if s["state"] in STATE_WORDS else UNREACHABLE
             for n, s in out["sessions"].items()
         },
         top=[[h["chunk"], h["seen_in"]] for h in top],
@@ -1248,21 +1257,21 @@ def prompt(
 
     run, info = _open(cfg, "prompt", argv)
     if run is None:
-        return doc("unreachable", info.get("refused") or "the box can't be opened")
+        return doc(UNREACHABLE, info.get("refused") or "the box can't be opened")
     if (refusal := _need_open(run, "prompt")) is not None:
-        return doc("unreachable", refusal["refused"])
+        return doc(UNREACHABLE, refusal["refused"])
     if not text.strip():
-        return doc("empty", "the prompt has no words to look up")
+        return doc(EMPTY, "the prompt has no words to look up")
     if run.serve_key is None:
-        return doc("unreachable", "no serve key this check-in")
+        return doc(UNREACHABLE, "no serve key this check-in")
     out = _lookup(cfg, run, text, keep=EMBED_POOL if cfg.embed else 0)
     hits = out["hits"]
     if not hits:
         why = next((s["why"] for s in out["sessions"].values() if s.get("why")), "")
-        return doc("empty", why or "the bite found nothing in this box")
+        return doc(EMPTY, why or "the bite found nothing in this box")
     index, _, _ = seed_mod.read_index(run.rec)
     if index is None:
-        return doc("unreachable", "no index this check-in; seed once first")
+        return doc(UNREACHABLE, "no index this check-in; seed once first")
     repos = _repos(cfg, index)
     texts: dict = {}
 
@@ -1295,9 +1304,9 @@ def prompt(
         t = {"rows": [], "source": {"chunk": chunk_of(h)}}
         tables.append(served._chunk_entry(t, h["chunk"], run.serve_key, set(), read))
     tables.sort(key=lambda t: t["id"])
-    res = doc("populated", "", tables)
+    res = doc(POPULATED, "", tables)
     if max_chars is not None and len(record.canon(res["doc"])) > max_chars:
-        return doc("empty", "the scope is too large for this model; narrow the stack")
+        return doc(EMPTY, "the scope is too large for this model; narrow the stack")
     return res
 
 
@@ -1397,13 +1406,13 @@ def forge_bite(
         else:
             d = e.to_dict()
             found = e.major or e.answer or e.candidates
-            out = {"state": "populated" if found else "empty", "entry": d}
+            out = {"state": POPULATED if found else EMPTY, "entry": d}
         finally:
             if c is not None:
                 c.db.close()
     if box is not None:
         out["box"] = {"state": box.last_state, "why": box.last_why}
-        if store_why and box.last_state == "unreachable":
+        if store_why and box.last_state == UNREACHABLE:
             out["box"]["why"] = f"no store attached: {store_why}"
     major = (out.get("entry") or {}).get("major")
     run.rec.append(
@@ -1412,7 +1421,7 @@ def forge_bite(
         bite_hash=record.h256(bite),
         state=out["state"],
         major=major,
-        box=(out.get("box") or {}).get("state", "unreachable"),
+        box=(out.get("box") or {}).get("state", UNREACHABLE),
     )
     return {**out, "code": 0}
 
