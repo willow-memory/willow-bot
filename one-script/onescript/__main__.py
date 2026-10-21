@@ -392,7 +392,8 @@ def _config(args, **more) -> opening.Config:
         keyring=args.keyring,
         nestor_db=args.nestor_db,
         phone=args.phone,
-        repos=dict(args.repos) or None,
+        # no --repo: the repos the last check-in named (the hook passes none)
+        repos=dict(args.repos) or opening.load_repos(args.keys),
         store_background=True,
         forge=FORGE,
         index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,

@@ -286,6 +286,7 @@ def checkin(cfg: Config, argv: Iterable[str] = ("checkin",)) -> dict:
         _save_serve_key(cfg, None)  # no key: serve fails closed
         return {"wont_open": str(e), "code": 3}
     _save_serve_key(cfg, run.serve_key)
+    opening.save_repos(cfg)  # what a verb without --repo reads (the hook)
     if cfg.store and not rep["hard_close"]:
         rep["store"] = _attach_store(cfg, run)
     if cfg.seal_at_end and not rep["hard_close"]:

@@ -80,6 +80,10 @@ ANCHOR = "anchor.json"  # the sealed tip, beside the keys: outside the box
 
 
 SERVE_KEY = "serve.key"  # this session's id key, beside the keys: outside the box
+#: The repos the last check-in read, by name and path, beside the keys: a verb
+#: run without `--repo` (the prompt hook) reads the same ones the store was built
+#: over. Only where to read: every chunk is still checked against the index.
+REPOS = "repos.json"
 
 
 #: Set in the tests gate's child. A checkin started under it never runs the
@@ -231,6 +235,37 @@ def _load_serve_key(cfg: Config) -> bytes | None:
         return bytes.fromhex(path.read_text(encoding="utf-8").strip()) or None
     except (OSError, ValueError):
         return None
+
+
+def save_repos(cfg: Config) -> None:
+    """At check-in: the `--repo` map it was given, or nothing (and any old one
+    gone), so the repos a later verb reads are the ones this check-in named."""
+    path = cfg.keys.parent / REPOS
+    if not cfg.repos:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({n: str(p) for n, p in sorted(cfg.repos.items())}, f)
+    path.chmod(0o600)
+
+
+def load_repos(keys: Path) -> dict[str, Path] | None:
+    """The last check-in's repo map, or None: none saved, a file others can
+    write (not trusted to say where to read), or one that isn't a name -> path map."""
+    path = keys.parent / REPOS
+    try:
+        if path.stat().st_mode & 0o022:
+            return None
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(got, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in got.items()
+    ):
+        return None
+    return {k: Path(v) for k, v in got.items()} or None
 
 
 def _in_venv(venv: Path | None):
