@@ -1053,25 +1053,58 @@ def store_path(box: Path, limit: int = MAX) -> Path:
     return box.with_name(box.name + "-store") / f"pile-{limit}.sqlite"
 
 
+def _indexed(index: dict, chunk: dict) -> bool:
+    name, path = chunk.get("repo"), chunk.get("path")
+    arrival = index.get("arrival", {}).get(name, {})
+    f = next((x for x in arrival.get("files", []) if x.get("path") == path), None)
+    return f is not None and f.get("state") == "present" and bool(f.get("blob_match"))
+
+
+class ChunkReader:
+    """`read_chunk` for many chunks at once: every file they sit in read in one
+    pass (`seed.Texts`: one `cat-file --batch` per repo, not one per chunk),
+    then each chunk answered exactly as `read_chunk` answers it alone, the
+    same text and the same why. A chunk it wasn't built for is read alone."""
+
+    def __init__(self, index: dict, repos: dict, chunks, limit: int = MAX):
+        self.index, self.repos, self.limit = index, repos, limit
+        want = {(c.get("repo"), c.get("path")) for c in chunks if _indexed(index, c)}
+        self.files: dict[tuple[str, str], str] = {}
+        self.texts = seed.Texts(index, repos, only=want) if want else None
+        if self.texts is not None:
+            for name, f, text in self.texts:
+                self.files.setdefault(
+                    (name, f.get("path")), text
+                )  # the first, as alone
+        self.want = want
+
+    def __call__(self, chunk: dict):
+        """(text, None) for a chunk read at its indexed blob, or (None, why)."""
+        if not _indexed(self.index, chunk):
+            return None, "not in the index"
+        name, path = chunk.get("repo"), chunk.get("path")
+        if (name, path) not in self.want:
+            return ChunkReader(self.index, self.repos, [chunk], self.limit)(chunk)
+        text = self.files.get((name, path))
+        if text is not None:
+            for line, s, _ in chunks(text, self.limit):
+                if line == chunk.get("line") and hashlib.sha256(
+                    s.encode()
+                ).hexdigest() == chunk.get("sha256"):
+                    return s, None
+            return None, "the chunk isn't at that line with that hash"
+        t = self.texts
+        return None, (
+            t.unreachable.get(name) or t.skip_of.get((name, path)) or "not read"
+        )
+
+
 def read_chunk(index: dict, repos: dict, chunk: dict, limit: int = MAX):
     """(text, None) for a chunk read at its indexed blob, or (None, why).
     Content stays where it lives: the text is re-read here (`seed.Texts`), and
     only while the blob hashes to the index and the chunk hashes to its own
-    SHA-256."""
-    name, path = chunk.get("repo"), chunk.get("path")
-    arrival = index.get("arrival", {}).get(name, {})
-    f = next((x for x in arrival.get("files", []) if x.get("path") == path), None)
-    if f is None or f.get("state") != "present" or not f.get("blob_match"):
-        return None, "not in the index"
-    texts = seed.Texts(index, repos, only=(name, path))
-    for _, _, text in texts:
-        for line, s, _ in chunks(text, limit):
-            if line == chunk.get("line") and hashlib.sha256(
-                s.encode()
-            ).hexdigest() == chunk.get("sha256"):
-                return s, None
-        return None, "the chunk isn't at that line with that hash"
-    return None, texts.unreachable.get(name) or next(iter(texts.skipped), "not read")
+    SHA-256. One chunk through the one reader (`ChunkReader`)."""
+    return ChunkReader(index, repos, [chunk], limit)(chunk)
 
 
 # ── across sessions: piles merged by hash, a view rebuilt on demand ─────────

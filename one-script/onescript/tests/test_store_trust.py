@@ -179,9 +179,12 @@ def test_the_store_row_counts_skips_by_reason(cfg, tmp_path):  # noqa: F811
 def test_one_reader_for_seed_pile_store_and_chunk():
     import inspect
 
-    for fn in (seed.scan, pile.read_pile, pile.build_cache, pile.read_chunk):
+    for fn in (seed.scan, pile.read_pile, pile.build_cache, pile.ChunkReader):
         src = inspect.getsource(fn)
         assert "Texts(" in src and "_blobs(" not in src, fn.__name__
+    # one chunk is read by the batch reader, never a second way
+    src = inspect.getsource(pile.read_chunk)
+    assert "ChunkReader(" in src and "Texts(" not in src and "_blobs(" not in src
     assert pile.WORD is seed.WORD
 
 

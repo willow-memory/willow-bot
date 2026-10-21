@@ -82,10 +82,15 @@ def prompt(
         return doc(UNREACHABLE, "no index this check-in; seed once first")
     repos = _repos(cfg, index)
     texts: dict = {}
+    reader = None  # one pass over every file the candidates sit in
 
     def read(ch: dict):
+        nonlocal reader
         if ch["sha256"] not in texts:
-            texts[ch["sha256"]] = pile_mod.read_chunk(index, repos, ch)
+            if reader is None:
+                pool = hits if cfg.embed is not None else hits[:PROMPT_TOP]
+                reader = pile_mod.ChunkReader(index, repos, [chunk_of(h) for h in pool])
+            texts[ch["sha256"]] = reader(ch)
         return texts[ch["sha256"]]
 
     def chunk_of(h: dict) -> dict:

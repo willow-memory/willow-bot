@@ -14,6 +14,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from onescript.tests.test_api import cfg  # noqa: F401  (the box fixture needs it)
+from onescript.tests.test_store import BITE, box  # noqa: F401
+
 PKG = Path(__file__).resolve().parent.parent
 ONE = PKG.parent  # one-script/
 
@@ -142,3 +145,59 @@ def test_the_stamp_is_the_gates_own():
         rec.append("note", gate.system())
         with pytest.raises(Exception):
             rec.append("note", Verified("run", "python", object()))
+
+
+class TestOneReadPerRepo:
+    """The prompt reads its chunks through one `pile.ChunkReader`: every file
+    in one `cat-file --batch` per repo, each chunk answered as `read_chunk`
+    answers it alone, its text or its why."""
+
+    def chunks(self, box):  # noqa: F811
+        from onescript import api, seed
+
+        c = box["cfg"]
+        index, _, _ = seed.read_index(
+            api.record.Record(c.box, lambda: "", "", object())
+        )
+        repos = api._repos(c, index)
+        hits = api.lookup(c, BITE)["hits"]
+        good = [
+            {"repo": r, "path": p, "line": n, "sha256": h["chunk"]}
+            for h in hits
+            for r, p, n in h["where"][:1]
+        ]
+        g = good[0]
+        bad = [
+            {**g, "line": g["line"] + 999},  # not at that line
+            {**g, "sha256": "0" * 64},  # not that hash
+            {**g, "path": "not-indexed.md"},  # not in the index
+            {**g, "repo": "no-such-repo"},  # no arrival for it
+        ]
+        return index, repos, good + bad
+
+    def test_the_batch_answers_each_chunk_as_one_read_would(self, box):  # noqa: F811
+        from onescript import pile
+
+        index, repos, chunks = self.chunks(box)
+        reader = pile.ChunkReader(index, repos, chunks)
+        for ch in chunks:
+            assert reader(ch) == pile.read_chunk(index, repos, ch), ch
+        assert any(reader(ch)[0] for ch in chunks)
+        assert any(reader(ch)[0] is None for ch in chunks)
+
+    def test_one_git_spawn_per_repo_however_many_chunks(self, box, monkeypatch):  # noqa: F811
+        from onescript import pile, xref
+
+        index, repos, chunks = self.chunks(box)
+        spawned = []
+        real = xref.subprocess.run
+
+        def counted(argv, *a, **k):
+            spawned.append(argv)
+            return real(argv, *a, **k)
+
+        monkeypatch.setattr(xref.subprocess, "run", counted)
+        good = [c for c in chunks if pile._indexed(index, c)]
+        assert len({(c["repo"], c["path"]) for c in good}) > 1  # several files
+        pile.ChunkReader(index, repos, good)
+        assert len(spawned) == len({c["repo"] for c in good})
