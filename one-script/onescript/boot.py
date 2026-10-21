@@ -33,8 +33,8 @@ import sys
 from pathlib import Path
 
 from . import gate, reverse
+from .states import EMPTY, POPULATED, UNREACHABLE
 
-UNREACHABLE = "unreachable"
 
 OPTIONS = [
     "put it back and continue",
@@ -112,7 +112,14 @@ def _run(
     the child only; the calling process's own environment is never changed."""
     child = {**os.environ, **env} if env else None
     p = subprocess.run(
-        argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=child
+        argv,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        env=child,
     )
     lines = (p.stdout + p.stderr).strip().splitlines()
     return p.returncode, lines[-1] if lines else ""
@@ -158,17 +165,21 @@ def tests_gate(
         for s in sorted(skipped or [], key=lambda s: s["name"])
     ]
     for s in sorted(suites, key=lambda s: s["name"]):
+        # `ran_on`: the suite had no venv to ask, and says where it ran instead.
+        on = f" (ran on {s['ran_on']})" if s.get("ran_on") else ""
         missing = _missing(s, runner)
         if missing:
             where = " in the venv" if s.get("python") else ""
             out.append(
                 _unreachable(
-                    "tests", s["name"], f"can't run: needs {missing}{where}", phone
+                    "tests", s["name"], f"can't run: needs {missing}{where}{on}", phone
                 )
             )
         elif not Path(s["cwd"]).is_dir():
             out.append(
-                _unreachable("tests", s["name"], "can't run: no such directory", phone)
+                _unreachable(
+                    "tests", s["name"], f"can't run: no such directory{on}", phone
+                )
             )
         else:
             if s.get("env"):  # the child's environment alone, never ours
@@ -176,9 +187,9 @@ def tests_gate(
             else:
                 rc, last = runner(s["argv"], s["cwd"])
             out.append(
-                _row("tests", s["name"], "satisfied", "", result=last)
+                _row("tests", s["name"], "satisfied", "", result=f"{last}{on}")
                 if rc == 0
-                else _row("tests", s["name"], "failing", f"failed: {last}")
+                else _row("tests", s["name"], "failing", f"failed: {last}{on}")
             )
     return out
 
@@ -240,7 +251,14 @@ def toolchain_gate(
 
 def _git(repo: str, *args: str) -> str:
     try:
-        p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+        p = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "LC_ALL": "C"},  # F17: parsed output, one locale
+        )
     except OSError:  # no git on this machine
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""
@@ -311,19 +329,19 @@ def reachability_gate(deps: list[dict]) -> list[dict]:
                     d["name"],
                     "failing",
                     f"unreachable: {type(e).__name__}: {e}",
-                    state="unreachable",
+                    state=UNREACHABLE,
                 )
             )
             continue
         out.append(
-            _row("reachability", d["name"], "satisfied", "", state="populated")
+            _row("reachability", d["name"], "satisfied", "", state=POPULATED)
             if got
             else _row(
                 "reachability",
                 d["name"],
                 "differently",
                 "reachable, empty",
-                state="empty",
+                state=EMPTY,
             )
         )
     return out

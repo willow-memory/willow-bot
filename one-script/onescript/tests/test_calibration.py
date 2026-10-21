@@ -7,6 +7,11 @@ from drifting: where the Forge is in reach, both give the same numbers on a
 grid. The Forge is found at $ONESCRIPT_FORGE, else beside willow-bot
 (../Forge), and loaded from that file by path, never from whatever `forge`
 happens to be installed.
+
+The Forge is not touched and is not a dependency (flatten-2 F10, D9): where it
+is not beside (CI checks out only willow-bot and willows-grove), the parity
+tests skip, by design, and `test_the_vendored_sources_are_the_pinned_forge_sources`
+still holds the copy to the Forge's pinned text, so a drift cannot go unseen.
 """
 
 from __future__ import annotations
@@ -61,6 +66,18 @@ def test_bins_match_the_forges():
     pairs = [(p, i % 3 == 0) for i, p in enumerate(GRID) if p >= 0.5]
     assert calibration.bins(pairs) == forge.bins(pairs)
     assert calibration.bins([]) == forge.bins([])
+
+
+@pytest.mark.parametrize("p", [0.0, 1.0])
+@pytest.mark.parametrize("outcome", [True, False])
+def test_log_score_is_finite_at_certainty(p, outcome):
+    """Forecast-ledger point (flatten-2 F10): `log_score` clamps with `_EPS`,
+    so a wager stated at exactly 0 or 1 and wrong scores a large finite number,
+    never `inf` (which would poison a mean). Holds for the Forge's too."""
+    assert math.isfinite(calibration.log_score(p, outcome))
+    assert calibration.log_score(p, outcome) <= -math.log(calibration._EPS)
+    if forge is not None:
+        assert calibration.log_score(p, outcome) == forge.log_score(p, outcome)
 
 
 def test_the_vendored_copy_names_its_source():
@@ -119,3 +136,43 @@ def test_the_forges_sources_are_still_the_pinned_ones():
     for name, sha in FORGE_SOURCES.items():
         assert _source_sha(getattr(forge, name)) == sha, name
     assert forge.BIN_EDGES == calibration.BIN_EDGES and forge._EPS == calibration._EPS
+
+
+# oakenscrolls-office keeps its own copy on purpose (the operator, 2026-10-21:
+# "1 revert"): its calibration is "dependency-free, stdlib-only, in the
+# no-egress zone ... small enough to audit in one sitting", a device app with
+# nothing beside it, so it can't import the one script. The copy is held here,
+# value for value, where it is in reach: $ONESCRIPT_OAKENSCROLLS, else a clone
+# of hornbook-knowledge/oakenscrolls-office beside willow-bot.
+OAKEN = Path(
+    os.environ.get("ONESCRIPT_OAKENSCROLLS")
+    or WILLOW_BOT.parent / "oakenscrolls-office"
+).expanduser()
+OAKEN_CAL = OAKEN / "calibration.py"
+
+
+def _oaken():
+    if not OAKEN_CAL.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_oaken_calibration", OAKEN_CAL)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
+
+
+oaken = _oaken()
+
+
+@pytest.mark.skipif(
+    oaken is None, reason=f"oakenscrolls is not in reach at {OAKEN_CAL}"
+)
+def test_oakenscrolls_keeps_the_same_math():
+    assert oaken._EPS == calibration._EPS
+    assert tuple(oaken.BIN_EDGES) == tuple(calibration.BIN_EDGES)
+    pairs = []
+    for p in GRID:
+        for outcome in (True, False):
+            assert oaken.brier(p, outcome) == calibration.brier(p, outcome)
+            assert oaken.log_score(p, outcome) == calibration.log_score(p, outcome)
+            pairs.append((p, outcome))
+    assert oaken.bins(pairs) == calibration.bins(pairs)

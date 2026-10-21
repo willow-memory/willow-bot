@@ -116,7 +116,13 @@ def _canonical(rec: dict[str, Any]) -> bytes:
     """Deterministic bytes for the row_hash. Sort keys so a re-ordering of
     the input dict does not change the hash; separators dropped so
     whitespace does not either. Chain keys are excluded — the row_hash
-    covers the row's data, not itself."""
+    covers the row's data, not itself.
+
+    Family B of the one script (`onescript/canon.py`, ``sorted_compact_ascii``,
+    flatten-2 F7), kept as its own code on purpose: this package ships as a
+    wheel without ``one-script/``, so it has no one script to import, and an
+    unreachable one must not stop CI deposits. ``tests/test_deposits_canon.py``
+    holds the two to the same bytes."""
     body = {k: v for k, v in rec.items() if k not in _CHAIN_KEYS}
     return json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
 

@@ -1,0 +1,110 @@
+{
+  "chunk": "states",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/states.py",
+  "goldens": "onescript/tests/test_states_variants.py",
+  "copies": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/api.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/boot.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/box_lookup.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/escalate.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/gate.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/jeles_store.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/market.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/pile.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/reverse.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/run.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/table.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/writeback.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/xref.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "grove/three_states.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "web/lib/states.js",
+      "kind": "named-copy",
+      "parity": "tests/test_states_js_parity.py::test_states_js_is_the_generators_output",
+      "why": "a browser module cannot import python: generated from the one script"
+    }
+  ],
+  "absent": [
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_grove_serve_no_one_script.py::TestNoOneScript::test_the_page_starts_and_says_unreachable"
+    },
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_three_states.py::TestThreeStates::test_absent_holds_the_reachs_unreachable_and_the_names_raise_importerror"
+    }
+  ],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true,
+  "lookalikes": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/writeback.py",
+      "name": "state_of",
+      "why": "a write-back candidate is proposed, held or unreachable; not a record row's state word"
+    }
+  ]
+}

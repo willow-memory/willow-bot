@@ -44,9 +44,12 @@ import posixpath
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
+from .states import EMPTY, POPULATED, UNREACHABLE
+
+from . import canon as _canon
+from . import clock, mai_shape
 
 TEXT_SUFFIXES = (".md", ".py")
 MAX_BYTES = 5_000_000
@@ -54,8 +57,8 @@ EXTRACT_VERSION = 1  # bump when extract() changes, so the cache misses
 FAMILIES = ("Q", "D", "OW", "F", "CONST", "INV", "PR")
 
 
-def canon(obj) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+#: Family A (`onescript/canon.py`, flatten-2 F7): sorted, compact, non-ASCII literal.
+canon = _canon.sorted_compact_utf8
 
 
 # ── git ──────────────────────────────────────────────────────────────────────
@@ -70,6 +73,7 @@ def git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
             input=stdin,
             capture_output=True,
             check=False,
+            env={**os.environ, "LC_ALL": "C"},  # F17: error text in one locale
         )
     except OSError as e:
         raise GitError(str(e)) from e
@@ -90,15 +94,15 @@ def arrive(repo: Path, name: str, rev: str = "HEAD") -> dict:
     try:
         git(repo, "rev-parse", "--git-dir")
     except GitError as e:
-        return {**head, "state": "unreachable", "reason": f"not a git repo: {e}"}
+        return {**head, "state": UNREACHABLE, "reason": f"not a git repo: {e}"}
     try:
         commit = git(repo, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
         commit = commit.decode().strip()
     except GitError:
         has_any = git(repo, "rev-list", "-n1", "--all").strip()
         if not has_any:
-            return {**head, "state": "empty", "reason": "no commits"}
-        return {**head, "state": "unreachable", "reason": f"no commit {rev!r}"}
+            return {**head, "state": EMPTY, "reason": "no commits"}
+        return {**head, "state": UNREACHABLE, "reason": f"no commit {rev!r}"}
     fmt = git(repo, "rev-parse", "--show-object-format").decode().strip() or "sha1"
     remote = bool(git(repo, "branch", "-r", "--contains", commit).strip())
     root_tree = git(repo, "rev-parse", f"{commit}^{{tree}}").decode().strip()
@@ -140,7 +144,7 @@ def arrive(repo: Path, name: str, rev: str = "HEAD") -> dict:
     trees.sort(key=lambda r: r["path"])
     return {
         **head,
-        "state": "populated",
+        "state": POPULATED,
         "commit": commit,
         "object_format": fmt,
         "on_remote": remote,
@@ -274,7 +278,7 @@ def _resolve_sha(repos: dict, tokens: set) -> dict:
         return found
     order = sorted(tokens)
     for name, r in sorted(repos.items()):
-        if r["arrival"]["state"] != "populated":
+        if r["arrival"]["state"] != POPULATED:
             continue
         req = "".join(f"{t}^{{commit}}\n" for t in order).encode()
         out = git(r["path"], "cat-file", "--batch-check", stdin=req).decode()
@@ -302,7 +306,7 @@ def build(repos_in: list, rev: str = "HEAD", cache: Path | None = None) -> dict:
     blobs, trees, data_of = {}, {}, {}
     for name, r in repos.items():
         a = r["arrival"]
-        if a["state"] != "populated":
+        if a["state"] != POPULATED:
             continue
         blobs[name] = {f["path"]: f for f in a["files"]}
         trees[name] = {t["path"] for t in a["trees"]}
@@ -340,7 +344,7 @@ def build(repos_in: list, rev: str = "HEAD", cache: Path | None = None) -> dict:
     prs = {
         n: _merged_prs(r["path"])
         for n, r in repos.items()
-        if r["arrival"]["state"] == "populated"
+        if r["arrival"]["state"] == POPULATED
     }
 
     refs = [_check(x, defined, shas, prs, blobs, trees, data_of) for x in raw]
@@ -549,13 +553,25 @@ def record_outputs(box: Path, index_bytes: bytes, report_bytes: bytes, inputs) -
     pkg = Path(__file__).resolve().parent
     rec = record.Record(
         box,
-        lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        clock.isoformat_seconds_utc,
         record.version_of(pkg),
         gate.token(),
     )
     who = gate.system()
-    rec.write_file(who, "xref/index.json", index_bytes, provenance="authored")
-    rec.write_file(who, "xref/report.txt", report_bytes, provenance="authored")
+    rec.write_file(
+        who,
+        "xref/index.json",
+        index_bytes,
+        provenance="authored",
+        check=mai_shape.check,
+    )
+    rec.write_file(
+        who,
+        "xref/report.txt",
+        report_bytes,
+        provenance="authored",
+        check=mai_shape.check,
+    )
     return rec.append(
         "xref",
         who,

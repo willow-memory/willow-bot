@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 from typing import Callable
+from .states import EMPTY, POPULATED, RANKED, UNREACHABLE, base_of
 
 REPO = "jeles"
 PATH_PREFIX = "ask_jeles_corpus/"
@@ -53,7 +54,6 @@ TOP = 4
 #: How many nuggets to read for each one kept, since some are filtered out.
 OVERFETCH = 3
 
-RANKED, EMPTY, UNREACHABLE = "ranked", "empty", "unreachable"
 _LABEL = {"human": "verified", "machine": "corroborated"}
 
 
@@ -186,7 +186,7 @@ def escalate(store: JelesStore | None, bite: str, out: dict) -> dict | None:
     if not go:
         return {"state": "not_asked", "why": why}
     r = store.rank(bite)
-    if r["state"] == RANKED:
+    if base_of(r["state"]) == POPULATED:  # ranked is populated (F9)
         # The bite escalated because the pile doesn't hold its subject, so
         # Jeles's hits lead and the pile's follow; scope draws from the top.
         out["rank"] = r["hits"] + list(out.get("rank") or [])

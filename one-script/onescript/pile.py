@@ -44,8 +44,17 @@ import zlib
 from pathlib import Path
 
 from . import seed
+from .states import (
+    EMPTY,
+    POPULATED,
+    RANKED,
+    REPORT_UNREACHABLE,
+    STEP_ESCALATED_COLD_START,
+    UNREACHABLE,
+)
+from .words import WORD as _WORD
 
-WORD = seed.WORD  # one word, for seed and the pile alike
+WORD = _WORD  # one word, for seed and the pile alike (flatten-2 F11)
 CLAUSE = re.compile(r"[,.;:!?()\[\]{}|\"]+")
 K1, B = 1.2, 0.75  # BM25's standard constants
 RRF_K = 60  # Cormack, Clarke & Büttcher 2009
@@ -284,11 +293,11 @@ def nothing(tally: dict) -> dict:
     `unreachable` when no repo could be read, or every file read was refused
     (INVARIANTS section 1: the two are never collapsed)."""
     if not tally.get("repos"):
-        state, why = "unreachable", "no indexed repo could be read"
+        state, why = UNREACHABLE, "no indexed repo could be read"
     elif not tally.get("files_read") and tally.get("skipped"):
-        state, why = "unreachable", "no indexed file could be read as text"
+        state, why = UNREACHABLE, "no indexed file could be read as text"
     else:
-        state, why = "empty", "the pile was read and holds no chunk"
+        state, why = EMPTY, "the pile was read and holds no chunk"
     return {"state": state, "why": why, "fused": False, "hits": []}
 
 
@@ -403,7 +412,7 @@ def score_grams(
     order = [w for _, w in scored]
     by_where = {w: sc for sc, w in scored}
     out = {
-        "state": "ranked" if scored else "escalated:cold_start",
+        "state": RANKED if scored else STEP_ESCALATED_COLD_START,
         "why": "",
         "chunks": n_all,
         "copies": extra,
@@ -481,7 +490,7 @@ def make_key(path: Path) -> None:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         return
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(secrets.token_bytes(KEY_BYTES).hex())
     path.chmod(0o600)
 
@@ -495,7 +504,7 @@ def read_key(path: Path) -> tuple[bytes | None, str | None]:
             return None, "the store key isn't a plain file"
         if st.st_mode & 0o077:
             return None, "the store key is readable beyond its owner; chmod 600 it"
-        key = bytes.fromhex(path.read_text().strip())
+        key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
         return None, "no store key in the operator's keys dir"
     except (OSError, ValueError) as e:
@@ -685,7 +694,7 @@ def build_spec(box: Path, index_sha: str, repos: dict, key_path: Path) -> Path:
         "key_path": str(key_path),
     }
     tmp = spec.with_suffix(".tmp")
-    tmp.write_text(json.dumps(body, sort_keys=True))
+    tmp.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
     os.replace(tmp, spec)
     return spec
 
@@ -695,7 +704,7 @@ def building(box: Path) -> bool:
     stale, and is cleared)."""
     lock = store_path(box).parent / LOCK
     try:
-        pid = int(lock.read_text().strip() or "0")
+        pid = int(lock.read_text(encoding="utf-8").strip() or "0")
     except (OSError, ValueError):
         return False
     try:
@@ -708,7 +717,7 @@ def building(box: Path) -> bool:
 
 def build_from_spec(spec_path: Path) -> int:
     """The background builder: 0 built, 1 refused (with why on stderr)."""
-    spec = json.loads(Path(spec_path).read_text())
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     box = Path(spec["box"])
     lock = store_path(box).parent / LOCK
     try:
@@ -835,7 +844,7 @@ class Cached:
     def tally(self) -> dict:
         """What the build reached, as its meta says."""
         out = {}
-        for k in ("repos", "files_read", "skipped", "unreachable"):
+        for k in ("repos", "files_read", "skipped", REPORT_UNREACHABLE):
             try:
                 out[k] = json.loads(self.meta[k])
             except (KeyError, ValueError):
@@ -895,15 +904,15 @@ class Cached:
                 )
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "keys": [], "missed": words}
+            return {"state": UNREACHABLE, "why": why, "keys": [], "missed": words}
         keys.sort(key=lambda k: (k["files"], k["chunks"], k["word"]))
         t = self.tally()
         state = (
-            "unreachable"
+            UNREACHABLE
             if not self.n_all
             else "seeded"
             if keys
-            else "escalated:cold_start"
+            else STEP_ESCALATED_COLD_START
         )
         return {
             "state": state,
@@ -911,7 +920,7 @@ class Cached:
             "missed": missed,
             "files_read": t["files_read"],
             "skipped": t["skipped"] or {},
-            "unreachable": t["unreachable"] or {},
+            REPORT_UNREACHABLE: t[REPORT_UNREACHABLE] or {},
         }
 
     def repair(self, bite: str) -> dict:
@@ -937,7 +946,7 @@ class Cached:
                     fixes[w] = (best[1], -best[0])
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "bite": bite, "repairs": []}
+            return {"state": UNREACHABLE, "why": why, "bite": bite, "repairs": []}
         fixed = WORD.sub(
             lambda m: fixes.get(m.group(0).lower(), (m.group(0),))[0], bite
         )
@@ -953,7 +962,7 @@ class Cached:
             return self._rank(bite, embed)
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "fused": False, "hits": []}
+            return {"state": UNREACHABLE, "why": why, "fused": False, "hits": []}
 
     def _rank(self, bite: str, embed=None) -> dict:
         if not self.n_all:
@@ -1027,14 +1036,14 @@ class Cached:
                     )
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "quotes": []}
+            return {"state": UNREACHABLE, "why": why, "quotes": []}
         if not out:
             return {
-                "state": "empty",
+                "state": EMPTY,
                 "why": "no sentence of the bite said before",
                 "quotes": [],
             }
-        return {"state": "populated", "why": "", "quotes": out}
+        return {"state": POPULATED, "why": "", "quotes": out}
 
 
 # ── the session's store, and a chunk read back at its blob ─────────────────
@@ -1078,9 +1087,9 @@ def merge(stores: dict, bite: str) -> dict:
     for name in sorted(stores):
         c = stores[name]
         r, q = c.rank(bite), c.quotes(bite)
-        if "unreachable" in (r["state"], q["state"]):
-            bad = r if r["state"] == "unreachable" else q
-            states[name] = {"state": "unreachable", "why": bad["why"]}
+        if UNREACHABLE in (r["state"], q["state"]):
+            bad = r if r["state"] == UNREACHABLE else q
+            states[name] = {"state": UNREACHABLE, "why": bad["why"]}
             continue
         states[name] = {"state": r["state"], "why": r.get("why", "")}
         order = []
@@ -1257,20 +1266,20 @@ def main(argv=None) -> int:
         ap.error("--key is the --cache's key")
     index, index_sha, why = load_index(a.box)
     if index is None:
-        print(json.dumps({"state": "unreachable", "why": why}))
+        print(json.dumps({"state": UNREACHABLE, "why": why}))
         return 1
     key = None
     if a.cache:
         key, why = cli_key(a.key)
         if key is None:
-            print(json.dumps({"state": "unreachable", "why": why}))
+            print(json.dumps({"state": UNREACHABLE, "why": why}))
             return 1
     repos = {n: root.parent / n for n in index.get("arrival", {})}
     for spec in a.repo:
         name, _, path = spec.partition("=")
         repos[name] = Path(path)
     if a.sweep:
-        queries = json.loads(a.sweep.read_text())["queries"]
+        queries = json.loads(a.sweep.read_text(encoding="utf-8"))["queries"]
         limits = [int(x) for x in a.max_values.split(",")]
         cache = (a.cache, index_sha, key) if a.cache else None
         print(json.dumps(sweep(index, repos, queries, limits, cache), indent=1))

@@ -44,7 +44,9 @@ def main() -> None:
     deadline = time.monotonic() + (float(sys.argv[3]) if len(sys.argv) > 3 else 240)
     out.mkdir(parents=True, exist_ok=True)
     idx_path = out / "index.json"
-    index = json.loads(idx_path.read_text()) if idx_path.exists() else {}
+    index = (
+        json.loads(idx_path.read_text(encoding="utf-8")) if idx_path.exists() else {}
+    )
     now = time.time()
     for t in sorted(projects.glob("*/*.jsonl")):
         key = f"{t.parent.name}/{t.stem}"
@@ -61,7 +63,7 @@ def main() -> None:
         prev = dest / "session-flow.json"
         if prev.exists():
             try:
-                old = json.loads(prev.read_text())
+                old = json.loads(prev.read_text(encoding="utf-8"))
                 if (
                     old.get("transcript_sha256_16") == sha
                     and old.get("flow_version") == FLOW_VERSION
@@ -98,7 +100,8 @@ def main() -> None:
                 "why": (r.stderr.strip().splitlines() or ["?"])[-1][:200],
             }
     idx_path.write_text(
-        json.dumps(dict(sorted(index.items())), indent=1, sort_keys=True) + "\n"
+        json.dumps(dict(sorted(index.items())), indent=1, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     states: dict[str, int] = {}
     for v in index.values():

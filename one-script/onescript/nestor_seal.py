@@ -45,79 +45,18 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-
-class Unverifiable(ValueError):
-    """The keyring or store can't be read. Said plainly, never a pass."""
+from . import sign
 
 
-def message(source_norm: str, target_text: str, verifier: str) -> bytes:
-    """The bytes a Nestor seal signature is taken over (frozen by Nestor)."""
-    return json.dumps(
-        [source_norm, target_text, verifier],
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-
-#: Said when the ed25519 check can't run here. It is `unreachable`, not a
-#: refusal of the seal itself: the seal was never judged.
-NO_CRYPTO = "unreachable: an ed25519 seal needs the cryptography package here"
-
-#: A keyring is public keys. An entry with a field named for private material is
-#: refused, whatever else it holds.
-_PRIVATE = ("priv", "secret", "seed", "passphrase", "signing", "hmac")
-
-
-def have_ed25519() -> bool:
-    """Whether this interpreter can check an ed25519 seal at all."""
-    try:
-        import cryptography.hazmat.primitives.asymmetric.ed25519  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
-def load_keyring(path: str | Path) -> dict:
-    """The operator's keyring file, as the verifying side needs it: name -> key.
-
-    Only ed25519 public keys are accepted. An HMAC entry is a shared secret
-    (whoever can verify with it can also forge with it), and an entry that
-    carries private material is a keyring someone else could have written from
-    the signing side; both are refused, naming the entry, never skipped."""
-    try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-        entries = {}
-        for v in raw.get("verifiers", []):
-            name = str(v["name"])
-            odd = sorted(k for k in v if any(p in str(k).lower() for p in _PRIVATE))
-            if odd:
-                raise Unverifiable(
-                    f"keyring entry {name!r} carries {odd}; a keyring holds public "
-                    "keys only"
-                )
-            kind = str(v.get("kind", ""))
-            if kind != "ed25519":
-                raise Unverifiable(
-                    f"keyring entry {name!r} is kind {kind!r}; only ed25519 "
-                    "public keys are accepted"
-                )
-            key = bytes.fromhex(v["key"])
-            if len(key) != 32:
-                raise Unverifiable(f"keyring entry {name!r} is not a 32-byte key")
-            # Nestor's own fields (`nestor.keyring.VerifierKey`): a key is revoked
-            # when `revoked_at` is set; `compromised` says why that matters.
-            entries[name] = {
-                "key": key,
-                "kind": kind,
-                "compromised": bool(v.get("compromised", False)),
-                "revoked": bool(v.get("revoked_at", "")),
-                "reason": str(v.get("reason", "")),
-            }
-    except Unverifiable:
-        raise
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-        raise Unverifiable(f"keyring unreadable: {type(e).__name__}") from e
-    return {"verifiers": entries}
+# The seal message, the keyring rules and the Ed25519 check are `sign.py`'s
+# (flatten-2 F14): "Using the onescript at every path." These names stay here
+# because every caller reaches them as `nestor_seal.<name>`.
+Unverifiable = sign.Unverifiable
+message = sign.seal_message
+NO_CRYPTO = sign.NO_CRYPTO
+have_ed25519 = sign.have_ed25519
+load_keyring = sign.load_keyring
+_PRIVATE = sign.PRIVATE_FIELDS
 
 
 def export_public(
@@ -198,16 +137,12 @@ def export_public(
 def _sig_ok(kind: str, key: bytes, msg: bytes, sig: str) -> tuple[bool, str]:
     if kind != "ed25519":
         return False, f"key kind {kind!r} is not accepted; only ed25519 public keys"
-    try:
-        from cryptography.exceptions import InvalidSignature
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    except ImportError:
-        return False, NO_CRYPTO
-    try:
-        Ed25519PublicKey.from_public_bytes(key).verify(bytes.fromhex(sig), msg)
-    except (InvalidSignature, ValueError):
-        return False, "the seal's signature does not verify"
-    return True, ""
+    ok, why = sign.ed25519_verify_hex(key.hex(), msg, sig)
+    if ok:
+        return True, ""
+    if why == sign.NO_CRYPTO:
+        return False, why
+    return False, "the seal's signature does not verify"
 
 
 def shape(pair: object, subject: str) -> str:

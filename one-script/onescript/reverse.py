@@ -18,6 +18,7 @@ from typing import Callable
 from . import calibration, ladder
 from .gate import verify_seal
 from .record import TIP, canon, h256, tip_subject
+from .states import REPORT_UNREACHABLE, UNREACHABLE
 
 WAGER = "wager:"
 
@@ -30,7 +31,7 @@ COMMIT = "chain-order/v1"
 #: Who a forecast is by: a role, never a person's name (SPEC-documented J1).
 ROLES = ("human", "desk", "oracle", "coin")
 
-KEEP_OUT = {"record.jsonl", "pile.json"}
+KEEP_OUT = {"record.jsonl", "record.lock", "pile.json"}
 
 
 def three_way(box: Path, pile: dict, rows: list[dict]) -> list[dict]:
@@ -497,7 +498,7 @@ def reconcile_wagers(
                 "reason": "the record is broken: " + "; ".join(breaks),
             }
         elif outcome is None and cant is not None:
-            row |= {"state": "unreachable", "why": cant}
+            row |= {"state": UNREACHABLE, "why": cant}
         elif outcome is None:
             row |= {
                 "state": "escalate",
@@ -521,7 +522,7 @@ def reconcile_wagers(
         elif isinstance(said := ask(), dict) and said.get("unreachable"):
             # the hook could not check where the outcome came from (the
             # beacon reader is offline): said, never escalate (INVARIANTS §1)
-            row |= {"state": "unreachable", "why": f"R3: {said['unreachable']}"}
+            row |= {"state": UNREACHABLE, "why": f"R3: {said['unreachable']}"}
         elif isinstance(said, str):
             row |= {
                 "state": "escalate",
@@ -574,7 +575,9 @@ def reconcile_wagers(
         "reconciled": [r["id"] for r in out if r["state"] == "reconciled"],
         "escalate": [r["id"] for r in out if r["state"] == "escalate"],
         "escalate_to": "human" if any(r["state"] == "escalate" for r in out) else None,
-        "unreachable": {r["id"]: r["why"] for r in out if r["state"] == "unreachable"},
+        REPORT_UNREACHABLE: {
+            r["id"]: r["why"] for r in out if r["state"] == UNREACHABLE
+        },
         "breaks": list(breaks or []),
         "rows": out,
     }

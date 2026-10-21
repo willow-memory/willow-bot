@@ -71,6 +71,7 @@ class _TokenMatcher:
     tau = 0.8
 
     def _tokens(self, value) -> list[str]:
+        """Punctuation to space, stopwords out, deduped: search tuning, not the pile's key rule (flatten-2 F11)."""
         text = re.sub(r"[^\w\s]", " ", str(value).lower())
         out: list[str] = []
         for tok in text.split():

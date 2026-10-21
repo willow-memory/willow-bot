@@ -45,6 +45,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
 from . import api, beacon, reverse, table
+from .states import EMPTY, POPULATED, REPORT_UNREACHABLE, UNREACHABLE
 
 YES, NO = "yes", "no"
 KINDS = ("up", "above")  # up: close > the close before it; above: close > threshold
@@ -181,7 +182,7 @@ def reveal(
     todo = [s for s in asked if not market_rows(rows, s, close_date)]
     if not todo:
         why = "no call names this date" if not asked else "every symbol is answered"
-        return {"state": "empty", "why": why, "rows": [], "code": 0}
+        return {"state": EMPTY, "why": why, "rows": [], "code": 0}
     written, missing = [], []
     for s in todo:
         closes, why = read_closes(cfg.market, s, close_date)
@@ -199,13 +200,13 @@ def reveal(
         written.append(res["row"])
     if not written:
         return {
-            "state": "unreachable",
+            "state": UNREACHABLE,
             "why": "; ".join(missing),
             "rows": [],
             "code": 1,
         }
-    out = {"state": "populated", "rows": written, "code": 0}
-    return {**out, "unreachable": missing} if missing else out
+    out = {"state": POPULATED, "rows": written, "code": 0}
+    return {**out, REPORT_UNREACHABLE: missing} if missing else out
 
 
 # ── the outcome code proposes; the human seals it ──────────────────────────
@@ -249,7 +250,7 @@ def propose_outcome(
             "wager.n < verdict.n is broken (T4)"
         )
     if human_key is None:
-        return {"state": "unreachable",
+        return {"state": UNREACHABLE,
                 "reason": "no human key handed over: the tip seal can't be checked"}  # fmt: skip
     tips = [(t, tn) for t, tn in reverse.tip_seals(rows, human_key) if w["n"] <= tn]
     under = next(((t, tn) for t, tn in sorted(tips) if t < v["n"]), None)
@@ -261,7 +262,7 @@ def propose_outcome(
     tip_n = int(str(rows[under[0]].get("subject", "")).split(":")[1])
     seal_latest = (seal_rounds or {}).get(str(tip_n))
     if isinstance(seal_latest, bool) or not isinstance(seal_latest, int):
-        return {"state": "unreachable", "reason": (
+        return {"state": UNREACHABLE, "reason": (
             "the anchor holds no reader round for the tip seal: it can't be shown "
             f"to be before {DEADLINE_UTC}:00 UTC on {day} (R23a)")}  # fmt: skip
     for what, seen in (("call", w.get("beacon_latest")), ("tip seal", seal_latest)):
@@ -273,7 +274,7 @@ def propose_outcome(
             )
     closes, why = read_closes(read_market, s, day)
     if closes is None:
-        return {"state": "unreachable", "reason": why}
+        return {"state": UNREACHABLE, "reason": why}
     if (v.get("close"), v.get("prev_close")) != (closes["close"], closes["prev_close"]):
         return table._escalate(
             f"market row {v['n']} says {s} closed {v.get('close')!r} (before: "

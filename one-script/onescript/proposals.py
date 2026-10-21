@@ -30,7 +30,7 @@ KEYS = frozenset({"path", "data", "cites", "claim"})
 SUBJECT = "proposal:"
 
 #: Files the run keeps in the box for itself; a proposal never lands on them.
-RESERVED = frozenset({"record.jsonl", "pile.json", "served.json"})
+RESERVED = frozenset({"record.jsonl", "record.lock", "pile.json", "served.json"})
 
 
 def subject(p: dict) -> str:

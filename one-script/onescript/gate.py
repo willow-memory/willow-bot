@@ -12,18 +12,18 @@ job, and only the human's seal makes it so.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import graph, nestor_seal
+from . import sign as _sign
 from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
 import script_match as sm  # noqa: E402  (adopt, don't rewrite: checks 1-4 live there)
+from .states import EMPTY, POPULATED, UNREACHABLE
 
 _TOKEN = object()  # the only key that mints a Verified; the record checks for it
 HUMAN = "human"
@@ -48,7 +48,9 @@ def token() -> object:
 
 
 def sign(key: bytes, *parts: str) -> str:
-    return hmac.new(key, "\x1f".join(parts).encode(), hashlib.sha256).hexdigest()
+    """The gate's HMAC seal; the one HMAC helper is `sign.hmac_parts`
+    (flatten-2 F14), the bytes are unchanged."""
+    return _sign.hmac_parts(key, *parts)
 
 
 def verify(identity: dict, keys: dict[str, bytes]) -> Verified:
@@ -59,7 +61,7 @@ def verify(identity: dict, keys: dict[str, bytes]) -> Verified:
         identity.get("sig", ""),
     )
     key = keys.get(who or "")
-    if key is None or not hmac.compare_digest(sign(key, who, family), sig):
+    if key is None or not _sign.hmac_equal(sign(key, who, family), sig):
         raise Refused(f"unsigned agent at the door: {who!r}")
     if who == HUMAN:
         raise Refused(
@@ -74,10 +76,9 @@ def system() -> Verified:
 
 
 def verify_seal(subject: str, proof: str, human_key: bytes) -> bool:
-    """Only the human's key produces this. Presence is a label; this is authority."""
-    return hmac.compare_digest(
-        sign(human_key, "seal", subject).encode(), proof.encode("utf-8", "replace")
-    )
+    """Only the human's key produces this. Presence is a label; this is authority.
+    The check lives in `sign.verify_seal` (the record needs it without the gate)."""
+    return _sign.verify_seal(subject, proof, human_key)
 
 
 def human(subject: str, proof: str, human_key: bytes) -> Verified:
@@ -463,13 +464,13 @@ def _symbol_row(c: dict, entry: object) -> dict:
     if not isinstance(entry, dict) or "state" not in entry:
         return {**base, "verdict": "unchecked", "record": "the graph was not asked"}
     state = entry["state"]
-    if state in ("stale", "unreachable"):
+    if state in ("stale", UNREACHABLE):
         return {
             **base,
             "verdict": "unchecked",
             "record": f"graph {state}: {entry.get('why', '')}".rstrip(": "),
         }
-    if state == "empty" and not entry.get("stamp"):
+    if state == EMPTY and not entry.get("stamp"):
         # S1: no stamp means the project itself is not in the graph: nothing was
         # looked at, so nothing is struck
         return {
@@ -477,7 +478,7 @@ def _symbol_row(c: dict, entry: object) -> dict:
             "verdict": "unchecked",
             "record": "project not in the graph",
         }
-    if state != "populated":  # empty and stamped: a fresh graph holds no symbol there
+    if state != POPULATED:  # empty and stamped: a fresh graph holds no symbol there
         return {
             **base,
             "verdict": "unverified",

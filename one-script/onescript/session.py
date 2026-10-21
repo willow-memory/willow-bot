@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-import json
+
+from . import canon
 
 KIND = "session"
 PREFIX = "session:"
@@ -45,9 +46,7 @@ _QUIET = frozenset({"invocation", "pin"})
 def canonical(bundle: dict) -> bytes:
     """The bundle's bytes, as Nestor hashes them (`nestor.session_seal.canonical`):
     sorted keys, compact, UTF-8. The `session` row's subject is over these."""
-    return json.dumps(
-        bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
+    return canon.sorted_compact_utf8.bytes(bundle)
 
 
 def subject(data: bytes) -> str:

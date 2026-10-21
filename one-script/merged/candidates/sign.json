@@ -1,0 +1,83 @@
+{
+  "chunk": "sign",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/sign.py",
+  "goldens": "onescript/tests/test_sign.py",
+  "copies": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/gate.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/nestor_seal.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/serve.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/bound_receipt.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "u2u/identity.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "u2u/packets.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/net_signer.py",
+      "kind": "named-copy",
+      "parity": "tests/test_sign_parity.py::test_net_signer_seal_message_is_the_one_scripts",
+      "why": "trust owner: signing code stays local to the root-owned venv"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/session_signing.py",
+      "kind": "named-copy",
+      "parity": "tests/test_sign_parity.py::test_session_signing_ed25519_bytes_are_the_one_scripts",
+      "why": "trust owner: signing code stays local to the root-owned venv"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/dispatch_signing.py",
+      "kind": "named-copy",
+      "parity": "tests/test_sign_parity.py::test_dispatch_signing_hmac_is_the_one_scripts",
+      "why": "trust owner: signing code stays local to the root-owned venv"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/session_binder.py",
+      "kind": "named-copy",
+      "parity": "tests/test_sign_parity.py::test_session_binder_hmac_is_the_one_scripts",
+      "why": "trust owner: signing code stays local to the root-owned venv"
+    }
+  ],
+  "absent": [
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_onescript_sign.py::test_unreachable_names_onescript_home"
+    },
+    {
+      "repo": "willow-mcp",
+      "test": "tests/test_onescript_sign_reach.py::test_the_sign_reach_signs_with_the_carried_copy_and_says_so"
+    }
+  ],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}

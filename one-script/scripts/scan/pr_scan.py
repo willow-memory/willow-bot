@@ -14,6 +14,7 @@ Deterministic: same refs, same output bytes.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -32,7 +33,13 @@ def when(date: str) -> datetime:
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env={**os.environ, "LC_ALL": "C"},  # F17: parsed output, one locale
     ).stdout
 
 

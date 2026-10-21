@@ -22,6 +22,7 @@ from typing import Callable, Iterable
 from . import (
     boot,
     gate,
+    mai_shape,
     nestor_seal,
     predict,
     proposals,
@@ -32,6 +33,7 @@ from . import (
     view,
 )
 from .record import h256
+from .states import POPULATED, UNREACHABLE
 
 _TIP = object()  # `held`: work out how far old seals reach here
 
@@ -133,6 +135,7 @@ class Run:
                     live=change.get("live", False),
                     expect_vanish=change.get("expect_vanish", False),
                     cites=change.get("cites", []),
+                    check=mai_shape.check,
                 )
         if proposed is not None:
             out["proposals"] = self._take(who, n, proposed)
@@ -391,7 +394,7 @@ class Run:
             # accepts it only alongside a populated served state ("only along
             # side"); with nothing served it is refused, not guessed at.
             own = not p["cites"]
-            if own and doc.get("state") != "populated":
+            if own and doc.get("state") != POPULATED:
                 rows.append(
                     self.rec.append(
                         "proposal",
@@ -547,7 +550,7 @@ class Run:
             held, unchecked = self.held(rows)
             if subject in unchecked and subject not in held:
                 why = f"{unchecked[subject]}; nothing written"
-                state = {"state": "unreachable"}
+                state = {"state": UNREACHABLE}
             elif subject not in held:
                 why = "no human seal over this proposal; nothing written"
         if why is not None:
@@ -573,7 +576,12 @@ class Run:
             return done[-1]
         try:
             return self.rec.write_file(
-                self.sys, prop["path"], data, cites=prop["cites"], provenance="authored"
+                self.sys,
+                prop["path"],
+                data,
+                cites=prop["cites"],
+                provenance="authored",
+                check=mai_shape.check,
             )
         except (PermissionError, OSError) as e:
             return self.rec.append(
