@@ -122,6 +122,9 @@ class Record:
         # would block on the first: one lock, counted, and a thread lock beside it.
         self._tlock = threading.RLock()
         self._depth = 0
+        # The last full parse, keyed by the file's (inode, size, mtime): one
+        # verb reads the record several times, and a parse costs per row.
+        self._parsed: tuple | None = None
         box.mkdir(parents=True, exist_ok=True)
 
     # ── rows ────────────────────────────────────────────────────────────────
@@ -152,10 +155,31 @@ class Record:
                     self._depth = 0
                     fcntl.flock(lock, fcntl.LOCK_UN)
 
-    def _scan(self) -> tuple[list[dict], list[int], int | None]:
+    def _stat_key(self) -> tuple | None:
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+    def _scan(self, fresh: bool = False) -> tuple[list[dict], list[int], int | None]:
         """The rows, the 1-based line numbers of every garbled line, and the
         line number of an unterminated last line (None when the file ends in a
-        newline or is empty). The unterminated line is in neither of the others."""
+        newline or is empty). The unterminated line is in neither of the others.
+
+        Reused from the last parse while the file's (inode, size, mtime) is
+        what it was then, or what this record's own append left it (under the
+        lock); `fresh` always reads the file. Callers get their own copies."""
+        key = self._stat_key()
+        if not fresh and key is not None and self._parsed and self._parsed[0] == key:
+            _, rows, garbled, torn = self._parsed
+            return [dict(r) for r in rows], list(garbled), torn
+        got = self._scan_file()
+        self._parsed = (key, *got) if key is not None else None
+        rows, garbled, torn = got
+        return [dict(r) for r in rows], list(garbled), torn
+
+    def _scan_file(self) -> tuple[list[dict], list[int], int | None]:
         if not self.path.exists():
             return [], [], None
         rows, garbled, torn = [], [], None
@@ -179,16 +203,16 @@ class Record:
                 garbled.append(i)
         return rows, garbled, torn
 
-    def _read(self) -> tuple[list[dict], list[int]]:
+    def _read(self, fresh: bool = False) -> tuple[list[dict], list[int]]:
         """The rows, and the line numbers (1-based) of every line that isn't one.
         An unterminated last line is neither: see torn_tail()."""
-        rows, garbled, _ = self._scan()
+        rows, garbled, _ = self._scan(fresh)
         return rows, garbled
 
     def torn_tail(self) -> str | None:
         """Says so when the record ends in an unterminated line (a crash cut an
         append short): not yet written, left out of rows(), not a break."""
-        torn = self._scan()[2]
+        torn = self._scan(fresh=True)[2]
         return (
             None
             if torn is None
@@ -234,10 +258,21 @@ class Record:
                 **fields,
             }
             row["hash"] = h256(canon(row))
+            line = canon(row)
             with self.path.open("a", encoding="utf-8") as f:
-                f.write(canon(row) + "\n")
+                f.write(line + "\n")
                 f.flush()
                 os.fsync(f.fileno())  # an error raises; never retried (fsyncgate)
+            # Under the lock the file is what was read plus this line: the
+            # remembered parse grows by the row as a reader would parse it.
+            if self._parsed is not None or not rows:
+                _, garbled, _ = self._parsed[1:] if self._parsed else ([], [], None)
+                self._parsed = (
+                    self._stat_key(),
+                    [*rows, json.loads(line)],
+                    list(garbled),
+                    None,
+                )
             if created:
                 _fsync_dir(self.box)  # the new file's name must survive a crash
         return row
@@ -251,7 +286,7 @@ class Record:
         hash chain alone only binds `n` to the bytes, not to the place. Rows
         after the sealed tip can be rewritten and re-hashed; a row whose label
         says it came earlier than it did would otherwise read as earlier."""
-        rows, garbled = self._read()
+        rows, garbled = self._read(fresh=True)  # the file, never a remembered parse
         breaks = [f"line {i}: garbled, not a record row" for i in garbled]
         prev = GENESIS
         for i, row in enumerate(rows):
