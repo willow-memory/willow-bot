@@ -1393,3 +1393,45 @@ def test_gate3_a_symlinked_repo_is_found_and_its_tests_run(world, tmp_path):
     g, ok, d = mc._gate3(device_att(), p)
     assert ok, d
     assert "device: 1 passed" in d
+
+
+@pytest.mark.skipif(
+    not _CAN_DROP, reason="needs a root test process, setpriv and a user 'nobody'"
+)
+def test_nonroot_a_tree_outside_the_repos_is_copied_for_the_user(
+    world, tmp_path, monkeypatch
+):
+    """diverge's throwaway worktrees sit outside the repos; they are copied too."""
+    monkeypatch.setattr(mc, "_euid", os.geteuid)
+    loose = tmp_path / "loose"
+    put(
+        loose,
+        {
+            "t.py": "import os\nprint(os.getuid(), os.getcwd())\nopen('w', 'w').write('x')\n"
+        },
+    )
+    p = pl(world)
+    try:
+        rc, out, uid = p.run_tests([sys.executable, "t.py"], loose, dict(os.environ))
+        jail = p.jail.root
+        assert rc == 0, out
+        assert uid == pwd.getpwnam("nobody").pw_uid
+        assert out.split()[0] == str(uid) and str(jail) in out
+        assert not (loose / "w").exists(), (
+            "the user wrote in the copy, not the original"
+        )
+    finally:
+        p.close()
+    assert not jail.exists()
+
+
+def test_nonroot_a_term_signal_is_turned_into_an_exit(monkeypatch):
+    got = {}
+    monkeypatch.setattr(mc.signal, "signal", lambda sig, h: got.update(sig=sig, h=h))
+    monkeypatch.setattr(mc, "check", lambda *a, **k: [])
+    monkeypatch.setattr(mc, "_gate0", lambda *a, **k: (mc.GATE0_NAME, True, "x"))
+    mc.run_cli("nonexistent.json", out=lambda _s: None)
+    assert got["sig"] == mc.signal.SIGTERM
+    with pytest.raises(SystemExit) as e:
+        got["h"](15, None)
+    assert e.value.code == 143

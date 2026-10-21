@@ -105,6 +105,7 @@ import os
 import pwd
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -271,6 +272,29 @@ class Jail:
         if resolved != str(pl.repos / name):
             self._add_map(resolved, str(dst))
 
+    def mapped(self, text: str) -> bool:
+        return any(
+            re.match(re.escape(src) + r"(?=$|[/:\s])", text) for src, _dst in self.maps
+        )
+
+    def ensure_tree(self, path: Path) -> None:
+        """Copy a directory that is not one of the repos (diverge's throwaway
+        worktrees) so the user can run in it."""
+        real = path.resolve()
+        if str(real) in ("/", "/tmp", "/home", "/root") or not real.is_dir():
+            raise JailError(f"will not copy {path} for the unprivileged run")
+        dst = self.root / "trees" / f"{len(self.copied)}-{real.name}"
+        try:
+            dst.parent.mkdir(exist_ok=True)
+            shutil.copytree(real, dst, symlinks=True, ignore=_NOT_COPIED)
+            _chown_tree(dst, self.uid, self.gid)
+        except (OSError, shutil.Error) as e:
+            raise JailError(f"cannot copy {path} for the unprivileged run: {e}") from e
+        self.copied.add("tree:" + str(real))
+        self._add_map(str(path), str(dst))
+        if str(real) != str(path):
+            self._add_map(str(real), str(dst))
+
     def venv_of(self, py: str) -> Path | None:
         """The venv a python lives in (the dir holding ``pyvenv.cfg``), or None
         for a system python the user can run as it is."""
@@ -341,6 +365,8 @@ class Jail:
         )
         for name in names:
             self.ensure_repo(pl, name)
+        if cwd and not self.mapped(str(cwd)):
+            self.ensure_tree(Path(cwd))
         for py in {str(cmd[0]), sys.executable, sys.prefix + "/bin/python"}:
             v = self.venv_of(py)
             if v is not None and (py == str(cmd[0]) or str(v) in blob):
@@ -1780,6 +1806,10 @@ def run_cli(
     """The verb: exit 0 only when every gate passed (and, with ``record``, the
     record was written)."""
     out = out or sys.stdout.write
+    try:  # a TERM must still run the finally that removes the unprivileged copy
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    except ValueError:  # not the main thread
+        pass
     att_path = Path(attestation).resolve()
     pl = default_places(repos, python)
     results = check(att_path, pl, box=box, box_anchor=box_anchor, skip_suite=skip_suite)

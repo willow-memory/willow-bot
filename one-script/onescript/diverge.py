@@ -37,7 +37,7 @@ Each level narrows the one before it to what BOTH sides changed against
            --no-commit`` of B into A, never on a real branch. A conflict is a
            divergence point (its hunks are listed); with none, each side's changed
            tests run on the merged tree and pass/fail is said per side. This is
-           merge_check's own pytest runner.
+           merge_check's own pytest runner (as an unprivileged user when root).
 
 The minimal set is: level-2 both_different units + level-1 both-changed hunks that
 differ (and whole files that cannot be cut: binary, rename/rename, modify/delete)
@@ -1008,6 +1008,7 @@ def _behaviour(
     changed tests on the merged tree."""
     tmp = Path(tempfile.mkdtemp(prefix="diverge-"))
     wt = tmp / "w"
+    pl = None
     res = {
         "conflicts": [],
         "merge": "",
@@ -1077,7 +1078,11 @@ def _behaviour(
             if (
                 d.is_dir()
                 and not d.name.startswith(".")
-                and any((c / "__init__.py").exists() for c in sorted(d.iterdir()) if c.is_dir())
+                and any(
+                    (c / "__init__.py").exists()
+                    for c in sorted(d.iterdir())
+                    if c.is_dir()
+                )
             ):
                 roots.append(str(d))
         if (wt / "src").is_dir():
@@ -1103,7 +1108,11 @@ def _behaviour(
             )
             if not tests:
                 continue
-            run = runner or mc._pytest
+            run = runner or (
+                lambda py, cwd, env, tg, strict: mc._pytest(
+                    pl, py, cwd, env, tg, strict
+                )
+            )
             ok, detail = run(pl.py(name), str(wt), env2, tests, False)
             res["tests"][s] = {
                 "state": "pass" if ok else "fail",
@@ -1112,6 +1121,8 @@ def _behaviour(
             }
         return res
     finally:
+        if pl is not None:
+            pl.close()  # the unprivileged copy merge_check made, if it did
         shutil.rmtree(tmp, ignore_errors=True)
 
 
