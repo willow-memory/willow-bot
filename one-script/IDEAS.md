@@ -272,7 +272,7 @@ from onescript.stream import StreamRandom
 rnd = beacon.round_for(day)
 r = beacon.drand_reader(rnd)["randomness"]
 rng = StreamRandom.from_seed(bytes.fromhex(r), label=login.encode())
-print(rng.seed_id, TEMPLATES[rng.randrange(len(TEMPLATES))])
+print(rng.seed_id, rng.choice(TEMPLATES))   # StreamRandom has choice, not randrange
 ```
 
 ### 7. Serendipity mode
@@ -1395,7 +1395,8 @@ A nat 1 is advisory. Mostly.
 ```python
 rng = StreamRandom.from_seed(bytes.fromhex(randomness), label=f"pr-{n}".encode())
 total, nat = dice5e.d20(rng, mod=green_runs - sigh.get(repo, n))
-table.verdict(cfg, {"what": "merge_roll", "pr": n, "total": total, "nat": nat})
+table.verdict(cfg, {"what": "roll", "session": f"merge roll {repo} {n}",
+                    "total": total, "nat": nat})   # `what` is one of table.WHATS
 ```
 
 ### 88. Grade the horoscope
@@ -1410,7 +1411,8 @@ funnier.)
 
 ```python
 api.forecast(cfg, f"horoscope-{day}", [{"path": "tests-red", "p": 0.5},
-                                       {"path": "tests-green", "p": 0.5}], by="stars")
+                                       {"path": "tests-green", "p": 0.5}], by="oracle")
+# a forecast is by a role (human, desk, oracle, coin), never "stars"
 ```
 
 ### 89. The sigh is a forecaster
@@ -1663,6 +1665,24 @@ package and nothing else.
 Six of the eight world-data ideas now compile. 36 still needs `crowd` (the
 market's probability as a two-path forecast) and 47 needs `answer` (a value
 out of an OWID CSV): one small helper each.
+
+**Compiled** (same day): `compiled/ideas.py` builds the 19 as one function
+each, made only of the calls above and glue, and
+`onescript/tests/test_compiled.py` runs every one against a real box with
+offline stand-ins for drand, prices and the fetcher. Running them found
+what matching names can't:
+
+| Idea | What running it showed | Now |
+|---|---|---|
+| 4 | `table.verdict` only takes a `what` from a fixed list (`open, roll, step, decision, result, agm_head, escalate, deck, market`); a CI streak is none of them | **Blocked.** The streaks read; writing them as rows needs a new `what`, which is the operator's call |
+| 6 | `StreamRandom` has `choice` and `randint`, not `randrange` | Uses `choice` |
+| 87 | `merge_roll` isn't an allowed `what`, but `roll` is; and `dice5e` imports the `dice` package (the `table` extra) | A `roll` verdict; `unreachable` without `dice` |
+| 88 | A forecast is by a role (human, desk, oracle, coin), never `stars` | By `oracle` |
+| 102 | A market call can only say what SPY does; the bot's half has no field | The SPY call alone |
+
+So of the 19: 18 run, one (4) waits on a decision, and three sketches had
+to change to fit contracts the code already enforces. The `BLOCKED` table
+in `compiled/ideas.py` carries the same notes.
 
 So most of the list compiles from what's here: 33 of 55 now need nothing
 new, and 10 more need one package.
