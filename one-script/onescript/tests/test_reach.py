@@ -24,8 +24,6 @@ REPOS = ONE.parents[1]  # the directory holding willow-bot
 #: every consuming repo's copy of the template (repo, path inside it).
 COPIES = [
     ("willows-grove", "grove/onescript_reach.py"),
-    ("safe-app-store", "apps/the-table/the_table/onescript_reach.py"),
-    ("safe-app-store", "apps/catgrid/catgrid/onescript_reach.py"),
     ("willow-mcp", "src/willow_mcp/onescript_reach.py"),
     ("ratatosk", "ratatosk/onescript_reach.py"),
 ]
