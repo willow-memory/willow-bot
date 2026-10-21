@@ -62,6 +62,19 @@ here reads, writes or caches vault material.
 31. [Gource: the pile as a movie](#31-gource-the-pile-as-a-movie)
 32. [Pagefind: search for the dashboard page](#32-pagefind-search-for-the-dashboard-page)
 
+*Found by the research pass*
+
+49. [bm25s: BM25 in numpy](#49-bm25s-bm25-in-numpy)
+50. [tantivy-py: a full search engine](#50-tantivy-py-a-full-search-engine)
+51. [FlashRank: a CPU reranker](#51-flashrank-a-cpu-reranker)
+52. [sqlite-vec: vectors in the same file](#52-sqlite-vec-vectors-in-the-same-file)
+53. [scip-python: precise symbols](#53-scip-python-precise-symbols)
+54. [tree-sitter-language-pack: every language](#54-tree-sitter-language-pack-every-language)
+55. [rfc3161-client: a second timestamp](#55-rfc3161-client-a-second-timestamp)
+56. [pymerkle: proofs for the chain](#56-pymerkle-proofs-for-the-chain)
+57. [Tracery: oracle text from a grammar](#57-tracery-oracle-text-from-a-grammar)
+58. [ink: branching stories](#58-ink-branching-stories)
+
 **The world's data**
 
 *Things to bet on*
@@ -357,7 +370,9 @@ vecs = m.encode([bite] + chunk_texts)
 
 Watch: `from_pretrained` downloads from Hugging Face when given a name.
 Fetch once off the box, then only ever point it at a local dir, the way the
-WordLlama rung does.
+WordLlama rung does. Its loader passes `force_download=True` on to Hugging
+Face, so prove a local dir really stays offline with `HF_HUB_OFFLINE=1`
+before trusting it.
 
 ### 20. tree-sitter: chunk by function, not by line
 
@@ -418,6 +433,10 @@ duckdb -c "SELECT kind, count(*) FROM read_json_auto('record.jsonl')
            GROUP BY 1 ORDER BY 2 DESC"
 ```
 
+Watch: DuckDB installs a known extension from the internet the first time
+it's needed (`autoinstall_known_extensions` is on by default). Turn that off
+and pre-install `json` to keep it offline.
+
 ### 25. OpenTimestamps: an anchor for the record
 
 Every check-in says *anchor: never sealed; a cut or a rewrite of the record
@@ -427,12 +446,15 @@ each session bundle or the record's tip, and a rewrite after the fact shows.
 
 ```sh
 ots stamp sessions/2026-10-21.json      # writes sessions/2026-10-21.json.ots
-ots verify sessions/2026-10-21.json.ots
+ots verify sessions/2026-10-21.json.ots # needs a local Bitcoin Core node
 ```
 
 Watch: this is the one item that goes online. Only the hash leaves the box,
 it's off by default, and no network is `unreachable`, not a failed seal. It
-needs no key, so it never comes near the vault.
+needs no key, so it never comes near the vault. Stamping is easy; verifying
+needs a Bitcoin Core node (a pruned one is fine), so until there is one a
+proof is `unreachable`, not checked. The client's last release was
+2024-12-31. Its license is LGPL-3.
 
 ### 26. Kiwix ZIM files: an offline encyclopedia rung
 
@@ -448,8 +470,9 @@ zim = Archive("wikipedia_en_simple_all.zim")
 hits = Searcher(zim).search(Query().set_query(bite)).getResults(0, 5)
 ```
 
-Watch: the content is CC BY-SA and the bindings are GPL, so keep it a
-separate process and cite the article in every served row.
+Watch: the bindings (`pip install libzim`) are GPL-3.0-or-later, so keep it
+a separate process. Each ZIM file carries its own content license
+(Wikipedia's is CC BY-SA); cite the article in every served row.
 
 ### 27. Hypothesis: property tests for the byte rules
 
@@ -473,9 +496,14 @@ Mutation testing flips `<` to `<=`, `True` to `False`, and so on, then runs
 the tests. A mutant that survives in `gate.py` or `proposals.py` is a way a
 seal could go wrong without any test noticing.
 
+```toml
+# pyproject.toml
+[tool.mutmut]
+source_paths = ["onescript/gate.py", "onescript/proposals.py"]
+```
+
 ```sh
-mutmut run   # with paths_to_mutate = onescript/gate.py in setup.cfg
-mutmut results
+mutmut run && mutmut results
 ```
 
 ### 29. ast-grep: structural search as a seed
@@ -500,6 +528,9 @@ scc --format json ../willow-bot ../Jeles ../willow-memory/willows-grove
 git-of-theseus-analyze ../willow-bot && git-of-theseus-stack-plot cohorts.json
 ```
 
+Watch: git-of-theseus's last release was 2023 (0.3.4), so it may need
+coaxing on a new Python.
+
 ### 31. Gource: the pile as a movie
 
 Gource animates a repo's history as a growing tree. Combine the three repos'
@@ -519,6 +550,111 @@ search index for it at build time, with no server, all in the browser.
 ```sh
 npx pagefind --site dashboard/
 ```
+
+### Found by the research pass
+
+A second pass (2026-10-21) checked ideas 18–32 against their own repos and
+PyPI, and found these. Versions are PyPI's at the time; anything the pass
+couldn't confirm is said.
+
+#### 49. bm25s: BM25 in numpy
+
+A fast BM25 over sparse matrices, MIT. A quicker way to try idea 18's BM25
+rung without touching the store's schema.
+
+```python
+import bm25s
+retriever = bm25s.BM25()
+retriever.index(bm25s.tokenize(chunk_texts, stopwords="en"))
+docs, scores = retriever.retrieve(bm25s.tokenize(bite), k=10)
+```
+
+Watch: needs numpy. `retrieve`'s exact return is from memory; the index and
+tokenize lines are from its README.
+
+#### 50. tantivy-py: a full search engine
+
+Python bindings for Tantivy (a Rust Lucene), MIT. A whole inverted index
+with BM25, phrases and fields, if the pile ever outgrows SQLite.
+
+Watch: a compiled wheel, heavier than anything else here. Usage not checked.
+
+#### 51. FlashRank: a CPU reranker
+
+A tiny cross-encoder, Apache-2.0, that reorders the top results by reading
+the bite and the chunk together. A rung after RRF: words and the embedder
+find 100, FlashRank picks the 5.
+
+Watch: it fetches its model at first use unless you give it a `cache_dir`
+that already holds one. Last release 0.2.10, January 2025.
+
+#### 52. sqlite-vec: vectors in the same file
+
+A SQLite extension for vector search, MIT/Apache-2.0. The embedder's vectors
+could live in the pile's own SQLite file instead of being recomputed.
+
+Watch: pre-1.0 (0.1.9). Usage not checked.
+
+#### 53. scip-python: precise symbols
+
+Sourcegraph's SCIP indexer for Python, MIT: exact definitions and
+references, the kind of facts `graph.py` wants, without `cbm`.
+
+```sh
+scip-python index . --project-name=willow-bot   # with the venv active
+```
+
+Watch: needs Node and npm.
+
+#### 54. tree-sitter-language-pack: every language
+
+Prebuilt tree-sitter grammars for hundreds of languages, MIT, so idea 20
+works on the Rust, JS and shell files in the pile too.
+
+Watch: whether it downloads grammars at runtime wasn't confirmed.
+
+#### 55. rfc3161-client: a second timestamp
+
+Trail of Bits' RFC 3161 client, Apache-2.0. A timestamp from a standard
+timestamp authority beside OpenTimestamps (25), and it verifies offline
+against a root certificate you keep, no Bitcoin node needed.
+
+```python
+from rfc3161_client import TimestampRequestBuilder
+req = TimestampRequestBuilder().data(bundle_bytes).build()   # sent to a TSA
+```
+
+Watch: stamping is a network call to the authority; only the hash goes.
+
+#### 56. pymerkle: proofs for the chain
+
+Merkle trees with inclusion and consistency proofs. The record is a hash
+chain, which proves order but needs the whole file to check. A Merkle tree
+over it proves one row with a handful of hashes.
+
+Watch: GPL-3.0-or-later, so a separate process only. Usage not checked.
+
+#### 57. Tracery: oracle text from a grammar
+
+Kate Compton's grammar engine for generated text, ISC. The horoscope and
+rune lines become grammars that never run dry, and the drand stream picks
+every branch, so a reading is still provable.
+
+```js
+const grammar = tracery.createGrammar({origin: ["#omen# #advice#"], ...});
+grammar.flatten("#origin#");
+```
+
+Watch: JavaScript, and it rolls its own randomness; the one script would
+have to hand it the stream's draws (a Python port is the easier route).
+
+#### 58. ink: branching stories
+
+inkle's narrative language, MIT, compiled to JSON and run by inkjs. A story
+the-table could tell, where every choice the game makes for you comes from
+the drand stream.
+
+Watch: same as Tracery: the seeding is ours to wire in.
 
 ## The world's data
 
