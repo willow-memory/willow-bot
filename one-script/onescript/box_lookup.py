@@ -30,7 +30,7 @@ from typing import Callable
 
 from . import pile as pile_mod
 
-from .states import EMPTY, POPULATED, UNREACHABLE  # the three, once (F5, F-18)
+from .states import EMPTY, POPULATED, RANKED, UNREACHABLE  # the three, once (F5, F-18)
 
 
 @dataclass(frozen=True)
@@ -91,9 +91,9 @@ class PileBox:
         if self._rank is not None:
             out = self._rank(bite)
             if isinstance(out, dict):
-                state, hits = out.get("state", "ranked"), list(out.get("hits") or [])
+                state, hits = out.get("state", RANKED), list(out.get("hits") or [])
             else:
-                state, hits = "ranked", list(out or [])
+                state, hits = RANKED, list(out or [])
             if state == UNREACHABLE:
                 return UNREACHABLE, [], "the ranker reports no pile"
             return state, hits, ""
@@ -110,7 +110,7 @@ class PileBox:
         if len(down) == len(self._stores):
             return UNREACHABLE, [], "no store could answer: " + ", ".join(down)
         why = f"unreachable: {', '.join(down)}" if down else ""
-        return "ranked", out["hits"], why
+        return RANKED, out["hits"], why
 
     def lookup(self, hits) -> list[Candidate]:
         keywords = list(dict.fromkeys(h.source for h in hits if h.source))

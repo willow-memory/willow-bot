@@ -15,6 +15,21 @@ from __future__ import annotations
 POPULATED, EMPTY, UNREACHABLE = "populated", "empty", "unreachable"
 STATES = (POPULATED, EMPTY, UNREACHABLE)
 
+# Richer row words, kept as written (flatten-2 F9, D-e: "persisted bytes
+# never change"). Each is a NAMED VARIANT of one of the three: the word stays
+# in the row, and code that compares across readers asks ``base_of(word)``.
+RANKED = "ranked"  # a ranker found hits: populated
+HELD = "held"  # a write-back with a verifying seal: populated
+NONE = "none"  # no write-back answers the bite: empty
+VARIANTS = {RANKED: POPULATED, HELD: POPULATED, NONE: EMPTY}
+
+
+def base_of(word: object) -> str:
+    """The state a row word stands for: one of the three reads as itself, a
+    variant (``ranked``, ``held``, ``none``) as the state it names, and any
+    other word as ``unreachable`` (as ``checked``)."""
+    return checked(VARIANTS.get(word, word))  # type: ignore[call-overload]
+
 
 def state_of(rows: object) -> str:
     """``populated`` or ``empty`` for rows a reader got back; None (the reader

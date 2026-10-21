@@ -32,6 +32,7 @@ from . import (
     view,
 )
 from .record import h256
+from .states import POPULATED, UNREACHABLE
 
 _TIP = object()  # `held`: work out how far old seals reach here
 
@@ -391,7 +392,7 @@ class Run:
             # accepts it only alongside a populated served state ("only along
             # side"); with nothing served it is refused, not guessed at.
             own = not p["cites"]
-            if own and doc.get("state") != "populated":
+            if own and doc.get("state") != POPULATED:
                 rows.append(
                     self.rec.append(
                         "proposal",
@@ -547,7 +548,7 @@ class Run:
             held, unchecked = self.held(rows)
             if subject in unchecked and subject not in held:
                 why = f"{unchecked[subject]}; nothing written"
-                state = {"state": "unreachable"}
+                state = {"state": UNREACHABLE}
             elif subject not in held:
                 why = "no human seal over this proposal; nothing written"
         if why is not None:

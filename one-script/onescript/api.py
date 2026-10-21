@@ -62,6 +62,7 @@ from . import serve as served
 from . import session as session_mod
 from . import writeback as wb_mod
 from .run import PKG, Run
+from .states import EMPTY, POPULATED, UNREACHABLE
 
 DESK = ("desk", "claude")
 ANCHOR = "anchor.json"  # the sealed tip, beside the keys: outside the box
@@ -547,7 +548,7 @@ def _attach_store(cfg: Config, run: Run) -> dict:
         indexed = index is not None
     key, kwhy = _store_key(cfg, cfg.box, make=True)
     if index is None or key is None:
-        row = {"state": "unreachable", "why": why or kwhy}
+        row = {"state": UNREACHABLE, "why": why or kwhy}
     elif cfg.store_background and not pile_mod.cache_ready(
         index, _repos(cfg, index), pile_mod.store_path(cfg.box), sha, key
     ):
@@ -584,7 +585,7 @@ def _attach_store(cfg: Config, run: Run) -> dict:
                 **tally,
             }
         except Exception as e:  # noqa: BLE001 — a store that can't be built is a state
-            row = {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:120]}"}
+            row = {"state": UNREACHABLE, "why": f"{type(e).__name__}: {str(e)[:120]}"}
     if indexed:
         row["indexed"] = sorted(cfg.index_repos)
     run.rec.append("store", run.sys, where=row.get("store"), **row)
@@ -769,7 +770,7 @@ def _close_session(cfg: Config, run: Run) -> dict:
     rows = run.rec.rows()
     start = session_mod.current(rows)
     if start is None:
-        return {"state": "empty", "why": "no check-in to close"}
+        return {"state": EMPTY, "why": "no check-in to close"}
     b = session_mod.bundle(rows, start, record.h256(str(cfg.box.resolve()))[:12])
     data = session_mod.canonical(b)
     subj = session_mod.subject(data)
@@ -794,22 +795,22 @@ def _propose_session(cfg: Config, bundle: dict, subj: str) -> dict:
     `unreachable` and why. A draft is a proposal: Nestor lets a machine make
     one, and only the person seals or denies it."""
     if cfg.nestor_db is None:
-        return {"state": "unreachable", "why": NO_STORE}
+        return {"state": UNREACHABLE, "why": NO_STORE}
     try:
         from nestor import cascade, home_paths  # type: ignore[import-not-found]
         from nestor import session_seal as ns  # type: ignore[import-not-found]
         from nestor.sqlite_store import SqliteStore  # type: ignore[import-not-found]
     except ImportError as e:
-        return {"state": "unreachable", "why": f"Nestor isn't importable: {e}"}
+        return {"state": UNREACHABLE, "why": f"Nestor isn't importable: {e}"}
     try:
         cascade.set_ledger_path(home_paths.ledger_for(cfg.nestor_db))
         store = SqliteStore(str(cfg.nestor_db))
         store.init_db()
         got = ns.propose(bundle, origin="one-script", store=store)
     except Exception as e:  # noqa: BLE001 — Nestor's refusal is a state
-        return {"state": "unreachable", "why": f"{type(e).__name__}: {str(e)[:160]}"}
+        return {"state": UNREACHABLE, "why": f"{type(e).__name__}: {str(e)[:160]}"}
     if got.get("target_text") != subj:
-        return {"state": "unreachable", "why": "Nestor hashed the bundle differently"}
+        return {"state": UNREACHABLE, "why": "Nestor hashed the bundle differently"}
     return {"state": "proposed", "id": got["id"], "status": got["status"]}
 
 
@@ -903,7 +904,7 @@ def peek(
     if not cfg.keys.is_file():
         # R23a: `_keys` would mint a keys file; peek writes nothing, ever
         why = f"unreachable: no keys file at {cfg.keys}; nothing was read or made"
-        return {"needs": [], "count": 0, "state": "unreachable", "why": why, "code": 1}
+        return {"needs": [], "count": 0, "state": UNREACHABLE, "why": why, "code": 1}
     before = _breaks_before(cfg, key)
     run, info = _open(cfg, "peek", ("peek",), write=False)
     if run is None:
@@ -927,7 +928,7 @@ def _seed_from_store(cfg: Config, run: Run, bite: str, ws: list[str]) -> dict:
     `{state, why}`; `counts` is `Cached.counts`, read only while attached."""
     c, why = _open_store(cfg, cfg.box, run)
     if c is None:
-        return {"store": {"state": "unreachable", "why": why}}
+        return {"store": {"state": UNREACHABLE, "why": why}}
     try:
         fix = c.repair(bite)  # rung 2 first: the rank reads the repaired bite
         r, q = c.rank(fix["bite"]), c.quotes(bite)  # quotes are your words, exact
@@ -935,8 +936,8 @@ def _seed_from_store(cfg: Config, run: Run, bite: str, ws: list[str]) -> dict:
     finally:
         c.db.close()
     if "unreachable" in (r["state"], q["state"], fix["state"], n["state"]):
-        bad = next(x for x in (fix, r, q, n) if x["state"] == "unreachable")
-        return {"store": {"state": "unreachable", "why": bad.get("why", "")}}
+        bad = next(x for x in (fix, r, q, n) if x["state"] == UNREACHABLE)
+        return {"store": {"state": UNREACHABLE, "why": bad.get("why", "")}}
     return {
         "counts": n,
         "store": {"state": "attached", "why": ""},
@@ -1031,7 +1032,7 @@ def seed(
     back = wb_mod.read_back(run, bite_hash)
     index, sha, why = seed_mod.read_index(run.rec)
     if index is None:
-        out = {"state": "unreachable", "why": why, "keys": [], "missed": ws}
+        out = {"state": UNREACHABLE, "why": why, "keys": [], "missed": ws}
     else:
         out = _seed_from_store(cfg, run, bite, ws)
         counts = out.pop("counts", None)
@@ -1172,7 +1173,7 @@ def _lookup(
     stores, states, tags = {}, {}, {"this": "this"}
     mine, why = _open_store(cfg, cfg.box, run)
     if mine is None:
-        states["this"] = {"state": "unreachable", "why": why}
+        states["this"] = {"state": UNREACHABLE, "why": why}
     else:
         stores["this"] = mine
     tag_key = pile_mod.read_key(cfg.keys.parent / pile_mod.key_name(cfg.box))[0]
@@ -1181,7 +1182,7 @@ def _lookup(
         tags[name] = _session_tag(tag_key, box) if tag_key else f"box-{i}"
         c, why = _open_store(cfg, Path(box))
         if c is None:
-            states[name] = {"state": "unreachable", "why": why}
+            states[name] = {"state": UNREACHABLE, "why": why}
         else:
             stores[name] = c
     try:
@@ -1238,7 +1239,7 @@ def prompt(
             "return": PROMPT_RETURN,
             "tables": tables or [],
         }
-        if state == "populated":
+        if state == POPULATED:
             out["seal"] = served.UNSEALED
             out["rung"] = dict(rung)
         return {"doc": out, "state": state, "why": why, "code": 0}
@@ -1368,7 +1369,7 @@ def forge_bite(
     try:
         from forge import entry  # type: ignore[import-not-found]
     except ImportError as e:
-        out = {"state": "unreachable", "why": f"the Forge isn't importable: {e}"}
+        out = {"state": UNREACHABLE, "why": f"the Forge isn't importable: {e}"}
     else:
         c, why = _open_store(cfg, cfg.box, run)
         box, store_why = PileBox(c), why
@@ -1390,7 +1391,7 @@ def forge_bite(
         except _NeedsYou as n:
             out = {"state": "needs_you", "card": n.card}
         except entry.EntryError as err:
-            out = {"state": "unreachable", "why": f"the Forge refused: {err}"}
+            out = {"state": UNREACHABLE, "why": f"the Forge refused: {err}"}
         else:
             d = e.to_dict()
             found = e.major or e.answer or e.candidates
@@ -1574,7 +1575,7 @@ def _sizes(cfg: Config, run: Run, tables: list[dict], card: dict, max_chars) -> 
             ({*held, subj}, {k: v for k, v in unchecked.items() if k != subj}),
             reader,
         )
-        if doc["state"] != "populated":
+        if doc["state"] != POPULATED:
             raise gate.Refused(doc["why"])
         size["served_chars"] = len(record.canon(doc))
     except Exception as e:  # noqa: BLE001 — a size that can't be measured is said
@@ -1607,7 +1608,7 @@ def _seal(
     signed = subject if outcome is None else reverse.outcome_subject(subject, outcome)
 
     def refuse(why: str) -> dict:
-        state = {"state": "unreachable"} if why.startswith("unreachable") else {}
+        state = {"state": UNREACHABLE} if why.startswith("unreachable") else {}
         return run.rec.append(
             "refused", run.sys, at="seal", reason=why, subject=signed, **state
         )
@@ -2076,14 +2077,14 @@ def resume(cfg: Config, argv: Iterable[str] = ("resume",)) -> dict:
         if r["n"] in unchecked and newer is None:  # said, not guessed
             newer = {
                 "subject": subject,
-                "state": "unreachable",
+                "state": UNREACHABLE,
                 "why": unchecked[r["n"]],
             }
     if seal is None:
         if newer is not None:
             return {
                 "resume": None,
-                "state": "unreachable",
+                "state": UNREACHABLE,
                 "why": newer["why"],
                 "code": 0,
             }

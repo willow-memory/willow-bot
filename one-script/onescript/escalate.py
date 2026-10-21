@@ -72,6 +72,7 @@ from typing import Callable
 
 from .record import canon, h256
 from .run import PKG
+from .states import POPULATED
 
 ROOT = PKG.parents[1]  # onescript -> one-script -> willow-bot
 
@@ -286,7 +287,7 @@ def usable(doc: object) -> tuple[bool, str]:
     if not isinstance(doc, dict):
         return False, "no served file stands in this check-in"
     state = doc.get("state")
-    if state != "populated":
+    if state != POPULATED:
         return False, f"the scope is {state!r}: {doc.get('why') or 'nothing served'}"
     tables = doc.get("tables")
     if not isinstance(tables, list) or not tables:
@@ -337,7 +338,7 @@ def act_of(task: str, doc: dict) -> dict:
 # ── the piece cutter ────────────────────────────────────────────────────────
 def _piece_doc(doc: dict, table: dict, rows: list) -> dict:
     return {
-        "state": "populated",
+        "state": POPULATED,
         "why": "",
         "return": doc.get("return", ""),
         "tables": [{**table, "rows": rows}],

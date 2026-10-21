@@ -33,8 +33,8 @@ import sys
 from pathlib import Path
 
 from . import gate, reverse
+from .states import EMPTY, POPULATED, UNREACHABLE
 
-UNREACHABLE = "unreachable"
 
 OPTIONS = [
     "put it back and continue",
@@ -315,19 +315,19 @@ def reachability_gate(deps: list[dict]) -> list[dict]:
                     d["name"],
                     "failing",
                     f"unreachable: {type(e).__name__}: {e}",
-                    state="unreachable",
+                    state=UNREACHABLE,
                 )
             )
             continue
         out.append(
-            _row("reachability", d["name"], "satisfied", "", state="populated")
+            _row("reachability", d["name"], "satisfied", "", state=POPULATED)
             if got
             else _row(
                 "reachability",
                 d["name"],
                 "differently",
                 "reachable, empty",
-                state="empty",
+                state=EMPTY,
             )
         )
     return out

@@ -44,6 +44,7 @@ import zlib
 from pathlib import Path
 
 from . import seed
+from .states import EMPTY, POPULATED, UNREACHABLE
 
 WORD = seed.WORD  # one word, for seed and the pile alike
 CLAUSE = re.compile(r"[,.;:!?()\[\]{}|\"]+")
@@ -895,7 +896,7 @@ class Cached:
                 )
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "keys": [], "missed": words}
+            return {"state": UNREACHABLE, "why": why, "keys": [], "missed": words}
         keys.sort(key=lambda k: (k["files"], k["chunks"], k["word"]))
         t = self.tally()
         state = (
@@ -937,7 +938,7 @@ class Cached:
                     fixes[w] = (best[1], -best[0])
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "bite": bite, "repairs": []}
+            return {"state": UNREACHABLE, "why": why, "bite": bite, "repairs": []}
         fixed = WORD.sub(
             lambda m: fixes.get(m.group(0).lower(), (m.group(0),))[0], bite
         )
@@ -953,7 +954,7 @@ class Cached:
             return self._rank(bite, embed)
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "fused": False, "hits": []}
+            return {"state": UNREACHABLE, "why": why, "fused": False, "hits": []}
 
     def _rank(self, bite: str, embed=None) -> dict:
         if not self.n_all:
@@ -1027,14 +1028,14 @@ class Cached:
                     )
         except BROKEN as e:
             why = f"the store can't be read: {type(e).__name__}"
-            return {"state": "unreachable", "why": why, "quotes": []}
+            return {"state": UNREACHABLE, "why": why, "quotes": []}
         if not out:
             return {
-                "state": "empty",
+                "state": EMPTY,
                 "why": "no sentence of the bite said before",
                 "quotes": [],
             }
-        return {"state": "populated", "why": "", "quotes": out}
+        return {"state": POPULATED, "why": "", "quotes": out}
 
 
 # ── the session's store, and a chunk read back at its blob ─────────────────
@@ -1079,8 +1080,8 @@ def merge(stores: dict, bite: str) -> dict:
         c = stores[name]
         r, q = c.rank(bite), c.quotes(bite)
         if "unreachable" in (r["state"], q["state"]):
-            bad = r if r["state"] == "unreachable" else q
-            states[name] = {"state": "unreachable", "why": bad["why"]}
+            bad = r if r["state"] == UNREACHABLE else q
+            states[name] = {"state": UNREACHABLE, "why": bad["why"]}
             continue
         states[name] = {"state": r["state"], "why": r.get("why", "")}
         order = []
@@ -1257,13 +1258,13 @@ def main(argv=None) -> int:
         ap.error("--key is the --cache's key")
     index, index_sha, why = load_index(a.box)
     if index is None:
-        print(json.dumps({"state": "unreachable", "why": why}))
+        print(json.dumps({"state": UNREACHABLE, "why": why}))
         return 1
     key = None
     if a.cache:
         key, why = cli_key(a.key)
         if key is None:
-            print(json.dumps({"state": "unreachable", "why": why}))
+            print(json.dumps({"state": UNREACHABLE, "why": why}))
             return 1
     repos = {n: root.parent / n for n in index.get("arrival", {})}
     for spec in a.repo:
