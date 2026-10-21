@@ -59,12 +59,36 @@ and does not fail: the gate is new. It runs ahead of the eight and is kept apart
 ``--skip-suite`` exists for a quick look: gate 1 then FAILS as ``not run``, in a
 dry run and in ``--record`` alike, so a skipped gate can never mint a record.
 
+A copy may carry ``"via": "grove/seat_boxes.py:one_script_module"`` (``path:function``
+in the copy's own repo): it reaches the kernel through that repo-local helper, not
+through a reach import of its own. Gate 4 then verifies the chain by AST, and every
+link must hold or the copy FAILS: the helper file defines the function at module
+level; the function itself reaches through an ``onescript_*`` reach (it uses a name
+the file bound from one); and the copy file imports that function from that file
+(or is that file). The names bound from the helper count as the reach in the "no
+local version" test, as ``onescript_reach`` names do. This widens what the gate can
+verify, never what it lets pass.
+
 Known limits, said once: gate 4's "no local version" is by name (the public
 top-level defs of ``home``, plus ``rule_names``); a def that delegates into the
 reach (or, inside the kernel, the home module) is a wrapper, not a copy; a def that
 only looks alike is named in ``lookalikes`` (repo, path, name, and a ``why``);
 gate 6's walk follows literal ``import_module``
 names only (the closure test it takes its seeds from does the same).
+
+Tests run as an unprivileged user (the uid is a hidden input). When the process is
+root (``os.geteuid() == 0``), every test run (the one-script suite, the prompt tests,
+the nested checkin run, the goldens, a named copy's parity test, a repo's own tests,
+the absent tests, the fixture) is run through ``setpriv --reuid --regid
+--clear-groups`` (else ``runuser -u``) as ``nobody`` (``$MERGE_CHECK_RUN_AS`` names
+another), in a throwaway copy: a plain ``mkdtemp`` under ``/tmp`` (traversable;
+``/tmp/claude-0/...`` is 0700 root), holding a copy of each repo the run touches
+(its worktree, without ``.git``), a copy of the interpreter's venv, a ``HOME``, all
+chowned to that user, and ``PYTHONDONTWRITEBYTECODE=1``. Each gate result says the uid
+its tests ran as. If privileges cannot be dropped (no such user, neither launcher, a
+copy that fails), the gate FAILS with that reason; it never runs as root instead. The
+temp dir is removed in a ``finally``. Not root: unchanged, run in place. Gate 2's
+``--box`` check and the git calls read data and run no tests, so they stay in place.
 
 Stdlib only; the suite and the other repos' tests run in subprocesses.
 """
@@ -74,7 +98,9 @@ from __future__ import annotations
 import ast
 import json
 import os
+import pwd
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -129,6 +155,223 @@ SEAL_VERBS = {
 }
 
 
+# -- running as an unprivileged user ---------------------------------------------
+
+
+def _euid() -> int:
+    return os.geteuid()
+
+
+class JailError(Exception):
+    """Privileges cannot be dropped, so the tests must not run."""
+
+
+_JAIL_PARENT = "/tmp"  # plain /tmp: $TMPDIR may be a 0700 root directory
+_JAIL_PREFIX = "merge-check-nonroot-"
+_NOT_COPIED = shutil.ignore_patterns(
+    ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"
+)
+
+
+def jail_command(launcher: list[str], cmd: list[str]) -> list[str]:
+    """The command line that runs ``cmd`` through the launcher."""
+    return [*launcher, *cmd]
+
+
+def find_launcher(user: str, uid: int, gid: int, which=None) -> list[str]:
+    """``setpriv --reuid --regid --clear-groups --``, else ``runuser -u USER --``.
+    Raises ``JailError`` when neither is there."""
+    which = which or shutil.which
+    sp = which("setpriv")
+    if sp:
+        return [sp, f"--reuid={uid}", f"--regid={gid}", "--clear-groups", "--"]
+    ru = which("runuser")
+    if ru:
+        return [ru, "-u", user, "--"]
+    raise JailError("neither setpriv nor runuser is installed to drop privileges")
+
+
+def _chown_tree(path: Path, uid: int, gid: int) -> None:
+    os.chown(path, uid, gid, follow_symlinks=False)
+    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+        for n in dirnames + filenames:
+            os.chown(os.path.join(dirpath, n), uid, gid, follow_symlinks=False)
+
+
+class Jail:
+    """A throwaway tree an unprivileged user can run the tests in."""
+
+    def __init__(self, root: Path, user: str, uid: int, gid: int, launcher: list[str]):
+        self.root = root
+        self.user, self.uid, self.gid = user, uid, gid
+        self.launcher = launcher
+        self.maps: list[tuple[str, str]] = []
+        self.copied: set[str] = set()
+        self.home = root / "home"
+        self.repos = root / "repos"
+
+    @classmethod
+    def make(cls, pl: "Places") -> "Jail":
+        user = os.environ.get("MERGE_CHECK_RUN_AS", "nobody")
+        try:
+            pw = pwd.getpwnam(user)
+        except KeyError:
+            raise JailError(f"no user {user!r} to run the tests as") from None
+        if pw.pw_uid == 0:
+            raise JailError(f"{user!r} is root, not an unprivileged user")
+        launcher = find_launcher(user, pw.pw_uid, pw.pw_gid)
+        try:
+            root = Path(tempfile.mkdtemp(prefix=_JAIL_PREFIX, dir=_JAIL_PARENT))
+        except OSError as e:
+            raise JailError(f"cannot make a temp dir under {_JAIL_PARENT}: {e}") from e
+        jail = cls(root, user, pw.pw_uid, pw.pw_gid, launcher)
+        try:
+            os.chmod(root, 0o755)  # traversable by the user
+            for d in (jail.home, jail.repos, jail.home / "tmp"):
+                d.mkdir(parents=True, exist_ok=True)
+            _chown_tree(jail.home, pw.pw_uid, pw.pw_gid)
+            # siblings the tests may look for beside the repos: read-only links
+            # (a repo the run touches is copied over its link when first needed)
+            if pl.repos.is_dir():
+                for sib in sorted(pl.repos.iterdir()):
+                    if sib.is_dir():
+                        (jail.repos / sib.name).symlink_to(sib.resolve())
+        except Exception as e:  # leave nothing behind
+            jail.close()
+            raise JailError(f"cannot prepare the unprivileged copy: {e}") from e
+        return jail
+
+    # -- copying
+
+    def _add_map(self, src: str, dst: str) -> None:
+        self.maps.append((src, dst))
+        self.maps.sort(key=lambda m: -len(m[0]))
+
+    def ensure_repo(self, pl: "Places", name: str) -> None:
+        if name in self.copied:
+            return
+        src = pl.repos / name
+        if not src.is_dir():
+            return
+        dst = self.repos / name
+        try:
+            if dst.is_symlink():
+                dst.unlink()
+            shutil.copytree(src.resolve(), dst, symlinks=True, ignore=_NOT_COPIED)
+            _chown_tree(dst, self.uid, self.gid)
+        except (OSError, shutil.Error) as e:
+            raise JailError(f"cannot copy {name} for the unprivileged run: {e}") from e
+        self.copied.add(name)
+        self._add_map(str(pl.repos / name), str(dst))
+        resolved = str(src.resolve())
+        if resolved != str(pl.repos / name):
+            self._add_map(resolved, str(dst))
+
+    def venv_of(self, py: str) -> Path | None:
+        """The venv a python lives in (the dir holding ``pyvenv.cfg``), or None
+        for a system python the user can run as it is."""
+        if not py:
+            return None
+        p = Path(py)
+        if not p.is_absolute():
+            found = shutil.which(py)
+            if not found:
+                return None
+            p = Path(found)
+        cfg = p.parent.parent / "pyvenv.cfg"
+        return cfg.parent if cfg.is_file() else None
+
+    def ensure_venv(self, venv: Path) -> None:
+        key = "venv:" + str(venv)
+        if key in self.copied:
+            return
+        dst = self.root / "venvs" / f"{len(self.copied)}-{venv.name}"
+        try:
+            dst.parent.mkdir(exist_ok=True)
+            shutil.copytree(venv, dst, symlinks=True)
+            _chown_tree(dst, self.uid, self.gid)
+        except (OSError, shutil.Error) as e:
+            raise JailError(
+                f"cannot copy the venv {venv} for the unprivileged run: {e}"
+            ) from e
+        self.copied.add(key)
+        self._add_map(str(venv), str(dst))
+
+    def translate(self, text: str) -> str:
+        for src, dst in self.maps:
+            text = re.sub(re.escape(src) + r"(?=$|[/:\s])", lambda _m, d=dst: d, text)
+        return text
+
+    def scratch(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def made():
+            d = Path(tempfile.mkdtemp(prefix="scratch-", dir=self.home / "tmp"))
+            try:
+                _chown_tree(d, self.uid, self.gid)
+                yield str(d)
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+
+        return made()
+
+    # -- running
+
+    def run(self, pl: "Places", cmd, cwd, env, stdin, timeout) -> tuple[int, str]:
+        """Run as the user, in the copy. Every repo and venv the command, the cwd
+        or the environment names is copied first and its path translated."""
+        texts = (
+            [str(c) for c in cmd] + [str(cwd or "")] + [str(v) for v in env.values()]
+        )
+        blob = "\n".join(texts)
+        names = (
+            [
+                n.name
+                for n in sorted(pl.repos.iterdir())
+                if n.is_dir()
+                and re.search(re.escape(str(pl.repos / n.name)) + r"(?=$|[/:\s])", blob)
+            ]
+            if pl.repos.is_dir()
+            else []
+        )
+        for name in names:
+            self.ensure_repo(pl, name)
+        for py in {str(cmd[0]), sys.executable, sys.prefix + "/bin/python"}:
+            v = self.venv_of(py)
+            if v is not None and (py == str(cmd[0]) or str(v) in blob):
+                self.ensure_venv(v)
+        new_env = {k: self.translate(str(v)) for k, v in env.items()}
+        new_env.update(
+            HOME=str(self.home),
+            TMPDIR=str(self.home / "tmp"),
+            PYTHONDONTWRITEBYTECODE="1",
+            USER=self.user,
+            LOGNAME=self.user,
+        )
+        new_cmd = [self.translate(str(c)) for c in cmd]
+        new_cwd = self.translate(str(cwd)) if cwd else str(self.home)
+        if not Path(new_cwd).is_dir():
+            raise JailError(
+                f"the working directory {new_cwd} is not in the unprivileged copy"
+            )
+        return _run(
+            jail_command(self.launcher, new_cmd),
+            new_cwd,
+            new_env,
+            stdin=stdin,
+            timeout=timeout,
+        )
+
+    def close(self) -> None:
+        # only what this run made: a path we created under the temp parent
+        if (
+            self.root.name.startswith(_JAIL_PREFIX)
+            and str(self.root.parent) == _JAIL_PARENT
+        ):
+            shutil.rmtree(self.root, ignore_errors=True)
+
+
 # -- places ------------------------------------------------------------------
 
 
@@ -139,6 +382,54 @@ class Places:
         self.repos = Path(repos)
         self.kernel = Path(kernel)
         self.python = dict(python or {})
+        self.jail: Jail | None = None
+        self.jail_error: str | None = None
+
+    def run_tests(
+        self, cmd, cwd, env, stdin: str | None = None, timeout: int = TIMEOUT
+    ):
+        """(rc, output, uid): run test code. Not root: in place, as ourselves. Root:
+        only as an unprivileged user in a throwaway copy, else rc -1 and the reason
+        (fail-closed: never as root)."""
+        if _euid() != 0:
+            rc, out = _run(cmd, cwd, env, stdin=stdin, timeout=timeout)
+            return rc, out, _euid()
+        if self._ensure_jail() is not None:
+            return (
+                -1,
+                f"cannot drop privileges, so the tests did not run: {self.jail_error}",
+                0,
+            )
+        try:
+            rc, out = self.jail.run(self, cmd, cwd, env, stdin, timeout)
+        except JailError as e:
+            return -1, f"cannot drop privileges, so the tests did not run: {e}", 0
+        return rc, out, self.jail.uid
+
+    def _ensure_jail(self) -> str | None:
+        """None when tests can run unprivileged, else why not."""
+        if self.jail is None and self.jail_error is None:
+            try:
+                self.jail = Jail.make(self)
+            except JailError as e:
+                self.jail_error = str(e)
+        return None if self.jail is not None else self.jail_error
+
+    def scratch(self):
+        """A scratch dir the user the tests run as can write (a context manager
+        giving its path). Raises ``JailError`` when root cannot drop privileges."""
+        if _euid() == 0:
+            why = self._ensure_jail()
+            if why is not None:
+                raise JailError(why)
+            return self.jail.scratch()
+        return tempfile.TemporaryDirectory(prefix="merge-check-")
+
+    def close(self) -> None:
+        """Remove what this run created (the unprivileged copy), always."""
+        jail, self.jail = self.jail, None
+        if jail is not None:
+            jail.close()
 
     def repo(self, name: str) -> Path | None:
         """A repo beside the others, or None. Never a guess."""
@@ -221,6 +512,9 @@ def _shape(att: dict) -> str | None:
             isinstance(c.get(k), str) and c[k] for k in ("repo", "path", "kind")
         ):
             return f"a copy needs repo, path and kind: {c!r}"
+    for c in att["copies"]:
+        if "via" in c and not (isinstance(c["via"], str) and c["via"]):
+            return f"a copy's 'via' must be 'path:function': {c!r}"
     for a in att["absent"]:
         if not isinstance(a, dict) or not all(
             isinstance(a.get(k), str) and a[k] for k in ("repo", "test")
@@ -286,13 +580,17 @@ def _counts(out: str) -> dict:
     return c
 
 
-def _pytest(py, cwd, env, targets, strict_skip: bool) -> tuple[bool, str]:
+def _pytest(pl, py, cwd, env, targets, strict_skip: bool) -> tuple[bool, str]:
     """Green means: rc 0, something passed, and (strict) nothing skipped. A
-    skipped parity or absent test is not a proof."""
+    skipped parity or absent test is not a proof. Run as an unprivileged user when
+    we are root (``Places.run_tests``); the detail says the uid it ran as."""
     cmd = [py, "-m", "pytest", "-q", "-rsfE", "-p", "no:cacheprovider", *targets]
-    rc, out = _run(cmd, cwd, env)
+    rc, out, uid = pl.run_tests(cmd, cwd, env)
+    if rc == -1 and uid == 0 and "cannot drop privileges" in out:
+        return False, out
     c = _counts(out)
     shown = ", ".join(f"{v} {k}" for k, v in c.items()) or "no summary"
+    shown += f"; as uid {uid}"
     if rc != 0:
         lines = out.strip().splitlines()
         bad = [x for x in lines if x.startswith(("FAILED ", "ERROR "))]
@@ -392,17 +690,19 @@ def _gate1(att, pl: Places, skip_suite: bool) -> Result:
     if not (k / "onescript" / "__init__.py").is_file():
         return g, False, f"no one script at {k}"
     env = pl.env()
-    ok, d = _pytest(sys.executable, k, env, ["onescript/tests"], strict_skip=False)
+    ok, d = _pytest(pl, sys.executable, k, env, ["onescript/tests"], strict_skip=False)
     if not ok:
         return g, False, f"one-script suite: {d}"
     suite = d
     rp = k / "foundation" / "run_prompt_tests.py"
     if not rp.is_file():
         return g, False, "foundation/run_prompt_tests.py is missing"
-    rc, out = _run([sys.executable, str(rp)], k, env)
+    rc, out, uid = pl.run_tests([sys.executable, str(rp)], k, env)
     if rc != 0:
         return g, False, f"run_prompt_tests exit {rc}: {out.strip()[-200:]}"
-    prompt = out.strip().splitlines()[-1] if out.strip() else "ok"
+    prompt = (
+        out.strip().splitlines()[-1] if out.strip() else "ok"
+    ) + f" (as uid {uid})"
     ok, d = _e2e(pl, env)
     if not ok:
         return g, False, d
@@ -413,7 +713,12 @@ def _e2e(pl: Places, env: dict) -> tuple[bool, str]:
     """checkin -> lookup -> prompt -> checkout in a fresh tmp box, tmp keys.
     ``--no-tests`` is for this nested run only: the suite ran just above."""
     k = pl.kernel
-    with tempfile.TemporaryDirectory(prefix="merge-check-") as t:
+    try:
+        scratch = pl.scratch()
+    except JailError as e:
+        return False, f"cannot drop privileges, so the nested run did not run: {e}"
+    uid = 0
+    with scratch as t:
         base = [
             sys.executable,
             "-m",
@@ -433,7 +738,7 @@ def _e2e(pl: Places, env: dict) -> tuple[bool, str]:
             ("checkout", ["checkout"], None),
         ]
         for name, argv, stdin in steps:
-            rc, out = _run(base + argv, k, env, stdin=stdin)
+            rc, out, uid = pl.run_tests(base + argv, k, env, stdin=stdin)
             if rc != 0:
                 return False, f"{name} exit {rc}: {out.strip()[-200:]}"
             if "BOX WON'T OPEN" in out or "\nrefused:" in "\n" + out:
@@ -449,7 +754,7 @@ def _e2e(pl: Places, env: dict) -> tuple[bool, str]:
                     return False, "prompt answered with no hookSpecificOutput"
     return (
         True,
-        "checkin, lookup, prompt, checkout ran in a fresh box (--no-tests, nested)",
+        f"checkin, lookup, prompt, checkout ran in a fresh box (--no-tests, nested; as uid {uid})",
     )
 
 
@@ -481,7 +786,12 @@ def _gate2(att, pl: Places, box: Path | None, box_anchor: Path | None) -> Result
     if n < 1:
         return g, False, "goldens hold no test"
     ok, d = _pytest(
-        sys.executable, k, pl.env(), [str(f.relative_to(k.resolve()))], strict_skip=True
+        pl,
+        sys.executable,
+        k,
+        pl.env(),
+        [str(f.relative_to(k.resolve()))],
+        strict_skip=True,
     )
     if not ok:
         return g, False, f"goldens: {d}"
@@ -587,7 +897,7 @@ def _gate3(att, pl: Places) -> Result:
         parity = sorted(t for t in targets if "::" in t)
         files = sorted(t for t in targets if "::" not in t)
         ok, d = (
-            _pytest(pl.py(name), repo, pl.env(repo=repo), parity, strict_skip=True)
+            _pytest(pl, pl.py(name), repo, pl.env(repo=repo), parity, strict_skip=True)
             if parity
             else (True, "")
         )
@@ -596,7 +906,7 @@ def _gate3(att, pl: Places) -> Result:
             continue
         if files:
             ok, d2 = _pytest(
-                pl.py(name), repo, pl.env(repo=repo), files, strict_skip=False
+                pl, pl.py(name), repo, pl.env(repo=repo), files, strict_skip=False
             )
             if not ok:
                 why.append(f"{name} tests: {d2}")
@@ -652,12 +962,15 @@ def _names_in(node) -> set[str]:
     return {x.id for x in ast.walk(node) if isinstance(x, ast.Name)}
 
 
-def _reach_names(tree, home_stem: str | None = None) -> set[str]:
+def _reach_names(
+    tree, home_stem: str | None = None, seeds: frozenset | set = frozenset()
+) -> set[str]:
     """The names a file binds from a reach (``import onescript_reach``,
     ``from . import onescript_canon as c``) or, inside the kernel, from the home
     module (``from .words import words as _words``), and what it assigns from
-    them. A def that calls through one of these is a wrapper, not a copy."""
-    names: set[str] = set()
+    them. A def that calls through one of these is a wrapper, not a copy.
+    ``seeds`` are names already known to reach (a verified ``via`` helper)."""
+    names: set[str] = set(seeds)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
@@ -697,9 +1010,11 @@ def _reach_names(tree, home_stem: str | None = None) -> set[str]:
     return names
 
 
-def _local_rules(tree, rule_names: set[str], home_stem: str | None = None) -> list[str]:
+def _local_rules(
+    tree, rule_names: set[str], home_stem: str | None = None, seeds=frozenset()
+) -> list[str]:
     """Rule names the file defines itself rather than through the reach."""
-    reach = _reach_names(tree, home_stem)
+    reach = _reach_names(tree, home_stem, seeds)
     out = []
     for d in _toplevel_defs(tree):
         if d.name in rule_names and d.name not in reach:
@@ -715,6 +1030,60 @@ def _imports_kernel_home(names, home_stem: str) -> bool:
         if parts[0] == "onescript" and home_stem in parts[1:]:
             return True
     return False
+
+
+def _via(repo: Path, f: Path, tree, spec: str) -> tuple[set[str], str | None]:
+    """Verify a copy's ``via`` (``path:function`` in its own repo). Returns
+    (the names the copy binds from the helper, why-not). Each link of the chain
+    is checked by AST; one that cannot be shown FAILS."""
+    path, _, fn_name = spec.partition(":")
+    if not path or not fn_name or not fn_name.isidentifier():
+        return set(), f"via {spec!r} is not 'path:function'"
+    hf = _within(repo, path)
+    if hf is None or not hf.is_file():
+        return set(), f"via helper {path} is not a file in {repo.name}"
+    try:
+        htree = _parse(hf)
+    except SyntaxError as e:
+        return set(), f"via helper {path} does not parse: {e}"
+    fn = next(
+        (
+            d
+            for d in htree.body
+            if isinstance(d, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and d.name == fn_name
+        ),
+        None,
+    )
+    if fn is None:
+        return set(), f"via helper {path} defines no top-level function {fn_name}"
+    if not any(_is_reach(n) for n in _import_names(htree)):
+        return set(), f"via helper {path} imports no onescript_* reach"
+    bound = _reach_names(htree) - {fn_name}
+    if not (_names_in(fn) & bound):
+        return (
+            set(),
+            f"via helper {path}:{fn_name} does not reach through onescript_reach",
+        )
+    if hf.resolve() == f.resolve():
+        return {fn_name}, None
+    mod = ".".join(Path(path).with_suffix("").parts)
+    stem = Path(path).stem
+    got: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        m = node.module or ""
+        same = (
+            (node.level == 0 and m == mod)
+            or (node.level > 0 and m.split(".")[-1] == stem)
+            or (node.level == 0 and m.split(".")[-1] == stem and mod.endswith(m))
+        )
+        if same:
+            got |= {a.asname or a.name for a in node.names if a.name == fn_name}
+    if not got:
+        return set(), f"{f.name} does not import {fn_name} from {path}"
+    return got, None
 
 
 def _gate4(att, pl: Places) -> Result:
@@ -764,13 +1133,19 @@ def _gate4(att, pl: Places) -> Result:
             continue
         names = _import_names(tree)
         in_kernel = _in_kernel(pl, c)
-        if not (
+        seeds: set[str] = set()
+        if c.get("via"):
+            seeds, bad = _via(repo, f, tree, c["via"])
+            if bad:
+                why.append(f"{label}: via: {bad}")
+                continue
+        elif not (
             any(_is_reach(n) for n in names)
             or (in_kernel and _imports_kernel_home(names, home_stem))
         ):
             why.append(f"{label}: an import copy that imports no onescript_* reach")
             continue
-        local = _local_rules(tree, rules, home_stem if in_kernel else None)
+        local = _local_rules(tree, rules, home_stem if in_kernel else None, seeds)
         local = [n for n in local if (c["repo"], c["path"], n) not in looks]
         if local:
             why.append(f"{label}: defines the rule locally: {', '.join(local)}")
@@ -822,12 +1197,12 @@ def _gate5(att, pl: Places) -> Result:
             why.append(f"{a['repo']}:{a['test']} never says unreachable")
             continue
         ok, d = _pytest(
-            pl.py(a["repo"]), repo, pl.env(repo=repo), [a["test"]], strict_skip=True
+            pl, pl.py(a["repo"]), repo, pl.env(repo=repo), [a["test"]], strict_skip=True
         )
         if not ok:
             why.append(f"{a['repo']}:{a['test']}: {d}")
             continue
-        ran.append(f"{a['repo']}:{a['test'].split('::')[-1]}")
+        ran.append(f"{a['repo']}:{a['test'].split('::')[-1]} ({d})")
     if why:
         return g, False, "; ".join(why)
     if not ran:
@@ -1089,7 +1464,7 @@ def _gate7(att, pl: Places) -> Result:
             "LC_ALL": "C",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
-        rc, out = _run(
+        rc, out, uid = pl.run_tests(
             [sys.executable, "-m", "onescript.tests.hidden_inputs_fixture"], k, env
         )
         if rc != 0 or not out.strip():
@@ -1108,7 +1483,7 @@ def _gate7(att, pl: Places) -> Result:
     return (
         g,
         True,
-        f"fixture names {stem}; {len(outs[0])} bytes identical under 2 hash seeds, LC_ALL=C",
+        f"fixture names {stem}; {len(outs[0])} bytes identical under 2 hash seeds, LC_ALL=C (as uid {uid})",
     )
 
 
@@ -1220,13 +1595,20 @@ def check(
         (GATE_NAMES[7], lambda: _gate8(att, pl)),
     ]
     out: list[Result] = []
-    for name, fn in gates:
-        try:
-            out.append(fn())
-        except Exception as e:  # a gate that crashes has verified nothing
-            out.append(
-                (name, False, f"gate crashed, so unverified: {type(e).__name__}: {e}")
-            )
+    try:
+        for name, fn in gates:
+            try:
+                out.append(fn())
+            except Exception as e:  # a gate that crashes has verified nothing
+                out.append(
+                    (
+                        name,
+                        False,
+                        f"gate crashed, so unverified: {type(e).__name__}: {e}",
+                    )
+                )
+    finally:
+        pl.close()  # the unprivileged copy, if this run made one
     return out
 
 
@@ -1239,9 +1621,17 @@ def _gate0(att_path, pl: Places) -> Result:
         return GATE0_NAME, True, "not attested (no readable attestation)"
     given = [k for k in ("base_ref", "chunk_ref") if k in att]
     if not given:
-        return GATE0_NAME, True, "not attested (no base_ref and chunk_ref); nothing scoped"
+        return (
+            GATE0_NAME,
+            True,
+            "not attested (no base_ref and chunk_ref); nothing scoped",
+        )
     if len(given) == 1:
-        return GATE0_NAME, False, f"only {given[0]!r} is attested; base_ref and chunk_ref come together"
+        return (
+            GATE0_NAME,
+            False,
+            f"only {given[0]!r} is attested; base_ref and chunk_ref come together",
+        )
     base, chunk = att["base_ref"], att["chunk_ref"]
     names = att.get("diverge_repos", ["willow-bot"])
     if (
@@ -1250,13 +1640,21 @@ def _gate0(att_path, pl: Places) -> Result:
         or not names
         or not all(isinstance(n, str) for n in names)
     ):
-        return GATE0_NAME, False, "base_ref, chunk_ref and diverge_repos must be non-empty strings"
+        return (
+            GATE0_NAME,
+            False,
+            "base_ref, chunk_ref and diverge_repos must be non-empty strings",
+        )
     from . import diverge
 
     res = diverge.run(pl.repos, names, base, chunk)
     h = diverge.result_hash(res)
     if res["state"] == "unreachable":
-        return GATE0_NAME, False, f"diverge is unreachable (fail-closed): {res['reason']}"
+        return (
+            GATE0_NAME,
+            False,
+            f"diverge is unreachable (fail-closed): {res['reason']}",
+        )
     c = res["counts"]
     return (
         GATE0_NAME,
@@ -1294,7 +1692,10 @@ def record_merge(
     if len(results) != len(GATE_NAMES) or not all(ok for _, ok, _ in results):
         return None, "chunk is NOT MERGEABLE: no record written (fail-closed)"
     if gate0 is not None and not gate0[1]:
-        return None, "chunk is NOT MERGEABLE (gate 0 divergence): no record written (fail-closed)"
+        return (
+            None,
+            "chunk is NOT MERGEABLE (gate 0 divergence): no record written (fail-closed)",
+        )
     if [g for g, _, _ in results] != GATE_NAMES:
         return None, "refusing to record: the gate list is not the eight (fail-closed)"
     att = _load(att_path) or {}
@@ -1356,7 +1757,11 @@ def run_cli(
     try:
         g0 = _gate0(att_path, pl)
     except Exception as e:  # a gate that crashes has verified nothing
-        g0 = (GATE0_NAME, False, f"gate crashed, so unverified: {type(e).__name__}: {e}")
+        g0 = (
+            GATE0_NAME,
+            False,
+            f"gate crashed, so unverified: {type(e).__name__}: {e}",
+        )
     mergeable = bool(results) and all(ok for _, ok, _ in results) and g0[1]
     written, reason = None, ""
     if record:

@@ -29,6 +29,14 @@ from onescript.record import Record, Verified  # noqa: E402
 ONE_SCRIPT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _gate_logic_runs_in_place(monkeypatch):
+    """These tests exercise the gates' logic on synthetic worlds; where the suite
+    itself runs as root they must not each copy a venv. The unprivileged run has
+    its own tests below (``test_nonroot_*``), which set the euid themselves."""
+    monkeypatch.setattr(mc, "_euid", lambda: 1000)
+
+
 def put(root: Path, files: dict[str, str]) -> None:
     for rel, text in files.items():
         f = root / rel
@@ -193,7 +201,10 @@ def run(world, n, a=None, **kw):
         7: lambda: mc._gate7(a, p),
         8: lambda: mc._gate8(a, p),
     }[n]
-    g, ok, detail = fn()
+    try:
+        g, ok, detail = fn()
+    finally:
+        p.close()  # the unprivileged copy, if the gate made one
     assert g == mc.GATE_NAMES[n - 1]
     return ok, detail
 
@@ -1058,3 +1069,258 @@ def test_gate3_only_tests_in_a_tests_directory_count_as_callers(world):
     )
     ok, d = run(world, 3)
     assert not ok and "no test in the repo imports bound_receipt" in d
+
+
+# -- gate 4: a repo-local reach helper (``via``) ------------------------------
+
+HELPER = """
+    from . import onescript_reach
+
+    def one_script_module(name):
+        return onescript_reach.module(name)
+"""
+VIA_COPY = """
+    from .helper import one_script_module
+
+    _c = one_script_module("canon")
+
+    def canonical(x):
+        return _c.canonical(x)
+"""
+
+
+def via_att(**copy_over) -> dict:
+    c = {
+        "repo": "willow-mcp",
+        "path": "src/willow_mcp/viauser.py",
+        "kind": "import",
+        "via": "src/willow_mcp/helper.py:one_script_module",
+    }
+    c.update(copy_over)
+    return att(copies=[c], absent=[])
+
+
+def via_world(world, helper=HELPER, copy=VIA_COPY):
+    mcp_put(
+        world,
+        {"src/willow_mcp/helper.py": helper, "src/willow_mcp/viauser.py": copy},
+    )
+
+
+def test_gate4_via_a_helper_that_reaches_passes(world):
+    via_world(world)
+    ok, d = run(world, 4, via_att())
+    assert ok, d
+    # and without the via the same copy imports no reach, so it fails
+    a = via_att()
+    del a["copies"][0]["via"]
+    assert not run(world, 4, a)[0]
+
+
+def test_gate4_via_refuses_a_helper_that_does_not_reach(world):
+    via_world(
+        world,
+        helper="""
+        import importlib
+
+        def one_script_module(name):
+            return importlib.import_module("canon")
+    """,
+    )
+    ok, d = run(world, 4, via_att())
+    assert not ok and "imports no onescript_* reach" in d
+    via_world(
+        world,
+        helper="""
+        from . import onescript_reach
+
+        def one_script_module(name):
+            return object()
+    """,
+    )
+    ok, d = run(world, 4, via_att())
+    assert not ok and "does not reach through onescript_reach" in d
+
+
+def test_gate4_via_refuses_a_missing_helper_or_function(world):
+    via_world(world)
+    ok, d = run(world, 4, via_att(via="src/willow_mcp/nope.py:one_script_module"))
+    assert not ok and "is not a file" in d
+    ok, d = run(world, 4, via_att(via="src/willow_mcp/helper.py:gone"))
+    assert not ok and "defines no top-level function gone" in d
+    ok, d = run(world, 4, via_att(via="no-colon"))
+    assert not ok and "not 'path:function'" in d
+
+
+def test_gate4_via_refuses_a_copy_that_does_not_import_the_helper(world):
+    via_world(
+        world,
+        copy="""
+        def canonical(x):
+            return repr(x)
+    """,
+    )
+    ok, d = run(world, 4, via_att())
+    assert not ok and "does not import one_script_module" in d
+
+
+def test_gate4_via_still_refuses_a_local_version_of_the_rule(world):
+    via_world(
+        world,
+        copy="""
+        from .helper import one_script_module
+
+        _c = one_script_module("canon")
+
+        def canonical(x):
+            return repr(x)
+    """,
+    )
+    ok, d = run(world, 4, via_att())
+    assert not ok and "defines the rule locally: canonical" in d
+
+
+def test_gate4_via_must_be_a_string(world):
+    via_world(world)
+    r = mc.check(write_att(world, via_att(via=3)), pl(world))
+    assert r[0][0] == "attestation" and "'via'" in r[0][2]
+
+
+# -- running as an unprivileged user -------------------------------------------
+
+import os  # noqa: E402
+import pwd  # noqa: E402
+
+
+def _tmp_jails():
+    return sorted(Path("/tmp").glob(mc._JAIL_PREFIX + "*"))
+
+
+def test_nonroot_the_launcher_command_line():
+    which = {"setpriv": "/usr/bin/setpriv", "runuser": "/usr/sbin/runuser"}.get
+    got = mc.find_launcher("nobody", 4242, 4343, which=which)
+    assert got == [
+        "/usr/bin/setpriv",
+        "--reuid=4242",
+        "--regid=4343",
+        "--clear-groups",
+        "--",
+    ]
+    assert mc.jail_command(got, ["py", "-m", "pytest"]) == [*got, "py", "-m", "pytest"]
+    only_runuser = {"runuser": "/usr/sbin/runuser"}.get
+    got = mc.find_launcher("nobody", 4242, 4343, which=only_runuser)
+    assert got == ["/usr/sbin/runuser", "-u", "nobody", "--"]
+    with pytest.raises(mc.JailError, match="neither setpriv nor runuser"):
+        mc.find_launcher("nobody", 4242, 4343, which=lambda _n: None)
+
+
+def _root(monkeypatch):
+    monkeypatch.setattr(mc, "_euid", lambda: 0)
+
+    def never(*a, **k):
+        raise AssertionError("tests ran as root: " + repr(a[:1]))
+
+    monkeypatch.setattr(mc, "_run", never)
+
+
+def test_nonroot_root_with_no_such_user_fails_closed_and_runs_nothing(
+    world, monkeypatch
+):
+    _root(monkeypatch)
+    monkeypatch.setenv("MERGE_CHECK_RUN_AS", "no-such-user-merge-check")
+    before = _tmp_jails()
+    for n in (3, 5):
+        ok, d = run(world, n)
+        assert not ok and "cannot drop privileges" in d and "no-such-user" in d, d
+    assert _tmp_jails() == before
+
+
+def test_nonroot_root_with_no_launcher_fails_closed(world, monkeypatch):
+    _root(monkeypatch)
+    monkeypatch.setattr(mc.shutil, "which", lambda _n: None)
+    before = _tmp_jails()
+    ok, d = run(world, 5)
+    assert not ok and "neither setpriv nor runuser" in d, d
+    assert _tmp_jails() == before
+
+
+def test_nonroot_the_user_may_not_be_root(world, monkeypatch):
+    _root(monkeypatch)
+    monkeypatch.setenv("MERGE_CHECK_RUN_AS", "root")
+    ok, d = run(world, 5)
+    assert not ok and "not an unprivileged user" in d
+
+
+def test_nonroot_a_copy_that_fails_leaves_nothing_behind(world, monkeypatch):
+    _root(monkeypatch)
+    if not pwd.getpwnam("nobody"):  # pragma: no cover
+        pytest.skip("no nobody")
+    monkeypatch.setattr(mc.shutil, "which", lambda n: "/usr/bin/" + n)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mc, "_chown_tree", boom)
+    before = _tmp_jails()
+    ok, d = run(world, 5)
+    assert not ok and "cannot prepare the unprivileged copy" in d, d
+    assert _tmp_jails() == before
+
+
+def test_nonroot_not_root_runs_in_place_and_says_its_uid(world, monkeypatch):
+    # the autouse fixture's euid is 1000: nothing is copied, nothing dropped
+    before = _tmp_jails()
+    ok, d = run(world, 5)
+    assert ok, d
+    assert "as uid 1000" in d or "as uid" in d
+    assert _tmp_jails() == before
+
+
+def test_nonroot_translate_maps_whole_path_segments_only(tmp_path):
+    j = mc.Jail(tmp_path / "j", "nobody", 1, 1, ["x"])
+    j._add_map("/r/willow-bot", "/j/repos/willow-bot")
+    assert (
+        j.translate("/r/willow-bot/a:/r/willow-bot")
+        == "/j/repos/willow-bot/a:/j/repos/willow-bot"
+    )
+    assert j.translate("/r/willow-bot-fix/a") == "/r/willow-bot-fix/a"
+
+
+_CAN_DROP = (
+    os.geteuid() == 0
+    and mc.shutil.which("setpriv") is not None
+    and any(u.pw_name == "nobody" for u in pwd.getpwall())
+)
+
+
+@pytest.mark.skipif(
+    not _CAN_DROP, reason="needs a root test process, setpriv and a user 'nobody'"
+)
+def test_nonroot_a_real_run_is_unprivileged_and_cleans_up(world, monkeypatch):
+    """The real thing: the absent test itself asserts it is not root."""
+    monkeypatch.setattr(mc, "_euid", os.geteuid)
+    mcp_put(
+        world,
+        {
+            "tests/test_absent.py": """
+        import os
+
+        def test_unreachable_is_said():
+            # no kernel beside: unreachable; and not as root
+            assert os.geteuid() != 0 and os.getuid() != 0
+            assert os.environ["HOME"].startswith("/tmp/merge-check-nonroot-")
+            assert os.environ["PYTHONDONTWRITEBYTECODE"] == "1"
+            assert "unreachable"
+    """
+        },
+    )
+    before = _tmp_jails()
+    a = att()
+    r = mc.check(write_att(world, a), pl(world), skip_suite=True)
+    by = {g: (ok, d) for g, ok, d in r}
+    ok5, d5 = by[mc.GATE_NAMES[4]]
+    assert ok5, d5
+    assert "uid 65534" in d5 or f"uid {pwd.getpwnam('nobody').pw_uid}" in d5, d5
+    ok3, d3 = by[mc.GATE_NAMES[2]]
+    assert ok3 and f"uid {pwd.getpwnam('nobody').pw_uid}" in d3, d3
+    assert _tmp_jails() == before, "the temp dir is removed"
