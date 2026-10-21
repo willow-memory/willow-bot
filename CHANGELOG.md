@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [1.17.2](https://github.com/willow-memory/willow-bot/compare/v1.17.1...v1.17.2) (2026-10-21)
+
+
+### Changed
+
+* **one-script:** the box's front door is opening.py ([c7c4795](https://github.com/willow-memory/willow-bot/commit/c7c4795ef6b5bc2f2c8a11e5affca3b942505d93))
+* **one-script:** the prompt hook's path loads 18 modules, not 39 ([39bdbb8](https://github.com/willow-memory/willow-bot/commit/39bdbb82aea0b02a379d96c497f3e71797535c18))
+* **one-script:** the prompt hook's path loads 18 modules, not 39 ([8176358](https://github.com/willow-memory/willow-bot/commit/81763585326a5928bd026e27534a9d768a0b6b45))
+
 ## [1.17.1](https://github.com/willow-memory/willow-bot/compare/v1.17.0...v1.17.1) (2026-10-21)
 
 
