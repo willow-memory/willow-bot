@@ -155,6 +155,10 @@ here reads, writes or caches vault material.
 84. [Cells on the map: geohash and H3](#84-cells-on-the-map-geohash-and-h3)
 85. [The snapshots' own IDs](#85-the-snapshots-own-ids)
 
+**One from you**
+
+86. [Compare the snippets in the boxes, and serve the comparison](#86-compare-the-snippets-in-the-boxes-and-serve-the-comparison)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -1275,6 +1279,61 @@ Some planned sources already carry IDs that join:
 https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=us6000jllz&format=geojson
 swh:1:rev:<commit sha from a GH Archive PushEvent>
 ```
+
+## One from you
+
+### 86. Compare the snippets in the boxes, and serve the comparison
+
+The operator, 2026-10-21: *"Is there anything in the one script that
+compares snippets, as in snippets in boxes, that can be served through the
+system?"*
+
+**What's built** (read in this tree, 2026-10-21). Each one compares only
+part of what this idea asks for:
+
+| Piece | What it compares | Served? |
+|---|---|---|
+| `serve.joins` / `serve.propose_chunks` | Which piles share a who/what/when/where value, and which served chunks come from the same file: "the mosaic" | On the card, for the human to judge before sealing. Not to the model |
+| `pile.read_pile` (`copies`) | Exact copies: a chunk whose sha256 was already seen is counted and skipped | No. The count is dropped |
+| `pile.merge` (`lookup`) | The same chunk across sessions' stores, merged by hash (`seen_in`, `sessions`) | `lookup` is a view; nothing is served |
+| `diverge` | Two refs down to the smallest code unit (AST hash), and two record chains | No. It writes one `diverge` row |
+| `xref` (`dupes`) | IDs defined twice in one repo | Only in the xref report |
+| willows-grove `templates/cross-table/cross_table.py` | Boxes on a grid, each filled by copying a passage. `measure --against` says which boxes changed since a snapshot; `link` writes a crosswalk between two grids | No. It lives in the grove, and the one script doesn't call it |
+
+So exact sameness (same hash) and "comes from the same place" are covered.
+The cross table is the nearest thing to snippets in boxes, but it isn't
+wired into serving.
+
+**What isn't built:** comparing what two snippets *say*. Near-copies (one
+word changed), two chunks that answer the same question differently,
+or a Jeles answer against your own code. And nothing hands a comparison
+to the model as a served table.
+
+**A shape for it.** A new `compare` table kind beside chunk tables. For the
+top N served chunks, code works out each pair's relation and serves it as
+rows, so the model reads "these two say the same thing" or "these two
+differ here". It never computes that itself.
+
+```python
+# serve.py (sketch): pairs of served chunks, related by code
+for a, b in itertools.combinations(top, 2):
+    rel = ("same" if a.sha256 == b.sha256 else
+           "near" if jaccard(shingles(a), shingles(b)) >= NEAR else    # difflib / MinHash
+           "close" if cosine(embed(a), embed(b)) >= CLOSE else None)    # rung 3, when on
+    if rel:
+        rows.append({"what": "compare", "a": name(a), "b": name(b),
+                     "rel": rel, "diff": diff_hunks(a, b) if rel == "near" else None})
+```
+
+- Stdlib gets the first two relations: `difflib` for the diff, word
+  shingles for "near".
+- The embedder (16, 19) adds "close": same meaning, different words.
+- The rows cite both chunks' ids, so a proposal that leans on a comparison
+  goes through the same cite check as anything else.
+- With 63–64 the pair is two world-wide IDs. Then "this chunk of yours is
+  a near-copy of that file in Software Heritage" becomes a servable row too.
+- `NEAR` and `CLOSE` are thresholds, so they're the operator's numbers,
+  like every number in `deep_thought.py`.
 
 ## What the one script said about this list
 
