@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main, master]
 
+# Every job here only reads: checkouts and tests. A token that can write is
+# one nothing here needs (CodeQL: actions/missing-workflow-permissions).
+permissions:
+  contents: read
+
 jobs:
   test-matrix:
     runs-on: ubuntu-latest
