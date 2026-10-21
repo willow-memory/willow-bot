@@ -62,6 +62,36 @@ here reads, writes or caches vault material.
 31. [Gource: the pile as a movie](#31-gource-the-pile-as-a-movie)
 32. [Pagefind: search for the dashboard page](#32-pagefind-search-for-the-dashboard-page)
 
+**The world's data**
+
+*Things to bet on*
+
+33. [Open-Meteo: Out-forecast the weather forecaster](#33-open-meteo-out-forecast-the-weather-forecaster)
+34. [USGS: The earthquake base-rate game](#34-usgs-the-earthquake-base-rate-game)
+35. [Wikipedia pageviews: Which article wins tomorrow](#35-wikipedia-pageviews-which-article-wins-tomorrow)
+36. [Manifold: You against the crowd](#36-manifold-you-against-the-crowd)
+37. [Hacker News: Will it hit the front page](#37-hacker-news-will-it-hit-the-front-page)
+38. [NOAA tides: The tide is a sure thing](#38-noaa-tides-the-tide-is-a-sure-thing)
+
+*Things to read*
+
+39. [Open English WordNet: A dictionary rung](#39-open-english-wordnet-a-dictionary-rung)
+40. [wordfreq: What's rare to you, common to the world](#40-wordfreq-whats-rare-to-you-common-to-the-world)
+41. [Tatoeba: Sentences in every language](#41-tatoeba-sentences-in-every-language)
+42. [Project Gutenberg: Old books for serendipity](#42-project-gutenberg-old-books-for-serendipity)
+
+*Things to draw from*
+
+43. [Skyfield: A horoscope with real planets](#43-skyfield-a-horoscope-with-real-planets)
+44. [Natural Earth: Today's place](#44-natural-earth-todays-place)
+45. [The Met Open Access: Art of the day](#45-the-met-open-access-art-of-the-day)
+46. [Lichess: Puzzle of the day](#46-lichess-puzzle-of-the-day)
+
+*Things to measure yourself against*
+
+47. [Our World in Data: The 90 percent quiz](#47-our-world-in-data-the-90-percent-quiz)
+48. [GH Archive: Is your CI normal](#48-gh-archive-is-your-ci-normal)
+
 ---
 
 ## New data to feed it
@@ -489,3 +519,224 @@ search index for it at build time, with no server, all in the browser.
 ```sh
 npx pagefind --site dashboard/
 ```
+
+## The world's data
+
+Everything above is about your own repos. This is about everything else: the
+public data that's out there for free, and the games you can play with it.
+They all use pieces the one script already has: forecasts that can't be
+edited (`api.forecast`, the way `market.py` bets on SPY), Brier scores
+(`calibration.py`), drand draws (`beacon`, `stream`), served chunks, and
+serendipity (7).
+
+The rules for outside data:
+- Fetch it once into a dated snapshot, with its SHA-256, source URL and
+  license on the record.
+- Only the human refreshes a snapshot.
+- After that it reads offline.
+- A forecast settled from live data names its reader, the way
+  `market.stooq_reader` does. No network means `unreachable`, never a
+  wrong answer.
+
+The endpoints below are free and need no key, as far as I know. They are
+sketches and haven't been run.
+
+### Things to bet on
+
+#### 33. Open-Meteo: Out-forecast the weather forecaster
+
+Every morning, wager on "rain tomorrow in your town" before you look. Then
+log Open-Meteo's own forecast as a second wager. Settle both from its
+historical archive and compare Brier scores: you against a weather model.
+
+```python
+f = get("https://api.open-meteo.com/v1/forecast", latitude=lat, longitude=lon,
+        daily="precipitation_sum", timezone="auto")
+api.forecast(cfg, f"rain-{day}", [{"path": "yes", "p": 0.3}, {"path": "no", "p": 0.7}])
+# settle: archive-api.open-meteo.com/v1/archive?...&start_date=day&end_date=day
+```
+
+#### 34. USGS: The earthquake base-rate game
+
+"Will there be an M6+ somewhere this week?" The USGS feeds settle it, and
+its catalogue gives the base rate, so you find out whether you beat the
+base rate or just repeat it.
+
+```python
+n = get("https://earthquake.usgs.gov/fdsnws/event/1/count",
+        starttime=monday, endtime=sunday, minmagnitude=6)
+```
+
+#### 35. Wikipedia pageviews: Which article wins tomorrow
+
+Draw two Wikipedia articles from the stream and guess which gets more views
+tomorrow. Twelve of them make a `deck.py` round. A good way to find out how
+little you know about what the world reads.
+
+```python
+url = ("https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+       f"en.wikipedia/all-access/user/{title}/daily/{day}/{day}")
+```
+
+Watch: Wikimedia asks for a User-Agent that names you and how to reach you.
+
+#### 36. Manifold: You against the crowd
+
+Copy a public prediction-market question into your own ledger with your own
+probability, write the crowd's probability beside it, and when it resolves,
+score both. Over a season you learn where you beat the crowd.
+
+```python
+m = get(f"https://api.manifold.markets/v0/market/{market_id}")
+api.forecast(cfg, f"manifold-{market_id}", mine, by="human")
+api.forecast(cfg, f"manifold-{market_id}-crowd", crowd(m["probability"]), by="crowd")
+```
+
+#### 37. Hacker News: Will it hit the front page
+
+For a handful of new posts, wager on which make the front page. Algolia's
+HN search API settles it.
+
+```python
+front = get("https://hn.algolia.com/api/v1/search", tags="front_page")
+```
+
+#### 38. NOAA tides: The tide is a sure thing
+
+A control for the whole forecasting game: NOAA publishes tide predictions
+that are nearly always right. If your Brier score on tides isn't close to
+zero, the plumbing is broken, not your judgement.
+
+```python
+get("https://api.tidesandcurrents.noaa.gov/api/prod/datagetter",
+    product="predictions", station=station, begin_date=day, range=24,
+    datum="MLLW", interval="hilo", units="metric", time_zone="lst_ldt", format="json")
+```
+
+### Things to read
+
+#### 39. Open English WordNet: A dictionary rung
+
+The checkout problem (16) is a word with two senses. WordNet knows "seal"
+the stamp, "seal" the animal and "seal" the gasket. Expanding a bite's words
+with the right synonyms (or flagging when a word has several senses) is a
+cheap fix before any embedder. CC BY 4.0, offline once downloaded.
+
+```python
+import wn
+wn.download("oewn:2024")               # once, off the box
+[s.definition() for s in wn.synsets("seal")]
+```
+
+#### 40. wordfreq: What's rare to you, common to the world
+
+wordfreq gives how common a word is across the web, books, subtitles and
+more. Set that against your pile's counts and you get your own dialect: the
+words you use far more than the world does ("seal", "bite", "rung", "pile").
+Good for ranking too: a word rare in the world but common for you is a
+strong signal.
+
+```python
+from wordfreq import zipf_frequency
+mine = store_count(w) / store_total
+print(w, zipf_frequency(w, "en"), mine)
+```
+
+Watch: wordfreq's data stopped being updated in 2024; it's a snapshot of
+the web before then.
+
+#### 41. Tatoeba: Sentences in every language
+
+Jeles already has `source_lang` and `target_lang`. Tatoeba is millions of
+sentences with their translations, CC BY 2.0 FR. A bite in one language
+could pull the same idea in another.
+
+```sh
+curl -O https://downloads.tatoeba.org/exports/sentences.tar.bz2
+```
+
+#### 42. Project Gutenberg: Old books for serendipity
+
+Serendipity mode (7) gets stranger when one side is a paragraph from a
+public-domain book: your gate code beside Moby-Dick.
+
+```python
+book = get(f"https://www.gutenberg.org/cache/epub/{n}/pg{n}.txt")
+```
+
+Watch: Gutenberg asks that bulk downloads come from a mirror, not the site.
+
+### Things to draw from
+
+#### 43. Skyfield: A horoscope with real planets
+
+`horoscope.py` is made up. Skyfield computes where the planets really are,
+offline, from a JPL ephemeris file. Each sign is a real 30-degree slice of
+the ecliptic, and the drand round picks the reading for the sign.
+
+```python
+from skyfield.api import load
+ts, eph = load.timescale(), load("de421.bsp")   # the file, fetched once
+lat, lon, _ = eph["earth"].at(ts.now()).observe(eph["mars"]).apparent().ecliptic_latlon()
+sign = SIGNS[int(lon.degrees // 30)]
+```
+
+#### 44. Natural Earth: Today's place
+
+Natural Earth's populated places are public domain and small. A drand round
+picks one, and it becomes the day's place: where the oracle "is", where the
+weather bet (33) is made, where the-table's next scene is set.
+
+```python
+place = rng.choice(places)    # rng = StreamRandom.from_seed(randomness)
+```
+
+#### 45. The Met Open Access: Art of the day
+
+Hundreds of thousands of the Met's public-domain works, CC0, by API. A drand
+draw picks one for each sealed session, beside its rune (15).
+
+```python
+ids = get("https://collectionapi.metmuseum.org/public/collection/v1/objects")["objectIDs"]
+art = get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{rng.choice(ids)}")
+```
+
+Watch: check `isPublicDomain` on each object before showing its image.
+
+#### 46. Lichess: Puzzle of the day
+
+Lichess publishes millions of rated chess puzzles, CC0. A drand round picks
+today's, and `python-chess` (already in the table tests) checks the answer.
+Predict whether you'll solve it first, and that's a wager too.
+
+```sh
+curl -O https://database.lichess.org/lichess_db_puzzle.csv.zst
+```
+
+### Things to measure yourself against
+
+#### 47. Our World in Data: The 90 percent quiz
+
+The classic calibration drill: "Population of Nigeria in 2020? Give a range
+you're 90% sure of." Our World in Data has thousands of such numbers as
+CSV. If far fewer than 9 in 10 of your ranges hold the answer, you're
+overconfident. `calibration.bins` then shows exactly where.
+
+```python
+rows = get(f"https://ourworldindata.org/grapher/{slug}.csv")
+hit = low <= answer(rows, country, year) <= high
+```
+
+#### 48. GH Archive: Is your CI normal
+
+GH Archive records every public GitHub event, hour by hour. From it: how
+often do PRs everywhere go green on the first push, how long do they stay
+open, how many force-pushes? That's the base rate for betting on your own
+CI (5), and for `rebase_shame.py`: are you actually worse than average?
+
+```sh
+curl -O https://data.gharchive.org/2026-10-20-15.json.gz   # one hour
+```
+
+Watch: one hour is around 100 MB unpacked. Sample a few hours, don't pull
+the year.
