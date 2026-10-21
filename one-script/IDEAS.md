@@ -180,6 +180,14 @@ here reads, writes or caches vault material.
 
 [How much is already here](#how-much-is-already-here)
 
+**What fell out of the second run**
+
+103. [Writing an idea down hides its gap](#103-writing-an-idea-down-hides-its-gap)
+104. [NEEDS YOU doesn't list a session waiting on your seal](#104-needs-you-doesnt-list-a-session-waiting-on-your-seal)
+105. [Deep Thought measures the world before D2](#105-deep-thought-measures-the-world-before-d2)
+106. [A box with its own keys can't be looked into](#106-a-box-with-its-own-keys-cant-be-looked-into)
+107. [This branch merges clean](#107-this-branch-merges-clean)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -1686,6 +1694,75 @@ in `compiled/ideas.py` carries the same notes.
 
 So most of the list compiles from what's here: 33 of 55 now need nothing
 new, and 10 more need one package.
+
+## What fell out of the second run
+
+2026-10-21, after the snapshot reader and the compile. A fresh box over
+willow-bot, willows-grove and Jeles (1,373 files, today's commits in it),
+the same 80-word bite as the first run, the morning screen, `needs`, a
+cross-box `lookup`, `diverge` against `main`, and `deep_thought.py`.
+
+### 103. Writing an idea down hides its gap
+
+All 40 once-missed words are found now, and the five bad typo repairs (59)
+are gone. But nothing was fixed: 37 of the 40 are found *only* in this
+file. The misses map (3) goes blind to anything written down as an idea,
+and the rank's top hit for the bite (score 354, next best 97) is this
+file's own report listing the missing words. Only `algolia` and `tarot`
+reached real code (`compiled/ideas.py`); `bm25s` sits only in a test's
+example.
+
+A shape for the fix: a hit that lands only in a proposal file isn't
+knowledge. Mark this file (and anything like it) as `provenance: proposal`
+in the index, and count a word as known only when it lands somewhere else
+too.
+
+```python
+known = [k for k in seed["keys"]
+         if any(not a[1].endswith("IDEAS.md") for a in k["anchors"])]
+```
+
+### 104. NEEDS YOU doesn't list a session waiting on your seal
+
+Check-in says *"sessions: 0 sealed, 1 waiting on your seal"*; the morning
+screen's NEEDS YOU says *"nothing"*, and `needs` returns 0. `view.needs`
+builds its lines from turns, proposals, offers, claims and acts, but not
+from sessions. Here neither session could even be proposed (no Nestor
+store), so two sessions sit unsealed and nothing on the screen says so.
+
+```python
+# view.needs (sketch)
+needs += [f"session {s['subject']} · waiting on your seal{s.get('why', '')}"
+          for s in report.get("sessions_waiting", [])]
+```
+
+### 105. Deep Thought measures the world before D2
+
+`deep_thought.py` reports 8 `[failing] … nothing in the bot`. Two reasons,
+both stale:
+- Its default root is `~/github/willow-memory`. Pointed at the real repos
+  (`ONESCRIPT_ROOT`), 5 of the 8 find a file.
+- It counts `one-script/onescript/` as "skeleton" (elsewhere) and only
+  `willow_bot/deterministic/` as "the bot". Since D2 moved the one script
+  into willow-bot, the skeleton *is* in the bot: `predict.py`, `view.py`
+  and `reverse.py` are all there.
+
+So its "Move one in, merge them, or write it new in the bot?" questions are
+already answered by the move. What counts as "in the bot" is the operator's
+to say; the measure just needs to be told.
+
+### 106. A box with its own keys can't be looked into
+
+`lookup --other <box>` said the other box was `unreachable`: *"no store key
+in the operator's keys dir"*. The cross-session lookup reads the other
+store's key from the operator's keys dir, so a box made with its own
+`--keys` file can't be merged in. Said, not hidden; worth knowing before
+relying on cross-box lookups.
+
+### 107. This branch merges clean
+
+`diverge origin/main HEAD`: 9 files and 203 units changed on this branch
+only, none on `main`, 0 divergence points. Nothing to reconcile.
 
 ## What the one script said about this list
 
