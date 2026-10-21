@@ -86,6 +86,43 @@ jobs:
           ref: ${{ steps.store_ref.outputs.ref }}
           path: safe-app-store
 
+      # The reach's parity test (flatten-2 F6.5) holds every consumer's copy of
+      # reach_bootstrap.py to the template, so every consumer is beside.
+      # A change that spans repos rides one branch name in each.
+      - name: Which willow-mcp
+        id: mcp_ref
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/willow-memory/willow-mcp "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          repository: willow-memory/willow-mcp
+          ref: ${{ steps.mcp_ref.outputs.ref }}
+          path: willow-mcp
+
+      - name: Which ratatosk
+        id: rat_ref
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/willow-memory/ratatosk "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          repository: willow-memory/ratatosk
+          ref: ${{ steps.rat_ref.outputs.ref }}
+          path: ratatosk
+
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
