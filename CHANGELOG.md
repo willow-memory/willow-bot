@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [1.17.3](https://github.com/willow-memory/willow-bot/compare/v1.17.2...v1.17.3) (2026-10-21)
+
+
+### Fixed
+
+* **one-script:** the prompt hook reads the repos its check-in named ([debbf0b](https://github.com/willow-memory/willow-bot/commit/debbf0b5b3d4ad004b01e7d38953b6e25c91b916))
+
+
+### Performance
+
+* **one-script:** a prompt reads its chunks in one git pass per repo ([7c62f10](https://github.com/willow-memory/willow-bot/commit/7c62f10af7df9dd372f717f18893d166135de677))
+* **one-script:** a prompt reads the record from the human's sealed tip ([fff0ac8](https://github.com/willow-memory/willow-bot/commit/fff0ac8e2d785c5852d2922bb267622eb58b73df))
+* **one-script:** the record remembers its last parse ([435a411](https://github.com/willow-memory/willow-bot/commit/435a411e6a6c09cef87ae09cc20ca8df9e0d53a5))
+
+
+### Changed
+
+* **one-script:** the write token's home is stamp.py; the prompt path drops the gate ([f12d94f](https://github.com/willow-memory/willow-bot/commit/f12d94f4513e58a498ef8ea024f17873747ab202))
+* **one-script:** the write token's home is stamp.py; the prompt path drops the gate ([8a2e462](https://github.com/willow-memory/willow-bot/commit/8a2e46216381cfc82b941ec350839b17d19c4778))
+
 ## [1.17.2](https://github.com/willow-memory/willow-bot/compare/v1.17.1...v1.17.2) (2026-10-21)
 
 
