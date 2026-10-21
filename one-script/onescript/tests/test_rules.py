@@ -136,7 +136,11 @@ def _mai_resolve_phase_works() -> bool:
         f.write_text("@markdownai v1.0\n@phase R-weak\nhello\n")
         try:
             out = subprocess.run(
-                [MAI, "mai_resolve_phase", json.dumps({"file": str(f), "phase": "R-weak"})],
+                [
+                    MAI,
+                    "mai_resolve_phase",
+                    json.dumps({"file": str(f), "phase": "R-weak"}),
+                ],
                 capture_output=True,
                 text=True,
             ).stdout
