@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from onescript import __main__ as cli  # noqa: E402
-from onescript import api  # noqa: E402
+from onescript import api, boxstore, prompt_path  # noqa: E402
 from onescript.tests.test_api import cfg, rows  # noqa: E402,F401
 from onescript.tests.test_store import BITE, box  # noqa: E402,F401
 
@@ -193,7 +193,7 @@ class TestTheEmbedderRung:
             return order
 
         monkeypatch.setattr(api.pile_mod, "wordllama_embed", fake)
-        monkeypatch.setattr(api, "PROMPT_TOP", 1)
+        monkeypatch.setattr(prompt_path, "PROMPT_TOP", 1)  # its home since the cut
         words = api.prompt(box["cfg"], BITE)["doc"]
         fused = api.prompt(self.cfg_with(box, tmp_path), BITE)["doc"]
         assert fused["rung"] == {"used": "fused", "why": ""}
@@ -212,7 +212,7 @@ class TestTheEmbedderRung:
         monkeypatch,
         tmp_path,  # noqa: F811
     ):
-        monkeypatch.setattr(api, "SEED_TOP", 1)
+        monkeypatch.setattr(boxstore, "SEED_TOP", 1)  # its home since the cut
         monkeypatch.setattr(
             api.pile_mod,
             "wordllama_embed",
@@ -230,7 +230,7 @@ class TestTheEmbedderRung:
     ):
         got = []
         monkeypatch.setattr(
-            api,
+            prompt_path,  # the hook calls prompt_path.prompt, never through api
             "prompt",
             lambda c, *a, **k: (
                 got.append(c.embed)

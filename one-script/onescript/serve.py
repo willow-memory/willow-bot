@@ -49,7 +49,16 @@ import os
 import re
 import unicodedata
 
-from . import gate, lore, mai_shape, nestor_seal, rules, scrub, sign
+from . import gate, lore, mai_shape, nestor_seal, rules, sign
+from .chunk import (  # noqa: F401  (moved to chunk.py; read here as before)
+    UNSEALED,
+    WITHHELD,
+    _chunk_entry,
+    _marker,
+    _scrub,
+    chunk_name,
+    served_id,
+)
 from .record import Record, canon, h256
 from .states import EMPTY, POPULATED, UNREACHABLE
 
@@ -92,7 +101,6 @@ RETURN = (
 )
 
 _ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
-WITHHELD = "[hash withheld]"
 
 
 def session_key() -> bytes:
@@ -111,24 +119,6 @@ def w_of(row: dict, w: str) -> str | None:
     if w == "where":
         return row.get("where") or row.get("path")
     raise ValueError(f"not a W: {w!r}")
-
-
-def _marker(kind):
-    return WITHHELD if kind == "hash64" else f"[REDACTED:{kind}]"
-
-
-def _scrub(value):
-    """No full-width hash reaches the model, wherever it sits. Since flatten-2
-    F12 the rule is ``scrub.py``'s: the hash first, as it always was (its
-    marker is still ``WITHHELD``), then the credential shapes, which are added
-    coverage (a key in a record's text reaches the model no more than a hash)."""
-    if isinstance(value, str):
-        return scrub.apply(value, ("hash64", "credentials"), marker=_marker)
-    if isinstance(value, list):
-        return [_scrub(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _scrub(v) for k, v in value.items()}
-    return value
 
 
 def view(row: dict) -> dict:
@@ -257,11 +247,6 @@ def is_chunk(table: dict) -> bool:
     return isinstance(src, dict) and isinstance(src.get("chunk"), dict)
 
 
-def chunk_name(table: dict) -> str:
-    c = table["source"]["chunk"]
-    return f"{c['repo']}:{c['path']}:{c['line']}"
-
-
 def chunk_tables(seed_row: dict, top: int) -> list[dict]:
     """The seed's top chunks, each a table: no rows, and a source that names
     the chunk by repo, path, line and its own SHA-256, with its receipt: the
@@ -337,10 +322,6 @@ def table_id(table: dict) -> str:
 def scope_subject(ids) -> str:
     """What the human seals: one hash over the exact, sorted set of table ids."""
     return "serve:" + h256(canon(sorted(set(ids))))
-
-
-def served_id(serve_key: bytes, tid: str) -> str:
-    return gate.sign(serve_key, "served", tid)
 
 
 def claimed_seals(rows: list[dict]) -> set[str]:
@@ -543,10 +524,6 @@ def _nothing(state: str, why: str) -> dict:
     return {"state": state, "why": why, "return": RETURN, "tables": []}
 
 
-#: What a scope served with no seal says of itself (`Config.seal_at_end`).
-UNSEALED = "unsealed: this session"
-
-
 def _serve(
     rows,
     tables,
@@ -643,31 +620,6 @@ def _serve(
             EMPTY, "the scope is too large for this model; narrow the stack"
         )
     return doc
-
-
-def _chunk_entry(t: dict, tid: str, serve_key: bytes, seals, read_chunk) -> dict:
-    """A repo chunk as the model reads it: its place and its text, re-read at
-    the indexed blob now. A chunk is someone's file, not a sealed row, so it is
-    `untrusted` unless its own id carries the human's seal."""
-    where = chunk_name(t)
-    entry = {
-        "id": served_id(serve_key, tid),
-        "trust": "human-sealed" if tid in seals else "untrusted",
-        "group": _scrub({"where": where}),
-        "cannot_hold": [],
-        "rows": [],
-    }
-    if read_chunk is None:
-        text, why = None, "no reader for repo chunks in this serve"
-    else:
-        text, why = read_chunk(t["source"]["chunk"])
-    if text is None:
-        entry["state"], entry["why"] = UNREACHABLE, f"{where}: {why}"
-    else:
-        entry["rows"] = [
-            {"what": "chunk", "where": _scrub(where), "text": _scrub(text)}
-        ]
-    return entry
 
 
 def _receipt(table: dict, rows: list[dict]) -> None:

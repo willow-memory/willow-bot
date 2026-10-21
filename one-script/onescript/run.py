@@ -24,6 +24,7 @@ from . import (
     gate,
     mai_shape,
     nestor_seal,
+    opening,
     predict,
     proposals,
     record,
@@ -48,10 +49,16 @@ class Run:
         law: dict,
         clock: Callable[[], str],
         anchor: Path | None = None,
+        rec: record.Record | None = None,
     ):
+        """`rec`: a record already opened (`opening.open_box`), used as is."""
         self.keys, self.law = keys, law
         self.version = record.version_of(PKG)
-        self.rec = record.Record(box, clock, self.version, gate.token(), anchor)
+        self.rec = (
+            rec
+            if rec is not None
+            else record.Record(box, clock, self.version, gate.token(), anchor)
+        )
         self.sys = gate.system()
         self.answers: list[dict] = []
         self.graded: list[dict] = []
@@ -251,10 +258,7 @@ class Run:
         return {"through": None if pin is None else min(pin, tip), "unpinned": None}
 
     def _anchor(self) -> dict | None:
-        try:
-            return self.rec.anchor()
-        except (ValueError, OSError):
-            return None
+        return opening.anchor_of(self.rec)
 
     def seal_rounds(self) -> dict[str, int]:
         """The reader's newest round at each tip seal, by tip row, as the
@@ -263,24 +267,17 @@ class Run:
         got = a.get("rounds") if isinstance(a, dict) else None
         return dict(got) if isinstance(got, dict) else {}
 
-    _NOW = object()
+    _NOW = opening._NOW
 
     def pin(self, anchor: dict | None | object = _NOW) -> dict | None:
         """Write the `pin` row, once: the tip the human had sealed when this
         code first wrote to the box, so old seal rows with no proof count only
         up to it (`reverse.pinned`). No anchor, or one that can't be read, pins
-        no tip, and then no proofless row counts. `api._open` calls it on every
-        verb, right after the `invocation` row; `seal_tip` hands over the anchor
+        no tip, and then no proofless row counts. `opening.open_box` pins on
+        every verb, right after the `invocation` row; `seal_tip` hands over the anchor
         as it was before the new tip replaced it. A pin already on record is left alone,
         and None is returned."""
-        if any(r["kind"] == "pin" for r in self.rec.rows()):
-            return None
-        a = self._anchor() if anchor is Run._NOW else anchor
-        if not isinstance(a, dict):
-            return self.rec.append("pin", self.sys, tip_n=None)
-        return self.rec.append(
-            "pin", self.sys, tip_n=a["n"], tip_hash=a["hash"], proof=a["proof"]
-        )
+        return opening.pin(self.rec, self.sys, anchor)
 
     def seal_rows(
         self, rows: list[dict] | None = None
