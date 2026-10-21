@@ -32,6 +32,8 @@
     python3 -m onescript ledger-head --n N --head H  # the agm_head row (J9, R9)
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
     python3 -m onescript merge-check merge.json [--json] [--record] [--box BOX]  # the merge gate
+    python3 -m onescript diverge A B [--repo NAME ...] [--repos DIR] [--json] [--record]
+        [--behaviour] [--box-a BOX --box-b BOX]  # where two refs part, to the smallest unit
 
 The app calls the functions in `onescript.api`; this file only reads argv,
 builds the `Config`, calls one of them and prints. Nothing here needs a tty.
@@ -66,7 +68,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, deck, jeles_store, market, merge_check, table, view
+from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -354,6 +356,23 @@ def main(argv: list[str] | None = None) -> int:
     mc.add_argument("--python", dest="mc_python", action="append", default=[],
                     type=_name_path, metavar="REPO=PYTHON",
                     help="the interpreter for a repo's own tests (default: this one)")
+    dv = sub.add_parser(
+        "diverge",
+        help="where two refs (or two boxes' chains) part, down to the smallest unit "
+        "(off the box; --record appends one `diverge` row to --box)",
+    )
+    dv.add_argument("ref_a", nargs="?", metavar="A")
+    dv.add_argument("ref_b", nargs="?", metavar="B")
+    dv.add_argument("--repo", dest="dv_repo", action="append", default=[], metavar="NAME",
+                    help="a repo under --repos to compare (repeatable; default willow-bot)")
+    dv.add_argument("--repos", dest="dv_repos", type=Path, default=None,
+                    help="the directory holding the repos (default: beside this willow-bot)")
+    dv.add_argument("--json", dest="as_json", action="store_true")
+    dv.add_argument("--record", dest="dv_record", action="store_true")
+    dv.add_argument("--behaviour", dest="dv_behaviour", action="store_true",
+                    help="level 4: merge in a throwaway clone and run each side's changed tests")
+    dv.add_argument("--box-a", dest="dv_box_a", type=Path, default=None)
+    dv.add_argument("--box-b", dest="dv_box_b", type=Path, default=None)
     sub.add_parser("checkin")
     sd = sub.add_parser(
         "seed", help="the first bite's words against the box; once per check-in"
@@ -648,6 +667,21 @@ def main(argv: list[str] | None = None) -> int:
         for name in res["dropped_hmac"]:
             print(f"  dropped  {name} (HMAC: a shared secret, not a public key)")
         return 0
+
+    if args.cmd == "diverge":  # off the box: it reads refs; --record appends one row to --box
+        return diverge.run_cli(
+            args.ref_a,
+            args.ref_b,
+            repos=args.dv_repos,
+            names=args.dv_repo or None,
+            as_json=args.as_json,
+            record=args.dv_record,
+            box=args.box,
+            behaviour=args.dv_behaviour,
+            box_a=args.dv_box_a,
+            box_b=args.dv_box_b,
+            clock=(lambda: args.now) if args.now else None,
+        )
 
     if args.cmd == "merge-check":  # off the box: no record, no invocation row
         return merge_check.run_cli(

@@ -46,6 +46,16 @@ that is not beside the others FAILS the gate that needs it.
   8 the human seals          ``verified_by`` set and != ``author``; ``home`` writes no
                              sealed standing, no human seal row, calls no seal verb
 
+Gate 0, ``divergence`` (new, beside the eight, which are untouched): when the attestation
+carries ``base_ref`` AND ``chunk_ref`` (optional; ``diverge_repos`` names the repos, default
+``willow-bot``), ``onescript.diverge`` runs between them (levels 0-3) and gate 0 records the
+set it found: its state, its sha-256 and its counts. It scopes nothing yet. It fails closed
+when diverge is ``unreachable`` (a ref, a repo or a merge base missing) or when only one
+of the two fields is given. An existing candidate with neither field says ``not attested``
+and does not fail: the gate is new. It runs ahead of the eight and is kept apart from
+``GATE_NAMES``/``check()``; ``run_cli`` puts it first and a record carries it as
+``divergence``.
+
 ``--skip-suite`` exists for a quick look: gate 1 then FAILS as ``not run``, in a
 dry run and in ``--record`` alike, so a skipped gate can never mint a record.
 
@@ -87,6 +97,7 @@ GATE_NAMES = [
     "7 same_in_same_out",
     "8 human_seals [M]",
 ]
+GATE0_NAME = "0 divergence [M]"
 TIMEOUT = 3600
 
 # willow-mcp's trust seeds if its own closure test can't be read (the brief's list).
@@ -1178,6 +1189,43 @@ def check(
     return out
 
 
+def _gate0(att_path, pl: Places) -> Result:
+    """Gate 0: the divergence between the attested ``base_ref`` and ``chunk_ref``,
+    recorded and scoping nothing. Not attested is not a failure (the gate is new);
+    attested and unreachable is."""
+    att = _load(att_path) or {}
+    if "_error" in att:
+        return GATE0_NAME, True, "not attested (no readable attestation)"
+    given = [k for k in ("base_ref", "chunk_ref") if k in att]
+    if not given:
+        return GATE0_NAME, True, "not attested (no base_ref and chunk_ref); nothing scoped"
+    if len(given) == 1:
+        return GATE0_NAME, False, f"only {given[0]!r} is attested; base_ref and chunk_ref come together"
+    base, chunk = att["base_ref"], att["chunk_ref"]
+    names = att.get("diverge_repos", ["willow-bot"])
+    if (
+        not all(isinstance(x, str) and x.strip() for x in (base, chunk))
+        or not isinstance(names, list)
+        or not names
+        or not all(isinstance(n, str) for n in names)
+    ):
+        return GATE0_NAME, False, "base_ref, chunk_ref and diverge_repos must be non-empty strings"
+    from . import diverge
+
+    res = diverge.run(pl.repos, names, base, chunk)
+    h = diverge.result_hash(res)
+    if res["state"] == "unreachable":
+        return GATE0_NAME, False, f"diverge is unreachable (fail-closed): {res['reason']}"
+    c = res["counts"]
+    return (
+        GATE0_NAME,
+        True,
+        f"{res['state']}: {c['minimal']} divergence point(s) between {base} and {chunk} "
+        f"(units both-different {c['units_both_different']}, edges {c['edges']}); "
+        f"recorded, scopes nothing; sha256 {h[:12]}",
+    )
+
+
 def _gates_payload(results: list[Result]) -> list[dict]:
     return [{"gate": g, "ok": ok, "detail": d} for g, ok, d in results]
 
@@ -1195,7 +1243,7 @@ def _head(repo: Path | None) -> str:
 
 
 def record_merge(
-    att_path, results: list[Result], pl: Places
+    att_path, results: list[Result], pl: Places, gate0: Result | None = None
 ) -> tuple[Path | None, str]:
     """Write one-script/merged/<chunk>.json for a passing chunk. Every refusal
     comes before the first write, so a refused record leaves the tree untouched:
@@ -1204,6 +1252,8 @@ def record_merge(
     identifier; a record that already exists (re-minting is deliberate)."""
     if len(results) != len(GATE_NAMES) or not all(ok for _, ok, _ in results):
         return None, "chunk is NOT MERGEABLE: no record written (fail-closed)"
+    if gate0 is not None and not gate0[1]:
+        return None, "chunk is NOT MERGEABLE (gate 0 divergence): no record written (fail-closed)"
     if [g for g, _, _ in results] != GATE_NAMES:
         return None, "refusing to record: the gate list is not the eight (fail-closed)"
     att = _load(att_path) or {}
@@ -1237,6 +1287,8 @@ def record_merge(
         },
         "gates": _gates_payload(results),
     }
+    if gate0 is not None:
+        record["divergence"] = {"gate": gate0[0], "ok": gate0[1], "detail": gate0[2]}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return out, f"recorded at {out}"
@@ -1260,16 +1312,21 @@ def run_cli(
     att_path = Path(attestation).resolve()
     pl = default_places(repos, python)
     results = check(att_path, pl, box=box, box_anchor=box_anchor, skip_suite=skip_suite)
-    mergeable = bool(results) and all(ok for _, ok, _ in results)
+    try:
+        g0 = _gate0(att_path, pl)
+    except Exception as e:  # a gate that crashes has verified nothing
+        g0 = (GATE0_NAME, False, f"gate crashed, so unverified: {type(e).__name__}: {e}")
+    mergeable = bool(results) and all(ok for _, ok, _ in results) and g0[1]
     written, reason = None, ""
     if record:
-        written, reason = record_merge(att_path, results, pl)
+        written, reason = record_merge(att_path, results, pl, g0)
     if as_json:
         payload = {
             "attestation": str(att_path),
             "kernel": str(pl.kernel),
             "repos": str(pl.repos),
             "mergeable": mergeable,
+            "divergence": {"gate": g0[0], "ok": g0[1], "detail": g0[2]},
             "gates": _gates_payload(results),
         }
         if record:
@@ -1280,6 +1337,7 @@ def run_cli(
         out(json.dumps(payload, indent=2) + "\n")
     else:
         out(f"\nmerge candidate: {att_path.stem}  (kernel {pl.kernel})\n")
+        out(f"  [{'PASS' if g0[1] else 'FAIL'}] {g0[0]:26} {g0[2]}\n")
         for g, ok, d in results:
             out(f"  [{'PASS' if ok else 'FAIL'}] {g:26} {d}\n")
         out(
