@@ -139,6 +139,55 @@ def _script(rng) -> list:
     return out
 
 
+# -- the policy side and the draw (flatten-2 F13) ------------------------------
+
+
+def test_the_legacy_policy_is_named_and_is_mersenne_twister():
+    """D-e: the old generator survives as a name, `random.Random(seed)`, so the
+    frozen records can be re-derived."""
+    import random
+
+    assert (
+        stream.MT19937_POLICY.generator_id
+        == stream.POLICY_LEGACY_ID
+        == "mt19937-policy/legacy"
+    )
+    a, b = stream.MT19937_POLICY(7), random.Random(7)
+    assert [a.randint(1, 6) for _ in range(20)] == [b.randint(1, 6) for _ in range(20)]
+    assert stream.MT19937_POLICY.generator_id != GENERATOR_ID
+
+
+def test_a_new_policy_defaults_to_the_stream_under_its_own_label():
+    r = stream.resolve_policy_factory(None)(5)
+    assert isinstance(r, StreamRandom) and r.generator_id == GENERATOR_ID
+    # not the game's own draws: a policy and its game, both seeded 5, differ
+    game = StreamRandom.from_seed(5)
+    assert [r.stream.u32() for _ in range(4)] != [game.stream.u32() for _ in range(4)]
+    assert stream.resolve_policy_factory(stream.MT19937_POLICY) is stream.MT19937_POLICY
+
+
+def test_adapter_rng_defaults_to_the_stream_and_names_the_legacy_one():
+    import random
+
+    assert isinstance(stream.adapter_rng(None, 3), StreamRandom)
+    assert isinstance(stream.adapter_rng(stream.LEGACY, 3), random.Random)
+    assert isinstance(stream.adapter_rng(stream.MT19937_POLICY, 3), random.Random)
+    mine = StreamRandom.from_seed(9, b"x")
+    assert stream.adapter_rng(lambda s: mine, 3) is mine
+
+
+def test_a_drawn_seed_replays_the_run():
+    """The urandom seed is drawn once; the run from it is the stream's, so the
+    same recorded seed gives the same run."""
+    seed = stream.draw_seed()
+    assert isinstance(seed, int) and 0 <= seed < 1 << 64
+    a, b = StreamRandom.from_seed(seed), StreamRandom.from_seed(seed)
+    assert [a.randint(1, 20) for _ in range(30)] == [
+        b.randint(1, 20) for _ in range(30)
+    ]
+    assert stream.draw_seed() != seed  # unpredictable: a second draw differs
+
+
 @needs_table
 def test_the_tables_stream_is_this_one(table):
     """F-14/F-16: the-table imports the one script's stream and its table
