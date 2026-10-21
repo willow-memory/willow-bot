@@ -14,6 +14,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -116,7 +117,39 @@ def test_phases_are_read_the_way_mai_reads_them():
 MAI = shutil.which("mai") or "/home/user/tools/bin/mai"
 
 
-@pytest.mark.skipif(not Path(MAI).exists(), reason="the mai tool is not here")
+def _mai_resolve_phase_works() -> bool:
+    """True only when a `mai` on the box still has the `mai_resolve_phase`
+    command *and* the old bare-`@phase` semantics this parity check reads.
+
+    The public `@markdownai` npm package is a different implementation from the
+    willow-mcp parser `mai_shape` is vendored from (mai_shape.py docstring); as
+    of 0.0.10 it dropped `mai_resolve_phase` (now an unknown command, empty
+    stdout) and made `@phase` an `@end`-closed block (a bare `@phase` throws
+    `Unclosed @phase block`). Against such a `mai` this parity no longer holds,
+    so the test skips rather than hard-closing the box on an unrelated npm/fnm
+    bump. The probe doc is bare-`@phase`, matching the semantics asserted below:
+    a future `mai` that re-added the command with `@end` semantics skips too."""
+    if not Path(MAI).exists():
+        return False
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "probe.md"
+        f.write_text("@markdownai v1.0\n@phase R-weak\nhello\n")
+        try:
+            out = subprocess.run(
+                [MAI, "mai_resolve_phase", json.dumps({"file": str(f), "phase": "R-weak"})],
+                capture_output=True,
+                text=True,
+            ).stdout
+            return json.loads(json.loads(out)[0]).get("content") == "hello"
+        except Exception:
+            return False
+
+
+@pytest.mark.skipif(
+    not _mai_resolve_phase_works(),
+    reason="no mai with the mai_resolve_phase command and bare-@phase semantics "
+    "(the @markdownai npm CLI dropped it in 0.0.10; see mai_shape.py provenance)",
+)
 def test_the_parser_gives_what_mai_resolve_phase_gives(tmp_path):
     # S3: mai reads with read_text, which turns CRLF and a lone CR into LF; so
     # does phases_of ("verbatim" means mai's bytes), and the parity holds for both
