@@ -26,7 +26,6 @@ COPIES = [
     ("willows-grove", "grove/onescript_reach.py"),
     ("willow-mcp", "src/willow_mcp/onescript_reach.py"),
     ("ratatosk", "ratatosk/onescript_reach.py"),
-    ("willow-bot", "willow_bot/onescript_reach.py"),
 ]
 
 

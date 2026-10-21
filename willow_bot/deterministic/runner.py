@@ -5,17 +5,18 @@ import hashlib
 import json
 from pathlib import Path
 
-from willow_bot import onescript_reach
+from willow_bot._carried import clock as _clock
 from willow_bot.deterministic.ollama import chat
 from willow_bot.deterministic.policy import Policy
 
 
 def _utc_now() -> str:
-    """Row ``ts``, in the one script's ``seconds_z`` format, from its one clock
-    (flatten-2 F8: "Using the onescript at every path."). ``$ONESCRIPT_NOW``
-    pins it. With no one script reachable this raises
-    ``onescript_reach.Unreachable``, with why; there is no copy to fall back to."""
-    return onescript_reach.module("clock").seconds_z()
+    """Row ``ts``, in the one script's ``seconds_z`` format (flatten-2 F8: "Using
+    the onescript at every path."). ``$ONESCRIPT_NOW`` pins it. The installed
+    package carries a parity-tested byte copy of ``onescript/clock.py``
+    (``willow_bot/_carried/``; operator: "carry copies"), so it never reaches the
+    one script, which the wheel does not ship."""
+    return _clock.seconds_z()
 
 
 def _prompt_hash(text: str) -> str:

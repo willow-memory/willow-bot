@@ -57,13 +57,13 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from willow_bot._carried import scrub as _scrub
 from willow_bot.paths import bot_dir
 
 FILE_NAME = "ingress.json"
@@ -103,33 +103,14 @@ def _fetch_hook_url() -> str:
     return github_app.hook_url()
 
 
-def _one_script_scrub():
-    """The one script's ``scrub.py`` (flatten-2 F12; the operator: "Using the
-    onescript at every path."): ``one-script/`` beside ``willow_bot/`` in this
-    checkout. Not there: ``None``, and ``redact_url`` withholds the whole URL
-    and says why. It never falls back to a copy of its own."""
-    root = Path(__file__).resolve().parents[2] / "one-script"
-    if not (root / "onescript" / "scrub.py").is_file():
-        return None
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    try:
-        from onescript import scrub
-    except ImportError:
-        return None
-    return scrub
-
-
 def redact_url(url: str) -> str:
     """``scheme://host[:port]/path`` with every path segment that could be a
     secret replaced by ``…``, login, query and fragment dropped. The rule is
-    ``onescript/scrub.py``'s ``redact_url`` (the same code that stood here
-    until flatten-2 F12). With no one script beside, a URL that may carry a
-    login or a token is withheld, never shown."""
-    scrub = _one_script_scrub()
-    if scrub is None:
-        return "[URL withheld: unreachable, no one-script beside willow_bot]" if url else ""
-    return scrub.redact_url(url)
+    ``onescript/scrub.py``'s ``redact_url`` (flatten-2 F12: "Using the onescript
+    at every path."); the installed package carries a parity-tested byte copy
+    (``willow_bot/_carried/scrub.py``; operator: "carry copies"), because the
+    wheel ships without the one script and must not import it."""
+    return _scrub.redact_url(url)
 
 
 def _code(d: dict) -> int:

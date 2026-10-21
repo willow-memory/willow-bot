@@ -424,15 +424,11 @@ def test_redact_url_hides_path_tokens_and_keeps_ipv6_brackets(url, want):
     assert ingress.redact_url(url) == want
 
 
-def test_redact_url_is_the_one_scripts_and_withholds_when_it_is_not_beside(monkeypatch):
-    # flatten-2 F12: the rule is onescript/scrub.py's `redact_url`
-    shown = ingress.redact_url(SECRET_URL)  # reaches one-script/ beside willow_bot
-    from onescript import scrub
+def test_redact_url_is_the_carried_copy_of_the_one_scripts():
+    # flatten-2 F12: the rule is onescript/scrub.py's `redact_url`; the wheel
+    # carries a byte copy (tests/test_carried_parity.py holds it to the bytes)
+    from willow_bot._carried import scrub
 
-    assert shown == scrub.redact_url(SECRET_URL) == "https://hooks.example.invalid:8443/webhook"
-    monkeypatch.setattr(ingress, "_one_script_scrub", lambda: None)
-    shown = ingress.redact_url(SECRET_URL)
-    assert "unreachable" in shown
-    for secret in ("hookuser", "hookpass", "QUERYSECRET", "frag", "hooks.example.invalid"):
-        assert secret not in shown
+    assert ingress.redact_url(SECRET_URL) == scrub.redact_url(SECRET_URL)
+    assert ingress.redact_url(SECRET_URL) == "https://hooks.example.invalid:8443/webhook"
     assert ingress.redact_url("") == ""
