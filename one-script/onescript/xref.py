@@ -49,7 +49,7 @@ from urllib.parse import unquote
 from .states import EMPTY, POPULATED, UNREACHABLE
 
 from . import canon as _canon
-from . import clock
+from . import clock, mai_shape
 
 TEXT_SUFFIXES = (".md", ".py")
 MAX_BYTES = 5_000_000
@@ -558,8 +558,20 @@ def record_outputs(box: Path, index_bytes: bytes, report_bytes: bytes, inputs) -
         gate.token(),
     )
     who = gate.system()
-    rec.write_file(who, "xref/index.json", index_bytes, provenance="authored")
-    rec.write_file(who, "xref/report.txt", report_bytes, provenance="authored")
+    rec.write_file(
+        who,
+        "xref/index.json",
+        index_bytes,
+        provenance="authored",
+        check=mai_shape.check,
+    )
+    rec.write_file(
+        who,
+        "xref/report.txt",
+        report_bytes,
+        provenance="authored",
+        check=mai_shape.check,
+    )
     return rec.append(
         "xref",
         who,

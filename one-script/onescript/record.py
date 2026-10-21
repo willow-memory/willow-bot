@@ -29,6 +29,16 @@ fsyncs the directory so the file's name survives a crash. An fsync error
 raises and is never retried (fsyncgate: after a failed fsync the kernel may
 have dropped the dirty pages, so a second fsync can report success on data
 that is gone).
+
+THE KERNEL (flatten-2, the record piece; the deterministic loop, assert half).
+Asserted forward, held by tests/test_record_kernel.py:
+  R1  `record` imports only `canon`, `states` and `sign` (no gate, no graph,
+      no nestor_seal, no mai_shape). The seal check is `sign.verify_seal`;
+      the document-shape check is a `check=` hook the caller passes.
+  R2  No byte of any row, anchor or file the record writes changes.
+  R3  Every existing caller still gets what moved: verify_anchor's seal check
+      (same HMAC as `gate.verify_seal`, which now delegates) and write_file's
+      @markdownai shape check (each production caller passes `mai_shape.check`).
 """
 
 from __future__ import annotations
@@ -50,7 +60,7 @@ except ImportError:  # not POSIX: no flock; _locked() says so and runs unlocked
     fcntl = None  # type: ignore[assignment]
 
 from . import canon as _canon
-from . import mai_shape
+from . import sign as _sign
 
 GENESIS = "0" * 64
 
@@ -295,8 +305,6 @@ class Record:
         """Every way the chain fails to reach the sealed tip. Empty means it
         reaches it, or nothing was ever sealed (anchor_state() tells which).
         The proof is checked only where the human's key is present."""
-        from .gate import verify_seal  # gate imports record; import here
-
         rows = self.rows()
         sealed = [
             r
@@ -314,7 +322,7 @@ class Record:
                 else []
             )
         out = []
-        if human_key is not None and not verify_seal(
+        if human_key is not None and not _sign.verify_seal(
             tip_subject(a), a["proof"], human_key
         ):
             out.append("anchor: its seal proof does not verify")
@@ -368,15 +376,23 @@ class Record:
         expect_vanish: bool = False,
         cites: list[str] | None = None,
         provenance: str = "unknown",
+        check: Callable[[str, bytes], str | None] | None = None,
     ) -> dict:
         """`provenance` is where the bytes came from: authored, transcript,
         memory or third-party. It's stamped at write time so a push never has
-        to guess it; "unknown" never leaves the box (gate.push_card)."""
+        to guess it; "unknown" never leaves the box (gate.push_card).
+
+        `check(rel, data)` is the caller's shape check, run before anything is
+        written: it raises PermissionError to refuse, or returns a lint word
+        (stamped on the row as `lint`) or None. The record knows no document
+        shape; every caller that writes a world doc passes `mai_shape.check`."""
         if rel.startswith(("/tmp", "tmp/")) and not expect_vanish:
             raise PermissionError(
                 f"record: '{rel}' is temp; nothing kept is written to temp"
             )
-        lint = mai_shape.check(rel, data)  # T-mai-1: a malformed mai doc is refused
+        lint = (
+            check(rel, data) if check else None
+        )  # T-mai-1 (callers pass mai_shape.check)
         with self._locked():  # file, pointer and row: one writer start to end
             return self._write_file(
                 who, rel, data, lint, live, expect_vanish, cites, provenance

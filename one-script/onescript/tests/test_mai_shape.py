@@ -39,7 +39,7 @@ def box(tmp_path):
 
 def test_clean_mai_doc_passes_and_is_stamped(tmp_path):
     rec = box(tmp_path)
-    row = rec.write_file(gate.system(), "d.md", CLEAN.encode())
+    row = rec.write_file(gate.system(), "d.md", CLEAN.encode(), check=mai_shape.check)
     assert row["kind"] == "write" and row["lint"] == "clean"
     assert (tmp_path / "d.md").read_text() == CLEAN
 
@@ -48,7 +48,7 @@ def test_clean_mai_doc_passes_and_is_stamped(tmp_path):
 def test_each_lint_class_is_refused_with_a_reason(tmp_path, name):
     rec = box(tmp_path)
     with pytest.raises(PermissionError) as e:
-        rec.write_file(gate.system(), "d.md", BAD[name].encode())
+        rec.write_file(gate.system(), "d.md", BAD[name].encode(), check=mai_shape.check)
     assert "malformed @markdownai" in str(e.value)
     assert not (tmp_path / "d.md").exists()
     assert not [r for r in rec.rows() if r["kind"] == "write"]
@@ -72,11 +72,15 @@ def test_reasons_name_the_defect():
 def test_plain_markdown_and_other_files_pass_untouched(tmp_path):
     rec = box(tmp_path)
     plain = "# Notes\n\n@constraint: this is just prose in plain markdown\n@if x\n"
-    row = rec.write_file(gate.system(), "n.md", plain.encode())
+    row = rec.write_file(gate.system(), "n.md", plain.encode(), check=mai_shape.check)
     assert "lint" not in row
     fenced = "# About\n\n```\n@markdownai v1.0\n@constraint: x\n```\n"
-    assert "lint" not in rec.write_file(gate.system(), "f.md", fenced.encode())
-    assert "lint" not in rec.write_file(gate.system(), "x.txt", BAD["colon"].encode())
+    assert "lint" not in rec.write_file(
+        gate.system(), "f.md", fenced.encode(), check=mai_shape.check
+    )
+    assert "lint" not in rec.write_file(
+        gate.system(), "x.txt", BAD["colon"].encode(), check=mai_shape.check
+    )
 
 
 def test_a_refused_mai_doc_is_a_refused_row_through_write_proposal(tmp_path):
@@ -152,7 +156,9 @@ def test_S7_only_a_first_body_line_header_makes_a_doc_mai(tmp_path):
             "@markdownai\n@constraint: header-less is mai_lint's warning, not mai\n",
         )
     ):
-        assert "lint" not in rec.write_file(gate.system(), f"p{i}.md", text.encode())
+        assert "lint" not in rec.write_file(
+            gate.system(), f"p{i}.md", text.encode(), check=mai_shape.check
+        )
 
 
 def test_S7_a_header_placed_late_or_in_frontmatter_is_refused(tmp_path):
@@ -163,14 +169,18 @@ def test_S7_a_header_placed_late_or_in_frontmatter_is_refused(tmp_path):
         "@markdownai v1.0\n\n# T\n\n@markdownai v1.0\n",
     ):
         with pytest.raises(PermissionError):
-            rec.write_file(gate.system(), "d.md", text.encode())
+            rec.write_file(gate.system(), "d.md", text.encode(), check=mai_shape.check)
 
 
 def test_S8_a_bom_does_not_hide_a_defect(tmp_path):
     rec = box(tmp_path)
     with pytest.raises(PermissionError, match="colon form"):
-        rec.write_file(gate.system(), "d.md", ("﻿" + BAD["colon"]).encode())
-    row = rec.write_file(gate.system(), "ok.md", ("﻿" + CLEAN).encode())
+        rec.write_file(
+            gate.system(), "d.md", ("﻿" + BAD["colon"]).encode(), check=mai_shape.check
+        )
+    row = rec.write_file(
+        gate.system(), "ok.md", ("﻿" + CLEAN).encode(), check=mai_shape.check
+    )
     assert row["lint"] == "clean"
 
 
@@ -186,7 +196,9 @@ def test_S8_frontmatter_shape_is_checked_with_the_stdlib():
 def test_N4_upper_case_suffix_and_lone_cr_are_checked(tmp_path):
     rec = box(tmp_path)
     with pytest.raises(PermissionError):
-        rec.write_file(gate.system(), "d.MD", BAD["colon"].encode())
+        rec.write_file(
+            gate.system(), "d.MD", BAD["colon"].encode(), check=mai_shape.check
+        )
     assert mai_shape.problems(BAD["colon"].replace("\n", "\r"))
     assert mai_shape.is_mai("\r@markdownai v1.0\r# T\r")
 
