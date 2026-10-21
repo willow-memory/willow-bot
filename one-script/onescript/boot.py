@@ -25,7 +25,6 @@ gate the caller chose to skip says so in a row (`differently`), never silently.
 from __future__ import annotations
 
 import importlib.util
-import os
 import re
 import shutil
 import subprocess
@@ -33,6 +32,7 @@ import sys
 from pathlib import Path
 
 from . import gate, reverse
+from .opening import _git, _run  # noqa: F401  (moved to opening; read here as before)
 from .states import EMPTY, POPULATED, UNREACHABLE
 
 
@@ -100,29 +100,6 @@ def _unreachable(gate_name: str, where: str, why: str, phone: bool = False) -> d
     if phone:
         return _row(gate_name, where, UNREACHABLE, why, deferred=True)
     return _row(gate_name, where, "failing", f"can't run on the box: {why}")
-
-
-def _run(
-    argv: list[str],
-    cwd: str,
-    timeout: int = 600,
-    env: dict[str, str] | None = None,
-) -> tuple[int, str]:
-    """Run a command. `env` is added to a copy of this process's environment for
-    the child only; the calling process's own environment is never changed."""
-    child = {**os.environ, **env} if env else None
-    p = subprocess.run(
-        argv,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        env=child,
-    )
-    lines = (p.stdout + p.stderr).strip().splitlines()
-    return p.returncode, lines[-1] if lines else ""
 
 
 #: Run by the suite's own interpreter: prints the modules it can't import, or "-".
@@ -247,21 +224,6 @@ def toolchain_gate(
             )
         )
     return out
-
-
-def _git(repo: str, *args: str) -> str:
-    try:
-        p = subprocess.run(
-            ["git", "-C", repo, *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env={**os.environ, "LC_ALL": "C"},  # F17: parsed output, one locale
-        )
-    except OSError:  # no git on this machine
-        return ""
-    return p.stdout.strip() if p.returncode == 0 else ""
 
 
 def _git_here(repo: str) -> bool:
