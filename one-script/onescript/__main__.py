@@ -31,6 +31,7 @@
     python3 -m onescript verdict --json FILE         # one table verdict row (J4)
     python3 -m onescript ledger-head --n N --head H  # the agm_head row (J9, R9)
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
+    python3 -m onescript merge-check merge.json [--json] [--record] [--box BOX]  # the merge gate
 
 The app calls the functions in `onescript.api`; this file only reads argv,
 builds the `Config`, calls one of them and prints. Nothing here needs a tty.
@@ -65,7 +66,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, deck, jeles_store, market, table, view
+from . import beacon, deck, jeles_store, market, merge_check, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -335,6 +336,24 @@ def main(argv: list[str] | None = None) -> int:
         default=api.default_keyring(),
         help="default: the box's keyring path (verifiers.public.json)",
     )
+    mc = sub.add_parser(
+        "merge-check",
+        help="the merge gate: can this chunk come in and leave the one script intact "
+        "(off the box; --record writes one-script/merged/<chunk>.json only on a pass)",
+    )
+    mc.add_argument("attestation", type=Path, help="the chunk's merge.json")
+    mc.add_argument("--json", dest="as_json", action="store_true")
+    mc.add_argument("--record", dest="mc_record", action="store_true")
+    mc.add_argument("--box", dest="mc_box", type=Path, default=None,
+                    help="a box whose record's chain and anchor must verify (gate 2)")
+    mc.add_argument("--repos", dest="mc_repos", type=Path, default=None,
+                    help="the directory holding willow-bot and its siblings "
+                    "(default: beside this willow-bot, or $ONESCRIPT_HOME's)")
+    mc.add_argument("--skip-suite", action="store_true",
+                    help="do not run gate 1; it then FAILS as not run, and never records")
+    mc.add_argument("--python", dest="mc_python", action="append", default=[],
+                    type=_name_path, metavar="REPO=PYTHON",
+                    help="the interpreter for a repo's own tests (default: this one)")
     sub.add_parser("checkin")
     sd = sub.add_parser(
         "seed", help="the first bite's words against the box; once per check-in"
@@ -629,6 +648,17 @@ def main(argv: list[str] | None = None) -> int:
         for name in res["dropped_hmac"]:
             print(f"  dropped  {name} (HMAC: a shared secret, not a public key)")
         return 0
+
+    if args.cmd == "merge-check":  # off the box: no record, no invocation row
+        return merge_check.run_cli(
+            args.attestation,
+            repos=args.mc_repos,
+            box=args.mc_box,
+            as_json=args.as_json,
+            record=args.mc_record,
+            skip_suite=args.skip_suite,
+            python={k: str(v) for k, v in args.mc_python},
+        )
 
     cfg = api.Config(
         box=args.box,
