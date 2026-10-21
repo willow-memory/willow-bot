@@ -829,14 +829,12 @@ _HEX = ("sha = lower(sha) AND unhex(sha) IS NOT NULL", "sha NOT GLOB '*[^0-9a-f]
 
 def _bad_rows(db) -> int:
     """How many chunk rows aren't a 64-hex SHA-256 with whole numbers."""
-    for hex_test in _HEX:
-        q = f"SELECT count(*) FROM chunk WHERE NOT ({_ROW_OK.format(hex=hex_test)})"
-        try:
-            return db.execute(q).fetchone()[0]
-        except sqlite3.OperationalError:  # no unhex: an older SQLite
-            if hex_test == _HEX[-1]:
-                raise
-    raise AssertionError("unreachable")
+    fast, glob = _HEX
+    q = "SELECT count(*) FROM chunk WHERE NOT ({})"
+    try:
+        return db.execute(q.format(_ROW_OK.format(hex=fast))).fetchone()[0]
+    except sqlite3.OperationalError:  # no unhex: an older SQLite
+        return db.execute(q.format(_ROW_OK.format(hex=glob))).fetchone()[0]
 
 
 _BATCH = 900  # ids per IN (...): under SQLite's bound-parameter limit
