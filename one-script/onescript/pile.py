@@ -44,7 +44,13 @@ import zlib
 from pathlib import Path
 
 from . import seed
-from .states import EMPTY, POPULATED, UNREACHABLE
+from .states import (
+    EMPTY,
+    POPULATED,
+    RANKED,
+    STEP_ESCALATED_COLD_START,
+    UNREACHABLE,
+)
 from .words import WORD as _WORD
 
 WORD = _WORD  # one word, for seed and the pile alike (flatten-2 F11)
@@ -405,7 +411,7 @@ def score_grams(
     order = [w for _, w in scored]
     by_where = {w: sc for sc, w in scored}
     out = {
-        "state": "ranked" if scored else "escalated:cold_start",
+        "state": RANKED if scored else STEP_ESCALATED_COLD_START,
         "why": "",
         "chunks": n_all,
         "copies": extra,
@@ -905,7 +911,7 @@ class Cached:
             if not self.n_all
             else "seeded"
             if keys
-            else "escalated:cold_start"
+            else STEP_ESCALATED_COLD_START
         )
         return {
             "state": state,

@@ -64,9 +64,9 @@ from . import writeback as wb_mod
 from .run import PKG, Run
 from .states import (
     EMPTY,
-    ESCALATED_COLD_START,
     POPULATED,
     RANKED,
+    STEP_ESCALATED_COLD_START,
     UNREACHABLE,
 )
 
@@ -1141,9 +1141,9 @@ def decline_offer(
 
 # ── lookup: across sessions, merged by hash ─────────────────────────────────
 # What a session's lookup answer may say and keep: the ranker's variant, the
-# named cold-start step (NOT a state; see states.ESCALATED_COLD_START), and two
+# named cold-start step (a step, NOT a state: states.STEP_ESCALATED_COLD_START), and two
 # of the three states. Anything else is recorded as unreachable.
-STATE_WORDS = (RANKED, ESCALATED_COLD_START, EMPTY, UNREACHABLE)
+STATE_WORDS = (RANKED, STEP_ESCALATED_COLD_START, EMPTY, UNREACHABLE)
 
 
 def _session_tag(key: bytes, box: Path) -> str:

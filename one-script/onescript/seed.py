@@ -31,7 +31,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .states import UNREACHABLE
+from .states import STEP_ESCALATED_COLD_START, UNREACHABLE
 from .words import WORD  # noqa: F401  (the one word rule; re-exported)
 from .words import words as _words
 from .xref import GitError, git
@@ -198,7 +198,7 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
     elif keys:
         state = "seeded"
     else:
-        state = "escalated:cold_start"
+        state = STEP_ESCALATED_COLD_START
     return {
         "state": state,
         "keys": keys,
