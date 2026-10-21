@@ -159,6 +159,25 @@ here reads, writes or caches vault material.
 
 86. [Compare the snippets in the boxes, and serve the comparison](#86-compare-the-snippets-in-the-boxes-and-serve-the-comparison)
 
+**The stupid pile**
+
+87. [Roll for merge](#87-roll-for-merge)
+88. [Grade the horoscope](#88-grade-the-horoscope)
+89. [The sigh is a forecaster](#89-the-sigh-is-a-forecaster)
+90. [Ask Jeles whether today is the day for a rebase](#90-ask-jeles-whether-today-is-the-day-for-a-rebase)
+91. [Deep Thought already answered 42](#91-deep-thought-already-answered-42)
+92. [Earthquakes as dice](#92-earthquakes-as-dice)
+93. [Lunatic mode](#93-lunatic-mode)
+94. [Rainy-day scope](#94-rainy-day-scope)
+95. [The spurious-correlation machine](#95-the-spurious-correlation-machine)
+96. [Your decisions as a Gource movie](#96-your-decisions-as-a-gource-movie)
+97. [The pile writes poetry](#97-the-pile-writes-poetry)
+98. [Rebase shame tarot](#98-rebase-shame-tarot)
+99. [Chess for merge conflicts](#99-chess-for-merge-conflicts)
+100. [Ask the Met what the session looked like](#100-ask-the-met-what-the-session-looked-like)
+101. [The tide checks the clock](#101-the-tide-checks-the-clock)
+102. [The market bets on the bot](#102-the-market-bets-on-the-bot)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -1334,6 +1353,232 @@ for a, b in itertools.combinations(top, 2):
   a near-copy of that file in Software Heritage" becomes a servable row too.
 - `NEAR` and `CLOSE` are thresholds, so they're the operator's numbers,
   like every number in `deep_thought.py`.
+
+## The stupid pile
+
+The last pile: things that shouldn't work, and the reason each one
+probably does. Every one of them keeps the one script's rules. Nothing
+merges, seals or decides on its own, the record keeps hashes, and **the
+vault is Sean's key**. That's the joke: the plumbing is serious enough
+that nonsense still comes out checkable.
+
+### 87. Roll for merge
+
+A d20 for every PR. Add the green runs, take away `sigh.py`'s red streak,
+and the troll calls the DC. **Why it shouldn't work:** merges aren't
+Dungeons & Dragons. **Why it does:** `dice5e.d20` takes the rng it's handed,
+so a drand-seeded stream makes the roll replayable and provable after the
+fact. It goes on the record like any verdict, and the human still seals.
+A nat 1 is advisory. Mostly.
+
+```python
+rng = StreamRandom.from_seed(bytes.fromhex(randomness), label=f"pr-{n}".encode())
+total, nat = dice5e.d20(rng, mod=green_runs - sigh.get(repo, n))
+table.verdict(cfg, {"what": "merge_roll", "pr": n, "total": total, "nat": nat})
+```
+
+### 88. Grade the horoscope
+
+`horoscope.reading` says *"your tests know something you don't"*. Log every
+reading as a forecast, settle it against that day's CI, and give the stars a
+Brier score. **Why it shouldn't work:** a horoscope makes no claim you can
+check. **Why it does:** the market ledger doesn't care where a forecast
+came from, and after a month `calibration.bins` tells you exactly how
+psychic the bot is. (Probably as good as a coin. Possibly worse, which is
+funnier.)
+
+```python
+api.forecast(cfg, f"horoscope-{day}", [{"path": "tests-red", "p": 0.5},
+                                       {"path": "tests-green", "p": 0.5}], by="stars")
+```
+
+### 89. The sigh is a forecaster
+
+`sigh.sigh_line` gets one more `h` for every red after the third. Read the
+number of h's as a probability that the next push is red too, and score
+it. **Why it shouldn't work:** it's a joke string. **Why it does:** a
+streak length is a perfectly good feature, and `sighhhh` with five h's is
+a confident forecast. Now it can be held to it.
+
+```python
+p_red = min(0.95, 0.5 + 0.1 * (len(sigh.sigh_line(streak) or "sig") - 3))
+```
+
+### 90. Ask Jeles whether today is the day for a rebase
+
+Send the horoscope's line to the pile as a bite. Jeles holds no verified
+fact on the subject, so the seed writes a `miss` and the gap goes on the
+queue that only a human's answer closes. **Why it shouldn't work:** it's
+asking a fact-checked corpus about astrology. **Why it does:** the
+escalation path doesn't judge bites. You'll be asked, formally and with a
+hash, whether today is the day for a rebase. (`horoscope.py` says it isn't.)
+
+```sh
+python -m onescript seed "today is not the day for a rebase"   # exits 42
+```
+
+### 91. Deep Thought already answered 42
+
+`api.ESCALATE = 42`: since commit 907c2ac, the one script exits 42 when it
+hands something to the human ("not enough information to say a human said
+this was true"). `quips.py` already carries `ΔΣ=42`. Run `deep_thought.py`
+and every real question it finds should end in 42. **Why it shouldn't
+work:** it's a Douglas Adams joke. **Why it does:** it's already built.
+The Answer was always "ask the human".
+
+```sh
+python -m onescript escalate "the question"; echo $?   # 42 when no rung answers
+```
+
+### 92. Earthquakes as dice
+
+Use the week's USGS magnitudes as a random source, and put them through
+the same tests the stream has to pass. **Why it shouldn't work:** the
+earth is not a fair die (big quakes are rare; that's the whole Gutenberg-
+Richter law). **Why it does:** it fails, loudly and measurably.
+`pools.measure` puts the outliers in the outer layer, and the earth gets a
+grade next to drand's. A lesson in why the beacon exists.
+
+```python
+digits = [int(str(q["mag"]).replace(".", "")[-1]) for q in quakes]
+print(pools.hist(digits))   # spoiler: not flat
+```
+
+### 93. Lunatic mode
+
+Skyfield's moon phase sets the typo rung's floor: at full moon `REPAIR_MIN`
+drops to 3 and the pile repairs everything; at new moon it's off.
+**Why it shouldn't work:** the moon has nothing to do with spelling. **Why
+it does:** `REPAIR_MIN` is a number the operator owns, the phase is
+deterministic for a date, and the seed row records which floor ran, so
+every lunatic answer can be replayed. Read 59 first: at full moon *gource*
+is definitely *source*.
+
+```python
+phase = almanac.moon_phase(eph, ts.utc(y, m, d)).degrees
+REPAIR_MIN = 3 if abs(phase - 180) < 20 else None if phase < 20 else 4
+```
+
+### 94. Rainy-day scope
+
+A weather snapshot (33) becomes a W value, so `serve.choose` can pick
+"only the piles from days it rained in your town". **Why it shouldn't
+work:** weather isn't a property of your code. **Why it does:**
+`serve.choose` matches any W a group carries, and `serve.joins` will
+dutifully tell the human which piles share a drizzle before they seal.
+
+```python
+serve.propose(stack, weather="rain")   # the card lists the joins: all wet
+```
+
+### 95. The spurious-correlation machine
+
+Join everything on time and place (82, 84): CI reds, earthquakes,
+rainfall, Hacker News front pages, Wikipedia pageviews. Then let
+serendipity mode (7) hunt for correlations. **Why it shouldn't work:**
+almost all of them are noise. **Why it does:** that's the point. Every
+"finding" is logged as a forecast that has to come true *next* month, and
+the calibration curve shows how many links a big enough pile invents. A
+very honest machine for being wrong.
+
+```python
+api.forecast(cfg, "ci-red-when-it-rains-nov", [{"path": "holds", "p": 0.5},
+                                               {"path": "noise", "p": 0.5}])
+```
+
+### 96. Your decisions as a Gource movie
+
+Feed `record.jsonl` to Gource as a custom log: each session is a "user",
+each row kind is a "file" that gets added, so seals, misses and serves
+grow like a code tree. **Why it shouldn't work:** Gource visualises source
+code, and the record is a ledger. **Why it does:** Gource's custom log is
+just `timestamp|user|A|path`, and every row has a time, a who and a kind.
+
+```python
+for r in rows:
+    print(f"{epoch(r['ts'])}|{r.get('who','run')}|A|{r['kind']}/{r['n']}")
+```
+
+### 97. The pile writes poetry
+
+The pile already finds adjacent word pairs that belong together (NPMI over
+`PAIR_MIN`). Feed the strongest pairs into a Tracery grammar (57) and the
+pile writes verse in its own dialect: *sealed scope, served table, the
+human's no.* **Why it shouldn't work:** it's a search index. **Why it
+does:** a pair list is a phrase book, and Tracery only needs phrases. The
+drand stream picks every line, so each poem is provable.
+
+```python
+grammar = {"origin": ["#pair#, #pair#. #pair#."], "pair": strongest_pairs(store, 50)}
+```
+
+### 98. Rebase shame tarot
+
+Three cards from `rebase_shame.py`'s force-push history: past (the oldest
+force-push still on record), present (today's count) and future (the
+stream's draw). The runes already give a reading per SHA, so the cards
+come from the same SHAs. **Why it shouldn't work:** tarot. **Why it
+does:** every card is a hash, so the spread is the same every time you ask.
+The cards can't be shuffled until you get a nice one.
+
+```python
+past, present, future = (runes.cast(sha) for sha in (oldest, latest, drawn))
+```
+
+### 99. Chess for merge conflicts
+
+`diverge` finds the units both branches changed. Score each conflict like
+a chess position, and pull the matching Lichess puzzle (46) by rating:
+one conflict is a 1200 puzzle, five tangled ones are a 2400. Solve the
+puzzle before you resolve the merge. **Why it shouldn't work:** nothing
+about Python is chess. **Why it does:** both have a difficulty you can
+measure. A conflict's count of `both_different` units and level-3 edges
+is a rating.
+
+```python
+rating = 1000 + 200 * len(div["both_different"]) + 100 * len(div["edges"])
+```
+
+### 100. Ask the Met what the session looked like
+
+At check-out, hash the session bundle, use it to pick an artwork from the
+Met's public-domain collection (45), and file the painting beside the
+sealed session. **Why it shouldn't work:** a JSON bundle has no look.
+**Why it does:** a hash picks one object out of hundreds of thousands, the
+same one every time. Your worst session gets a still life of a dead
+pheasant forever, and you can prove it.
+
+```python
+art_id = ids[int(session_sha256[:12], 16) % len(ids)]
+```
+
+### 101. The tide checks the clock
+
+`clock.py` and the record's timestamps are trusted to be right. NOAA's
+tide predictions (38) are almost never wrong. Check one against the other:
+if the record says high tide was at 3 a.m. and NOAA says 9, someone's clock
+is off. **Why it shouldn't work:** tides aren't a time service. **Why it
+does:** the moon keeps better time than a laptop that slept through a
+DST change. An absurdly expensive NTP.
+
+```python
+assert abs(recorded_high - noaa_high) < timedelta(minutes=10)   # else: whose clock?
+```
+
+### 102. The market bets on the bot
+
+Cross-world wagers: "willow-bot cuts a release before SPY closes up on
+Friday." `market.reveal` settles the SPY half, the release tags settle
+the bot half, and `calibration` scores how well you understand both at
+once. **Why it shouldn't work:** the stock market doesn't know willow-bot
+exists. **Why it does:** a wager is a wager. The ledger only needs two
+settled facts and a date, and it will never let you drop the losers.
+
+```python
+api.forecast(cfg, "release-before-spy-up-1023",
+             [{"path": "yes", "p": 0.2}, {"path": "no", "p": 0.8}],
+             market={"symbol": "SPY", "kind": "up", "close_date": "2026-10-23"})
+```
 
 ## What the one script said about this list
 
