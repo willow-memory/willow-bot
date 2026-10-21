@@ -635,7 +635,8 @@ edited (`api.forecast`, the way `market.py` bets on SPY), Brier scores
 (`calibration.py`), drand draws (`beacon`, `stream`), served chunks, and
 serendipity (7).
 
-The rules for outside data:
+The rules for outside data (built: `onescript/snapshot.py`, `snapshot` and
+`snapshot-read` on the command line, the fetch only with `--fetch`):
 - Fetch it once into a dated snapshot, with its SHA-256, source URL and
   license on the record.
 - Only the human refreshes a snapshot.
@@ -656,8 +657,10 @@ log Open-Meteo's own forecast as a second wager. Settle both from its
 historical archive and compare Brier scores: you against a weather model.
 
 ```python
-f = get("https://api.open-meteo.com/v1/forecast", latitude=lat, longitude=lon,
-        daily="precipitation_sum", timezone="auto")
+q = urllib.parse.urlencode({"latitude": lat, "longitude": lon,
+                            "daily": "precipitation_sum", "timezone": "auto"})
+f = snapshot.get(cfg, f"rain-{day}", f"https://api.open-meteo.com/v1/forecast?{q}",
+                 license="CC-BY-4.0")
 api.forecast(cfg, f"rain-{day}", [{"path": "yes", "p": 0.3}, {"path": "no", "p": 0.7}])
 # settle: archive-api.open-meteo.com/v1/archive?...&start_date=day&end_date=day
 ```
@@ -669,8 +672,10 @@ its catalogue gives the base rate, so you find out whether you beat the
 base rate or just repeat it.
 
 ```python
-n = get("https://earthquake.usgs.gov/fdsnws/event/1/count",
-        starttime=monday, endtime=sunday, minmagnitude=6)
+q = urllib.parse.urlencode({"starttime": monday, "endtime": sunday, "minmagnitude": 6})
+n = snapshot.get(cfg, f"quakes-m6-{monday}",
+                 f"https://earthquake.usgs.gov/fdsnws/event/1/count?{q}",
+                 license="LicenseRef-us-public-domain")
 ```
 
 #### 35. Wikipedia pageviews: Which article wins tomorrow
@@ -693,7 +698,8 @@ probability, write the crowd's probability beside it, and when it resolves,
 score both. Over a season you learn where you beat the crowd.
 
 ```python
-m = get(f"https://api.manifold.markets/v0/market/{market_id}")
+m = snapshot.as_json(snapshot.get(cfg, f"manifold-{market_id}",
+    f"https://api.manifold.markets/v0/market/{market_id}", license="LicenseRef-unverified"))
 api.forecast(cfg, f"manifold-{market_id}", mine, by="human")
 api.forecast(cfg, f"manifold-{market_id}-crowd", crowd(m["probability"]), by="crowd")
 ```
@@ -704,7 +710,9 @@ For a handful of new posts, wager on which make the front page. Algolia's
 HN search API settles it.
 
 ```python
-front = get("https://hn.algolia.com/api/v1/search", tags="front_page")
+front = snapshot.get(cfg, f"hn-front-{day}",
+                     "https://hn.algolia.com/api/v1/search?tags=front_page",
+                     license="LicenseRef-unverified")
 ```
 
 #### 38. NOAA tides: The tide is a sure thing
@@ -714,9 +722,12 @@ that are nearly always right. If your Brier score on tides isn't close to
 zero, the plumbing is broken, not your judgement.
 
 ```python
-get("https://api.tidesandcurrents.noaa.gov/api/prod/datagetter",
-    product="predictions", station=station, begin_date=day, range=24,
-    datum="MLLW", interval="hilo", units="metric", time_zone="lst_ldt", format="json")
+q = urllib.parse.urlencode({"product": "predictions", "station": station,
+    "begin_date": day, "range": 24, "datum": "MLLW", "interval": "hilo",
+    "units": "metric", "time_zone": "lst_ldt", "format": "json"})
+snapshot.get(cfg, f"tides-{station}-{day}",
+             f"https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?{q}",
+             license="LicenseRef-us-public-domain")
 ```
 
 ### Things to read
@@ -767,7 +778,8 @@ Serendipity mode (7) gets stranger when one side is a paragraph from a
 public-domain book: your gate code beside Moby-Dick.
 
 ```python
-book = get(f"https://www.gutenberg.org/cache/epub/{n}/pg{n}.txt")
+book = snapshot.text(snapshot.get(cfg, f"gutenberg-{n}",
+    f"https://www.gutenberg.org/cache/epub/{n}/pg{n}.txt", license="LicenseRef-gutenberg"))
 ```
 
 Watch: Gutenberg asks that bulk downloads come from a mirror, not the site.
@@ -803,8 +815,10 @@ Hundreds of thousands of the Met's public-domain works, CC0, by API. A drand
 draw picks one for each sealed session, beside its rune (15).
 
 ```python
-ids = get("https://collectionapi.metmuseum.org/public/collection/v1/objects")["objectIDs"]
-art = get(f"https://collectionapi.metmuseum.org/public/collection/v1/objects/{rng.choice(ids)}")
+MET = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
+ids = snapshot.as_json(snapshot.get(cfg, "met-ids", MET, license="CC0-1.0"))["objectIDs"]
+pick = rng.choice(ids)
+art = snapshot.get(cfg, f"met-{pick}", f"{MET}/{pick}", license="CC0-1.0")
 ```
 
 Watch: check `isPublicDomain` on each object before showing its image.
@@ -829,7 +843,8 @@ CSV. If far fewer than 9 in 10 of your ranges hold the answer, you're
 overconfident. `calibration.bins` then shows exactly where.
 
 ```python
-rows = get(f"https://ourworldindata.org/grapher/{slug}.csv")
+rows = snapshot.text(snapshot.get(cfg, f"owid-{slug}",
+    f"https://ourworldindata.org/grapher/{slug}.csv", license="CC-BY-4.0"))
 hit = low <= answer(rows, country, year) <= high
 ```
 
@@ -1622,11 +1637,11 @@ rest are shell, JSON or prose, so they aren't counted.
 **27 of 55 (about half) need nothing new**, only wiring. Another 10 need one
 package and nothing else.
 
-**The 18 that need building mostly need the same few things:**
-- **One snapshot reader.** `get` is missing from 8 of them: 33, 34, 36, 37,
-  38, 42, 45 and 47, all the world data. It's one piece, a reader that
-  fetches once into a dated, hashed snapshot and says `unreachable` without
-  a network. `market.stooq_reader` is the pattern to copy.
+**The 18 that needed building mostly needed the same few things:**
+- **One snapshot reader.** `get` was missing from 8 of them: 33, 34, 36, 37,
+  38, 42, 45 and 47, all the world data. **Built** (`onescript/snapshot.py`,
+  2026-10-21): fetched once into the box under its SHA-256, a `snapshot`
+  row of hashes, offline after that, `unreachable` with no `--fetch`.
 - **A name away.** 96 calls `epoch`, which `beacon.epoch` already is. 64
   calls `base32`, which is `base64.b32encode`.
 - **Small helpers, one each:** `pile_files` (1), `chunks_of` and `spec_for`
@@ -1635,8 +1650,22 @@ package and nothing else.
 - **86 itself:** `shingles`, `diff_hunks`, `cosine` and `embed`. `jaccard`
   is already there, in `script_match`.
 
-So most of the list compiles from what's here: about half as it is, and
-most of the rest once one snapshot reader exists.
+**After the snapshot reader** (same day, sketches pointed at
+`snapshot.get`, rerun):
+
+| Verdict | Count | Ideas |
+|---|---|---|
+| compiled | 19 | 4 5 6 8 15 33 34 37 38 42 45 87 88 89 92 94 95 98 102 |
+| stdlib only | 14 | 3 9 12 18 35 44 60 63 66 82 93 99 100 101 |
+| needs outside | 10 | 19 20 22 26 27 39 43 49 55 84 |
+| needs building | 12 | 1 7 11 36 40 47 59 62 64 86 96 97 |
+
+Six of the eight world-data ideas now compile. 36 still needs `crowd` (the
+market's probability as a two-path forecast) and 47 needs `answer` (a value
+out of an OWID CSV): one small helper each.
+
+So most of the list compiles from what's here: 33 of 55 now need nothing
+new, and 10 more need one package.
 
 ## What the one script said about this list
 
