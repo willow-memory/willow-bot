@@ -48,11 +48,11 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import beacon, boot, gate, nestor_seal, record, reverse, view
+from . import clock as clock_mod
 from . import escalate as esc
 from . import jeles_store as jeles_mod
 from . import ladder
@@ -184,8 +184,7 @@ def default_nestor_db() -> Path | None:
     return Path(got).expanduser() if got else None
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_now = clock_mod.seconds_z  # the record's clock when there is no --now (flatten-2 F8)
 
 
 class KeysExposed(Exception):

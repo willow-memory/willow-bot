@@ -3,20 +3,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
+from willow_bot import onescript_reach
 from willow_bot.deterministic.ollama import chat
 from willow_bot.deterministic.policy import Policy
 
 
 def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    """Row ``ts``, in the one script's ``seconds_z`` format, from its one clock
+    (flatten-2 F8: "Using the onescript at every path."). ``$ONESCRIPT_NOW``
+    pins it. With no one script reachable this raises
+    ``onescript_reach.Unreachable``, with why; there is no copy to fall back to."""
+    return onescript_reach.module("clock").seconds_z()
 
 
 def _prompt_hash(text: str) -> str:

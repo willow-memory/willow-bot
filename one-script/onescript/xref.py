@@ -44,9 +44,10 @@ import posixpath
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
+
+from . import clock
 
 TEXT_SUFFIXES = (".md", ".py")
 MAX_BYTES = 5_000_000
@@ -549,7 +550,7 @@ def record_outputs(box: Path, index_bytes: bytes, report_bytes: bytes, inputs) -
     pkg = Path(__file__).resolve().parent
     rec = record.Record(
         box,
-        lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        clock.isoformat_seconds_utc,
         record.version_of(pkg),
         gate.token(),
     )
