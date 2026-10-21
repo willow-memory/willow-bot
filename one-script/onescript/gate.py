@@ -23,6 +23,7 @@ from .record import Verified
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts" / "scan"))
 import script_match as sm  # noqa: E402  (adopt, don't rewrite: checks 1-4 live there)
+from .states import EMPTY, POPULATED
 
 _TOKEN = object()  # the only key that mints a Verified; the record checks for it
 HUMAN = "human"
@@ -468,7 +469,7 @@ def _symbol_row(c: dict, entry: object) -> dict:
             "verdict": "unchecked",
             "record": f"graph {state}: {entry.get('why', '')}".rstrip(": "),
         }
-    if state == "empty" and not entry.get("stamp"):
+    if state == EMPTY and not entry.get("stamp"):
         # S1: no stamp means the project itself is not in the graph: nothing was
         # looked at, so nothing is struck
         return {
@@ -476,7 +477,7 @@ def _symbol_row(c: dict, entry: object) -> dict:
             "verdict": "unchecked",
             "record": "project not in the graph",
         }
-    if state != "populated":  # empty and stamped: a fresh graph holds no symbol there
+    if state != POPULATED:  # empty and stamped: a fresh graph holds no symbol there
         return {
             **base,
             "verdict": "unverified",

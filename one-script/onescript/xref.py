@@ -46,6 +46,7 @@ import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote
+from .states import EMPTY, POPULATED, UNREACHABLE
 
 from . import canon as _canon
 from . import clock
@@ -92,15 +93,15 @@ def arrive(repo: Path, name: str, rev: str = "HEAD") -> dict:
     try:
         git(repo, "rev-parse", "--git-dir")
     except GitError as e:
-        return {**head, "state": "unreachable", "reason": f"not a git repo: {e}"}
+        return {**head, "state": UNREACHABLE, "reason": f"not a git repo: {e}"}
     try:
         commit = git(repo, "rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
         commit = commit.decode().strip()
     except GitError:
         has_any = git(repo, "rev-list", "-n1", "--all").strip()
         if not has_any:
-            return {**head, "state": "empty", "reason": "no commits"}
-        return {**head, "state": "unreachable", "reason": f"no commit {rev!r}"}
+            return {**head, "state": EMPTY, "reason": "no commits"}
+        return {**head, "state": UNREACHABLE, "reason": f"no commit {rev!r}"}
     fmt = git(repo, "rev-parse", "--show-object-format").decode().strip() or "sha1"
     remote = bool(git(repo, "branch", "-r", "--contains", commit).strip())
     root_tree = git(repo, "rev-parse", f"{commit}^{{tree}}").decode().strip()
@@ -142,7 +143,7 @@ def arrive(repo: Path, name: str, rev: str = "HEAD") -> dict:
     trees.sort(key=lambda r: r["path"])
     return {
         **head,
-        "state": "populated",
+        "state": POPULATED,
         "commit": commit,
         "object_format": fmt,
         "on_remote": remote,
@@ -276,7 +277,7 @@ def _resolve_sha(repos: dict, tokens: set) -> dict:
         return found
     order = sorted(tokens)
     for name, r in sorted(repos.items()):
-        if r["arrival"]["state"] != "populated":
+        if r["arrival"]["state"] != POPULATED:
             continue
         req = "".join(f"{t}^{{commit}}\n" for t in order).encode()
         out = git(r["path"], "cat-file", "--batch-check", stdin=req).decode()
@@ -304,7 +305,7 @@ def build(repos_in: list, rev: str = "HEAD", cache: Path | None = None) -> dict:
     blobs, trees, data_of = {}, {}, {}
     for name, r in repos.items():
         a = r["arrival"]
-        if a["state"] != "populated":
+        if a["state"] != POPULATED:
             continue
         blobs[name] = {f["path"]: f for f in a["files"]}
         trees[name] = {t["path"] for t in a["trees"]}
@@ -342,7 +343,7 @@ def build(repos_in: list, rev: str = "HEAD", cache: Path | None = None) -> dict:
     prs = {
         n: _merged_prs(r["path"])
         for n, r in repos.items()
-        if r["arrival"]["state"] == "populated"
+        if r["arrival"]["state"] == POPULATED
     }
 
     refs = [_check(x, defined, shas, prs, blobs, trees, data_of) for x in raw]
