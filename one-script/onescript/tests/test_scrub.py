@@ -370,6 +370,7 @@ def test_grove_leak_rows_each_taken_out_by_the_generic_set(label):
 def test_grove_keeps_a_record_hash_in_its_place():
     h = "d" * 64
     ok = f"proposal:{h} · tip:12:{h} · serve:{h} · run {h} · commit {'e' * 40} · green on {'f' * 40}"
+
     def g(t, **kw):
         return scrub.apply(t, ("generic", "credentials"), marker="[withheld]", **kw)
 

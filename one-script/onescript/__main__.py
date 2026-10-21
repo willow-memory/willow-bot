@@ -353,16 +353,35 @@ def main(argv: list[str] | None = None) -> int:
     mc.add_argument("attestation", type=Path, help="the chunk's merge.json")
     mc.add_argument("--json", dest="as_json", action="store_true")
     mc.add_argument("--record", dest="mc_record", action="store_true")
-    mc.add_argument("--box", dest="mc_box", type=Path, default=None,
-                    help="a box whose record's chain and anchor must verify (gate 2)")
-    mc.add_argument("--repos", dest="mc_repos", type=Path, default=None,
-                    help="the directory holding willow-bot and its siblings "
-                    "(default: beside this willow-bot, or $ONESCRIPT_HOME's)")
-    mc.add_argument("--skip-suite", action="store_true",
-                    help="do not run gate 1; it then FAILS as not run, and never records")
-    mc.add_argument("--python", dest="mc_python", action="append", default=[],
-                    type=_name_path, metavar="REPO=PYTHON",
-                    help="the interpreter for a repo's own tests (default: this one)")
+    mc.add_argument(
+        "--box",
+        dest="mc_box",
+        type=Path,
+        default=None,
+        help="a box whose record's chain and anchor must verify (gate 2)",
+    )
+    mc.add_argument(
+        "--repos",
+        dest="mc_repos",
+        type=Path,
+        default=None,
+        help="the directory holding willow-bot and its siblings "
+        "(default: beside this willow-bot, or $ONESCRIPT_HOME's)",
+    )
+    mc.add_argument(
+        "--skip-suite",
+        action="store_true",
+        help="do not run gate 1; it then FAILS as not run, and never records",
+    )
+    mc.add_argument(
+        "--python",
+        dest="mc_python",
+        action="append",
+        default=[],
+        type=_name_path,
+        metavar="REPO=PYTHON",
+        help="the interpreter for a repo's own tests (default: this one)",
+    )
     dv = sub.add_parser(
         "diverge",
         help="where two refs (or two boxes' chains) part, down to the smallest unit "
@@ -370,14 +389,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     dv.add_argument("ref_a", nargs="?", metavar="A")
     dv.add_argument("ref_b", nargs="?", metavar="B")
-    dv.add_argument("--repo", dest="dv_repo", action="append", default=[], metavar="NAME",
-                    help="a repo under --repos to compare (repeatable; default willow-bot)")
-    dv.add_argument("--repos", dest="dv_repos", type=Path, default=None,
-                    help="the directory holding the repos (default: beside this willow-bot)")
+    dv.add_argument(
+        "--repo",
+        dest="dv_repo",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a repo under --repos to compare (repeatable; default willow-bot)",
+    )
+    dv.add_argument(
+        "--repos",
+        dest="dv_repos",
+        type=Path,
+        default=None,
+        help="the directory holding the repos (default: beside this willow-bot)",
+    )
     dv.add_argument("--json", dest="as_json", action="store_true")
     dv.add_argument("--record", dest="dv_record", action="store_true")
-    dv.add_argument("--behaviour", dest="dv_behaviour", action="store_true",
-                    help="level 4: merge in a throwaway clone and run each side's changed tests")
+    dv.add_argument(
+        "--behaviour",
+        dest="dv_behaviour",
+        action="store_true",
+        help="level 4: merge in a throwaway clone and run each side's changed tests",
+    )
     dv.add_argument("--box-a", dest="dv_box_a", type=Path, default=None)
     dv.add_argument("--box-b", dest="dv_box_b", type=Path, default=None)
     sub.add_parser("checkin")
@@ -675,7 +709,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  dropped  {name} (HMAC: a shared secret, not a public key)")
         return 0
 
-    if args.cmd == "diverge":  # off the box: it reads refs; --record appends one row to --box
+    if (
+        args.cmd == "diverge"
+    ):  # off the box: it reads refs; --record appends one row to --box
         return diverge.run_cli(
             args.ref_a,
             args.ref_b,

@@ -44,8 +44,12 @@ def test_isoformat_utc_is_isoformat_of_the_utc_instant():
 
 @pytest.mark.parametrize(
     "pin",
-    ["2026-10-20T12:00:00.123456Z", "2026-10-20T05:00:00.123456-07:00",
-     "2026-10-20T12:00:00.123456", "1792497600.123456"],
+    [
+        "2026-10-20T12:00:00.123456Z",
+        "2026-10-20T05:00:00.123456-07:00",
+        "2026-10-20T12:00:00.123456",
+        "1792497600.123456",
+    ],
 )
 def test_env_pin_forms_name_the_same_instant(pin):
     got = clock.now(env={clock.ENV_NOW: pin})
