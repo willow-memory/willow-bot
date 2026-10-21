@@ -2,9 +2,9 @@
 # Install: pip install -r requirements.txt
 fastapi==0.135.1
 uvicorn==0.42.0
-PyJWT==2.10.1
+PyJWT==2.15.1
 cryptography>=44.0.0
-requests==2.32.3
+requests==2.34.2
 # Nestor — verified-match engine behind Loki's semantic Mistletoe (loki/semantic.py).
 # stdlib-only (difflib); no network / no Postgres at import.
 # Repointed 2026-08-31: the repo moved to Die-Namic-Systems. The old URL only
