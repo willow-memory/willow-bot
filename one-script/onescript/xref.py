@@ -73,6 +73,7 @@ def git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
             input=stdin,
             capture_output=True,
             check=False,
+            env={**os.environ, "LC_ALL": "C"},  # F17: error text in one locale
         )
     except OSError as e:
         raise GitError(str(e)) from e

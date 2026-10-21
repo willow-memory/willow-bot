@@ -100,6 +100,8 @@ def cbm_runner(path: str | None = None, timeout: int = TIMEOUT) -> Runner:
                 [exe, tool, json.dumps(args)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 stdin=subprocess.DEVNULL,
             )
@@ -132,9 +134,11 @@ def _git(root: str, *args: str) -> str:
     try:
         p = subprocess.run(
             ["git", "--no-optional-locks", "-C", root, *args],
-            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"},
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             stdin=subprocess.DEVNULL,
         )

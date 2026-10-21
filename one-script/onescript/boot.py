@@ -112,7 +112,14 @@ def _run(
     the child only; the calling process's own environment is never changed."""
     child = {**os.environ, **env} if env else None
     p = subprocess.run(
-        argv, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=child
+        argv,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        env=child,
     )
     lines = (p.stdout + p.stderr).strip().splitlines()
     return p.returncode, lines[-1] if lines else ""
@@ -244,7 +251,14 @@ def toolchain_gate(
 
 def _git(repo: str, *args: str) -> str:
     try:
-        p = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+        p = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "LC_ALL": "C"},  # F17: parsed output, one locale
+        )
     except OSError:  # no git on this machine
         return ""
     return p.stdout.strip() if p.returncode == 0 else ""

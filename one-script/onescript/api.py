@@ -199,11 +199,14 @@ def _keys(path: Path) -> dict[str, bytes]:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         path.parent.chmod(0o700)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({DESK[0]: secrets.token_hex(32)}, f)
     if path.stat().st_mode & 0o077:
         raise KeysExposed(f"{path} is readable beyond its owner; chmod 600 it")
-    return {k: bytes.fromhex(v) for k, v in json.loads(path.read_text()).items()}
+    return {
+        k: bytes.fromhex(v)
+        for k, v in json.loads(path.read_text(encoding="utf-8")).items()
+    }
 
 
 def _law(text: str) -> dict:
@@ -219,7 +222,7 @@ def _save_serve_key(cfg: Config, key: bytes | None) -> None:
         return
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(key.hex())
     path.chmod(0o600)
 
@@ -229,7 +232,7 @@ def _load_serve_key(cfg: Config) -> bytes | None:
     try:
         if path.stat().st_mode & 0o077:
             return None  # a key others can read isn't a key
-        return bytes.fromhex(path.read_text().strip()) or None
+        return bytes.fromhex(path.read_text(encoding="utf-8").strip()) or None
     except (OSError, ValueError):
         return None
 
@@ -2637,7 +2640,7 @@ def read_human_key(path: Path | None, box: Path) -> tuple[bytes | None, str | No
     try:
         if path.stat().st_mode & 0o077:
             return None, f"{path} is readable beyond its owner; chmod 600 it"
-        key = bytes.fromhex(path.read_text().strip())
+        key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError) as e:
         return None, f"the human key could not be read: {type(e).__name__}"
     return (key, None) if key else (None, "the human key file is empty")

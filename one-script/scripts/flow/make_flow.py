@@ -14,6 +14,7 @@ from __future__ import annotations
 import collections
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -91,7 +92,7 @@ def is_operator(o: dict) -> bool:
 
 def load(path: Path) -> list[dict]:
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         try:
             out.append(json.loads(line))
         except ValueError:
@@ -198,7 +199,11 @@ def main() -> None:
     digest = hashlib.sha256(transcript.read_bytes()).hexdigest()[:16]
 
     marks_path = outdir / "marks.json"
-    marks = json.loads(marks_path.read_text()) if marks_path.exists() else []
+    marks = (
+        json.loads(marks_path.read_text(encoding="utf-8"))
+        if marks_path.exists()
+        else []
+    )
     marked = {}
     for m in marks:  # operator marks win the node colour over self-flags
         if m["turn"] not in marked or m["marked_by"] == "operator":
@@ -240,6 +245,9 @@ def main() -> None:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "LC_ALL": "C"},  # F17: parsed output, one locale
         ).stdout
         cur = None
         for line in out.splitlines():
@@ -280,7 +288,8 @@ def main() -> None:
             indent=1,
             sort_keys=True,
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
 
     # Mermaid: one node per operator turn that led to tool work; milestones as side nodes.
@@ -343,7 +352,7 @@ def main() -> None:
             if e["outcome"] != "ok":
                 lines.append(f"  style {sid} stroke:#c0392b,stroke-width:2px")
     mmd = "\n".join(lines) + "\n"
-    (outdir / "session-flow.mmd").write_text(mmd)
+    (outdir / "session-flow.mmd").write_text(mmd, encoding="utf-8")
 
     md = [
         f"# Session flow: {transcript.stem}",
@@ -435,7 +444,7 @@ def main() -> None:
         for e in milestones
     ]
     md += ["", "## Flow", "", "```mermaid", mmd.rstrip(), "```", ""]
-    (outdir / "session-flow.md").write_text("\n".join(md))
+    (outdir / "session-flow.md").write_text("\n".join(md), encoding="utf-8")
     print(
         f"{len(turns)} turns, {len(tools)} tool calls, {len(outliers)} outliers -> {outdir}"
     )

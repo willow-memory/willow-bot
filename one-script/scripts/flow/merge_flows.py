@@ -64,7 +64,7 @@ def shape(e: dict) -> str:
 
 
 def load(label: str, path: Path) -> dict:
-    d = json.loads(path.read_text())
+    d = json.loads(path.read_text(encoding="utf-8"))
     ev = d["events"]
     tools = [e for e in ev if e.get("kind") == "tool"]
     turns = [e for e in ev if e.get("kind") == "turn"]
@@ -263,7 +263,7 @@ def main() -> None:
         f"| {m['session']} | T{m['turn']} | {m['kind']} | {m.get('marked_by', '')} | {str(m.get('what', ''))[:90]} |"
         for m in marks
     ] or ["| none | | | | |"]
-    (out / "merged.md").write_text("\n".join(L) + "\n")
+    (out / "merged.md").write_text("\n".join(L) + "\n", encoding="utf-8")
     (out / "merged.json").write_text(
         json.dumps(
             {
@@ -282,7 +282,8 @@ def main() -> None:
             indent=1,
             sort_keys=True,
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     print(
         f"{len(sessions)} sessions, {len(procs)} procedures at the offer rung, {len(recurring)} recurring failures -> {out}"

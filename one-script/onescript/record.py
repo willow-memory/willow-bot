@@ -202,7 +202,7 @@ class Record:
         Unreadable is not None: it raises, and verify_anchor() says so."""
         if self.anchor_path is None or not self.anchor_path.exists():
             return None
-        a = json.loads(self.anchor_path.read_text())
+        a = json.loads(self.anchor_path.read_text(encoding="utf-8"))
         if not isinstance(a, dict) or not {"n", "hash", "proof"} <= a.keys():
             raise ValueError("not an anchor")
         return a
@@ -288,7 +288,7 @@ class Record:
     def pile(self) -> dict:
         if not self.pile_path.exists():
             return {"items": []}
-        return json.loads(self.pile_path.read_text())
+        return json.loads(self.pile_path.read_text(encoding="utf-8"))
 
     def _save_pile(self, pile: dict) -> None:
         pile["items"].sort(key=lambda i: i["where"])

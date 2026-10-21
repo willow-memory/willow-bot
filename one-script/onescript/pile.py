@@ -483,7 +483,7 @@ def make_key(path: Path) -> None:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         return
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(secrets.token_bytes(KEY_BYTES).hex())
     path.chmod(0o600)
 
@@ -497,7 +497,7 @@ def read_key(path: Path) -> tuple[bytes | None, str | None]:
             return None, "the store key isn't a plain file"
         if st.st_mode & 0o077:
             return None, "the store key is readable beyond its owner; chmod 600 it"
-        key = bytes.fromhex(path.read_text().strip())
+        key = bytes.fromhex(path.read_text(encoding="utf-8").strip())
     except FileNotFoundError:
         return None, "no store key in the operator's keys dir"
     except (OSError, ValueError) as e:
@@ -687,7 +687,7 @@ def build_spec(box: Path, index_sha: str, repos: dict, key_path: Path) -> Path:
         "key_path": str(key_path),
     }
     tmp = spec.with_suffix(".tmp")
-    tmp.write_text(json.dumps(body, sort_keys=True))
+    tmp.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
     os.replace(tmp, spec)
     return spec
 
@@ -697,7 +697,7 @@ def building(box: Path) -> bool:
     stale, and is cleared)."""
     lock = store_path(box).parent / LOCK
     try:
-        pid = int(lock.read_text().strip() or "0")
+        pid = int(lock.read_text(encoding="utf-8").strip() or "0")
     except (OSError, ValueError):
         return False
     try:
@@ -710,7 +710,7 @@ def building(box: Path) -> bool:
 
 def build_from_spec(spec_path: Path) -> int:
     """The background builder: 0 built, 1 refused (with why on stderr)."""
-    spec = json.loads(Path(spec_path).read_text())
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     box = Path(spec["box"])
     lock = store_path(box).parent / LOCK
     try:
@@ -1272,7 +1272,7 @@ def main(argv=None) -> int:
         name, _, path = spec.partition("=")
         repos[name] = Path(path)
     if a.sweep:
-        queries = json.loads(a.sweep.read_text())["queries"]
+        queries = json.loads(a.sweep.read_text(encoding="utf-8"))["queries"]
         limits = [int(x) for x in a.max_values.split(",")]
         cache = (a.cache, index_sha, key) if a.cache else None
         print(json.dumps(sweep(index, repos, queries, limits, cache), indent=1))

@@ -656,17 +656,29 @@ def main(argv: list[str] | None = None) -> int:
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
     if args.cmd == "forecast":
         try:
-            dist = json.loads(args.dist.read_text())
+            dist = json.loads(args.dist.read_text(encoding="utf-8"))
             committed = (
-                json.loads(args.committed.read_text()) if args.committed else None
+                json.loads(args.committed.read_text(encoding="utf-8"))
+                if args.committed
+                else None
             )
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
         try:
-            tbl = json.loads(args.table.read_text()) if args.table else None
-            dk = json.loads(args.deck.read_text()) if args.deck else None
-            mk = json.loads(args.market.read_text()) if args.market else None
+            tbl = (
+                json.loads(args.table.read_text(encoding="utf-8"))
+                if args.table
+                else None
+            )
+            dk = (
+                json.loads(args.deck.read_text(encoding="utf-8")) if args.deck else None
+            )
+            mk = (
+                json.loads(args.market.read_text(encoding="utf-8"))
+                if args.market
+                else None
+            )
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
@@ -716,7 +728,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             print(f"refused: --outcome is not JSON: {e}")
             return 2
-        pair = json.loads(args.pair.read_text()) if args.pair else None
+        pair = json.loads(args.pair.read_text(encoding="utf-8")) if args.pair else None
         res = api.seal_outcome(
             cfg,
             args.wager,
@@ -740,7 +752,7 @@ def main(argv: list[str] | None = None) -> int:
             text = (
                 sys.stdin.read()
                 if str(args.row_json) == "-"
-                else args.row_json.read_text()
+                else args.row_json.read_text(encoding="utf-8")
             )
             row = json.loads(text)
         except (OSError, ValueError) as e:
@@ -881,7 +893,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.subject.startswith("session:")
             else api.seal_scope
         )
-        pair = json.loads(args.pair.read_text()) if args.pair else None
+        pair = json.loads(args.pair.read_text(encoding="utf-8")) if args.pair else None
         res = seal(
             cfg,
             args.subject,
