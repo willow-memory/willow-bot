@@ -33,21 +33,20 @@ here reads, writes or caches vault material.
 
 **Quick ones**
 
-11. [How sessions end (`pools.py`)](#11-how-sessions-end)
-12. [Twelve questions about your repos (`deck.py`)](#12-twelve-questions-about-your-repos)
-13. [Where the two copies split (`diverge`)](#13-where-the-two-copies-split)
+11. [How sessions end](#11-how-sessions-end)
+12. [Twelve questions about your repos](#12-twelve-questions-about-your-repos)
+13. [Where the two copies split](#13-where-the-two-copies-split)
 14. [A daily lore row from commits](#14-a-daily-lore-row-from-commits)
 15. [A rune for each sealed session](#15-a-rune-for-each-sealed-session)
 
 **Found while trying it**
 
-0. [What the one script said about this list](#what-the-one-script-said-about-this-list)
 16. [Turn on the embedder](#16-turn-on-the-embedder)
 17. [Check the README's prompt timing](#17-check-the-readmes-prompt-timing)
 
 **Outside projects that could attach cleanly**
 
-18. [SQLite FTS5: BM25 as a rung (already in Python)](#18-sqlite-fts5-bm25-as-a-rung)
+18. [SQLite FTS5: BM25 as a rung](#18-sqlite-fts5-bm25-as-a-rung)
 19. [Model2Vec: a second static embedder](#19-model2vec-a-second-static-embedder)
 20. [tree-sitter: chunk by function, not by line](#20-tree-sitter-chunk-by-function-not-by-line)
 21. [ripgrep: a faster `--exact` seed](#21-ripgrep-a-faster---exact-seed)
@@ -62,19 +61,6 @@ here reads, writes or caches vault material.
 30. [scc and git-of-theseus: the repos as numbers](#30-scc-and-git-of-theseus-the-repos-as-numbers)
 31. [Gource: the pile as a movie](#31-gource-the-pile-as-a-movie)
 32. [Pagefind: search for the dashboard page](#32-pagefind-search-for-the-dashboard-page)
-
-*Found by the research pass*
-
-49. [bm25s: BM25 in numpy](#49-bm25s-bm25-in-numpy)
-50. [tantivy-py: a full search engine](#50-tantivy-py-a-full-search-engine)
-51. [FlashRank: a CPU reranker](#51-flashrank-a-cpu-reranker)
-52. [sqlite-vec: vectors in the same file](#52-sqlite-vec-vectors-in-the-same-file)
-53. [scip-python: precise symbols](#53-scip-python-precise-symbols)
-54. [tree-sitter-language-pack: every language](#54-tree-sitter-language-pack-every-language)
-55. [rfc3161-client: a second timestamp](#55-rfc3161-client-a-second-timestamp)
-56. [pymerkle: proofs for the chain](#56-pymerkle-proofs-for-the-chain)
-57. [Tracery: oracle text from a grammar](#57-tracery-oracle-text-from-a-grammar)
-58. [ink: branching stories](#58-ink-branching-stories)
 
 **The world's data**
 
@@ -106,7 +92,27 @@ here reads, writes or caches vault material.
 47. [Our World in Data: The 90 percent quiz](#47-our-world-in-data-the-90-percent-quiz)
 48. [GH Archive: Is your CI normal](#48-gh-archive-is-your-ci-normal)
 
----
+**More outside projects (the research pass)**
+
+49. [bm25s: BM25 in numpy](#49-bm25s-bm25-in-numpy)
+50. [tantivy-py: a full search engine](#50-tantivy-py-a-full-search-engine)
+51. [FlashRank: a CPU reranker](#51-flashrank-a-cpu-reranker)
+52. [sqlite-vec: vectors in the same file](#52-sqlite-vec-vectors-in-the-same-file)
+53. [scip-python: precise symbols](#53-scip-python-precise-symbols)
+54. [tree-sitter-language-pack: every language](#54-tree-sitter-language-pack-every-language)
+55. [rfc3161-client: a second timestamp](#55-rfc3161-client-a-second-timestamp)
+56. [pymerkle: proofs for the chain](#56-pymerkle-proofs-for-the-chain)
+57. [Tracery: oracle text from a grammar](#57-tracery-oracle-text-from-a-grammar)
+58. [ink: branching stories](#58-ink-branching-stories)
+
+**Gaps the one script found in itself**
+
+59. [The typo rung rewrites names it doesn't know](#59-the-typo-rung-rewrites-names-it-doesnt-know)
+60. [The miss row lost two words](#60-the-miss-row-lost-two-words)
+61. [The Jeles rung was never on](#61-the-jeles-rung-was-never-on)
+62. [A big corpus wins a code bite on volume](#62-a-big-corpus-wins-a-code-bite-on-volume)
+
+[What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
 
@@ -306,67 +312,6 @@ from its `session:<sha256>` subject.
 import runes
 print(runes.cast(subject.removeprefix("session:")))
 ```
-
-## What the one script said about this list
-
-2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366
-files; the index was built before this file existed, so the list can't find
-itself). One `seed` bite holding every idea's key words.
-
-**40 words the pile holds nowhere: real gaps.**
-algolia, bm25s, ctags, datasette, duckdb, ephemeris, flashrank, fts5,
-gharchive, gource, hexagram, inkle, kiwix, levenshtein, libzim, lichess,
-manifold, model2vec, mutmut, opentimestamps, owid, pagefind, pageviews,
-pymerkle, rapidfuzz, rfc3161, ripgrep, scc, scip, serendipity, skyfield,
-tantivy, tarot, tatoeba, theseus, tracery, vec, wordfreq, wordnet, zim.
-They were written as one `miss` row of keyed hashes (row 32), so they will
-show up in the misses map (3) once it's built. That row counts 38, not 40:
-two of the words the seed called missed weren't logged as misses. The row
-holds hashes only, so which two can't be read back; worth a look, since a
-miss that isn't logged never reaches the map.
-
-**Words that hit, but the idea isn't there:**
-- *earthquake*: only the shoebox demo's "mi terremoto". Nothing about USGS.
-- *tides*, *planets*, *usgs*, *noaa*, *museum*, *wikimedia*, *meteo*,
-  *reranker*, *bm25*: Jeles corpus facts *about* these, not code that uses
-  them.
-- *serendipity*: only Jeles prose.
-- *mutation*: never mutation testing.
-
-**Prior art: the idea is already started.**
-- *Hypothesis* (27): installed in the box-build venv
-  (`seat/willow/experiments/box-build-2026-10-17/BRIEF.md`) and imported
-  nowhere. The cheapest gap to close.
-- *Serendipity* (7): `docs/design/one-box/random-pull-2026-10-06.md` already
-  did "pull some randomness from your corpus", from the model's training,
-  every box `unattested`. Idea 7 is the same game made checkable: drand picks
-  the pull and the chunks come from the pile.
-- *Merkle* (56): `hashing-session-handoff-2026-10-05.md` already weighs
-  "hash chain or Merkle tree" for tamper-evident logs, and the grove's
-  one-script README lists Merkle beside the record chain.
-- *Zipf* (40): `next-pile.md` already fits the pile's own words (slope
-  −0.907, R² 0.993). The wordfreq dialect report is that fit against the
-  world's.
-- *Horoscope* (6, 15): willow-bot's `docs/IDEAS.md` 35 (voice preview) and
-  71 (a daily note with the day's horoscope) are the delivery for it.
-- *drand*, *Brier*, *calibration*: 100+ chunks each. The ledger, beacon and
-  scoring ideas (5, 33–38, 47) stand on built ground.
-
-**Gaps in the one script itself, found on the way:**
-- **The typo rung rewrites names it doesn't know.** `Cached.repair` turned
-  *gource* into *source* (5,850 chunks), *scip* into *skip*, *ctags* into
-  *tags*, *owid* into *owed* and *tracery* into *tracer*. A bite about a
-  tool the pile hasn't seen gets flooded by a common word one letter away.
-  `REPAIR_MIN` is a placeholder; a floor on the word's length, or skipping
-  repair for a word the bite spells twice the same way, would be the
-  operator's call.
-- **The Jeles rung was unreachable** ("Jeles isn't configured") although
-  Jeles was in the pile as a repo. Indexing Jeles (idea 2) and configuring
-  it as the escalation rung are two different settings; a miss never
-  escalated.
-- **The top of the rank was all Jeles** (`core_weather-earth.json` first) for
-  a bite that was mostly about code tools. Same story as 16: without BM25 or
-  an embedder, a big corpus wins on volume.
 
 ## Found while trying it
 
@@ -613,111 +558,6 @@ search index for it at build time, with no server, all in the browser.
 npx pagefind --site dashboard/
 ```
 
-### Found by the research pass
-
-A second pass (2026-10-21) checked ideas 18–32 against their own repos and
-PyPI, and found these. Versions are PyPI's at the time; anything the pass
-couldn't confirm is said.
-
-#### 49. bm25s: BM25 in numpy
-
-A fast BM25 over sparse matrices, MIT. A quicker way to try idea 18's BM25
-rung without touching the store's schema.
-
-```python
-import bm25s
-retriever = bm25s.BM25()
-retriever.index(bm25s.tokenize(chunk_texts, stopwords="en"))
-docs, scores = retriever.retrieve(bm25s.tokenize(bite), k=10)
-```
-
-Watch: needs numpy. `retrieve`'s exact return is from memory; the index and
-tokenize lines are from its README.
-
-#### 50. tantivy-py: a full search engine
-
-Python bindings for Tantivy (a Rust Lucene), MIT. A whole inverted index
-with BM25, phrases and fields, if the pile ever outgrows SQLite.
-
-Watch: a compiled wheel, heavier than anything else here. Usage not checked.
-
-#### 51. FlashRank: a CPU reranker
-
-A tiny cross-encoder, Apache-2.0, that reorders the top results by reading
-the bite and the chunk together. A rung after RRF: words and the embedder
-find 100, FlashRank picks the 5.
-
-Watch: it fetches its model at first use unless you give it a `cache_dir`
-that already holds one. Last release 0.2.10, January 2025.
-
-#### 52. sqlite-vec: vectors in the same file
-
-A SQLite extension for vector search, MIT/Apache-2.0. The embedder's vectors
-could live in the pile's own SQLite file instead of being recomputed.
-
-Watch: pre-1.0 (0.1.9). Usage not checked.
-
-#### 53. scip-python: precise symbols
-
-Sourcegraph's SCIP indexer for Python, MIT: exact definitions and
-references, the kind of facts `graph.py` wants, without `cbm`.
-
-```sh
-scip-python index . --project-name=willow-bot   # with the venv active
-```
-
-Watch: needs Node and npm.
-
-#### 54. tree-sitter-language-pack: every language
-
-Prebuilt tree-sitter grammars for hundreds of languages, MIT, so idea 20
-works on the Rust, JS and shell files in the pile too.
-
-Watch: whether it downloads grammars at runtime wasn't confirmed.
-
-#### 55. rfc3161-client: a second timestamp
-
-Trail of Bits' RFC 3161 client, Apache-2.0. A timestamp from a standard
-timestamp authority beside OpenTimestamps (25), and it verifies offline
-against a root certificate you keep, no Bitcoin node needed.
-
-```python
-from rfc3161_client import TimestampRequestBuilder
-req = TimestampRequestBuilder().data(bundle_bytes).build()   # sent to a TSA
-```
-
-Watch: stamping is a network call to the authority; only the hash goes.
-
-#### 56. pymerkle: proofs for the chain
-
-Merkle trees with inclusion and consistency proofs. The record is a hash
-chain, which proves order but needs the whole file to check. A Merkle tree
-over it proves one row with a handful of hashes.
-
-Watch: GPL-3.0-or-later, so a separate process only. Usage not checked.
-
-#### 57. Tracery: oracle text from a grammar
-
-Kate Compton's grammar engine for generated text, ISC. The horoscope and
-rune lines become grammars that never run dry, and the drand stream picks
-every branch, so a reading is still provable.
-
-```js
-const grammar = tracery.createGrammar({origin: ["#omen# #advice#"], ...});
-grammar.flatten("#origin#");
-```
-
-Watch: JavaScript, and it rolls its own randomness; the one script would
-have to hand it the stream's draws (a Python port is the easier route).
-
-#### 58. ink: branching stories
-
-inkle's narrative language, MIT, compiled to JSON and run by inkjs. A story
-the-table could tell, where every choice the game makes for you comes from
-the drand stream.
-
-Watch: same as Tracery: the seeding is ours to wire in.
-
 ## The world's data
 
 Everything above is about your own repos. This is about everything else: the
@@ -938,3 +778,211 @@ curl -O https://data.gharchive.org/2026-10-20-15.json.gz   # one hour
 
 Watch: one hour is around 100 MB unpacked. Sample a few hours, don't pull
 the year.
+
+## More outside projects (the research pass)
+
+A second pass (2026-10-21) checked ideas 18–32 against their own repos and
+PyPI, and found these. Versions are PyPI's at the time; anything the pass
+couldn't confirm is said.
+
+### 49. bm25s: BM25 in numpy
+
+A fast BM25 over sparse matrices, MIT. A quicker way to try idea 18's BM25
+rung without touching the store's schema.
+
+```python
+import bm25s
+retriever = bm25s.BM25()
+retriever.index(bm25s.tokenize(chunk_texts, stopwords="en"))
+docs, scores = retriever.retrieve(bm25s.tokenize(bite), k=10)
+```
+
+Watch: needs numpy. `retrieve`'s exact return is from memory; the index and
+tokenize lines are from its README.
+
+### 50. tantivy-py: a full search engine
+
+Python bindings for Tantivy (a Rust Lucene), MIT. A whole inverted index
+with BM25, phrases and fields, if the pile ever outgrows SQLite.
+
+Watch: a compiled wheel, heavier than anything else here. Usage not checked.
+
+### 51. FlashRank: a CPU reranker
+
+A tiny cross-encoder, Apache-2.0, that reorders the top results by reading
+the bite and the chunk together. A rung after RRF: words and the embedder
+find 100, FlashRank picks the 5.
+
+Watch: it fetches its model at first use unless you give it a `cache_dir`
+that already holds one. Last release 0.2.10, January 2025.
+
+### 52. sqlite-vec: vectors in the same file
+
+A SQLite extension for vector search, MIT/Apache-2.0. The embedder's vectors
+could live in the pile's own SQLite file instead of being recomputed.
+
+Watch: pre-1.0 (0.1.9). Usage not checked.
+
+### 53. scip-python: precise symbols
+
+Sourcegraph's SCIP indexer for Python, MIT: exact definitions and
+references, the kind of facts `graph.py` wants, without `cbm`.
+
+```sh
+scip-python index . --project-name=willow-bot   # with the venv active
+```
+
+Watch: needs Node and npm.
+
+### 54. tree-sitter-language-pack: every language
+
+Prebuilt tree-sitter grammars for hundreds of languages, MIT, so idea 20
+works on the Rust, JS and shell files in the pile too.
+
+Watch: whether it downloads grammars at runtime wasn't confirmed.
+
+### 55. rfc3161-client: a second timestamp
+
+Trail of Bits' RFC 3161 client, Apache-2.0. A timestamp from a standard
+timestamp authority beside OpenTimestamps (25), and it verifies offline
+against a root certificate you keep, no Bitcoin node needed.
+
+```python
+from rfc3161_client import TimestampRequestBuilder
+req = TimestampRequestBuilder().data(bundle_bytes).build()   # sent to a TSA
+```
+
+Watch: stamping is a network call to the authority; only the hash goes.
+
+### 56. pymerkle: proofs for the chain
+
+Merkle trees with inclusion and consistency proofs. The record is a hash
+chain, which proves order but needs the whole file to check. A Merkle tree
+over it proves one row with a handful of hashes.
+
+Watch: GPL-3.0-or-later, so a separate process only. Usage not checked.
+
+### 57. Tracery: oracle text from a grammar
+
+Kate Compton's grammar engine for generated text, ISC. The horoscope and
+rune lines become grammars that never run dry, and the drand stream picks
+every branch, so a reading is still provable.
+
+```js
+const grammar = tracery.createGrammar({origin: ["#omen# #advice#"], ...});
+grammar.flatten("#origin#");
+```
+
+Watch: JavaScript, and it rolls its own randomness; the one script would
+have to hand it the stream's draws (a Python port is the easier route).
+
+### 58. ink: branching stories
+
+inkle's narrative language, MIT, compiled to JSON and run by inkjs. A story
+the-table could tell, where every choice the game makes for you comes from
+the drand stream.
+
+Watch: same as Tracery: the seeding is ours to wire in.
+
+## Gaps the one script found in itself
+
+From the check described in [What the one script said about this
+list](#what-the-one-script-said-about-this-list).
+
+### 59. The typo rung rewrites names it doesn't know
+
+`Cached.repair` (rung 2) tries an unseen word one edit away. On the check
+bite it turned *gource* into *source* (5,850 chunks), *scip* into *skip*,
+*ctags* into *tags*, *owid* into *owed* and *tracery* into *tracer*. A bite
+about a tool the pile hasn't seen gets flooded by a common word one letter
+away. `REPAIR_MIN` (4, the D12 baseline) only stops short words. A guard is
+the operator's call; one shape it could take:
+
+```python
+# pile.py, rung 2 (sketch): don't trade a rare word for a flood
+if fix_chunks > REPAIR_FLOOD * max(1, median_chunks(bite_words)):
+    continue   # leave it a miss; a miss reaches the map, a flood doesn't
+```
+
+### 60. The miss row lost two words
+
+The seed's answer listed 40 missed words; the `miss` row it wrote (row 32)
+counts 38. The row keeps hashes only, so which two can't be read back. A
+miss that isn't logged never reaches the misses map (3). Worth a test that
+holds the answer's `missed` and the row's `count` to the same number.
+
+```python
+assert len(seed["missed"]) == miss_row["count"]
+```
+
+### 61. The Jeles rung was never on
+
+Jeles was in the pile as a repo, but the seed's gap row said `unreachable:
+Jeles isn't configured`. The CLI only turns the rung on when the `jeles`
+package is importable in the run's interpreter (`jeles_store.default_store`),
+so indexing Jeles (2) and Jeles as the escalation rung are two separate
+settings, and the 40 misses were never asked of it.
+
+```sh
+$VENV/bin/pip install -e ../Jeles   # then check in again
+```
+
+### 62. A big corpus wins a code bite on volume
+
+A bite that was mostly code-tool names ranked Jeles's
+`core_weather-earth.json` first, and Jeles held the top of the rank. Same
+story as the checkout bite (16): words alone favour whoever has the most
+text. BM25 (18, 49), an embedder (16, 19) or a per-repo cap on the top-N
+would each change it.
+
+```python
+# a cap (sketch): no repo takes more than half the top 10
+top = cap_per_repo(rank, n=10, most=5)
+```
+
+## What the one script said about this list
+
+2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366
+files; the index was built before this file existed, so the list can't find
+itself). One `seed` bite holding every idea's key words.
+
+**40 words the pile holds nowhere: real gaps.**
+algolia, bm25s, ctags, datasette, duckdb, ephemeris, flashrank, fts5,
+gharchive, gource, hexagram, inkle, kiwix, levenshtein, libzim, lichess,
+manifold, model2vec, mutmut, opentimestamps, owid, pagefind, pageviews,
+pymerkle, rapidfuzz, rfc3161, ripgrep, scc, scip, serendipity, skyfield,
+tantivy, tarot, tatoeba, theseus, tracery, vec, wordfreq, wordnet, zim.
+They were written as one `miss` row of keyed hashes (row 32), so they will
+show up in the misses map (3) once it's built. That row counts 38, not 40:
+two of the words the seed called missed weren't logged as misses. The row
+holds hashes only, so which two can't be read back; worth a look, since a
+miss that isn't logged never reaches the map.
+
+**Words that hit, but the idea isn't there:**
+- *earthquake*: only the shoebox demo's "mi terremoto". Nothing about USGS.
+- *tides*, *planets*, *usgs*, *noaa*, *museum*, *wikimedia*, *meteo*,
+  *reranker*, *bm25*: Jeles corpus facts *about* these, not code that uses
+  them.
+- *serendipity*: only Jeles prose.
+- *mutation*: never mutation testing.
+
+**Prior art: the idea is already started.**
+- *Hypothesis* (27): installed in the box-build venv
+  (`seat/willow/experiments/box-build-2026-10-17/BRIEF.md`) and imported
+  nowhere. The cheapest gap to close.
+- *Serendipity* (7): `docs/design/one-box/random-pull-2026-10-06.md` already
+  did "pull some randomness from your corpus", from the model's training,
+  every box `unattested`. Idea 7 is the same game made checkable: drand picks
+  the pull and the chunks come from the pile.
+- *Merkle* (56): `hashing-session-handoff-2026-10-05.md` already weighs
+  "hash chain or Merkle tree" for tamper-evident logs, and the grove's
+  one-script README lists Merkle beside the record chain.
+- *Zipf* (40): `next-pile.md` already fits the pile's own words (slope
+  −0.907, R² 0.993). The wordfreq dialect report is that fit against the
+  world's.
+- *Horoscope* (6, 15): willow-bot's `docs/IDEAS.md` 35 (voice preview) and
+  71 (a daily note with the day's horoscope) are the delivery for it.
+- *drand*, *Brier*, *calibration*: 100+ chunks each. The ledger, beacon and
+  scoring ideas (5, 33–38, 47) stand on built ground.
+
+**Gaps in the one script itself** are items 59–62 above.
