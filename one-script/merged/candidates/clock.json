@@ -112,7 +112,7 @@
   "absent": [
     {
       "repo": "willow-mcp",
-      "test": "tests/test_onescript_clock.py::test_no_one_script_is_unreachable_with_why"
+      "test": "tests/test_onescript_clock.py::test_no_one_script_the_carried_clock_answers_and_says_so"
     },
     {
       "repo": "willows-grove",

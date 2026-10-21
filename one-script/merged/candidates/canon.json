@@ -72,7 +72,7 @@
   "absent": [
     {
       "repo": "willow-mcp",
-      "test": "tests/test_onescript_canon.py::test_unreachable_is_said_with_why_and_never_falls_back"
+      "test": "tests/test_onescript_canon.py::test_absent_the_carried_copy_answers_and_says_so_with_why"
     },
     {
       "repo": "willows-grove",

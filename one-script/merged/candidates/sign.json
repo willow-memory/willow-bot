@@ -71,7 +71,7 @@
     },
     {
       "repo": "willow-mcp",
-      "test": "tests/test_onescript_sign_reach.py::test_the_sign_reach_says_unreachable_with_why_and_never_signs_another_way"
+      "test": "tests/test_onescript_sign_reach.py::test_the_sign_reach_signs_with_the_carried_copy_and_says_so"
     }
   ],
   "never_reach": [
