@@ -18,9 +18,11 @@ changes: a Jeles chunk is `untrusted` until its id is under the human's seal,
 exactly like a repo chunk. Whose record a card rests on is said inside its text
 ("verified — public record: NASA, ...").
 
-Only what Jeles itself lets answer is offered: a nugget whose
-`verification_kind` is `human` or `machine` and whose `visibility` is `serve`
-or `public` (Jeles PR #98). Asserted research never reaches a stack.
+Only what a human said is offered: a nugget whose `verification_kind` is
+`human` and whose `visibility` is `serve` or `public` (Jeles PR #98). The
+operator, 2026-10-21, of the nuggets credited to the public record: "They are
+0. A human said it was true." A `machine` nugget is corroborated, not said by a
+human, and asserted research is neither: both are 42, never served (`api`).
 
 | state | when |
 |---|---|
@@ -28,9 +30,12 @@ or `public` (Jeles PR #98). Asserted research never reaches a stack.
 | empty | Jeles answered and nothing servable ranked |
 | unreachable | `jeles` isn't installed, its store won't open, or the read failed |
 
-Read only: Jeles's store is never written from here. `jeles` is optional; this
-module imports it only when a store is made (`default_store`), so the one
-script runs the same without it.
+Written in one place only: a bite no human said an answer to is logged as a
+Jeles gap (`log_gap`, `corpus.log_gap`: local, never forwarded), the queue
+where the human's answer closes it and the next ask comes round as 0. The
+operator, 2026-10-21: "yes". Nothing else in Jeles's store is written from
+here. `jeles` is optional; this module imports it only when a store is made
+(`default_store`), so the one script runs the same without it.
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ from .states import EMPTY, POPULATED, RANKED, UNREACHABLE, base_of
 
 REPO = "jeles"
 PATH_PREFIX = "ask_jeles_corpus/"
-ANSWERING = ("human", "machine")
+ANSWERING = ("human",)  # a human said it (the module doc)
 SERVED = ("serve", "public")
 #: Ask Jeles when the pile ranks fewer chunks than this for the bite.
 #: Baseline (D12): 1, so a pile that ranks nothing always escalates.
@@ -105,14 +110,38 @@ class JelesStore:
     `search(bite, limit) -> [nugget]` and `get(id) -> nugget` are Jeles's
     `corpus.search_nuggets` and `corpus.get_nugget` (`default_store`), or
     stand-ins in a test. A nugget is the record Jeles stores, with its `_id`.
+    `gap(question) -> {id, asked_count}` is `corpus.log_gap`, or None: then no
+    gap is logged, and that is said.
     """
 
     name = REPO
 
-    def __init__(self, search: Callable, get: Callable, *, top: int = TOP):
+    def __init__(
+        self,
+        search: Callable,
+        get: Callable,
+        *,
+        top: int = TOP,
+        gap: Callable | None = None,
+    ):
         self._search = search
         self._get = get
+        self._gap = gap
         self.top = top
+
+    def log_gap(self, bite: str) -> dict:
+        """The bite as an open Jeles gap ("I don't know yet"): `logged` with
+        its id and how often it was asked, or why not."""
+        if self._gap is None:
+            return {"state": UNREACHABLE, "why": "no gap log in this Jeles"}
+        try:
+            got = self._gap(bite)
+        except Exception as e:  # noqa: BLE001 — a failed write is a state
+            return {"state": UNREACHABLE, "why": _err(e)}
+        if not isinstance(got, dict) or got.get("error") or not got.get("id"):
+            why = got.get("error") if isinstance(got, dict) else None
+            return {"state": UNREACHABLE, "why": str(why or "the gap wasn't logged")}
+        return {"state": "logged", "id": got["id"], "asked": got.get("asked_count")}
 
     def rank(self, bite: str) -> dict:
         try:
@@ -159,7 +188,7 @@ def default_store() -> JelesStore | None:
         from jeles import corpus  # noqa: PLC0415 — optional, and only here
     except ImportError:
         return None
-    return JelesStore(corpus.search_nuggets, corpus.get_nugget)
+    return JelesStore(corpus.search_nuggets, corpus.get_nugget, gap=corpus.log_gap)
 
 
 def should_escalate(out: dict) -> tuple[bool, str]:

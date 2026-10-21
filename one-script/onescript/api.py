@@ -24,13 +24,19 @@ writes its `invocation` row, and returns plain data (dicts, lists, strings), so
 the app can serialise it. A refusal comes back as {"refused": why, "code": n}
 and is never an exception: the box wasn't opened, or the state doesn't allow it.
 
-A verb that hands something to the human returns `ESCALATE`, 42, not 0:
-`escalate` when no rung answered a piece (the human card), `reconcile` and
-`read_misses` when a wager goes to the human. 42 is the operator's ΔΣ=42,
-"the sum of acknowledged gaps ... A system that reports no unknowns has
-stopped looking" (willow-mcp docs/repatriation/VOICES.md): what the box can't
-evaluate is said in the exit code, not only in the output, and is never a
-failure (1) or a refusal. `genesis.py` is the reference.
+`ESCALATE`, 42, is the operator's ΔΣ=42, in their words (2026-10-21): "42
+just means I don't have enough information to say a human said this was true."
+What a human said: the pile ("These are things I've already said yes to"), a
+seal of theirs that verifies, a Jeles nugget credited to the public record
+("They are 0. A human said it was true."). Anything else is 42: a model's
+answer or proposal, a machine's corroboration, a bite nothing answers. So:
+`seed` when neither the pile nor a human nugget in Jeles holds the bite (and
+the bite is logged as a Jeles gap, where the human's answer closes it);
+`lookup` when nothing is found; `turn` when it carries the model's proposals,
+until they are sealed; `escalate` when no rung answered a piece (the card);
+`reconcile` and `read_misses` when a wager's outcome can't be shown sealed.
+42 is not a failure (1) or a refusal; escalating is the step it asks for.
+`genesis.py` is the reference.
 
 The record is the only state between calls. The serve key, which makes the
 session's ids, is a thing the record must not hold; it is kept beside the
@@ -107,9 +113,10 @@ from .states import (
     POPULATED,
     REPORT_UNREACHABLE,
     UNREACHABLE,
+    base_of,
 )
 
-#: The exit code of a verb that hands something to the human (the module doc).
+#: Not enough to say a human said this was true (the module doc).
 ESCALATE = 42
 
 
@@ -745,9 +752,25 @@ def seed(
             if not exact:
                 out["counted_why"] = f"no store attached: {out['store']['why']}"
         out["index_sha256"] = sha
+    pile_holds = index is not None and not jeles_mod.should_escalate(out)[0]
     asked = jeles_mod.escalate(cfg.jeles, bite, out)
     if asked is not None:
         out["jeles"] = asked
+    said = (
+        pile_holds
+        or (asked is not None and base_of(asked["state"]) == POPULATED)
+        or back["state"] == wb_mod.HELD
+    )
+    gap = None
+    if not said:  # 42: the bite goes on the queue a human's answer closes
+        gap = (
+            cfg.jeles.log_gap(bite)
+            if cfg.jeles is not None
+            else {"state": UNREACHABLE, "why": "Jeles isn't configured"}
+        )
+        # the row keeps the gap's state, never its id: an unkeyed hash of the
+        # bite's words, a dictionary away from them (`_hidden`)
+        out["gap"] = {k: v for k, v in gap.items() if k != "id"}
     rung = ladder.step(run.rec.rows(), ladder.bite_key(bite))
     out["writeback"] = back
     if back["state"] == wb_mod.HELD:
@@ -769,7 +792,9 @@ def seed(
         out["miss"] = wb_mod.log_miss(run, row, lost["lost"])
     if rung["ladder"] == "offer":  # offered, never applied (§0.3)
         rung["offer_row"] = _offer(run, rung, row["n"])["n"]
-    return {**out, **rung, "row": row["n"], "code": 0}
+    if gap is not None:
+        out["gap"] = gap
+    return {**out, **rung, "row": row["n"], "code": 0 if said else ESCALATE}
 
 
 def _offer(run: Run, rung: dict, seed_row: int) -> dict:
@@ -850,7 +875,8 @@ def lookup(
         return info
     if (refusal := _need_open(run, "lookup")) is not None:
         return refusal
-    return {**_lookup(cfg, run, bite, boxes), "code": 0}
+    out = _lookup(cfg, run, bite, boxes)
+    return {**out, "code": 0 if out["hits"] else ESCALATE}
 
 
 # ── forge_bite: the Forge's first bite, with this session's pile as its box ──
@@ -984,7 +1010,9 @@ def turn(
         return refusal
     who, family = DESK
     ident = {"who": who, "family": family, "sig": gate.sign(run.keys[who], who, family)}
-    return {"out": run.turn(ident, bite, proposed=proposed), "code": 0}
+    out = run.turn(ident, bite, proposed=proposed)
+    # the model's proposals are 42 until the human seals them (seal_proposal)
+    return {"out": out, "code": ESCALATE if out.get("proposals") else 0}
 
 
 def take_proposals(

@@ -64,7 +64,8 @@ def proposed(res) -> list[dict]:
 def seed_again(cfg, bite=BITE):  # noqa: F811
     assert api.checkin(cfg)["code"] == 0
     got = api.seed(cfg, bite)
-    assert got["code"] == 0, got
+    # 0 when the pile holds the bite; 42 when nothing a human said does
+    assert got["code"] in (0, api.ESCALATE) and "refused" not in got, got
     return got
 
 

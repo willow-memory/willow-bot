@@ -21,6 +21,9 @@ from .opening import Config
 from .states import EMPTY, POPULATED, UNREACHABLE
 
 
+#: `api.ESCALATE`, kept here so the prompt path loads no `api` (the module doc).
+ESCALATE = 42
+
 # ── prompt: every prompt is a bite (workflow.md §2c), served into the turn ──
 PROMPT_TOP = 8  # the chunks one prompt's bite serves; the lookup row keeps SEED_TOP
 
@@ -47,7 +50,9 @@ def prompt(
     `serve` reads a chunk. The document is what `prompt.py` frames into the
     turn. Three states, never collapsed: no open check-in, no serve key or no
     index is `unreachable`; a bite that finds nothing is `empty`; over the
-    caller's cap is `empty` ("narrow the stack"), never truncated."""
+    caller's cap is `empty` ("narrow the stack"), never truncated. A bite that
+    finds nothing also carries `code` 42 (`api.ESCALATE`): nothing a human
+    said answers it. The hook itself still exits 0, as Claude Code needs."""
 
     rung = {"used": "words", "why": "no embedder set" if cfg.embed is None else ""}
 
@@ -76,7 +81,9 @@ def prompt(
     hits = out["hits"]
     if not hits:
         why = next((s["why"] for s in out["sessions"].values() if s.get("why")), "")
-        return doc(EMPTY, why or "the bite found nothing in this box")
+        nothing = doc(EMPTY, why or "the bite found nothing in this box")
+        nothing["doc"]["code"] = ESCALATE  # nothing a human said answers it
+        return nothing
     index, _, _ = seed_mod.read_index(run.rec)
     if index is None:
         return doc(UNREACHABLE, "no index this check-in; seed once first")
