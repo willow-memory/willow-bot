@@ -45,6 +45,8 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+from . import canon
+
 
 class Unverifiable(ValueError):
     """The keyring or store can't be read. Said plainly, never a pass."""
@@ -52,11 +54,7 @@ class Unverifiable(ValueError):
 
 def message(source_norm: str, target_text: str, verifier: str) -> bytes:
     """The bytes a Nestor seal signature is taken over (frozen by Nestor)."""
-    return json.dumps(
-        [source_norm, target_text, verifier],
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    return canon.compact_utf8.bytes([source_norm, target_text, verifier])
 
 
 #: Said when the ed25519 check can't run here. It is `unreachable`, not a
