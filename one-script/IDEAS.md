@@ -49,7 +49,7 @@ here reads, writes or caches vault material.
 18. [SQLite FTS5: BM25 as a rung (already in Python)](#18-sqlite-fts5-bm25-as-a-rung)
 19. [Model2Vec: a second static embedder](#19-model2vec-a-second-static-embedder)
 20. [tree-sitter: chunk by function, not by line](#20-tree-sitter-chunk-by-function-not-by-line)
-21. [ripgrep: a faster `--exact` seed](#21-ripgrep-a-faster-exact-seed)
+21. [ripgrep: a faster `--exact` seed](#21-ripgrep-a-faster---exact-seed)
 22. [RapidFuzz: a faster typo rung](#22-rapidfuzz-a-faster-typo-rung)
 23. [Datasette: browse the store, read only](#23-datasette-browse-the-store-read-only)
 24. [DuckDB: SQL straight over `record.jsonl`](#24-duckdb-sql-straight-over-recordjsonl)
