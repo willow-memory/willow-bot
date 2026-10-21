@@ -1,0 +1,88 @@
+{
+  "chunk": "canon",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/canon.py",
+  "goldens": "onescript/tests/test_canon.py",
+  "copies": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/record.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/xref.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/session.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/attribution_ledger.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/bound_receipt.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "grove_db.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "u2u/packets.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/session_signing.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_canon.py::test_trust_owner_modules_keep_their_own_code_and_match_their_family",
+      "why": "trust owner: the root-owned venv never reaches the one script"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/dispatch_signing.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_canon.py::test_trust_owner_modules_keep_their_own_code_and_match_their_family",
+      "why": "trust owner: the root-owned venv never reaches the one script"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "willow_bot/deposits.py",
+      "kind": "named-copy",
+      "parity": "tests/test_deposits_canon.py::test_it_is_the_one_scripts_family_b",
+      "why": "the wheel ships without one-script/, so it has no one script to import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/foundation/probe.py",
+      "kind": "named-copy",
+      "parity": "one-script/onescript/tests/test_canon.py::test_foundation_probe_keeps_its_own_canon_and_agrees_with_a",
+      "why": "stdlib only: runs under bare interpreters"
+    }
+  ],
+  "absent": [
+    {
+      "repo": "willow-mcp",
+      "test": "tests/test_onescript_canon.py::test_unreachable_is_said_with_why_and_never_falls_back"
+    },
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_onescript_canon.py::test_unreachable_names_onescript_home"
+    }
+  ],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}

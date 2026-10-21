@@ -1,0 +1,57 @@
+{
+  "chunk": "reach",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/reach.py",
+  "goldens": "onescript/tests/test_reach.py",
+  "copies": [
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/onescript_reach.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_reach.py::test_the_copy_is_the_template_byte_for_byte",
+      "why": "the bootstrap cannot import the reach before it has found the one script: a byte copy held to the template"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "grove/onescript_reach.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_reach.py::test_the_copy_is_the_template_byte_for_byte",
+      "why": "the bootstrap cannot import the reach before it has found the one script: a byte copy held to the template"
+    },
+    {
+      "repo": "ratatosk",
+      "path": "ratatosk/onescript_reach.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_reach.py::test_the_copy_is_the_template_byte_for_byte",
+      "why": "the bootstrap cannot import the reach before it has found the one script: a byte copy held to the template"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "willow_bot/onescript_reach.py",
+      "kind": "named-copy",
+      "parity": "one-script/onescript/tests/test_reach.py::test_every_consumers_copy_is_the_template_byte_for_byte",
+      "why": "the bootstrap cannot import the reach before it has found the one script: a byte copy held to the template"
+    }
+  ],
+  "absent": [
+    {
+      "repo": "willow-mcp",
+      "test": "tests/test_onescript_reach.py::test_it_says_unreachable_when_not"
+    },
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_onescript_reach.py::test_it_says_unreachable_when_not"
+    },
+    {
+      "repo": "ratatosk",
+      "test": "tests/test_onescript_reach.py::test_it_says_unreachable_when_not"
+    }
+  ],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}

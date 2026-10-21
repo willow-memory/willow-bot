@@ -1,0 +1,23 @@
+{
+  "chunk": "calibration",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/calibration.py",
+  "goldens": "onescript/tests/test_calibration.py",
+  "copies": [
+    {
+      "repo": "oakenscrolls-office",
+      "path": "calibration.py",
+      "kind": "named-copy",
+      "parity": "onescript/tests/test_calibration.py::test_oakenscrolls_keeps_the_same_math",
+      "why": "dependency-free stdlib-only no-egress device app (operator: 1 revert)"
+    }
+  ],
+  "absent": [],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}
