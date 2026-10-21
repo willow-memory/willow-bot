@@ -422,3 +422,13 @@ def test_quiet_does_not_resolve_an_open_flag(github):
 ])
 def test_redact_url_hides_path_tokens_and_keeps_ipv6_brackets(url, want):
     assert ingress.redact_url(url) == want
+
+
+def test_redact_url_is_the_carried_copy_of_the_one_scripts():
+    # flatten-2 F12: the rule is onescript/scrub.py's `redact_url`; the wheel
+    # carries a byte copy (tests/test_carried_parity.py holds it to the bytes)
+    from willow_bot._carried import scrub
+
+    assert ingress.redact_url(SECRET_URL) == scrub.redact_url(SECRET_URL)
+    assert ingress.redact_url(SECRET_URL) == "https://hooks.example.invalid:8443/webhook"
+    assert ingress.redact_url("") == ""

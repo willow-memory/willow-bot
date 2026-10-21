@@ -3,20 +3,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
+from willow_bot._carried import clock as _clock
 from willow_bot.deterministic.ollama import chat
 from willow_bot.deterministic.policy import Policy
 
 
 def _utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    """Row ``ts``, in the one script's ``seconds_z`` format (flatten-2 F8: "Using
+    the onescript at every path."). ``$ONESCRIPT_NOW`` pins it. The installed
+    package carries a parity-tested byte copy of ``onescript/clock.py``
+    (``willow_bot/_carried/``; operator: "carry copies"), so it never reaches the
+    one script, which the wheel does not ship."""
+    return _clock.seconds_z()
 
 
 def _prompt_hash(text: str) -> str:

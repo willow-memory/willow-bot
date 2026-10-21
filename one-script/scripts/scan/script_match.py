@@ -102,7 +102,7 @@ def entry(source: str, label: str, name: str | None) -> dict:
 
 def from_transcript(path: Path) -> list[dict]:
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         o = json.loads(line)
         if o.get("type") != "assistant":
             continue
@@ -122,7 +122,8 @@ def from_transcript(path: Path) -> list[dict]:
 def from_files(root: Path) -> list[dict]:
     files = sorted(p for p in root.rglob("*.py") if "__pycache__" not in p.parts)
     return [
-        entry(p.read_text(), f"saved · {p.relative_to(root)}", p.name) for p in files
+        entry(p.read_text(encoding="utf-8"), f"saved · {p.relative_to(root)}", p.name)
+        for p in files
     ]
 
 

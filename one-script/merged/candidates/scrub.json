@@ -1,0 +1,55 @@
+{
+  "chunk": "scrub",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/scrub.py",
+  "goldens": "onescript/tests/test_scrub.py",
+  "copies": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/serve.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/scrub_local.py",
+      "kind": "named-copy",
+      "parity": "tests/test_scrub_parity.py::test_the_copy_is_the_one_scripts_bytes",
+      "why": "trust closure and installed server: carry copies"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "grove/seat_record.py",
+      "kind": "import",
+      "via": "grove/seat_boxes.py:one_script_module"
+    },
+    {
+      "repo": "ratatosk",
+      "path": "ratatosk/redact.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "willow_bot/_carried/scrub.py",
+      "kind": "named-copy",
+      "parity": "tests/test_carried_parity.py::test_the_carried_copy_is_the_one_scripts_bytes",
+      "why": "the willow_bot wheel ships without the one script and must not import it (operator: carry copies); byte copy, parity-tested"
+    }
+  ],
+  "absent": [
+    {
+      "repo": "ratatosk",
+      "test": "tests/test_redact_one_script.py::test_out_of_reach_the_text_is_withheld_with_why"
+    },
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_seat_table.py::test_F12_without_the_one_script_the_seat_stops_at_import_and_says_why"
+    }
+  ],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}

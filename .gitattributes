@@ -1,0 +1,5 @@
+# One line ending everywhere. Consumers (ratatosk, willows-grove, willow-mcp)
+# hold carried copies of one-script files to these bytes, and their floors run
+# on Windows; a CRLF checkout there would change the bytes without changing
+# the file. Text checks out LF on every platform; git leaves binaries alone.
+* text=auto eol=lf

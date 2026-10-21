@@ -1,0 +1,132 @@
+{
+  "chunk": "clock",
+  "author": "agent:willow",
+  "verified_by": "UNSET",
+  "home": "onescript/clock.py",
+  "goldens": "onescript/tests/test_clock.py",
+  "copies": [
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/api.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "one-script/onescript/xref.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/bound_receipt.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/dispatch.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/enforcement_posture.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/handoff.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/kb_curate.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/kb_verify.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/seed_kb.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/seed_mirror.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/seed_sign.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/sign_session_cli.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/training_corpus.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/envelope_authoring.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_clock.py::test_privileged_helpers_keep_the_bytes_of_the_named_format",
+      "why": "trust owner: the privileged helpers keep their own clock"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/manifest_grant_executor.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_clock.py::test_privileged_helpers_keep_the_bytes_of_the_named_format",
+      "why": "trust owner: the privileged helpers keep their own clock"
+    },
+    {
+      "repo": "willow-mcp",
+      "path": "src/willow_mcp/install_steps/seed_envelope_ratify.py",
+      "kind": "named-copy",
+      "parity": "tests/test_onescript_clock.py::test_privileged_helpers_keep_the_bytes_of_the_named_format",
+      "why": "trust owner: the privileged helpers keep their own clock"
+    },
+    {
+      "repo": "willows-grove",
+      "path": "grove/journal_writer.py",
+      "kind": "import"
+    },
+    {
+      "repo": "ratatosk",
+      "path": "ratatosk/protocol/envelope.py",
+      "kind": "import"
+    },
+    {
+      "repo": "willow-bot",
+      "path": "willow_bot/_carried/clock.py",
+      "kind": "named-copy",
+      "parity": "tests/test_carried_parity.py::test_the_carried_copy_is_the_one_scripts_bytes",
+      "why": "the willow_bot wheel ships without the one script and must not import it (operator: carry copies); byte copy, parity-tested"
+    }
+  ],
+  "absent": [
+    {
+      "repo": "willow-mcp",
+      "test": "tests/test_onescript_clock.py::test_no_one_script_the_carried_clock_answers_and_says_so"
+    },
+    {
+      "repo": "willows-grove",
+      "test": "tests/test_journal_clock.py::test_no_one_script_is_unreachable_with_why"
+    },
+    {
+      "repo": "ratatosk",
+      "test": "tests/test_onescript_clock.py::test_no_one_script_is_unreachable_with_why"
+    }
+  ],
+  "never_reach": [
+    "willow-mcp:trust",
+    "safe-app-store",
+    "willow-bot:wheel"
+  ],
+  "fixture": true
+}

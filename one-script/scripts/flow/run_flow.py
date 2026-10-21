@@ -214,7 +214,13 @@ FLOW_VERSION = hashlib.sha256(
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        env={**os.environ, "LC_ALL": "C"},  # F17: parsed output, one locale
     ).stdout
 
 
@@ -226,7 +232,7 @@ def stamp(outdir: Path) -> None:
     -> same stamp; a moved ref shows up as a different fingerprint, so the
     commits section stops being an unrecorded live input."""
     path = outdir / "session-flow.json"
-    d = json.loads(path.read_text())
+    d = json.loads(path.read_text(encoding="utf-8"))
     heads = {}
     for repo in sorted({c["repo"] for c in d.get("commits", [])} | set(_repos_read(d))):
         g = Path(ROOT) / repo
@@ -240,7 +246,7 @@ def stamp(outdir: Path) -> None:
         }
     d["git_read"] = heads
     d["flow_version"] = FLOW_VERSION
-    path.write_text(json.dumps(d, indent=1, sort_keys=True) + "\n")
+    path.write_text(json.dumps(d, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     md = outdir / "session-flow.md"
     lines = [
         "",
@@ -255,7 +261,9 @@ def stamp(outdir: Path) -> None:
         f"| {r} | `{v['head'][:12]}` | {v['refs']} | `{v['refs_sha256_16']}` |"
         for r, v in heads.items()
     ] or ["| none | | | |"]
-    md.write_text(md.read_text() + "\n".join(lines) + "\n")
+    md.write_text(
+        md.read_text(encoding="utf-8") + "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
 
 def _repos_read(d: dict) -> set[str]:

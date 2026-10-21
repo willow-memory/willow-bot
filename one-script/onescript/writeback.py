@@ -46,12 +46,12 @@ from . import pile as pile_mod
 from . import seed as seed_mod
 from . import serve as served
 from .record import canon, h256
+from .states import EMPTY, HELD, NONE, POPULATED, UNREACHABLE  # the three, once
 
 MISS = "miss"
 KIND = "writeback"
 PREFIX = "writeback:"
 PROPOSED = "proposed"
-HELD, NONE, UNREACHABLE = "held", "none", "unreachable"
 
 #: The fields a write-back's subject is the hash of, and nothing else.
 SUBJECT_KEYS = ("bite_hash", "answer_hash", "cites")
@@ -312,7 +312,7 @@ def state_of(run, subj: str) -> dict:
     """A candidate's state as the record stands: proposed, held, or unreachable."""
     rows = run.rec.rows()
     if subj not in subjects(rows):
-        return {"state": "none", "why": "no such write-back on record"}
+        return {"state": NONE, "why": "no such write-back on record"}
     held, unchecked = run.held(rows)
     if subj in held:
         return {"state": HELD}
@@ -367,7 +367,7 @@ def at_seed(run, bite: str, words: list[str], open_store: Callable) -> dict:
         return {"state": UNREACHABLE, "why": why}
     try:
         lost = missing(c, words)
-        q = c.quotes(bite) if lost else {"state": "empty"}
+        q = c.quotes(bite) if lost else {"state": EMPTY}
     except pile_mod.BROKEN as e:  # a store that can't be read: unknown, not a miss
         return {
             "state": UNREACHABLE,
@@ -375,9 +375,9 @@ def at_seed(run, bite: str, words: list[str], open_store: Callable) -> dict:
         }
     finally:
         c.db.close()
-    if q["state"] == "unreachable":  # unknown is not a miss
+    if q["state"] == UNREACHABLE:  # unknown is not a miss
         return {"state": UNREACHABLE, "why": q["why"]}
-    quoted = q["state"] == "populated"
+    quoted = q["state"] == POPULATED
     if not lost:
         return {"state": NONE}
     if quoted:

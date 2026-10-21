@@ -31,6 +31,9 @@
     python3 -m onescript verdict --json FILE         # one table verdict row (J4)
     python3 -m onescript ledger-head --n N --head H  # the agm_head row (J9, R9)
     python3 -m onescript keys export --from KEYRING [--to FILE]  # public half only
+    python3 -m onescript merge-check merge.json [--json] [--record] [--box BOX]  # the merge gate
+    python3 -m onescript diverge A B [--repo NAME ...] [--repos DIR] [--json] [--record]
+        [--behaviour] [--box-a BOX --box-b BOX]  # where two refs part, to the smallest unit
 
 The app calls the functions in `onescript.api`; this file only reads argv,
 builds the `Config`, calls one of them and prints. Nothing here needs a tty.
@@ -65,7 +68,7 @@ from pathlib import Path
 
 from . import api, boot, nestor_seal  # noqa: F401  (boot: tests patch cli.boot.probes)
 from . import escalate as escalate_mod
-from . import beacon, deck, jeles_store, market, table, view
+from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
 from .api import (  # noqa: F401  (re-exported: the tests and callers read these)
     ANCHOR,
     DESK,
@@ -76,6 +79,13 @@ from .api import (  # noqa: F401  (re-exported: the tests and callers read these
     _law,
 )
 from .run import PKG
+from .states import EMPTY, POPULATED
+from .writeback import PROPOSED
+
+# A success is a reader's state (populated or empty) or a proposal's standing
+# (proposed): two vocabularies mixed on purpose, since these commands either
+# read rows or write a proposal for the human to seal.
+OK_STATES = (POPULATED, EMPTY, PROPOSED)
 
 ROOT = PKG.parents[1]  # onescript -> one-script -> willow-bot
 GROVE = Path(
@@ -335,6 +345,75 @@ def main(argv: list[str] | None = None) -> int:
         default=api.default_keyring(),
         help="default: the box's keyring path (verifiers.public.json)",
     )
+    mc = sub.add_parser(
+        "merge-check",
+        help="the merge gate: can this chunk come in and leave the one script intact "
+        "(off the box; --record writes one-script/merged/<chunk>.json only on a pass)",
+    )
+    mc.add_argument("attestation", type=Path, help="the chunk's merge.json")
+    mc.add_argument("--json", dest="as_json", action="store_true")
+    mc.add_argument("--record", dest="mc_record", action="store_true")
+    mc.add_argument(
+        "--box",
+        dest="mc_box",
+        type=Path,
+        default=None,
+        help="a box whose record's chain and anchor must verify (gate 2)",
+    )
+    mc.add_argument(
+        "--repos",
+        dest="mc_repos",
+        type=Path,
+        default=None,
+        help="the directory holding willow-bot and its siblings "
+        "(default: beside this willow-bot, or $ONESCRIPT_HOME's)",
+    )
+    mc.add_argument(
+        "--skip-suite",
+        action="store_true",
+        help="do not run gate 1; it then FAILS as not run, and never records",
+    )
+    mc.add_argument(
+        "--python",
+        dest="mc_python",
+        action="append",
+        default=[],
+        type=_name_path,
+        metavar="REPO=PYTHON",
+        help="the interpreter for a repo's own tests (default: this one)",
+    )
+    dv = sub.add_parser(
+        "diverge",
+        help="where two refs (or two boxes' chains) part, down to the smallest unit "
+        "(off the box; --record appends one `diverge` row to --box)",
+    )
+    dv.add_argument("ref_a", nargs="?", metavar="A")
+    dv.add_argument("ref_b", nargs="?", metavar="B")
+    dv.add_argument(
+        "--repo",
+        dest="dv_repo",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a repo under --repos to compare (repeatable; default willow-bot)",
+    )
+    dv.add_argument(
+        "--repos",
+        dest="dv_repos",
+        type=Path,
+        default=None,
+        help="the directory holding the repos (default: beside this willow-bot)",
+    )
+    dv.add_argument("--json", dest="as_json", action="store_true")
+    dv.add_argument("--record", dest="dv_record", action="store_true")
+    dv.add_argument(
+        "--behaviour",
+        dest="dv_behaviour",
+        action="store_true",
+        help="level 4: merge in a throwaway clone and run each side's changed tests",
+    )
+    dv.add_argument("--box-a", dest="dv_box_a", type=Path, default=None)
+    dv.add_argument("--box-b", dest="dv_box_b", type=Path, default=None)
     sub.add_parser("checkin")
     sd = sub.add_parser(
         "seed", help="the first bite's words against the box; once per check-in"
@@ -630,6 +709,34 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  dropped  {name} (HMAC: a shared secret, not a public key)")
         return 0
 
+    if (
+        args.cmd == "diverge"
+    ):  # off the box: it reads refs; --record appends one row to --box
+        return diverge.run_cli(
+            args.ref_a,
+            args.ref_b,
+            repos=args.dv_repos,
+            names=args.dv_repo or None,
+            as_json=args.as_json,
+            record=args.dv_record,
+            box=args.box,
+            behaviour=args.dv_behaviour,
+            box_a=args.dv_box_a,
+            box_b=args.dv_box_b,
+            clock=(lambda: args.now) if args.now else None,
+        )
+
+    if args.cmd == "merge-check":  # off the box: no record, no invocation row
+        return merge_check.run_cli(
+            args.attestation,
+            repos=args.mc_repos,
+            box=args.mc_box,
+            as_json=args.as_json,
+            record=args.mc_record,
+            skip_suite=args.skip_suite,
+            python={k: str(v) for k, v in args.mc_python},
+        )
+
     cfg = api.Config(
         box=args.box,
         keys=args.keys,
@@ -656,17 +763,29 @@ def main(argv: list[str] | None = None) -> int:
     args.cmd = args.cmd.replace("_", "-")  # seal_outcome is seal-outcome
     if args.cmd == "forecast":
         try:
-            dist = json.loads(args.dist.read_text())
+            dist = json.loads(args.dist.read_text(encoding="utf-8"))
             committed = (
-                json.loads(args.committed.read_text()) if args.committed else None
+                json.loads(args.committed.read_text(encoding="utf-8"))
+                if args.committed
+                else None
             )
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
         try:
-            tbl = json.loads(args.table.read_text()) if args.table else None
-            dk = json.loads(args.deck.read_text()) if args.deck else None
-            mk = json.loads(args.market.read_text()) if args.market else None
+            tbl = (
+                json.loads(args.table.read_text(encoding="utf-8"))
+                if args.table
+                else None
+            )
+            dk = (
+                json.loads(args.deck.read_text(encoding="utf-8")) if args.deck else None
+            )
+            mk = (
+                json.loads(args.market.read_text(encoding="utf-8"))
+                if args.market
+                else None
+            )
         except (OSError, ValueError) as e:
             print(f"refused: {type(e).__name__}: {e}")
             return 2
@@ -697,7 +816,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"seal {res['subject']}")  # the human signs it, or nothing counts
         said = {k: v for k, v in res.items() if k != "rows"}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
-        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
+        return 0 if res.get("state") in OK_STATES else 1
     elif args.cmd in ("deck-reveal", "deck-outcome"):
         if args.cmd == "deck-reveal":
             res = deck.reveal(cfg, args.round, argv=raw)
@@ -709,14 +828,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"seal {res['subject']}")  # the human signs it, or nothing counts
         said = {k: v for k, v in res.items() if k != "rows"}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
-        return 0 if res.get("state") in ("populated", "empty", "proposed") else 1
+        return 0 if res.get("state") in OK_STATES else 1
     elif args.cmd == "seal-outcome":
         try:
             outcome = json.loads(args.outcome)
         except ValueError as e:
             print(f"refused: --outcome is not JSON: {e}")
             return 2
-        pair = json.loads(args.pair.read_text()) if args.pair else None
+        pair = json.loads(args.pair.read_text(encoding="utf-8")) if args.pair else None
         res = api.seal_outcome(
             cfg,
             args.wager,
@@ -740,7 +859,7 @@ def main(argv: list[str] | None = None) -> int:
             text = (
                 sys.stdin.read()
                 if str(args.row_json) == "-"
-                else args.row_json.read_text()
+                else args.row_json.read_text(encoding="utf-8")
             )
             row = json.loads(text)
         except (OSError, ValueError) as e:
@@ -881,7 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.subject.startswith("session:")
             else api.seal_scope
         )
-        pair = json.loads(args.pair.read_text()) if args.pair else None
+        pair = json.loads(args.pair.read_text(encoding="utf-8")) if args.pair else None
         res = seal(
             cfg,
             args.subject,

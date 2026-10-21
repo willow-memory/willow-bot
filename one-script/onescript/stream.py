@@ -24,11 +24,20 @@ The table's side came in with flatten F-14 (from the-table's
 generator a recorded run was made with (C9); ``resolve_factory`` (None -> the
 stream); ``seed_label``; and ``replay``, which refuses a record made by any
 other generator or seed.
+
+Flatten-2 F13 (randomness F-14 missed): the games' policies and the adapters'
+fallbacks were still ``random.Random(seed)``. New runs now default to the
+stream (``policy_factory``, ``adapter_rng``); the old Mersenne path is the
+named ``MT19937_POLICY`` (``mt19937-policy/legacy``), used only to re-derive
+the frozen records, which stay frozen (rule 12). ``draw_seed`` is where an
+unpredictable seed comes from: drawn once, recorded, then the stream.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import random
 from collections.abc import Sequence
 from typing import Any
 
@@ -156,10 +165,96 @@ def default_factory(seed):
     return StreamRandom.from_seed(seed)
 
 
+# -- the policy side and the draw (flatten-2 F13: "randomness F-14 missed") ----
+POLICY_LEGACY_ID = "mt19937-policy/legacy"
+
+
+class _PolicyLegacy:
+    """``mt19937-policy/legacy``: ``random.Random(seed)``, the Mersenne
+    Twister the games' policies and adapters were seeded with before the
+    stream was their default. It is named so that a frozen record
+    (``baselines-N500.md``, ``pools-N200.json``) can be re-derived exactly
+    (D-e: "bytes already persisted never change"; rule 12). New runs never
+    use it unless asked by name. Not guaranteed the same on every Python,
+    which is why the stream is the default."""
+
+    generator_id = POLICY_LEGACY_ID
+
+    def __call__(self, seed):
+        return random.Random(seed)
+
+    def __repr__(self) -> str:
+        return "MT19937_POLICY"
+
+
+MT19937_POLICY = _PolicyLegacy()
+
+POLICY_LABEL = b"policy"
+
+
+def policy_factory(seed):
+    """The default for a policy's rng: the stream, under its own label, so a
+    policy and the game it plays (both seeded ``i``) do not draw the same
+    numbers."""
+    return StreamRandom.from_seed(seed, POLICY_LABEL)
+
+
+def resolve_policy_factory(factory):
+    """None -> the stream's policy factory; ``MT19937_POLICY`` (or any
+    callable) is handed back as given."""
+    return policy_factory if factory is None else factory
+
+
+def generator_pair(generator):
+    """``(the games' rng_factory, the policy's factory)`` for a whole run.
+    ``None`` -> the stream for both (``None`` for the games is each game's
+    default, the stream). Two named old pairs re-derive the two frozen
+    records, each made at a different time:
+
+    * ``LEGACY`` -> ``LEGACY`` games and the ``MT19937_POLICY`` policy: the
+      Aug 17 ``baselines-N500.md`` (card games on ``random.Random``, the scene
+      on the seeded global ``random``).
+    * ``MT19937_POLICY`` -> ``MT19937_POLICY`` for both: the Oct 19
+      ``pools-N200.json`` (card games and the policy on ``random.Random``, the
+      scene already on the stream).
+
+    Nothing else is a generator."""
+    if generator is None:
+        return None, policy_factory
+    if generator is LEGACY:
+        return LEGACY, MT19937_POLICY
+    if generator is MT19937_POLICY:
+        return MT19937_POLICY, MT19937_POLICY
+    raise ValueError(
+        f"generator must be None (the stream), LEGACY or MT19937_POLICY, got {generator!r}"
+    )
+
+
+def adapter_rng(rng_factory, seed):
+    """The rng a card or dice adapter plays a seed with. None -> the stream
+    (``default_factory``); ``LEGACY`` or ``MT19937_POLICY`` -> the old
+    ``random.Random(seed)``, by name; else the caller's factory."""
+    if rng_factory is None:
+        return default_factory(seed)
+    if rng_factory is LEGACY or rng_factory is MT19937_POLICY:
+        return random.Random(seed)
+    return rng_factory(seed)
+
+
+def draw_seed() -> int:
+    """An unpredictable seed, drawn ONCE (``os.urandom``, 8 bytes), to be
+    recorded by the caller and used to drive the whole run from the stream:
+    the run is then replayable from its recorded seed. ``urandom`` is only the
+    source of the number; every draw after it is the stream's."""
+    return int.from_bytes(os.urandom(8), "big")
+
+
 def resolve_factory(rng_factory):
     """None -> the stream (the default); LEGACY -> None (global random);
-    else the caller's factory."""
-    if rng_factory is None:
+    ``MT19937_POLICY`` -> the stream too (it names the Mersenne policy and the
+    card adapters, which a scene's dice never had; ``pools-N200.json`` was
+    made so); else the caller's factory."""
+    if rng_factory is None or rng_factory is MT19937_POLICY:
         return default_factory
     if rng_factory is LEGACY:
         return None

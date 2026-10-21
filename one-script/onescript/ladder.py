@@ -24,9 +24,8 @@ plan's 1/2/3); whether they are per box or per user is still OPEN there.
 
 from __future__ import annotations
 
-import hashlib
-
 from . import seed
+from .words import bite_key as _bite_key
 
 NOTICE_AT = 2  # the operator's number (workflow.md §2c); baseline (D12)
 OFFER_AT = 3  # the operator's number (workflow.md §2c); baseline (D12), per box
@@ -35,12 +34,9 @@ OFFER = "make it standing?"
 
 # ── the ladder ─────────────────────────────────────────────────────────────
 def bite_key(bite: str) -> str | None:
-    """The bite's words, lowercased, in order, one space between, hashed.
-    None for a bite with no words."""
-    ws = seed.WORD.findall(bite.lower())
-    if not ws:
-        return None
-    return hashlib.sha256(" ".join(ws).encode()).hexdigest()
+    """The bite's words, lowercased, in order, one space between, hashed (the
+    one rule is `words.bite_key`, flatten-2 F11). None for a bite with no words."""
+    return _bite_key(bite)
 
 
 def declined(rows: list[dict], key: str) -> bool:

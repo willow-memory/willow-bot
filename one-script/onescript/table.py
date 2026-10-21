@@ -72,6 +72,7 @@ from typing import Callable, Iterable
 from . import api, beacon, gate, odds, proposals, record, reverse
 from . import serve as served
 from .record import canon
+from .states import POPULATED, UNREACHABLE
 
 #: C11 (SPEC-documented §9 (b)): the table's identity, beside `api.DESK`.
 TABLE = ("table", "python")
@@ -98,12 +99,7 @@ _HEXRUN = re.compile(r"[0-9a-f]{40,}", re.IGNORECASE)
 #: The check's states, as SPEC-documented §12 (b) names them, plus the empty
 #: arm: no agm_head row on record, so nothing to compare (not satisfied, not
 #: failing).
-SATISFIED, FAILING, UNREACHABLE, UNANCHORED = (
-    "satisfied",
-    "failing",
-    "unreachable",
-    "unanchored",
-)
+SATISFIED, FAILING, UNANCHORED = "satisfied", "failing", "unanchored"
 
 
 # ── writing ────────────────────────────────────────────────────────────────
@@ -366,7 +362,7 @@ def beat_seal(
         }
     lost = [r for r in over if r["n"] in unchecked]
     if lost:
-        return {"state": "unreachable", "why": unchecked[lost[-1]["n"]], "code": 1}
+        return {"state": UNREACHABLE, "why": unchecked[lost[-1]["n"]], "code": 1}
     why = (
         "a seal row over this subject is on record, but no proof on it re-checks"
         if over
@@ -590,7 +586,7 @@ def beacon_problem(
     if not _int(seal_latest):
         # INVARIANTS §1: the anchor holds no reader round for this tip (missing,
         # unreadable, or sealed with no reader): unchecked here, not a finding
-        return "unreachable", (
+        return UNREACHABLE, (
             f"the anchor holds no reader round for the tip seal: round {rnd} "
             "can't be shown to have been ahead of it (R23a)"
         )
@@ -616,17 +612,17 @@ def beacon_problem(
             "may have been known"
         )
     if read is None:
-        return "unreachable", (
+        return UNREACHABLE, (
             f"no beacon reader on this box: round {rnd}'s randomness can't be "
             f"checked; {beacon.BLS_UNVERIFIED}"
         )
     try:
         got = read(rnd)
     except Exception as e:  # any failure of the reader is unreachable, said
-        return "unreachable", f"round {rnd} could not be read: {type(e).__name__}: {e}"
+        return UNREACHABLE, f"round {rnd} could not be read: {type(e).__name__}: {e}"
     fetched = got.get("randomness") if isinstance(got, dict) else None
     if not beacon.is_randomness(fetched):
-        return "unreachable", f"the reader gave no randomness for round {rnd}"
+        return UNREACHABLE, f"the reader gave no randomness for round {rnd}"
     if fetched != opened.get("randomness"):
         return "escalate", (
             f"the session's randomness is not round {rnd}'s: the seed was not the "
@@ -719,7 +715,7 @@ def propose_outcome(
         )
     if human_key is None:
         return {
-            "state": "unreachable",
+            "state": UNREACHABLE,
             "reason": "no human key handed over: the tip seal can't be checked",
             "session": session,
         }
@@ -748,8 +744,8 @@ def propose_outcome(
     seeded = beacon_problem(reopened[0], w, rows[under[0]], read_beacon, seal_latest)
     if seeded is not None:
         state, why = seeded
-        if state == "unreachable":
-            return {"state": "unreachable", "reason": why, "session": session}
+        if state == UNREACHABLE:
+            return {"state": UNREACHABLE, "reason": why, "session": session}
         return _escalate(why, session=session)
     idx, entry = reverse._match_distribution(w, {"path": path})
     if entry is None:
@@ -827,7 +823,7 @@ def basis(
             got = market.propose_outcome(
                 rows, wager["hash"], human_key, read_market, seal_rounds
             )
-            if got["state"] == "unreachable":
+            if got["state"] == UNREACHABLE:
                 return {"unreachable": str(got.get("reason"))}
             if got["state"] != "proposed":
                 return str(got.get("reason", got["state"]))
@@ -845,7 +841,7 @@ def basis(
             got = deck.propose_outcome(
                 rows, wager["hash"], human_key, read_beacon, seal_rounds
             )
-            if got["state"] == "unreachable":
+            if got["state"] == UNREACHABLE:
                 return {"unreachable": str(got.get("reason"))}
             if got["state"] != "proposed":
                 return str(got.get("reason", got["state"]))
@@ -866,7 +862,7 @@ def basis(
         if not claimed:
             return "no table session on record plays for this forecast"
         got = propose_outcome(rows, wager["hash"], human_key, read_beacon, seal_rounds)
-        if got["state"] == "unreachable":
+        if got["state"] == UNREACHABLE:
             return {"unreachable": str(got.get("reason"))}
         if got["state"] != "proposed":
             return str(got.get("reason", got["state"]))
@@ -955,7 +951,7 @@ def check_agm_head(
     try:
         got = read_head()
     except Exception as e:  # an injected reader that raises is unreachable, said
-        got = {"state": "unreachable", "why": f"{type(e).__name__}: {e}"}
+        got = {"state": UNREACHABLE, "why": f"{type(e).__name__}: {e}"}
     if not isinstance(got, dict):
         got = {"state": "?", "why": repr(got)}
     base = {
@@ -976,7 +972,7 @@ def check_agm_head(
     }
     if anchored is None:
         return {**base, "state": UNANCHORED, "why": "no agm_head row on record"}
-    if got.get("state") == "unreachable":
+    if got.get("state") == UNREACHABLE:
         return {**base, "state": UNREACHABLE, "why": got.get("why", "unreachable")}
     if got.get("state") == "broken":
         return {
@@ -1029,7 +1025,7 @@ def agm_check(
 
 # ── R13: what the seat shows ───────────────────────────────────────────────
 def _no_reader() -> dict:
-    return {"state": "unreachable", "why": "no ledger reader was handed over"}
+    return {"state": UNREACHABLE, "why": "no ledger reader was handed over"}
 
 
 def surface(
@@ -1064,7 +1060,7 @@ def surface(
         first = str(breaks[0])
         row = first[4:].split(":", 1)[0] if first.startswith("row ") else None
         why = f"chain broken at row {row}" if row else f"the record is broken: {first}"
-        return {"state": "unreachable", "why": why}
+        return {"state": UNREACHABLE, "why": why}
     wagers = {r["hash"]: r.get("id") for r in rows if r["kind"] == "wager"}
     sessions: dict[str, dict] = {}
     for r in mine:
@@ -1086,4 +1082,4 @@ def surface(
         )
     agm = check_agm_head(rows, read_head or _no_reader, covered_through=covered_through)
     agm.pop("read", None)  # the ledger's own reading stays with the checker
-    return {"state": "populated", "sessions": list(sessions.values()), "agm": agm}
+    return {"state": POPULATED, "sessions": list(sessions.values()), "agm": agm}
