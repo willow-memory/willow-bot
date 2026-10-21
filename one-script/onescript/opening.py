@@ -126,6 +126,11 @@ class Config:
     #: Fixed here, never taken from a caller; None: no market call resolves
     #: (`unreachable`, said).
     market: Callable[[str, str], dict] | None = None
+    #: The operator's fetcher for outside data (`snapshot.https_reader`, or a
+    #: stand-in): url -> bytes. A snapshot is read through this once and kept
+    #: in the box under its hash (`snapshot.py`). Fixed here, never taken from
+    #: a caller; None: offline, and a new snapshot is `unreachable`, said.
+    fetch: Callable[[str], bytes] | None = None
     #: Where an indexed repo is read from, by name; any it leaves out are looked
     #: for beside willow-bot. The session's store and serve read through it.
     repos: dict | None = None

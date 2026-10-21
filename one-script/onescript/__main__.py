@@ -19,6 +19,8 @@
     python3 -m onescript deck-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript forecast ID --dist FILE --market FILE  # {symbol, kind, close_date[, threshold]}
     python3 -m onescript market-reveal DATE  # the closes as market rows (--prices, --drand)
+    python3 -m onescript snapshot NAME URL --license SPDX  # outside data, once (--fetch)
+    python3 -m onescript snapshot-read NAME  # the held snapshot, offline
     python3 -m onescript market-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
@@ -91,12 +93,14 @@ def _load_everything() -> None:
     here: on import (the tests patch `cli.boot`, `cli.api`, `cli.beacon`...)
     and in `main` for any verb but the hook's. Idempotent."""
     global api, boot, nestor_seal, escalate_mod, beacon, deck, diverge
-    global jeles_store, market, merge_check, table, view, _last_boot, OK_STATES
+    global jeles_store, market, merge_check, snapshot, table, view, _last_boot
+    global OK_STATES
     if "api" in globals():
         return
     from . import api, boot, nestor_seal  # noqa: F401  (tests patch cli.boot.probes)
     from . import escalate as escalate_mod
     from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
+    from . import snapshot
     from .api import _last_boot  # noqa: F401  (re-exported: the tests read it)
     from .writeback import PROPOSED
 
@@ -351,6 +355,12 @@ def _add_globals(p: argparse.ArgumentParser) -> None:
         action="store_true",
         help="read market calls' closes from stooq.com's daily CSV over HTTPS. "
         "Without it no market call resolves, and its outcome is `unreachable`, said",
+    )
+    p.add_argument(
+        "--fetch",
+        action="store_true",
+        help="let `snapshot` read outside data over HTTPS, once, into the box. "
+        "Without it a new snapshot is `unreachable`, said; held ones still read",
     )
 
 
@@ -636,6 +646,25 @@ def main(argv: list[str] | None = None) -> int:
         help="the closes for the symbols called on a date, as market rows",
     )
     mr.add_argument("close_date", help="YYYY-MM-DD, the close the calls name")
+    sn = sub.add_parser(
+        "snapshot", help="outside data read once into the box, kept under its hash"
+    )
+    sn.add_argument("name", help="lowercase letters, digits and -")
+    sn.add_argument("url", help="https:// only")
+    sn.add_argument("--license", required=True, help="an SPDX id: CC0-1.0, ...")
+    sn.add_argument(
+        "--refresh",
+        action="store_true",
+        help="fetch again, as a new row beside the old",
+    )
+    sr = sub.add_parser(
+        "snapshot-read",
+        aliases=["snapshot_read"],
+        help="read-only: the newest held snapshot of a name, re-hashed",
+    )
+    sr.add_argument("name")
+    sr.add_argument("--sha256", help="the held snapshot with this content hash")
+    sr.add_argument("--out", type=Path, help="write its bytes here")
     mo = sub.add_parser(
         "market-outcome",
         aliases=["market_outcome"],
@@ -826,6 +855,7 @@ def main(argv: list[str] | None = None) -> int:
         args,
         beacon=beacon.drand_reader if args.drand else None,
         market=market.stooq_reader if args.prices else None,
+        fetch=snapshot.https_reader if args.fetch else None,
         jeles=jeles_store.default_store(),
     )
 
@@ -886,6 +916,22 @@ def main(argv: list[str] | None = None) -> int:
         said = {k: v for k, v in res.items() if k != "rows"}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
         return 0 if res.get("state") in OK_STATES else 1
+    elif args.cmd in ("snapshot", "snapshot-read"):
+        if args.cmd == "snapshot":
+            res = snapshot.take(
+                cfg, args.name, args.url, license=args.license,
+                refresh=args.refresh, argv=raw,
+            )  # fmt: skip
+        else:
+            res = snapshot.read(cfg, args.name, sha256_of=args.sha256, argv=raw)
+            if res.get("data") is not None and args.out:
+                args.out.write_bytes(res["data"])
+        if "refused" in res:
+            print(f"refused: {res['refused']}")
+            return res["code"]
+        said = {k: v for k, v in res.items() if k not in ("data", "code")}
+        print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
+        return res["code"]
     elif args.cmd in ("deck-reveal", "deck-outcome"):
         if args.cmd == "deck-reveal":
             res = deck.reveal(cfg, args.round, argv=raw)
