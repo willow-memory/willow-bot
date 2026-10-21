@@ -112,6 +112,49 @@ here reads, writes or caches vault material.
 61. [The Jeles rung was never on](#61-the-jeles-rung-was-never-on)
 62. [A big corpus wins a code bite on volume](#62-a-big-corpus-wins-a-code-bite-on-volume)
 
+**What connects all the worlds**
+
+*IDs the pile already has*
+
+63. [Every blob is already a Software Heritage ID](#63-every-blob-is-already-a-software-heritage-id)
+64. [Every chunk is already an IPFS CID](#64-every-chunk-is-already-an-ipfs-cid)
+65. [The same blob in supply-chain words: gitoid and in-toto](#65-the-same-blob-in-supply-chain-words-gitoid-and-in-toto)
+66. [Keep a SHA-256 git blob too](#66-keep-a-sha-256-git-blob-too)
+
+*Hubs that join everything else*
+
+67. [Wikidata as the crosswalk](#67-wikidata-as-the-crosswalk)
+68. [OpenAlex and DOIs: papers](#68-openalex-and-dois-papers)
+69. [ORCID and ROR: people and organisations](#69-orcid-and-ror-people-and-organisations)
+70. [GeoNames and OpenStreetMap: places](#70-geonames-and-openstreetmap-places)
+71. [Country and language codes](#71-country-and-language-codes)
+
+*The record in the world's formats*
+
+72. [W3C PROV: the record as provenance](#72-w3c-prov-the-record-as-provenance)
+73. [RO-Crate: a snapshot as a research object](#73-ro-crate-a-snapshot-as-a-research-object)
+74. [Frictionless, DCAT and an SPDX license on every row](#74-frictionless-dcat-and-an-spdx-license-on-every-row)
+75. [in-toto Statements: a seal others can check](#75-in-toto-statements-a-seal-others-can-check)
+76. [CloudEvents: a record row in a common envelope](#76-cloudevents-a-record-row-in-a-common-envelope)
+
+*Pointing into text without storing it*
+
+77. [Line and text fragments](#77-line-and-text-fragments)
+78. [W3C Web Annotation: a chunk talking about the world](#78-w3c-web-annotation-a-chunk-talking-about-the-world)
+79. [Memento and the Wayback Machine: what a page said then](#79-memento-and-the-wayback-machine-what-a-page-said-then)
+
+*Protocols*
+
+80. [MCP: the pile as resources by hash](#80-mcp-the-pile-as-resources-by-hash)
+81. [A feed of sealed decisions](#81-a-feed-of-sealed-decisions)
+
+*Time and place*
+
+82. [The drand round on every row](#82-the-drand-round-on-every-row)
+83. [Dates that admit doubt: EDTF and the tz database](#83-dates-that-admit-doubt-edtf-and-the-tz-database)
+84. [Cells on the map: geohash and H3](#84-cells-on-the-map-geohash-and-h3)
+85. [The snapshots' own IDs](#85-the-snapshots-own-ids)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -938,6 +981,299 @@ would each change it.
 ```python
 # a cap (sketch): no repo takes more than half the top 10
 top = cap_per_repo(rank, n=10, most=5)
+```
+
+## What connects all the worlds
+
+A third pass (2026-10-21): the shared IDs, addresses, formats and protocols
+that would let the pile, the outside snapshots (33–48) and the wider world
+point at each other. The two headline joins were checked here: a file's
+git blob is its Software Heritage ID (`git hash-object` on `words.py`
+matched `sha1("blob N\0"+bytes)`), and a chunk's hash (`pile.read_pile`:
+`sha256` over the chunk's text, no header) is already an IPFS CIDv1. The
+rest is the research pass's, from primary sources where it could reach
+them; what it couldn't confirm is said.
+
+### IDs the pile already has
+
+### 63. Every blob is already a Software Heritage ID
+
+Software Heritage archives all public code, and its content ID (SWHID, now
+ISO/IEC 18670) is git's blob hash. Every file the pile indexes already has
+a world-wide name, and a chunk is the same name plus `;lines=a-b`. The
+archive can be asked, hashes only, which of your blobs it holds.
+
+```python
+swhid = f"swh:1:cnt:{blob};origin={repo_url};path=/{path};lines={a}-{b}"
+# optional, hashes only: POST [swhid, ...] to
+# https://archive.softwareheritage.org/api/1/known/ -> {swhid: {"known": true}}
+```
+
+Watch: Software Heritage calls the git match "incidental and not
+guaranteed" in future versions; SWHID v2 is still being worked out.
+
+### 64. Every chunk is already an IPFS CID
+
+A chunk's `sha256` wrapped in four bytes is a CIDv1 `raw` ID, the address
+IPFS, IPLD and the AT Protocol use. Stdlib only, no network.
+
+```python
+cid = "b" + base32(bytes([1, 0x55, 0x12, 0x20]) + bytes.fromhex(chunk_sha256)).lower().rstrip("=")
+# sha256("hello world\n") -> bafkreifjjcie6lypi6ny7amxnfftagclbuxndqonfipmb64f2km2devei4
+```
+
+### 65. The same blob in supply-chain words: gitoid and in-toto
+
+IANA's provisional `gitoid:` scheme and in-toto's `gitBlob` digest are the
+same hex again. Free columns for SBOM and attestation tools.
+
+```text
+gitoid:blob:sha1:<blob>
+{"digest": {"gitBlob": "<blob>", "sha256": "<chunk sha256>"}}
+```
+
+### 66. Keep a SHA-256 git blob too
+
+Git's SHA-256 objects (and probably SWHID v2) hash `blob N\0` plus the
+bytes, so a plain `sha256(chunk)` won't match them. Storing both now saves
+a migration later.
+
+```python
+git256 = hashlib.sha256(b"blob %d\0" % len(data) + data).hexdigest()
+```
+
+### Hubs that join everything else
+
+### 67. Wikidata as the crosswalk
+
+Almost every outside source carries a Wikidata ID (QID): Wikipedia
+articles, OpenStreetMap features, OpenAlex, the Met, Gutenberg, WordNet.
+One `xref(qid, scheme, value, snapshot, fetched_at)` table, filled from a
+dated extract, joins them all. The structured data is CC0.
+
+```text
+https://en.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=Albert_Einstein&format=json
+-> pageprops.wikibase_item = "Q937"
+```
+
+Watch: the query service blocks generic User-Agents and caps a query at
+60 s. Most property numbers (GeoNames, OSM, the Met, Gutenberg) weren't
+confirmed.
+
+### 68. OpenAlex and DOIs: papers
+
+OpenAlex (CC0) maps every scholarly work to its DOI, PubMed, ORCID, ROR and
+Wikidata IDs in one `ids` object. When a Jeles answer cites a paper, store
+its `doi` and `openalex_id`, and the citation joins the world's.
+
+```sh
+curl https://api.openalex.org/works/doi:10.7717/peerj.4375
+curl -LH "Accept: application/vnd.citationstyles.csl+json" https://doi.org/10.5284/1015681
+```
+
+### 69. ORCID and ROR: people and organisations
+
+ORCID (people) and ROR (institutions) both publish CC0 dumps. Mostly just
+an ID string on a contributor, only with that person's consent. Low
+priority unless Jeles grows a lot of named sources.
+
+```text
+0000-0002-7869-831X
+```
+
+### 70. GeoNames and OpenStreetMap: places
+
+GeoNames (CC BY 4.0) gives every place an ID, coordinates and a country.
+OSM features carry a `wikidata=` tag, so they join through 67. Store only
+the IDs, never OSM geometry, to stay clear of its share-alike license.
+
+```text
+geonameid on each place-bearing snapshot row; osm_type/osm_id as an xref to a QID
+```
+
+### 71. Country and language codes
+
+ISO 3166 country codes, BCP-47 language tags and Unicode CLDR (open, with
+the 2-to-3-letter mappings) let OWID, USGS and Open-Meteo snapshots join by
+country. OWID adds its own `OWID_*` codes, such as `OWID_WRL` for the
+world.
+
+```text
+iso3166_a3 = "NGA"; lang = "en"   # CLDR as the bundled code source
+```
+
+Watch: SIL's ISO 639-3 tables restrict redistribution. Use CLDR.
+
+### The record in the world's formats
+
+### 72. W3C PROV: the record as provenance
+
+PROV is the W3C standard for "this came from that, by this activity, under
+this agent". The record already is that: chunks and snapshots are
+entities, rank and serve are activities, the sealer is the agent. An
+`export --prov` with SWHIDs and CIDs as the IRIs stays hash-only.
+
+```turtle
+<swh:1:cnt:…> a prov:Entity ; prov:wasGeneratedBy <run:…> .
+```
+
+### 73. RO-Crate: a snapshot as a research object
+
+RO-Crate (Apache-2.0 spec) is plain JSON-LD that Zenodo and WorkflowHub
+read. One `ro-crate-metadata.json` beside each dated snapshot: every file
+with its `sha256`, its SWHID or CID, its SPDX license and where it came
+from.
+
+```json
+{"@id": "ro-crate-metadata.json", "@type": "CreativeWork",
+ "about": {"@id": "./"}, "conformsTo": {"@id": "https://w3id.org/ro/crate/1.2"}}
+```
+
+### 74. Frictionless, DCAT and an SPDX license on every row
+
+A `datapackage.json` (Frictionless) per tabular snapshot, a DCAT
+`Distribution` with `spdx:checksum` and `previousVersion` (which chains
+snapshots the way the record chains rows), and an SPDX license ID on every
+snapshot row. The license column lets the script refuse to serve
+share-alike text into something that can't carry it.
+
+```json
+{"path": "owid-population.csv", "hash": "sha256:<hex>", "license": "CC-BY-4.0"}
+```
+
+### 75. in-toto Statements: a seal others can check
+
+A sealed decision exported as an in-toto Statement (the envelope SLSA
+uses): `subject` lists the served chunks by `gitBlob` and `sha256`, and the
+predicate holds the seal. Signing stays a separate concern; nothing here
+handles a key.
+
+```json
+{"_type": "https://in-toto.io/Statement/v1",
+ "subject": [{"name": "pile.py#L10-20", "digest": {"gitBlob": "…"}}],
+ "predicateType": "<your uri>", "predicate": {}}
+```
+
+### 76. CloudEvents: a record row in a common envelope
+
+CloudEvents' required fields map almost one-to-one onto a record row: `id`
+is the row hash, `source` the pile, `type` the kind, `subject` the chunk's
+SWHID. A cheap, standard way out for any row.
+
+```json
+{"specversion": "1.0", "id": "<row hash>", "source": "pile://willow",
+ "type": "org.willow.pile.seal", "subject": "swh:1:cnt:…"}
+```
+
+### Pointing into text without storing it
+
+### 77. Line and text fragments
+
+RFC 5147 addresses lines in a plain-text URL (`#line=10,20`); browsers now
+all support text fragments (`#:~:text=`). A chunk's locator becomes a link
+anyone can click, and the record still holds no words.
+
+```text
+https://raw.githubusercontent.com/willow-memory/willow-bot/<sha>/one-script/onescript/pile.py#line=265,275
+```
+
+### 78. W3C Web Annotation: a chunk talking about the world
+
+The standard shape for "this says something about that". A link between a
+pile chunk and an outside snapshot becomes an annotation any client can
+read. Use position selectors, not quote selectors, so no words go in.
+
+```json
+{"type": "Annotation", "body": "swh:1:cnt:…",
+ "target": {"source": "<wayback url>", "selector": {"type": "TextPositionSelector", "start": 40, "end": 90}}}
+```
+
+### 79. Memento and the Wayback Machine: what a page said then
+
+Each web snapshot gets the archive's closest copy beside its hash, so
+anyone can check what the source looked like on the day it was fetched.
+
+```text
+GET https://archive.org/wayback/available?url=<url>&timestamp=20261021
+-> archived_snapshots.closest.{url, timestamp}
+```
+
+Watch: an empty answer doesn't prove a page was never archived.
+
+### Protocols
+
+### 80. MCP: the pile as resources by hash
+
+Serving chunks to a model is what MCP is for. An MCP server exposing each
+chunk as a resource whose URI is its SWHID (or `pile://<sha256>`), plus a
+`rank` tool that takes a bite. willow-mcp already imports the one script
+(`reach.py`), so this may be a door to add there rather than a new server.
+
+```json
+{"method": "resources/read", "params": {"uri": "swh:1:cnt:…"}}
+```
+
+### 81. A feed of sealed decisions
+
+JSON Feed (or Atom) with one item per sealed row, `id` = the row's hash.
+The cheapest way for anything outside to follow what was decided, with no
+server beyond a static file. ActivityPub and the AT Protocol can come
+later; both need a running server.
+
+```json
+{"version": "https://jsonfeed.org/version/1.1", "items": [{"id": "<row hash>", "title": "sealed", "date_published": "2026-10-21T22:32:00Z"}]}
+```
+
+### Time and place
+
+### 82. The drand round on every row
+
+drand rounds are a clock everyone shares: round to time is arithmetic from
+the chain's genesis and period. A `(chain_hash, round)` pair on each row
+says "not before this" in the world's own terms. With OpenTimestamps (25)
+for "not after", every row is pinned on both sides.
+
+```python
+t = genesis_time + period * (round - 1)   # from /{chain_hash}/info
+```
+
+### 83. Dates that admit doubt: EDTF and the tz database
+
+UTC instants plus an IANA zone name, never local times. For fuzzy dates (a
+Met object "about 1880", a forecast resolving "sometime in March") EDTF
+adds `~` (approximate), `?` (uncertain) and `%` (both).
+
+```text
+1880~    2026-03?    2026-10-21T22:32:00Z America/Los_Angeles
+```
+
+### 84. Cells on the map: geohash and H3
+
+Give every place-bearing row a cell ID, and an earthquake (34), a weather
+reading (33) and today's place (44) join on cell plus time window. Geohash
+is a few lines of stdlib; H3 (Apache-2.0) would be an optional extra.
+
+```python
+import h3
+h3.latlng_to_cell(lat, lng, 5)   # a cell ID, a 15-digit hex string
+```
+
+Watch: avoid what3words; its terms make the words its property.
+
+### 85. The snapshots' own IDs
+
+Some planned sources already carry IDs that join:
+- USGS event IDs (`us6000jllz`) are never reused, and each event lists every
+  network's ID.
+- The Met's objects link back to Wikidata (67).
+- GH Archive's push events carry commit SHAs, which are git commit IDs, so
+  they're SWHID `rev` IDs too (63).
+- Manifold market IDs give your forecasts a crowd price to be scored
+  against (36).
+
+```text
+https://earthquake.usgs.gov/fdsnws/event/1/query?eventid=us6000jllz&format=geojson
+swh:1:rev:<commit sha from a GH Archive PushEvent>
 ```
 
 ## What the one script said about this list
