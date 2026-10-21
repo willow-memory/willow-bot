@@ -41,6 +41,7 @@ here reads, writes or caches vault material.
 
 **Found while trying it**
 
+0. [What the one script said about this list](#what-the-one-script-said-about-this-list)
 16. [Turn on the embedder](#16-turn-on-the-embedder)
 17. [Check the README's prompt timing](#17-check-the-readmes-prompt-timing)
 
@@ -305,6 +306,64 @@ from its `session:<sha256>` subject.
 import runes
 print(runes.cast(subject.removeprefix("session:")))
 ```
+
+## What the one script said about this list
+
+2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366
+files; the index was built before this file existed, so the list can't find
+itself). One `seed` bite holding every idea's key words.
+
+**38 words the pile holds nowhere: real gaps.**
+algolia, bm25s, ctags, datasette, duckdb, ephemeris, flashrank, fts5,
+gharchive, gource, hexagram, inkle, kiwix, levenshtein, libzim, lichess,
+manifold, model2vec, mutmut, opentimestamps, owid, pagefind, pageviews,
+pymerkle, rapidfuzz, rfc3161, ripgrep, scc, scip, serendipity, skyfield,
+tantivy, tarot, tatoeba, theseus, tracery, vec, wordfreq, wordnet, zim.
+They were written as one `miss` row of keyed hashes (row 32), so they will
+show up in the misses map (3) once it's built.
+
+**Words that hit, but the idea isn't there:**
+- *earthquake*: only the shoebox demo's "mi terremoto". Nothing about USGS.
+- *tides*, *planets*, *usgs*, *noaa*, *museum*, *wikimedia*, *meteo*,
+  *reranker*, *bm25*: Jeles corpus facts *about* these, not code that uses
+  them.
+- *serendipity*: only Jeles prose.
+- *mutation*: never mutation testing.
+
+**Prior art: the idea is already started.**
+- *Hypothesis* (27): installed in the box-build venv
+  (`seat/willow/experiments/box-build-2026-10-17/BRIEF.md`) and imported
+  nowhere. The cheapest gap to close.
+- *Serendipity* (7): `docs/design/one-box/random-pull-2026-10-06.md` already
+  did "pull some randomness from your corpus", from the model's training,
+  every box `unattested`. Idea 7 is the same game made checkable: drand picks
+  the pull and the chunks come from the pile.
+- *Merkle* (56): `hashing-session-handoff-2026-10-05.md` already weighs
+  "hash chain or Merkle tree" for tamper-evident logs, and the grove's
+  one-script README lists Merkle beside the record chain.
+- *Zipf* (40): `next-pile.md` already fits the pile's own words (slope
+  −0.907, R² 0.993). The wordfreq dialect report is that fit against the
+  world's.
+- *Horoscope* (6, 15): willow-bot's `docs/IDEAS.md` 35 (voice preview) and
+  71 (a daily note with the day's horoscope) are the delivery for it.
+- *drand*, *Brier*, *calibration*: 100+ chunks each. The ledger, beacon and
+  scoring ideas (5, 33–38, 47) stand on built ground.
+
+**Gaps in the one script itself, found on the way:**
+- **The typo rung rewrites names it doesn't know.** `Cached.repair` turned
+  *gource* into *source* (5,850 chunks), *scip* into *skip*, *ctags* into
+  *tags*, *owid* into *owed* and *tracery* into *tracer*. A bite about a
+  tool the pile hasn't seen gets flooded by a common word one letter away.
+  `REPAIR_MIN` is a placeholder; a floor on the word's length, or skipping
+  repair for a word the bite spells twice the same way, would be the
+  operator's call.
+- **The Jeles rung was unreachable** ("Jeles isn't configured") although
+  Jeles was in the pile as a repo. Indexing Jeles (idea 2) and configuring
+  it as the escalation rung are two different settings; a miss never
+  escalated.
+- **The top of the rank was all Jeles** (`core_weather-earth.json` first) for
+  a bite that was mostly about code tools. Same story as 16: without BM25 or
+  an embedder, a big corpus wins on volume.
 
 ## Found while trying it
 
