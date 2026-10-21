@@ -306,11 +306,17 @@ def closed_why(rows: list[dict]) -> str | None:
     i = next(
         (k for k in range(len(rows) - 1, -1, -1) if rows[k]["kind"] == "boot"), None
     )
-    if i is None:
+    return _closed(
+        rows[i] if i is not None else None, rows[i + 1 :] if i is not None else []
+    )
+
+
+def _closed(boot: dict | None, after: list[dict]) -> str | None:
+    if boot is None:
         return "no check-in on record"
-    if rows[i]["hard_close"]:
+    if boot["hard_close"]:
         return "the last check-in hard-closed"
-    if any(r["kind"] == "reconcile" for r in rows[i + 1 :]):
+    if any(r["kind"] == "reconcile" for r in after):
         return "the run checked out after its last check-in"
     return None
 
@@ -318,7 +324,7 @@ def closed_why(rows: list[dict]) -> str | None:
 def need_open(run, at: str, **fields) -> dict | None:
     """A refusal, recorded, unless the box is open. `run` is anything with a
     record and its own stamp (`rec`, `sys`): a `Run`, or an `Opened`."""
-    why = closed_why(run.rec.rows())
+    why = _closed(*run.rec.since_last("boot"))  # the rows since check-in only
     if why is None:
         return None
     run.rec.append("refused", run.sys, at=at, reason=why, **fields)
@@ -338,7 +344,7 @@ def anchor_of(rec: record.Record) -> dict | None:
 def pin(rec: record.Record, who, anchor: dict | None | object = _NOW) -> dict | None:
     """The `pin` row, once (`Run.pin` says why): the tip the human had sealed
     when this code first wrote to the box."""
-    if any(r["kind"] == "pin" for r in rec.rows()):
+    if rec.has_kind("pin"):
         return None
     a = anchor_of(rec) if anchor is _NOW else anchor
     if not isinstance(a, dict):
