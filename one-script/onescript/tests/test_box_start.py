@@ -76,14 +76,22 @@ def test_a_venv_that_wont_start_is_missing_everything(tmp_path):
 def test_the_gate_cfg_runs_the_suite_in_the_venv_when_there_is_one(
     tmp_path, monkeypatch
 ):
-    monkeypatch.delenv(cli.NESTED, raising=False)
-    bare = cli._gate_cfg(False, "", tmp_path)["tests"][0]
+    """The real signature: api._gate_cfg(no_tests, ci_text, venv, root, grove)."""
+    monkeypatch.delenv(api.NESTED, raising=False)
+    root, grove = Path("/r"), Path("/g")
+    bare = api._gate_cfg(False, "", None, root, grove)["tests"][0]
     assert bare["argv"][0] == sys.executable and "python" not in bare
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "python").write_text("")
-    got = cli._gate_cfg(False, "", tmp_path)["tests"][0]
+    got = api._gate_cfg(False, "", tmp_path, root, grove)["tests"][0]
     py = str(tmp_path / "bin" / "python")
-    assert got["argv"][0] == py and got["python"] == py
+    assert got["argv"][:4] == [py, "-m", "pytest", "-q"] and got["python"] == py
+    assert sys.executable not in got["argv"]
+    # a venv with no interpreter in it falls back to this one, and says no python
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    none = api._gate_cfg(False, "", empty, root, grove)["tests"][0]
+    assert none["argv"][0] == sys.executable and "python" not in none
 
 
 # ── B: the Forge from a clone ────────────────────────────────────────────────

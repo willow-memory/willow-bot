@@ -22,6 +22,7 @@ from typing import Callable, Iterable
 from . import (
     boot,
     gate,
+    mai_shape,
     nestor_seal,
     predict,
     proposals,
@@ -134,6 +135,7 @@ class Run:
                     live=change.get("live", False),
                     expect_vanish=change.get("expect_vanish", False),
                     cites=change.get("cites", []),
+                    check=mai_shape.check,
                 )
         if proposed is not None:
             out["proposals"] = self._take(who, n, proposed)
@@ -574,7 +576,12 @@ class Run:
             return done[-1]
         try:
             return self.rec.write_file(
-                self.sys, prop["path"], data, cites=prop["cites"], provenance="authored"
+                self.sys,
+                prop["path"],
+                data,
+                cites=prop["cites"],
+                provenance="authored",
+                check=mai_shape.check,
             )
         except (PermissionError, OSError) as e:
             return self.rec.append(

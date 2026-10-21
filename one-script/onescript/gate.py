@@ -76,8 +76,9 @@ def system() -> Verified:
 
 
 def verify_seal(subject: str, proof: str, human_key: bytes) -> bool:
-    """Only the human's key produces this. Presence is a label; this is authority."""
-    return _sign.hmac_equal(sign(human_key, "seal", subject), proof)
+    """Only the human's key produces this. Presence is a label; this is authority.
+    The check lives in `sign.verify_seal` (the record needs it without the gate)."""
+    return _sign.verify_seal(subject, proof, human_key)
 
 
 def human(subject: str, proof: str, human_key: bytes) -> Verified:

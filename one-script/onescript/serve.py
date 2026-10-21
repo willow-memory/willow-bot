@@ -49,7 +49,7 @@ import os
 import re
 import unicodedata
 
-from . import gate, lore, nestor_seal, rules, scrub, sign
+from . import gate, lore, mai_shape, nestor_seal, rules, scrub, sign
 from .record import Record, canon, h256
 from .states import EMPTY, POPULATED, UNREACHABLE
 
@@ -513,6 +513,7 @@ def serve(
         out,
         data,
         provenance="third-party" if untrusted else "authored",
+        check=mai_shape.check,
     )
     rec.append(
         "serve",

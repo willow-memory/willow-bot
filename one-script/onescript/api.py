@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from . import beacon, boot, gate, nestor_seal, record, reverse, view
+from . import beacon, boot, gate, mai_shape, nestor_seal, record, reverse, view
 from . import clock as clock_mod
 from . import escalate as esc
 from . import jeles_store as jeles_mod
@@ -610,8 +610,12 @@ def _index_box(cfg: Config, run: Run) -> None:
     idx = xref.build(sorted((n, Path(p)) for n, p in cfg.index_repos.items()))
     ib = (xref.canon(idx) + "\n").encode()
     rb = xref.report(idx).encode()
-    run.rec.write_file(run.sys, seed_mod.INDEX, ib, provenance="authored")
-    run.rec.write_file(run.sys, "xref/report.txt", rb, provenance="authored")
+    run.rec.write_file(
+        run.sys, seed_mod.INDEX, ib, provenance="authored", check=mai_shape.check
+    )
+    run.rec.write_file(
+        run.sys, "xref/report.txt", rb, provenance="authored", check=mai_shape.check
+    )
     run.rec.append(
         "xref",
         run.sys,
@@ -784,7 +788,9 @@ def _close_session(cfg: Config, run: Run) -> dict:
     data = session_mod.canonical(b)
     subj = session_mod.subject(data)
     where = f"{session_mod.DIR}/{start}.json"
-    run.rec.write_file(run.sys, where, data, provenance="authored")
+    run.rec.write_file(
+        run.sys, where, data, provenance="authored", check=mai_shape.check
+    )
     pair = _propose_session(cfg, b, subj)
     run.rec.append(
         session_mod.KIND,
