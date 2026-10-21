@@ -17,6 +17,18 @@ open to both; the anchor covers what the human has sealed, no further.
 
 A line that doesn't parse as a row is reported as a break by line number,
 never a crash, so the hard-close rule (report, options, wait) still applies.
+
+A crash mid-append can leave a last line with no newline. That line is not yet
+written: rows() and verify_chain() leave it out and torn_tail() reports it, so
+it is never a chain break. The same garble on any other line is a break. An
+append refuses to land after a torn tail (TornTail) rather than glue its row
+onto the fragment or silently drop it; a human decides, then truncates.
+
+Durability: a row is fsynced, and the first row of a new record.jsonl also
+fsyncs the directory so the file's name survives a crash. An fsync error
+raises and is never retried (fsyncgate: after a failed fsync the kernel may
+have dropped the dirty pages, so a second fsync can report success on data
+that is gone).
 """
 
 from __future__ import annotations
@@ -27,6 +39,7 @@ import json
 import os
 import secrets
 import tempfile
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
@@ -40,6 +53,12 @@ from . import canon as _canon
 from . import mai_shape
 
 GENESIS = "0" * 64
+
+
+class TornTail(RuntimeError):
+    """The record ends in an unterminated line: a crash cut an append short.
+    Nothing is appended until a human has looked at it."""
+
 
 #: Every row carries these. A line without them is garbled, whatever it parses as.
 ROW_KEYS = frozenset(
@@ -89,6 +108,10 @@ class Record:
         if anchor is not None and anchor.resolve().is_relative_to(box.resolve()):
             raise PermissionError("record: the anchor can't live inside the box")
         self.anchor_path = anchor
+        # The flock is per open file, so a second acquisition in this process
+        # would block on the first: one lock, counted, and a thread lock beside it.
+        self._tlock = threading.RLock()
+        self._depth = 0
         box.mkdir(parents=True, exist_ok=True)
 
     # ── rows ────────────────────────────────────────────────────────────────
@@ -100,26 +123,40 @@ class Record:
         `record.lock` in the box, held over read-tail, hash and append, and
         the tail is read under it, never cached. Without fcntl (not POSIX) there
         is no lock to take: that is said here, and the append runs as it did
-        before, unserialized."""
-        if fcntl is None:
-            yield
-            return
-        with (self.box / "record.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        before, unserialized. Reentrant within a process: write_file holds it
+        over the pile update and the row, and append takes it again."""
+        with self._tlock:
+            if fcntl is None or self._depth:  # reentrant: this process holds it
+                self._depth += 1
+                try:
+                    yield
+                finally:
+                    self._depth -= 1
+                return
+            with (self.box / "record.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                self._depth = 1
+                try:
+                    yield
+                finally:
+                    self._depth = 0
+                    fcntl.flock(lock, fcntl.LOCK_UN)
 
-    def _read(self) -> tuple[list[dict], list[int]]:
-        """The rows, and the line numbers (1-based) of every line that isn't one."""
+    def _scan(self) -> tuple[list[dict], list[int], int | None]:
+        """The rows, the 1-based line numbers of every garbled line, and the
+        line number of an unterminated last line (None when the file ends in a
+        newline or is empty). The unterminated line is in neither of the others."""
         if not self.path.exists():
-            return [], []
-        rows, garbled = [], []
+            return [], [], None
+        rows, garbled, torn = [], [], None
         text = self.path.read_bytes().decode("utf-8", errors="replace")
         # "\n" only: canon() writes ensure_ascii=False, so a row can hold a raw
         # U+2028/U+2029/U+0085 that str.splitlines() would cut the row at.
-        for i, line in enumerate(text.split("\n"), 1):
+        lines = text.split("\n")
+        tail = lines.pop()  # "" when the file ends in a newline
+        if tail.strip():
+            torn = len(lines) + 1
+        for i, line in enumerate(lines, 1):
             if not line.strip():
                 continue
             try:
@@ -130,7 +167,24 @@ class Record:
                 rows.append(row)
             else:
                 garbled.append(i)
+        return rows, garbled, torn
+
+    def _read(self) -> tuple[list[dict], list[int]]:
+        """The rows, and the line numbers (1-based) of every line that isn't one.
+        An unterminated last line is neither: see torn_tail()."""
+        rows, garbled, _ = self._scan()
         return rows, garbled
+
+    def torn_tail(self) -> str | None:
+        """Says so when the record ends in an unterminated line (a crash cut an
+        append short): not yet written, left out of rows(), not a break."""
+        torn = self._scan()[2]
+        return (
+            None
+            if torn is None
+            else f"line {torn}: unterminated last line, not yet written (a crash "
+            "cut an append short); ignored, and appends are refused until it is removed"
+        )
 
     def rows(self) -> list[dict]:
         """The rows that parse. A garbled line is left out here and reported by
@@ -148,7 +202,13 @@ class Record:
                 "record: unverified identity; the stamp comes from the gate"
             )
         with self._locked():
-            rows = self.rows()  # the true tail, read under the lock
+            rows, _, torn = self._scan()  # the true tail, read under the lock
+            if torn is not None:
+                raise TornTail(
+                    f"record: {self.torn_tail()}. Refusing to append after it; "
+                    "a human truncates the fragment (or restores it) first."
+                )
+            created = not self.path.exists()
             row = {
                 "n": len(rows),
                 "kind": kind,
@@ -167,7 +227,9 @@ class Record:
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(canon(row) + "\n")
                 f.flush()
-                os.fsync(f.fileno())
+                os.fsync(f.fileno())  # an error raises; never retried (fsyncgate)
+            if created:
+                _fsync_dir(self.box)  # the new file's name must survive a crash
         return row
 
     def verify_chain(self) -> list[str]:
@@ -315,6 +377,14 @@ class Record:
                 f"record: '{rel}' is temp; nothing kept is written to temp"
             )
         lint = mai_shape.check(rel, data)  # T-mai-1: a malformed mai doc is refused
+        with self._locked():  # file, pointer and row: one writer start to end
+            return self._write_file(
+                who, rel, data, lint, live, expect_vanish, cites, provenance
+            )
+
+    def _write_file(
+        self, who, rel, data, lint, live, expect_vanish, cites, provenance
+    ) -> dict:
         _write_in_box(self.box, rel, data)
         ptr = {
             "where": rel,
@@ -401,6 +471,22 @@ def _write_in_box(box: Path, rel: str, data: bytes) -> None:
     finally:
         for d in held:
             os.close(d)
+
+
+def _fsync_dir(path: Path) -> None:
+    """fsync a directory so a created or renamed entry is durable. Raises on
+    error and never retries (fsyncgate). Not every platform can open a directory
+    (Windows): there this is a no-op, said here."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        if os.name == "nt":
+            return
+        raise
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _atomic(path: Path, data: bytes) -> None:
