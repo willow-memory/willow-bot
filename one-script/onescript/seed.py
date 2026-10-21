@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from pathlib import Path
 
+from .words import WORD  # noqa: F401  (the one word rule; re-exported)
+from .words import words as _words
 from .xref import GitError, git
 
 INDEX = "xref/index.json"
@@ -39,12 +40,11 @@ INDEX = "xref/index.json"
 #: check-in may build an index for (`Config.index_repos`).
 NO_INDEX = "no xref index in the pile; run `onescript.xref index --record`"
 ANCHORS = 5  # anchors kept per word; the counts are always whole
-WORD = re.compile(r"[^\W_]+")  # a word, for seed and the pile alike
 
 
 def words(bite: str) -> list[str]:
     """The bite's distinct words, lowercased and sorted."""
-    return sorted(set(WORD.findall(bite.lower())))
+    return sorted(set(_words(bite)))
 
 
 def read_index(rec) -> tuple[dict | None, str | None, str | None]:

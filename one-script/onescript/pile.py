@@ -44,8 +44,9 @@ import zlib
 from pathlib import Path
 
 from . import seed
+from .words import WORD as _WORD
 
-WORD = seed.WORD  # one word, for seed and the pile alike
+WORD = _WORD  # one word, for seed and the pile alike (flatten-2 F11)
 CLAUSE = re.compile(r"[,.;:!?()\[\]{}|\"]+")
 K1, B = 1.2, 0.75  # BM25's standard constants
 RRF_K = 60  # Cormack, Clarke & Büttcher 2009
