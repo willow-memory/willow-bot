@@ -949,9 +949,7 @@ def analyze_repo(
         ),
         "minimal": len(minimal),
     }
-    res.update(
-        state=POPULATED if minimal else EMPTY, counts=counts, minimal=minimal
-    )
+    res.update(state=POPULATED if minimal else EMPTY, counts=counts, minimal=minimal)
     return res
 
 
