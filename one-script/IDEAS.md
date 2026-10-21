@@ -178,6 +178,8 @@ here reads, writes or caches vault material.
 101. [The tide checks the clock](#101-the-tide-checks-the-clock)
 102. [The market bets on the bot](#102-the-market-bets-on-the-bot)
 
+[How much is already here](#how-much-is-already-here)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -1316,10 +1318,12 @@ part of what this idea asks for:
 | `pile.read_pile` (`copies`) | Exact copies: a chunk whose sha256 was already seen is counted and skipped | No. The count is dropped |
 | `pile.merge` (`lookup`) | The same chunk across sessions' stores, merged by hash (`seen_in`, `sessions`) | `lookup` is a view; nothing is served |
 | `diverge` | Two refs down to the smallest code unit (AST hash), and two record chains | No. It writes one `diverge` row |
+| `scripts/scan/script_match.py` | Scripts against every earlier one: same name, renamed copy (same hash), variant (same syntax-tree shape) or similar (Jaccard over imports, defs and calls) | Into the gate: `gate.door` checks a proposed script against earlier ones. Not served to the model |
 | `xref` (`dupes`) | IDs defined twice in one repo | Only in the xref report |
 | willows-grove `templates/cross-table/cross_table.py` | Boxes on a grid, each filled by copying a passage. `measure --against` says which boxes changed since a snapshot; `link` writes a crosswalk between two grids | No. It lives in the grove, and the one script doesn't call it |
 
-So exact sameness (same hash) and "comes from the same place" are covered.
+So exact sameness (same hash), "same shape" and "comes from the same place"
+are covered, and the gate already compares scripts.
 The cross table is the nearest thing to snippets in boxes, but it isn't
 wired into serving.
 
@@ -1353,6 +1357,8 @@ for a, b in itertools.combinations(top, 2):
   a near-copy of that file in Software Heritage" becomes a servable row too.
 - `NEAR` and `CLOSE` are thresholds, so they're the operator's numbers,
   like every number in `deep_thought.py`.
+- `script_match.jaccard` and `script_match.features` already exist; the
+  first piece built on them is `snippet_cover` (below).
 
 ## The stupid pile
 
@@ -1579,6 +1585,58 @@ api.forecast(cfg, "release-before-spy-up-1023",
              [{"path": "yes", "p": 0.2}, {"path": "no", "p": 0.8}],
              market={"symbol": "SPY", "kind": "up", "close_date": "2026-10-23"})
 ```
+
+## How much is already here
+
+The operator, 2026-10-21: *"I want to see how much of the other can really
+be just compiled from what's already here, rather than hand built."*
+
+`scripts/scan/snippet_cover.py` (the first piece of 86) answers that. It
+reads every Python snippet in this file and every `.py` file committed in
+willow-bot, willows-grove and Jeles, and sorts each name a snippet calls:
+
+- **here:** exists, and the snippet says where (`dice5e.d20`).
+- **loose:** a bare name that something here happens to define, such as
+  `get`. It counts as missing until the snippet says which one.
+- **stdlib:** the standard library or a builtin.
+- **outside:** a package to install.
+- **missing:** exists nowhere.
+
+It reuses `script_match`'s `features` and `jaccard` to name the nearest
+existing function. Read only, and the same files give the same bytes.
+
+```sh
+python3 scripts/scan/snippet_cover.py IDEAS.md willow-bot=.. grove=../../willows-grove jeles=../../Jeles
+```
+
+First run, 2026-10-21. 55 of the 102 ideas carry a Python snippet; the
+rest are shell, JSON or prose, so they aren't counted.
+
+| Verdict | Count | Ideas |
+|---|---|---|
+| compiled: only existing code plus glue | 13 | 4 5 6 8 15 87 88 89 92 94 95 98 102 |
+| stdlib only: nothing to build but the glue | 14 | 3 9 12 18 35 44 60 63 66 82 93 99 100 101 |
+| needs outside: one pip extra | 10 | 19 20 22 26 27 39 43 49 55 84 |
+| needs building | 18 | 1 7 11 33 34 36 37 38 40 42 45 47 59 62 64 86 96 97 |
+
+**27 of 55 (about half) need nothing new**, only wiring. Another 10 need one
+package and nothing else.
+
+**The 18 that need building mostly need the same few things:**
+- **One snapshot reader.** `get` is missing from 8 of them: 33, 34, 36, 37,
+  38, 42, 45 and 47, all the world data. It's one piece, a reader that
+  fetches once into a dated, hashed snapshot and says `unreachable` without
+  a network. `market.stooq_reader` is the pattern to copy.
+- **A name away.** 96 calls `epoch`, which `beacon.epoch` already is. 64
+  calls `base32`, which is `base64.b32encode`.
+- **Small helpers, one each:** `pile_files` (1), `chunks_of` and `spec_for`
+  (7), `bundle_as_round` (11), `store_count` (40), `median_chunks` (59),
+  `cap_per_repo` (62), `strongest_pairs` (97).
+- **86 itself:** `shingles`, `diff_hunks`, `cosine` and `embed`. `jaccard`
+  is already there, in `script_match`.
+
+So most of the list compiles from what's here: about half as it is, and
+most of the rest once one snapshot reader exists.
 
 ## What the one script said about this list
 
