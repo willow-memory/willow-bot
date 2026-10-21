@@ -50,7 +50,7 @@ import os
 import re
 import unicodedata
 
-from . import gate, lore, nestor_seal, rules
+from . import gate, lore, nestor_seal, rules, scrub
 from .record import Record, canon, h256
 
 OUT = "served.json"
@@ -92,7 +92,6 @@ RETURN = (
 )
 
 _ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
-_HASH = re.compile(r"[0-9a-f]{64}", re.IGNORECASE)
 WITHHELD = "[hash withheld]"
 
 
@@ -114,10 +113,17 @@ def w_of(row: dict, w: str) -> str | None:
     raise ValueError(f"not a W: {w!r}")
 
 
+def _marker(kind):
+    return WITHHELD if kind == "hash64" else f"[REDACTED:{kind}]"
+
+
 def _scrub(value):
-    """No full-width hash reaches the model, wherever it sits."""
+    """No full-width hash reaches the model, wherever it sits. Since flatten-2
+    F12 the rule is ``scrub.py``'s: the hash first, as it always was (its
+    marker is still ``WITHHELD``), then the credential shapes, which are added
+    coverage (a key in a record's text reaches the model no more than a hash)."""
     if isinstance(value, str):
-        return _HASH.sub(WITHHELD, value)
+        return scrub.apply(value, ("hash64", "credentials"), marker=_marker)
     if isinstance(value, list):
         return [_scrub(v) for v in value]
     if isinstance(value, dict):

@@ -28,6 +28,7 @@ COPIES = [
     ("safe-app-store", "apps/catgrid/catgrid/onescript_reach.py"),
     ("willow-mcp", "src/willow_mcp/onescript_reach.py"),
     ("ratatosk", "ratatosk/onescript_reach.py"),
+    ("safe-app-store", "libs/nest-pipeline/src/nest_pipeline/onescript_reach.py"),  # F12
 ]
 
 
