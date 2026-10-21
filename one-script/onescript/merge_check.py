@@ -173,6 +173,10 @@ class JailError(Exception):
 
 _JAIL_PARENT = "/tmp"  # plain /tmp: $TMPDIR may be a 0700 root directory
 _JAIL_PREFIX = "merge-check-nonroot-"
+_JAIL_ENV = re.compile(
+    r"^(PATH|LANG|LANGUAGE|LC_\w+|TZ|TERM|CI|NO_COLOR|PYTHON\w*|PYTEST_\w+"
+    r"|ONESCRIPT_\w+|WILLOW_\w+|MERGE_CHECK_\w+)$"
+)
 _NOT_COPIED = shutil.ignore_patterns(
     ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"
 )
@@ -198,9 +202,8 @@ def find_launcher(user: str, uid: int, gid: int, which=None) -> list[str]:
 
 def _chown_tree(path: Path, uid: int, gid: int) -> None:
     os.chown(path, uid, gid, follow_symlinks=False)
-    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
-        for n in dirnames + filenames:
-            os.chown(os.path.join(dirpath, n), uid, gid, follow_symlinks=False)
+    for p in sorted(Path(path).rglob("*")):  # symlinks are chowned, never followed
+        os.chown(p, uid, gid, follow_symlinks=False)
 
 
 class Jail:
@@ -371,7 +374,17 @@ class Jail:
             v = self.venv_of(py)
             if v is not None and (py == str(cmd[0]) or str(v) in blob):
                 self.ensure_venv(v)
-        new_env = {k: self.translate(str(v)) for k, v in env.items()}
+        # a scrubbed environment: not the root session's proxy settings, CA bundle
+        # paths or tokens (a bundle under /root is unreadable to the user, and a
+        # secret has no business in an unprivileged test run)
+        new_env = {
+            k: self.translate(str(v)) for k, v in env.items() if _JAIL_ENV.match(k)
+        }
+        new_env = {
+            k: v
+            for k, v in new_env.items()
+            if k in ("PATH", "PYTHONPATH") or not v.startswith("/root")
+        }
         new_env.update(
             HOME=str(self.home),
             TMPDIR=str(self.home / "tmp"),

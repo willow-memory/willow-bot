@@ -1401,22 +1401,36 @@ def test_gate3_a_symlinked_repo_is_found_and_its_tests_run(world, tmp_path):
 def test_nonroot_a_tree_outside_the_repos_is_copied_for_the_user(
     world, tmp_path, monkeypatch
 ):
-    """diverge's throwaway worktrees sit outside the repos; they are copied too."""
+    """diverge's throwaway worktrees sit outside the repos; they are copied too.
+    The environment is scrubbed: no proxy settings, no CA bundle under /root."""
     monkeypatch.setattr(mc, "_euid", os.geteuid)
     loose = tmp_path / "loose"
     put(
         loose,
         {
-            "t.py": "import os\nprint(os.getuid(), os.getcwd())\nopen('w', 'w').write('x')\n"
+            "t.py": "import os\nprint(os.getuid(), os.getcwd())\n"
+            "print(sorted(os.environ))\nopen('w', 'w').write('x')\n"
         },
+    )
+    env = dict(os.environ)
+    env.update(
+        SSL_CERT_FILE="/root/.ccr/ca-bundle.crt",
+        HTTPS_PROXY="http://p:1",
+        GH_TOKEN="secret",
+        WILLOW_HOME="/root",
+        ONESCRIPT_NOW="2026-10-20T12:00:00Z",
     )
     p = pl(world)
     try:
-        rc, out, uid = p.run_tests([sys.executable, "t.py"], loose, dict(os.environ))
+        rc, out, uid = p.run_tests([sys.executable, "t.py"], loose, env)
         jail = p.jail.root
         assert rc == 0, out
         assert uid == pwd.getpwnam("nobody").pw_uid
-        assert out.split()[0] == str(uid) and str(jail) in out
+        first, keys = out.splitlines()[:2]
+        assert first.split()[0] == str(uid) and str(jail) in first
+        for gone in ("SSL_CERT_FILE", "HTTPS_PROXY", "GH_TOKEN", "WILLOW_HOME"):
+            assert gone not in keys, keys
+        assert "ONESCRIPT_NOW" in keys and "HOME" in keys
         assert not (loose / "w").exists(), (
             "the user wrote in the copy, not the original"
         )
