@@ -24,6 +24,14 @@ writes its `invocation` row, and returns plain data (dicts, lists, strings), so
 the app can serialise it. A refusal comes back as {"refused": why, "code": n}
 and is never an exception: the box wasn't opened, or the state doesn't allow it.
 
+A verb that hands something to the human returns `ESCALATE`, 42, not 0:
+`escalate` when no rung answered a piece (the human card), `reconcile` and
+`read_misses` when a wager goes to the human. 42 is the operator's ΔΣ=42,
+"the sum of acknowledged gaps ... A system that reports no unknowns has
+stopped looking" (willow-mcp docs/repatriation/VOICES.md): what the box can't
+evaluate is said in the exit code, not only in the output, and is never a
+failure (1) or a refusal. `genesis.py` is the reference.
+
 The record is the only state between calls. The serve key, which makes the
 session's ids, is a thing the record must not hold; it is kept beside the
 keys (`serve.key`, 0600), made fresh at each check-in, and is never the seal
@@ -100,6 +108,9 @@ from .states import (
     REPORT_UNREACHABLE,
     UNREACHABLE,
 )
+
+#: The exit code of a verb that hands something to the human (the module doc).
+ESCALATE = 42
 
 
 _STAMP = {"n", "kind", "who", "family", "standing", "version", "ts", "prev", "hash"}
@@ -1667,7 +1678,8 @@ def escalate(
     scope: D0, then pieces to the local rung, every result recorded by hash,
     whatever no rung answered as one human card (see `escalate`). `rung` is the
     local rung, injectable; by default Rat, per piece. Escalation is not a
-    failure: the code is 0 unless the box won't allow it."""
+    failure: the code is `ESCALATE` when the human card was made, else 0,
+    unless the box won't allow it."""
     run, info = _open(cfg, "escalate", argv)
     if run is None:
         return info
@@ -1695,7 +1707,7 @@ def escalate(
     except esc.ChainUnavailable as e:
         return _refused(str(e), 2)
     out["writeback"] = wb_mod.from_escalate(run, out, task, _spec_tables)
-    return {**out, "code": 0}
+    return {**out, "code": ESCALATE if out.get("card") else 0}
 
 
 # ── the forecast lane (SPEC R1: forge-convergence.md:643-645, plus seal_tip
@@ -2219,7 +2231,7 @@ def reconcile(
         # INVARIANTS §1: a broken record and an unchecked seal are said apart
         "record": {"breaks": rep["wagers"]["breaks"]},
         REPORT_UNREACHABLE: rep["wagers"][REPORT_UNREACHABLE],
-        "code": 0,
+        "code": ESCALATE if rep["wagers"].get("escalate_to") == "human" else 0,
     }
     if key is None:
         out["why"] = "no human key handed over: no outcome counts"
@@ -2238,7 +2250,7 @@ def read_misses(
     res = reconcile(cfg, human_key=human_key, argv=argv)
     if "refused" in res:
         return res
-    return {**res["misses"], "code": 0}
+    return {**res["misses"], "code": res["code"]}
 
 
 def read_proposals(path: Path) -> list[str]:

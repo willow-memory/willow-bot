@@ -38,6 +38,11 @@
 The app calls the functions in `onescript.api`; this file only reads argv,
 builds the `Config`, calls one of them and prints. Nothing here needs a tty.
 
+Exit codes: 0 done; 42 escalated, something handed to the human (`escalate`'s
+card, a `reconcile` wager): ΔΣ=42, see `onescript.api`; 1 refused or
+unreachable; 2 a bad command line, or a verb that can't run (no human key,
+the chain unavailable); 3 the box won't open.
+
 The box defaults to willow-bot's `.flow/onescript/` (excluded from git). The
 record persists there between commands, so check-in, turns and check-out are
 one run across several invocations.

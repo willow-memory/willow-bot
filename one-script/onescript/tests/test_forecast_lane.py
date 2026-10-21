@@ -465,8 +465,10 @@ def test_forecast_seal_outcome_seal_tip_reconcile_round_trip(
     assert rep["wagers"]["rows"][0]["graded_by"] is None
     rc, out = go("read-misses", "--human-key", str(key_file))
     assert rc == 0 and json.loads(out) == {"clusters": [], "misses": []}
-    rc, out = go("read_misses")
-    assert rc == 0
+    rc, out = go(
+        "read_misses"
+    )  # no key: no outcome counts, the wager goes to the human
+    assert rc == api.ESCALATE == 42
 
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps([{"path": "yes", "p": 0.9}]))
