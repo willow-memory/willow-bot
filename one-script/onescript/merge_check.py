@@ -111,6 +111,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from .states import UNREACHABLE
 
 PKG = Path(__file__).resolve().parent
 ONE_SCRIPT = PKG.parent  # onescript -> one-script
@@ -1717,7 +1718,7 @@ def _gate0(att_path, pl: Places) -> Result:
 
     res = diverge.run(pl.repos, names, base, chunk)
     h = diverge.result_hash(res)
-    if res["state"] == "unreachable":
+    if res["state"] == UNREACHABLE:
         return (
             GATE0_NAME,
             False,

@@ -41,7 +41,7 @@ from . import canon as _canon
 from . import states
 
 PREV_MISMATCH, HASH_MISMATCH, GARBLED = "prev mismatch", "hash mismatch", "garbled"
-TIP_MISMATCH, UNREACHABLE = "tip mismatch", "unreachable"
+TIP_MISMATCH, UNREACHABLE = "tip mismatch", states.UNREACHABLE
 
 
 def _h(data: bytes | str) -> str:

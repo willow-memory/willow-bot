@@ -84,6 +84,7 @@ import tempfile
 from pathlib import Path
 
 from . import canon as _canon
+from .states import EMPTY, POPULATED, UNREACHABLE
 from .xref import GitError, git
 
 canon = _canon.strict_sorted_compact_utf8
@@ -666,7 +667,7 @@ def _refs(side: _Side, pf: _Parsed, uname: str):
 
 def _unreachable(name: str, reason: str, **extra) -> dict:
     return {
-        "state": "unreachable",
+        "state": UNREACHABLE,
         "reason": reason,
         "counts": dict(_EMPTY_COUNTS),
         "minimal": [],
@@ -949,7 +950,7 @@ def analyze_repo(
         "minimal": len(minimal),
     }
     res.update(
-        state="populated" if minimal else "empty", counts=counts, minimal=minimal
+        state=POPULATED if minimal else EMPTY, counts=counts, minimal=minimal
     )
     return res
 
@@ -1013,8 +1014,8 @@ def _behaviour(
         "conflicts": [],
         "merge": "",
         "tests": {
-            "a": {"state": "empty", "tests": [], "detail": "no changed tests"},
-            "b": {"state": "empty", "tests": [], "detail": "no changed tests"},
+            "a": {"state": EMPTY, "tests": [], "detail": "no changed tests"},
+            "b": {"state": EMPTY, "tests": [], "detail": "no changed tests"},
         },
     }
     try:
@@ -1027,7 +1028,7 @@ def _behaviour(
             if p.returncode:
                 res["merge"] = "setup failed: " + _text(p.stderr).strip()[:200]
                 res["tests"] = {
-                    s: {"state": "unreachable", "tests": [], "detail": res["merge"]}
+                    s: {"state": UNREACHABLE, "tests": [], "detail": res["merge"]}
                     for s in "ab"
                 }
                 return res
@@ -1059,7 +1060,7 @@ def _behaviour(
             res["merge"] = "conflict"
             for s in "ab":
                 res["tests"][s] = {
-                    "state": "empty",
+                    "state": EMPTY,
                     "tests": [],
                     "detail": "not run: the merge conflicts",
                 }
@@ -1146,7 +1147,7 @@ def compare_boxes(box_a: Path, box_b: Path) -> dict:
     ra, wa = _chain(Path(box_a))
     rb, wb = _chain(Path(box_b))
     if ra is None or rb is None:
-        return {"state": "unreachable", "reason": "; ".join(w for w in (wa, wb) if w)}
+        return {"state": UNREACHABLE, "reason": "; ".join(w for w in (wa, wb) if w)}
     n = 0
     while n < min(len(ra), len(rb)) and ra[n]["hash"] == rb[n]["hash"]:
         n += 1
@@ -1162,9 +1163,9 @@ def compare_boxes(box_a: Path, box_b: Path) -> dict:
 
     res = {"common_rows": n, "a": side(tail_a), "b": side(tail_b)}
     if not tail_a and not tail_b:
-        return {"state": "empty", "split_at": None, **res}
+        return {"state": EMPTY, "split_at": None, **res}
     return {
-        "state": "populated",
+        "state": POPULATED,
         "split_at": n,
         "relation": "extends" if not tail_a or not tail_b else "forked",
         **res,
@@ -1192,13 +1193,13 @@ def run(
     minimal = sorted(
         (m for r in repos.values() for m in r["minimal"]), key=lambda m: canon(m)
     )
-    states = {r["state"] for r in repos.values()}
+    seen = {r["state"] for r in repos.values()}
     state = (
-        "unreachable"
-        if "unreachable" in states or not repos
-        else "populated"
+        UNREACHABLE
+        if UNREACHABLE in seen or not repos
+        else POPULATED
         if minimal
-        else "empty"
+        else EMPTY
     )
     out = {
         "tool": TOOL,
@@ -1208,12 +1209,12 @@ def run(
         "minimal": minimal,
         "counts": totals,
     }
-    if state == "unreachable":
+    if state == UNREACHABLE:
         out["reason"] = (
             "; ".join(
                 f"{n}: {r['reason']}"
                 for n, r in sorted(repos.items())
-                if r["state"] == "unreachable"
+                if r["state"] == UNREACHABLE
             )
             or "no repo named"
         )
@@ -1232,7 +1233,7 @@ def render(result: dict, rhash: str) -> str:
     if "reason" in result:
         lines.append(f"  unreachable: {result['reason']}")
     for nm, r in result["repos"].items():
-        if r["state"] == "unreachable":
+        if r["state"] == UNREACHABLE:
             lines.append(f"  {nm}: unreachable ({r['reason']})")
             continue
         k = r["counts"]
@@ -1272,9 +1273,9 @@ def render(result: dict, rhash: str) -> str:
 
 
 def render_boxes(res: dict) -> str:
-    if res["state"] == "unreachable":
+    if res["state"] == UNREACHABLE:
         return f"boxes: unreachable ({res['reason']})\n"
-    if res["state"] == "empty":
+    if res["state"] == EMPTY:
         return f"boxes: empty (identical, {res['common_rows']} rows)\n"
     return (
         f"boxes: populated, split at row {res['split_at']} ({res['relation']}); "
@@ -1351,11 +1352,11 @@ def run_cli(
         result = run(rdir, list(names or ["willow-bot"]), a, b, behaviour)
         rhash = result_hash(result)
         payload.update(result)
-        rc = {"empty": 0, "populated": 1, "unreachable": 2}[result["state"]]
+        rc = {EMPTY: 0, POPULATED: 1, UNREACHABLE: 2}[result["state"]]
     if box_a is not None:
         bx = compare_boxes(Path(box_a), Path(box_b))
         payload["boxes"] = bx
-        rc = max(rc, {"empty": 0, "populated": 1, "unreachable": 2}[bx["state"]])
+        rc = max(rc, {EMPTY: 0, POPULATED: 1, UNREACHABLE: 2}[bx["state"]])
     if as_json:
         out(canon.bytes(payload).decode("utf-8") + "\n")
     else:
