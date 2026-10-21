@@ -2,6 +2,49 @@
 
 All notable changes to this project are documented here.
 
+## [1.17.0](https://github.com/willow-memory/willow-bot/compare/v1.16.0...v1.17.0) (2026-10-21)
+
+
+### Added
+
+* **one-script:** a named legacy policy generator, the policy stream, and the drawn seed (flatten-2 F13) ([9538eb5](https://github.com/willow-memory/willow-bot/commit/9538eb59aa4e9b8cdea8164a0e0b3363801375aa))
+* **one-script:** canon.py, the canonical-bytes encodings by name (flatten-2 F7) ([991279c](https://github.com/willow-memory/willow-bot/commit/991279cdaf798facc06f7834b096e0376cb85310))
+* **one-script:** chains.py, one verifier per hash-chain shape (flatten-2 LE-6, F15) ([856278b](https://github.com/willow-memory/willow-bot/commit/856278b74ef6efa69e214aee5ac9d30c03779471))
+* **one-script:** diverge, the divergence finder; merge-check gate 0 ([88d54c7](https://github.com/willow-memory/willow-bot/commit/88d54c765a1d659dd1ebec0ebd1160fa651f4af5))
+* **one-script:** merge-check proved on the flatten-2 chunks; candidates and gate fixes ([9dd2e77](https://github.com/willow-memory/willow-bot/commit/9dd2e7785542a88696d419a6158cd1589e0d42ff))
+* **one-script:** merge-check runs tests as a non-root user, and reads a repo-local reach helper (flatten-2 residue, gate 4 + uid) ([f8ee4e8](https://github.com/willow-memory/willow-bot/commit/f8ee4e860f93442aae35731b102546d6bc09aed2))
+* **one-script:** merge-check takes a parity_repo, and a symlinked repo beside is found (flatten-2 residue, calibration repo set) ([e2f7f51](https://github.com/willow-memory/willow-bot/commit/e2f7f518dbc47556f738d5f67d4d3ded65a5d071))
+* **one-script:** merge-check, the one script's merge gate ([e4e78e4](https://github.com/willow-memory/willow-bot/commit/e4e78e42ed734dcd37467f114ae804f381d9f236))
+* **one-script:** one reach for code outside willow-bot (flatten-2 F6.5) ([bccdd76](https://github.com/willow-memory/willow-bot/commit/bccdd767a221b58c25b1c17357932faa7cb3a803))
+* **one-script:** scrub.py, the union of what ten copies took out (flatten-2 F12) ([e69f813](https://github.com/willow-memory/willow-bot/commit/e69f813a7d38ec2d910fdd2613772449abf83f6b))
+* **one-script:** sign.py, signing and keys once (flatten-2 F14) ([8b35837](https://github.com/willow-memory/willow-bot/commit/8b35837d0b0cc52c3089f438330b9bf99bb76282))
+* **one-script:** the nine merge candidates match the residue fixes; run as non-root they pass every gate but 8 (flatten-2) ([13b77e8](https://github.com/willow-memory/willow-bot/commit/13b77e827655a6612b2339c173ee0f5220c597b4))
+* **one-script:** the one clock, with a named format per use (flatten-2 F8) ([5bc4abc](https://github.com/willow-memory/willow-bot/commit/5bc4abc96d1796650eef3c15f67b3085a626c323))
+* **one-script:** the second flattening, the one script at every path ([03cfd51](https://github.com/willow-memory/willow-bot/commit/03cfd51e4243b70994cdde3e73daf5308806d4ef))
+
+
+### Fixed
+
+* **one-script:** a check-in with no box says why instead of crashing ([f767d43](https://github.com/willow-memory/willow-bot/commit/f767d439a094e726359ebb3feb4f1092b491f514))
+* **one-script:** candidates' absent tests name the carried-copy tests that replaced the unreachable ones (canon, clock, sign) ([46a8d26](https://github.com/willow-memory/willow-bot/commit/46a8d26a8bb5deef9bf8a3f4689f59e111381d42))
+* **one-script:** diverge's behaviour tests go through merge_check's non-root runner; TERM cleans up (flatten-2 residue) ([0f36f94](https://github.com/willow-memory/willow-bot/commit/0f36f94b372589c50cb7d4f54429f17c9be7c07e))
+* **one-script:** state words in diverge, merge_check and chains are states.* constants (merge of states-reverse with the residue and chains) ([0c26eb4](https://github.com/willow-memory/willow-bot/commit/0c26eb4757901091719776b8c34e057508c808e2))
+* **one-script:** the record survives a crash and a race (loose end LE1) ([449a53f](https://github.com/willow-memory/willow-bot/commit/449a53f0d281be05870f685263115fe86b0c25d7))
+* **one-script:** the record takes a write lock so concurrent rows can't fork the chain ([421421e](https://github.com/willow-memory/willow-bot/commit/421421e36e7f1d2adc1cb608a27aba0fb748160d))
+* **one-script:** the unprivileged run gets a scrubbed environment; chown walks sorted (flatten-2 residue) ([55a758a](https://github.com/willow-memory/willow-bot/commit/55a758a2196c718740094590b50f4aee933ce37f))
+* resync the carried clock copy to the one script's reformatted clock.py ([2ae3b24](https://github.com/willow-memory/willow-bot/commit/2ae3b24eb110c3496029a968bcc34e63fdc6b0b6))
+
+
+### Changed
+
+* **one-script:** escalated is a step, named as one (flatten-2 reverse pass on F5) ([de9c882](https://github.com/willow-memory/willow-bot/commit/de9c8829bf746fdc95091046050b1645015c2e38))
+* **one-script:** the modules use states' constants everywhere, and a test holds it (flatten-2 reverse pass on F5) ([82689ad](https://github.com/willow-memory/willow-bot/commit/82689adb430e996a39538786df3593133175d20f))
+* **one-script:** the one script's modules use states' constants (flatten-2 F9) ([022562a](https://github.com/willow-memory/willow-bot/commit/022562a8443795dc05909cd873280b00992c1554))
+* **one-script:** the pile's word rule and bite key get one home, words.py (flatten-2 F11) ([5f91b99](https://github.com/willow-memory/willow-bot/commit/5f91b99e2245fe45f81353f6d43f52bed2f22fde))
+* **one-script:** the record's closure is the kernel (canon, sign) ([9496e85](https://github.com/willow-memory/willow-bot/commit/9496e85d5aca814a8ebf569cc7c156e1970a11bc))
+* **one-script:** the report field names are constants, a named fourth vocabulary (flatten-2 reverse pass) ([970e14c](https://github.com/willow-memory/willow-bot/commit/970e14c9be6aa9f19bba88ad3c92c7af644722f6))
+* **one-script:** willow_bot carries parity-tested copies instead of reaching the one script (flatten-2 residue, gate 6 wheel) ([8b1696c](https://github.com/willow-memory/willow-bot/commit/8b1696c073e37784af616166d75b11279fc81a84))
+
 ## [1.16.0](https://github.com/willow-memory/willow-bot/compare/v1.15.0...v1.16.0) (2026-10-20)
 
 
