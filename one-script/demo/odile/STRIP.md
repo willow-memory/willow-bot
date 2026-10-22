@@ -58,3 +58,34 @@ need to do" still finds the notice.
 place. A folder's name is her word too, so a chunk now holds the words of its
 path as well as its text: "Dad's weight" serves the cardiologist's 2 kg line
 and the care log together, with the weight reading under them.
+
+## Second pass: the same questions, all four readings
+
+2026-10-22. A fresh copy of `life/` alone, the kernel with all four readings,
+path words, and her one-line list (`due = next`). The first pass's questions
+in the same words, plus four more, scored against PLANTED.md afterwards.
+
+| Need | First pass | Second pass |
+|---|---|---|
+| N1 who's due | nothing | "who's due" serves her tuning log's latest `next:` lines, and says her list did it. But those are her latest visits, next due Oct 2027: the right file, the wrong rows. Who is due is a date passed with no visit since, and no reading says that. **Still missed.** |
+| N2 Dad's weight | missed; T1 sprang | "Dad's weight": the cardiologist's "more than 2 kg in a week", the care log, and `the most in one week of the last 4: up 2.5, 2026-10-09 to 2026-10-16`. **Found, asked.** |
+| N3 county deadline | found, unasked | found the same way ("what do I need to do"). What isn't there doesn't see it. **Found, unasked.** |
+| N4 unpaid orders | missed; T3 sprang | `2023-040, 2025-063, 2026-095: not in money/teo-books.csv`, on six questions. The cash order (T3) is still among them; only her memo knows. **Found, with the trap.** |
+| N5 hive 4 | 2021's first inspections | the last two inspections, each with `H4: ... eggs none, brood none`. Served, not named: she reads it. **Evidence served.** |
+| N6 the van | found, unasked | **lost.** "What do I need to do" now serves two market memos from 2026 beside the county notice; the 2021 van memo ties on score and loses to newer ones. |
+| N7 worn out | an accident | the same accident, newer: "is Dad okay" serves her latest night memos, "Okay." "How am I doing" is still empty. **Not found as asked.** |
+
+Four of seven by her plain questions (N2, N3, N4, and N5's evidence), against
+two the first time. Asked and found: one more than before (N2).
+
+**What the readings cost:**
+
+- **Newest first lost N6.** The van memo is the oldest thing in her folder
+  that still matters: a rider she's paid for five years. Newest first sorts it
+  behind this year's jar orders. An open matter doesn't get newer.
+- **What isn't there repeats itself.** The same three orders are said on six
+  of seventeen questions, "I'm tired" among them, because her tuning log and
+  calendar name orders. A fact said under every question stops being read.
+- **N1 needs a fifth thing.** "Due" is a `next:` date that has passed with no
+  visit since: a date compared with today, which none of the four readings
+  does. Newest first orders dates; it never asks whether one has gone by.
