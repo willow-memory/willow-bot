@@ -336,3 +336,14 @@ def test_numbers_over_time_say_what_moved_and_never_judge(tmp_path):
     assert k.series("books.csv", ledger) == []
     assert k.number("-0.30") == (-30, 2) and k.number("1.") is None
     assert k.day("20240307") - k.day("20240229") == 7
+
+
+def test_a_folders_name_is_her_word(tmp_path):
+    """ "Dad's weight": Laszlo's care log never says Dad, its folder does, and
+    a client named Weight shouldn't outrank it (demo/odile, T1)."""
+    (tmp_path / "dad").mkdir()
+    (tmp_path / "dad" / "care-log.csv").write_text("date,weight_kg\n2026-10-21,75.1\n")
+    (tmp_path / "books.csv").write_text("2026-06-08,check Harriet Weight,110\n")
+    pile = k.chunks(tmp_path)
+    assert k.rank(pile, "Dad's weight")[0]["path"] == "dad/care-log.csv"
+    assert not any("dad" in h["why"] for h in k.look(pile, "Dad's weight", []))

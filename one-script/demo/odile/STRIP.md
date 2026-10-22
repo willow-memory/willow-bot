@@ -53,7 +53,8 @@ What isn't there misses N3: the 2026 case number has no reply, but nothing names
 it beside the 2024 one, so by the rule it has no group. Her plain "what do I
 need to do" still finds the notice.
 
-"Dad's weight" still doesn't serve the care log: the file never says "Dad"
-(only its folder, `dad/`, does), and the client named Weight (T1) takes a
-place. The reading works once the log is served; getting it served is a
-ranking question, not a reading one.
+"Dad's weight" didn't serve the care log at first: the file never says "Dad"
+(only its folder, `dad/`, does), and the client named Weight (T1) took a
+place. A folder's name is her word too, so a chunk now holds the words of its
+path as well as its text: "Dad's weight" serves the cardiologist's 2 kg line
+and the care log together, with the weight reading under them.

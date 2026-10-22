@@ -393,6 +393,12 @@ def newest(text: str) -> str:
     return best
 
 
+def toks(c: dict) -> set[str]:
+    """A chunk's words: its text's and its path's. A folder's name is the
+    person's word too: Laszlo's care log never says "Dad", its folder does."""
+    return set(words(c["text"])) | set(words(c["path"]))
+
+
 def held_by(w: str, toks: set[str], alias: dict) -> bool:
     """Their word holds where it, or a word their list reads it as, does."""
     return any(holds(x, toks) for x in [w, *alias.get(w, [])])
@@ -400,7 +406,8 @@ def held_by(w: str, toks: set[str], alias: dict) -> bool:
 
 def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
     """The chunks holding at least `HOLD` of the bite's content words (not
-    `FUNCTION`), rarest words weighing most; among equal scores, the newest
+    `FUNCTION`) in their text or their path (`toks`), rarest words weighing
+    most; among equal scores, the newest
     first (`dates`), then by path, and in one file a dated chunk's later line
     first (a log grows downward). A chunk sharing only "the" or
     "how" and "do" doesn't hold "when does the frost come" or "how do I bake
@@ -411,7 +418,7 @@ def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
     if not want:
         return []
     held = [
-        (c, d, {w for w in want if held_by(w, set(words(c["text"])), alias or {})})
+        (c, d, {w for w in want if held_by(w, toks(c), alias or {})})
         for c, d in zip(pile, dates(pile))
     ]
     held = [(c, d, h) for c, d, h in held if len(h) >= HOLD * len(want)]
@@ -674,7 +681,7 @@ def look(
         out.append({"why": "every word is a common one: name the thing you mean"})
     every = set()
     for c in pile:
-        every |= set(words(c["text"]))
+        every |= toks(c)
     alias = alias or {}
     absent = [w for w in want if not held_by(w, every, alias)]
     for w in want:  # said, so a match their list made is never taken for theirs

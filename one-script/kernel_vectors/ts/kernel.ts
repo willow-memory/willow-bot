@@ -1005,7 +1005,7 @@ function rank(pile: Chunk[], bite: string, alias: Alias): Chunk[] {
   const when = dates(pile);
   const held: [Chunk, Set<string>, number][] = [];
   pile.forEach((c, k) => {
-    const toks = new Set(words(c.text));
+    const toks = new Set([...words(c.text), ...words(c.path)]); // a folder's name is the person's word too
     const h = new Set([...want].filter((w) => heldBy(w, toks, alias)));
     if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h, when[k]]);
   });
@@ -1041,7 +1041,7 @@ function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias): J[] {
   };
   if (!want.length) out.push(hint("every word is a common one: name the thing you mean", null, null));
   const every = new Set<string>();
-  for (const c of pile) for (const w of words(c.text)) every.add(w);
+  for (const c of pile) for (const w of [...words(c.text), ...words(c.path)]) every.add(w);
   const absent = want.filter((w) => !heldBy(w, every, alias));
   for (const w of want) {
     // said, so a match their list made is never taken for theirs

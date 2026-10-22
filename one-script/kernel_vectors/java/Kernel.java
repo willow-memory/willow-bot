@@ -1257,6 +1257,7 @@ public final class Kernel {
         for (int k = 0; k < pile.size(); k++) {
             Chunk c = pile.get(k);
             Set<String> toks = new HashSet<>(words(c.text));
+            toks.addAll(words(c.path)); // a folder's name is the person's word too
             Set<String> h = new HashSet<>();
             for (String w : want) if (heldBy(w, toks, alias)) h.add(w);
             if ((long) h.size() * HOLD_DEN >= (long) HOLD_NUM * want.size()) {
@@ -1303,7 +1304,10 @@ public final class Kernel {
         for (String w : new LinkedHashSet<>(ws)) if (!FUNCTION.contains(w)) want.add(w);
         if (want.isEmpty()) out.add(hint("every word is a common one: name the thing you mean", null, null));
         Set<String> every = new HashSet<>();
-        for (Chunk c : pile) every.addAll(words(c.text));
+        for (Chunk c : pile) {
+            every.addAll(words(c.text));
+            every.addAll(words(c.path));
+        }
         List<String> absent = new ArrayList<>();
         for (String w : want) if (!heldBy(w, every, alias)) absent.add(w);
         for (String w : want) { // said, so a match their list made is never taken for theirs

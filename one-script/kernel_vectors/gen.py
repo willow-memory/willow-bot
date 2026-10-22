@@ -1019,7 +1019,9 @@ def extra_bites(i: int) -> list[str]:
     if i == 10:
         return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
     if i == 12:
-        return ["weight", "ankles", "pulse", "what amount", "weight kg"]
+        # dad, care, log and csv are only in a path: a folder's name is a word
+        return ["weight", "ankles", "pulse", "what amount", "weight kg", "dad",
+                "dad weight", "dad's weight", "care log", "books csv"]  # fmt: skip
     if i == 11:
         return ["purchase order", "order", "reply", "case", "rider", "Kawai", "call",
                 "DEP", "lot", "auction"]  # fmt: skip

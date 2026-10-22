@@ -1095,6 +1095,7 @@ public static class Kernel
         {
             var c = pile[k];
             var toks = new HashSet<string>(Words(c.Text), StringComparer.Ordinal);
+            toks.UnionWith(Words(c.Path)); // a folder's name is the person's word too
             var h = want.Where(w => HeldBy(w, toks, alias)).ToHashSet(StringComparer.Ordinal);
             if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h, when[k]));
         }
@@ -1136,7 +1137,7 @@ public static class Kernel
         foreach (var w in ws) if (!FUNCTION.Contains(w) && !want.Contains(w)) want.Add(w);
         if (want.Count == 0) o.Add(Hint("every word is a common one: name the thing you mean", null, null));
         var every = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var c in pile) every.UnionWith(Words(c.Text));
+        foreach (var c in pile) { every.UnionWith(Words(c.Text)); every.UnionWith(Words(c.Path)); }
         var absent = want.Where(w => !HeldBy(w, every, alias)).ToList();
         foreach (var w in want) // said, so a match their list made is never taken for theirs
         {
