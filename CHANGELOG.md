@@ -2,6 +2,52 @@
 
 All notable changes to this project are documented here.
 
+## [1.18.0](https://github.com/willow-memory/willow-bot/compare/v1.17.3...v1.18.0) (2026-10-22)
+
+
+### Added
+
+* **kernel_vectors:** the kernel and its ports on the runtimes of 2020 ([ae2acdd](https://github.com/willow-memory/willow-bot/commit/ae2acdd62fb70787f80a47fe1331877ad68a72e6))
+* **kernel_vectors:** the TypeScript and C# ports, every box under every implementation ([558a8a0](https://github.com/willow-memory/willow-bot/commit/558a8a019ca0ce6b3f5cfea68bde0d25fb5a1414))
+* **kernel:** vectors for any language, and the first port, Java ([7c254ee](https://github.com/willow-memory/willow-bot/commit/7c254eea3d06e4b4e5d4b041d102d535abde91fc))
+* **one-script:** a kernel 42 says where to look ([6e901d1](https://github.com/willow-memory/willow-bot/commit/6e901d13cef77d73a87dfa0b64edab47d6dfb49f))
+* **one-script:** compiled/ideas.py, the 19 ideas built from what's here ([aa513db](https://github.com/willow-memory/willow-bot/commit/aa513dba3d96b8be531deb12a1f8bb238a5293c0))
+* **one-script:** compiled/offsets.py, the Discord group's asymmetric offsets ([8731899](https://github.com/willow-memory/willow-bot/commit/8731899766553447a7ba732c853bfae836af4a93))
+* **one-script:** draw, the serendipity loop (IDEAS 7) ([0159285](https://github.com/willow-memory/willow-bot/commit/0159285b9fc730c02540082348478196e7990a28))
+* **one-script:** kernel.py, the smallest script that runs the whole loop for anyone ([4b5dc89](https://github.com/willow-memory/willow-bot/commit/4b5dc893d5652da1cee217ffa1c05fa3627f33ad))
+* **one-script:** oauth_probe splits blind wagers from seen pins, adds Google ([9af64f6](https://github.com/willow-memory/willow-bot/commit/9af64f682eba63a1aa9e46f6c55c8da1467acbcf))
+* **one-script:** oauth_probe, deterministic OAuth as forecast ledger wagers ([a2c71ed](https://github.com/willow-memory/willow-bot/commit/a2c71ed751141b48f6087213582a0e3d4edcbb13))
+* **one-script:** oauth_resource, every token knows the server it is for ([bc7df15](https://github.com/willow-memory/willow-bot/commit/bc7df154997290953cbe0fe02f96091ba16cb158))
+* **one-script:** plant shows the seed's first letter and asks who you are ([cc1c8b7](https://github.com/willow-memory/willow-bot/commit/cc1c8b7f944aa359adc12e9e4b1086f3556226c3))
+* **one-script:** plant, consent and letter, the seed's person-facing half ([e619ce2](https://github.com/willow-memory/willow-bot/commit/e619ce2c2a82a41a97e00b3c73c5dd349407b9d2))
+* **one-script:** retire — propose dropping served rows, gated on the human seal ([f8ad91e](https://github.com/willow-memory/willow-bot/commit/f8ad91e3961729c8c88ac1a18baa897e9d238bcb))
+* **one-script:** serve takes a typed password and the baseline pii kinds ([2f255a6](https://github.com/willow-memory/willow-bot/commit/2f255a6de6beb90c1e97b263c8e5cad943b2add9))
+* **one-script:** serve withholds the names a person gives ([af3c15a](https://github.com/willow-memory/willow-bot/commit/af3c15a60c5688407f41a6efc710aa3cb3575942))
+* **one-script:** snapshot, outside data fetched once into the box ([1a47101](https://github.com/willow-memory/willow-bot/commit/1a47101414b75cde45bce8723418a9baab7ca463))
+* **one-script:** snippet_cover, how much of each idea is already here (IDEAS 86) ([fc3c7e0](https://github.com/willow-memory/willow-bot/commit/fc3c7e025d251d8e17218f9c1e3414c5c9b3b165))
+* **one-script:** the idea pile, the snapshot reader, the serendipity loop, the kernel, and what compiles from what's here ([452f6ba](https://github.com/willow-memory/willow-bot/commit/452f6bab759710725f106eeeccba3db4c9f536f8))
+* **one-script:** the kernel reads pages as text, serials by their ends, and knows an echo ([7054d70](https://github.com/willow-memory/willow-bot/commit/7054d70db4d7c34558063c836e76d24ba8d178cc))
+* **one-script:** the loose chunks, found by asking the pile and built on what it pointed at ([a9c9b76](https://github.com/willow-memory/willow-bot/commit/a9c9b76d859d211da8eeea298fe9a737bd46502a))
+* **one-script:** the operator's three joins, ready to seal on their box ([c813b6c](https://github.com/willow-memory/willow-bot/commit/c813b6c74680df57facc64115eb3e85bbebd93f7))
+* **one-script:** the pii set, and serve withholds a person's data over a ceiling ([1e06979](https://github.com/willow-memory/willow-bot/commit/1e06979e268a94e8e8584fd11403a0077c0863bc))
+* **one-script:** the retire verb — api.retire + the CLI, end to end on a real scope ([222a054](https://github.com/willow-memory/willow-bot/commit/222a0541a4db70eddb56911154344f7d98ae5754))
+* **one-script:** withhold the names a person gives; the demos' cast as the cross-check ([5e71308](https://github.com/willow-memory/willow-bot/commit/5e71308bf9cde0f4f396ea31ec64ed1e65a8f31f))
+
+
+### Fixed
+
+* **carried:** recopy scrub.py after the pii set ([5601e74](https://github.com/willow-memory/willow-bot/commit/5601e7404dc9b3b143b7365bc42167bb3a22ad30))
+* **kernel_vectors:** Java takes Python's tag rules; the four patterns become scanners ([228c7d2](https://github.com/willow-memory/willow-bot/commit/228c7d2d5a3557d0470b9ff39770781f5891b733))
+* **kernel:** exact rank scores, so a bite ranks the same on every run ([0ce659c](https://github.com/willow-memory/willow-bot/commit/0ce659c2f76591ebfdb3a4af2d554de8a2cfeb07))
+* **kernel:** read the record on "\n" only, so a file name can't brick the box ([a837823](https://github.com/willow-memory/willow-bot/commit/a837823d63e2ad811817905a80e86b30d33c9a9b))
+* **one-script:** an idea isn't knowledge, and NEEDS YOU lists waiting sessions (IDEAS 103, 104) ([ecf0bf5](https://github.com/willow-memory/willow-bot/commit/ecf0bf5b50c40c09e37fb1a47830f0709a00b0c3))
+* **one-script:** BLOCKED keeps one 87 and drops 7 ([33aeafa](https://github.com/willow-memory/willow-bot/commit/33aeafa1f62acd9e9af220a4d6ebfe62e5500003))
+* **one-script:** said reads the quote shapes the pile holds; IDEAS 108-112, the third run ([c12591f](https://github.com/willow-memory/willow-bot/commit/c12591fcf56bb2862565fe24e969b924c4932354))
+* **one-script:** snapshot's license is an SPDX id or a LicenseRef, not any word ([3b61114](https://github.com/willow-memory/willow-bot/commit/3b61114889fb8cae2a55a267bbe4a14f6ded7394))
+* **one-script:** the kernel reads a stranger's files by what they hold, not their names ([50b56ac](https://github.com/willow-memory/willow-bot/commit/50b56aca25d7ad85e6fc9b5880c5282e21c58560))
+* **one-script:** the kernel's bite is held by content words, not 'how' and 'do' ([cb4ea45](https://github.com/willow-memory/willow-bot/commit/cb4ea45d3e6d6051a4cab175446ec5b8aec6d45c))
+* **one-script:** the proposal rule reads any case, so docs/ideas.md is an idea pile too ([b42d1d7](https://github.com/willow-memory/willow-bot/commit/b42d1d7fdc1dcd030dc175af6e8d0d2ad9ee3f2a))
+
 ## [1.17.3](https://github.com/willow-memory/willow-bot/compare/v1.17.2...v1.17.3) (2026-10-21)
 
 
