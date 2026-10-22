@@ -180,13 +180,15 @@ class Texts:
 #: Files whose words are ideas, not knowledge (IDEAS.md 103: "writing an idea
 #: down hides its gap"). A word held only in these is still a miss, by the
 #: store (`pile.Cached.counts`, `writeback.missing`) and by this scan alike.
-#: By basename; a placeholder list, the operator's to name.
+#: By basename, any case (`IDEAS.md`, and the steward's `docs/ideas.md`); a
+#: placeholder list, the operator's to name.
 PROPOSALS = ("IDEAS.md",)
+_PROPOSALS = frozenset(p.casefold() for p in PROPOSALS)
 
 
 def is_proposal(path: str) -> bool:
     """Whether `path` is a proposal file (`PROPOSALS`): its words are ideas."""
-    return Path(path).name in PROPOSALS
+    return Path(path).name.casefold() in _PROPOSALS
 
 
 def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:

@@ -83,7 +83,10 @@ def propose(run, ident: dict, *, select: Selector, bite: str = "retire") -> dict
     state = doc.get("state") if isinstance(doc, dict) else None
     base: dict = {"state": state, "candidates": [], "proposals": [], "out": None}
     if not (isinstance(doc, dict) and state == POPULATED and doc.get("tables")):
-        return {**base, "why": "nothing is served as populated; retire proposes nothing"}
+        return {
+            **base,
+            "why": "nothing is served as populated; retire proposes nothing",
+        }
 
     cands = [_candidate(c) for c in select(doc)]
     lost = serve.check_cites(doc, [c["cite"] for c in cands])

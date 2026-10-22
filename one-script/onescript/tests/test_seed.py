@@ -275,6 +275,6 @@ def test_the_seed_row_keeps_proposal_only_words_as_hashes(ideas_box):
 
 def test_a_proposal_is_known_by_its_basename():
     assert seed.is_proposal("one-script/IDEAS.md") and seed.is_proposal("IDEAS.md")
-    assert not seed.is_proposal("docs/IDEAS.md.bak") and not seed.is_proposal(
-        "ideas.md"
-    )
+    assert seed.is_proposal("docs/ideas.md")  # the steward's idea pile, any case
+    assert not seed.is_proposal("docs/IDEAS.md.bak")
+    assert not seed.is_proposal("ideas.py")
