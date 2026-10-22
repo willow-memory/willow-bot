@@ -2538,6 +2538,43 @@ and the kernel rebuilt the seed's job under new names, and `onescript/seed.py`
 reuses the word for a different job (the first bite). Three names for one
 role, one word for two roles.
 
+**How much of the seed the one script already holds** (the operator: *"use
+the one script again, a few more times with different sets of questions"*).
+Willow-seed joined the box; 42 questions in eight sets (the seed's steps,
+onboarding, consent, the first bite, the return run, the seed's own words,
+the one script's start-up in its own words, a stranger's first ten
+minutes). The first answer came from the wider fleet 28 times, the old seed
+line 9, the one script 5; asked in its own words, the one script answers
+for its own start-up (check-in, the morning screen, check-out). Lined up
+job by job:
+
+| The seed's job | In the one script or the kernel? | Where else |
+|---|---|---|
+| the person's own key, outside the box | yes: kernel `init`, the human key | |
+| their folder is not a yes yet | yes: kernel | |
+| refuse a second planting | yes: kernel `init` ("this box already has a record") | |
+| the first bite | yes: kernel `bite`; `onescript/seed.py` | the Forge's first bite |
+| the return run | yes: check-in, NEEDS YOU, check-out | SEED9's splash, auth, dashboard |
+| check the tools | partly: the toolchain gate checks the bot's venv, not a newcomer's | willow-seed, SEED9 |
+| choose where to plant | partly: kernel `init --box --pile` | willow-seed `--target` |
+| the onboarding conversation | no | SEED9; the Forge's design |
+| walk the canon's six movements | no | the Grove's `seed_reader` |
+| make the person's card | no | SEED9 |
+| ask consent for the session | no | willow-seed's README; willow-2.0's fylgja `session.py` |
+| the handoff letter | no | willow-2.0 `fylgja/handoff_write.py`; the charter |
+| a first screen that isn't empty | no: an empty pile is a 42 | Nestor's demo `seed.py` |
+| the first five minutes, written down | no | willow-2.0 `docs/FIRST_5_MINUTES.md` |
+| a database, models | not its job: the record is a file, the embedder optional | SEED9 |
+
+Seven of the fourteen jobs that are its to do are held, five of them whole.
+What it holds is the mechanics (key, refusal, bite, return); what it lacks
+is the person-facing half: the conversation, the canon, the card, the
+consent, the letter, the full first screen. Those all exist, in the seed
+line and willow-2.0, just not in the one script.
+
+Asked this way, hermes-agent's skill pages took the first answer for six
+questions about installing and data: 62's per-repo cap again.
+
 ## What the one script said about this list
 
 2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366
