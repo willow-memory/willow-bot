@@ -88,18 +88,7 @@ FUNCTION = frozenset(
     " what which who whom whose when where why how much many can could would"
     " should will shall may might must not no yes there here s t".split()
 )
-TEXT = {
-    ".md",
-    ".txt",
-    ".py",
-    ".json",
-    ".toml",
-    ".yaml",
-    ".yml",
-    ".csv",
-    ".rst",
-    ".html",
-}
+SNIFF = 8192  # bytes looked at to tell text from binary: a NUL byte means binary
 MAX_FILE = 1_000_000  # bytes read from one file of the pile
 MAX_CHUNK = 500  # characters in one chunk: the one script's pile.MAX
 
@@ -280,25 +269,24 @@ def echo(bite: str, text: str) -> bool:
 
 
 def chunks(pile: Path) -> list[dict]:
-    """Every paragraph of every text file under `pile`, cut into runs of at most
+    """Every paragraph of every text file under `pile` (any name; UTF-8 with no
+    NUL byte in its first `SNIFF` bytes), cut into runs of at most
     `MAX_CHUNK` characters (a file with no blank lines would otherwise be one
     chunk holding every word, served for any bite): where it starts, its text,
-    its SHA-256. Hidden folders and anything not UTF-8 are left out."""
+    its SHA-256. Hidden folders, binaries and anything not UTF-8 are left out."""
     out = []
     for p in sorted(pile.rglob("*")):
         rel = p.relative_to(pile)
-        if not p.is_file() or p.suffix.lower() not in TEXT:
+        if not p.is_file() or any(part.startswith(".") for part in rel.parts):
             continue
-        if (
-            any(part.startswith(".") for part in rel.parts)
-            or p.stat().st_size > MAX_FILE
-        ):
-            continue
-        try:
-            text = p.read_text(encoding="utf-8")
+        try:  # text by what it holds, not by its name: a newcomer's TODO,
+            # deploy.bat and login.php are theirs to ask about
+            if p.stat().st_size > MAX_FILE or b"\0" in (raw := p.read_bytes())[:SNIFF]:
+                continue
+            text = raw.decode("utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if p.suffix.lower() == ".html":
+        if p.suffix.lower() in (".html", ".htm"):
             text = html_text(text)
         para, start, size = [], 1, 0
         for i, line in enumerate(text.splitlines() + [""], 1):

@@ -68,6 +68,19 @@ def test_it_is_the_one_scripts_record_seal_and_bite_key():
         assert k.bite_key(bite) == words.bite_key(bite)
 
 
+def test_a_strangers_files_are_read_by_what_they_hold_not_their_names(tmp_path):
+    """quick-stupids' the-box: the answers lived in TODO, login.php, deploy.bat,
+    error_log and a .doc that is plain text, none of them on a list of suffixes."""
+    pile = tmp_path / "pile"
+    pile.mkdir()
+    (pile / "TODO").write_text("TODO: pick a license -- rm, 3/9/1998\n")
+    (pile / "deploy.bat").write_text("REM run the deploy from daves machine\r\n")
+    (pile / "TEST_PROCEDURE.doc").write_text("compare the screens by eye\n")
+    (pile / "Thumbs.db").write_bytes(b"\xd0\xcf\x11\xe0\0\0license deploy\0")
+    got = {c["path"] for c in k.chunks(pile)}
+    assert got == {"TODO", "deploy.bat", "TEST_PROCEDURE.doc"}  # a NUL is binary
+
+
 def test_a_key_inside_the_box_and_a_box_not_theirs_are_refused(tmp_path):
     pile = tmp_path / "pile"
     pile.mkdir()

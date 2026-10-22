@@ -202,6 +202,7 @@ here reads, writes or caches vault material.
 114. [What the demos' characters needed](#114-what-the-demos-characters-needed)
 115. [Crossing the streams: what already lives in the box](#115-crossing-the-streams-what-already-lives-in-the-box)
 116. [One repo at a time](#116-one-repo-at-a-time)
+117. [The kernel on the-box: what plopped out](#117-the-kernel-on-the-box-what-plopped-out)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2180,6 +2181,53 @@ they possibly bring in something new."* README and tree only, nothing built:
 | willow-compose (private) | Left unread past its README: "a self-portrait", a database dump of the operator and the collaboration (123 MB). Treat as vault: never in a box |
 | willow-config, yggdrasil-training-data | Not opened: config with token files, and training data; the operator's call |
 | glapagos (castroquiles) | Not the operator's; for the contributed-to pass |
+
+### 117. The kernel on the-box: what plopped out
+
+2026-10-22. The operator: *"run the kernel on the-box, and see what golden
+eggs plop out"*. quick-stupids' `the-box/` is a made-up legacy intranet, a
+stranger's folder at its worst. The kernel got the exhibit only: the
+curator's note, the excavation logs and `tests/THE_VERDICT.txt` (an earlier
+dig's answer) were left out, so nothing in the pile had been explained.
+Twelve questions a new hire would ask.
+
+**Egg 1, a defect: the kernel read only my kind of file.** It took a list of
+suffixes (`.md .txt .py .json` ...), the fleet's shape, so 5 of the 12
+questions came back 42 while their answers sat in `TODO`, `login.php`,
+`dates.pl`, `deploy.bat`, `error_log`, `data.mdb.ldb`, and a
+`TEST_PROCEDURE.doc` that is plain text. That is the first bite filled with
+mine, the thing the kernel exists to avoid. Now a file is text by what it
+holds (UTF-8, no NUL byte in its first 8 KB), whatever its name; `Thumbs.db`
+and `login.swf` stay out because they're binary. After the fix, 11 of 12
+answered.
+
+**Egg 2: the contradiction is served, not settled.** "Which folder is the
+real intranet" serves `README.txt` (final_v2, wrong on purpose) and the svn
+migration notes (final_v2_REAL_USE_THIS_ONE, "unless it is a northeast
+region issue") side by side. The kernel doesn't pick; the human seals the
+one that's true, and the other stays a chunk.
+
+**Egg 3: the database's answer came under another question.** "Where is the
+database" is a 42: no file says "database". "Who is dave" answers it: the
+lock file `data.mdb.ldb` says `DAVE-DESKTOP Admin`, so the 1.4 GB database
+is open on Dave's desktop. Same meaning, other words (86): the fleet's
+`semantic_matcher` is the hand-off (115).
+
+**Egg 4: what DO_NOT_DELETE.txt does is split across three files.** It is
+empty. `TODO` says "NEVER DO THAT AGAIN" (Dave, 1 April 2006),
+`DO_NOT_DELETE_2.txt` says "testing if the other one is really load
+bearing (it was)", and `error_log` shows machines on 10.0.0.x requesting it
+from final_v2 every few weeks ("WHO IS REQUESTING THIS"). Something outside
+polls it. The kernel served the pieces; the join is a proposal for a human
+to seal.
+
+**Egg 5, a limit: it can't see what's missing.** "Does the login check the
+password" serves `check_login()` and the hard-coded `admin`/`password`. The
+true answer, that nothing calls `check_login()` so anyone walks into
+`payments.php` (the earlier dig's verdict), is about an absence. Text
+retrieval answers "populated"; whether the code is used needs a code tool
+(`script_match`, a call graph). A newcomer asking "is this used?" should be
+told where to look, not shown the definition as if it settled it.
 
 ## What the one script said about this list
 
