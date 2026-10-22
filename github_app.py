@@ -6,6 +6,8 @@ Handles installation access tokens and posting comments/reactions.
 Private key lives in the operator data vault (never committed). Env may
 override for tests.
 """
+from __future__ import annotations
+
 import logging
 import time
 

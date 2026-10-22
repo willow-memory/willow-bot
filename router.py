@@ -2,6 +2,8 @@
 router.py — GitHub event dispatcher for willow-bot.
 b17: WBRT1  ΔΣ=42
 """
+from __future__ import annotations
+
 import logging
 import os
 from typing import Callable
