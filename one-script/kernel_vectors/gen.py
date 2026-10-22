@@ -118,7 +118,6 @@ def tables() -> dict:
             "MAKE": sorted(k.MAKE),
             "NEXT": k.NEXT,
             "ROW_KEYS": sorted(k.ROW_KEYS),
-            "MONTHS": k.MONTHS,
         },
     }
 
@@ -677,9 +676,6 @@ def memo_pile() -> list:
     ]
 
 
-TODAY = "20261022"  # what the look cases take as today
-
-
 def log_pile() -> list:
     """Has this date passed: a log kept a file a year, entries under headings
     with a later date written in them. Ann is due (May 2026, nothing since);
@@ -804,141 +800,6 @@ ALIASED = {
         ("bees calm", {"calm": ["okay", "fine"]}),
     ],
 }
-
-
-def _table(head: str, start: str, n: int, step: int, cols) -> str:
-    """A dated table: `n` rows from `start` (YYYY-MM-DD), `step` days apart."""
-    y, m, d = map(int, start.split("-"))
-    first = k.day(f"{y:04d}{m:02d}{d:02d}")
-    rows = [head]
-    for i in range(n):
-        x = first + i * step + 719468  # back to a civil date (Hinnant's)
-        era = x // 146097
-        doe = x - era * 146097
-        yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
-        doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
-        mp = (5 * doy + 2) // 153
-        dd = doy - (153 * mp + 2) // 5 + 1
-        mm = mp + 3 if mp < 10 else mp - 9
-        yy = yoe + era * 400 + (mm <= 2)
-        rows.append(f"{yy:04d}-{mm:02d}-{dd:02d}," + ",".join(c(i) for c in cols))
-    return "\n".join(rows) + "\n"
-
-
-def series_cases() -> list[dict]:
-    hand = [
-        (
-            "care.csv",
-            "date,weight_kg,bp,pulse,notes\n2026-10-01,71.2,120/70,60,\n"
-            '2026-10-08,71.3,118/72,62,\n2026-10-15,73.8,121/70,61,"ankles, puffy"\n'
-            "2026-10-21,75.1,112/78,64,\n",
-        ),
-        (
-            "ledger.csv",
-            "date,what,in\n2026-10-01,a,5\n2026-10-01,b,6\n2026-10-09,c,7\n",
-        ),
-        ("back.csv", "date,v\n2026-10-09,1\n2026-10-01,2\n2026-10-20,3\n"),
-        ("short.csv", "date,v\n2026-10-01,1\n"),
-        ("nohead.csv", "2026-10-01,1\n2026-10-09,2\n2026-10-20,3\n"),
-        ("onecol.csv", "date\n2026-10-01\n2026-10-09\n"),
-        ("leap.csv", "day,v\n2024-02-29,1.5\n2024-03-07,1.25\n"),
-        ("compact.csv", "d,v\n20261001,-3\n20261008,-3\n20261016,-0.5\n"),
-        ("places.csv", "d,v\n2026-10-01,0.0000000000001\n2026-10-09,0.0000000000003\n"),
-        (
-            "ties.csv",
-            "d,v\n2026-09-01,0\n2026-09-08,2\n2026-09-15,0\n2026-09-22,2\n"
-            "2026-09-29,0\n2026-10-06,2\n2026-10-13,0\n2026-10-20,1\n",
-        ),
-        ("gaps.csv", "d,a,b\n2026-10-01,1,\n2026-10-09,,x\n2026-10-20,3,1.\n"),
-        ("quoted.csv", 'd,"a, b","q""x"\n2026-10-01,"1","2"\n2026-10-09," 4 ",5\n'),
-        ("spaced.csv", "d , v \n 2026-10-01 , 1\n\n 2026-10-09 , 2 \n"),
-        ("odd.csv", "d,v\n2026-10-01x,1\n2026-10-09,1\n2026-10-17,1\n"),
-        (
-            "big.csv",
-            "d,v\n2026-10-01,99999999999999999999\n2026-10-09,-99999999999999999999\n",
-        ),
-        ("old.csv", "d,v\n1899-12-25,1\n1999-12-25,2\n2000-01-01,3\n"),
-        ("unicode.csv", "d,v\n2026-10-01,\u0661\n2026-10-09,\uff11\n2026-10-17,1\n"),
-    ]
-    tables = [
-        _table("date,w,p", "2025-08-18", 430, 1,
-               [lambda i: f"{71 + RN.randint(-9, 30) / 10:.1f}", lambda i: str(RN.randint(55, 80))]),
-        _table("date,x", "2023-12-20", 40, 3, [lambda i: str(RN.randint(-5, 5))]),
-    ]  # fmt: skip
-    for n in range(40):
-        cols = [
-            lambda i: RN.choice(["", "1", "-2", "3.5", "0.25", "x", "10", "-0.75"])
-            for _ in range(RN.randint(1, 3))
-        ]
-        tables.append(
-            _table("d," + ",".join(f"c{j}" for j in range(len(cols))),
-                   RN.choice(["2026-01-01", "2024-02-20", "1999-12-01"]),
-                   RN.randint(2, 30), RN.randint(1, 5), cols)
-        )  # fmt: skip
-    hand += [(f"t{n}.csv", t) for n, t in enumerate(tables)]
-    return [{"path": p, "text": t, "out": k.series(p, t)} for p, t in hand]
-
-
-def written_cases() -> list[dict]:
-    texts = [
-        "", "next: Oct 2027", "March 20, 2026", "Mar. 5 2024", "Octo 2026",
-        "Oct2026", "may 1999", "May 32 2026", "Sept 9, 2026", "sep 2026",
-        "DEC  2025", "Oct \u0661\u0662 2026", "2026-10-14\u0663", "2026-10-149",
-        "x2026-10-14", "20261015", "Jun 0 2026", "Jul 1 1899", "Aug 1, 2100",
-        "Nov 30, 2026 and Nov 2026", "Feb 31 2026", "Oct-2026", "Oct, 2026",
-        "May\t2026", "January 2026 February 2, 2026", "\u212aov 2026",
-        "Oct 2026 Oct 2026", "1 Oct 2026", "Oct 1 2026x", "Oct 012 2026",
-    ]  # fmt: skip
-    bits = ["Oct", "may", "Sept", " ", ",", ".", "2026", "1", "31", "-", "x",
-            "2026-10-14", "\u0662", "\t"]  # fmt: skip
-    texts += [
-        "".join(RN.choice(bits) for _ in range(RN.randint(1, 9))) for _ in range(250)
-    ]
-    return [{"text": t, "written": [list(w) for w in k.written(t)]} for t in texts]
-
-
-def ids_cases() -> list[dict]:
-    texts = [
-        "",
-        "DCSD PO 2025-063 (575) 555-0161 2026-10-16 WR-2026-0117",
-        "mites 1/300 -x- a-b 4-5 -2025-063- K-52 caf\u00e9-9",
-        "--",
-        "-/-",
-        "a/b/c",
-        "2026-10-14",
-        "2026-10-14-5",
-        "2026-1014",
-        "x2026-10-14",
-        "20261014-1",
-        "\u0662-\u0663",
-        "1-\u0662",
-        "２-3",
-        "A-1 A-1 a-1",
-        "PO#2025-063.",
-        "x_1-2",
-    ]
-    bits = [
-        "2025",
-        "-",
-        "/",
-        "063",
-        "WR",
-        "a",
-        "1",
-        " ",
-        ".",
-        "_",
-        "\u00e9",
-        "10",
-        "14",
-    ]
-    texts += [
-        "".join(RN.choice(bits) for _ in range(RN.randint(1, 12))) for _ in range(250)
-    ]
-    return [
-        {"text": t, "ids": k.ids(t), "shapes": [k.shape(i) for i in k.ids(t)]}
-        for t in texts
-    ]
 
 
 def wordlist_cases() -> list[dict]:
@@ -1185,8 +1046,7 @@ def pile_based_cases() -> dict:
                         "bite": bite,
                         "alias": alias,
                         "served": at,
-                        "today": TODAY,
-                        "look": k.look(ch, bite, answers, alias, TODAY),
+                        "look": k.look(ch, bite, answers, alias),
                     }
                 )
     return {"chunks": chunks_out, "rank": rank_out, "look": look_out}
@@ -1275,9 +1135,6 @@ def main(argv: list[str]) -> int:
         **pile_based_cases(),
         "newest": newest_cases(),
         "wordlist": wordlist_cases(),
-        "ids": ids_cases(),
-        "series": series_cases(),
-        "written": written_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

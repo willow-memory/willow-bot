@@ -162,7 +162,7 @@ jobs:
 
       - name: Run the one script's tests
         working-directory: willow-bot/one-script
-        run: python -m pytest -q -p no:cacheprovider onescript/tests
+        run: python -m pytest -q -p no:cacheprovider onescript/tests adapters
 
       - name: Run prompt.py's tests without pytest
         working-directory: willow-bot/one-script

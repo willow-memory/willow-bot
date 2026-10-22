@@ -284,60 +284,6 @@ def test_a_words_list_line_is_one_word_then_words():
         ), bad
 
 
-def test_what_isnt_there_is_said_beside_what_was_served(tmp_path):
-    """Odile's books name 21 of her 24 purchase orders (demo/odile/STRIP.md).
-    Served an order, the kernel says which ones the books don't name. Things
-    that only share a shape (a Kawai's K-300, a van's E-150) never are."""
-    pos = [f"2025-{n:03d}" for n in range(10, 22)]
-    (tmp_path / "books.csv").write_text(
-        "".join(f"DEP PO {p}\n" for p in pos if p not in ("2025-013", "2025-019"))
-    )
-    (tmp_path / "calendar.txt").write_text(" ".join(f"PO {p}" for p in pos) + "\n")
-    (tmp_path / "po.txt").write_text("PURCHASE ORDER PO 2025-010\n")
-    (tmp_path / "piano.txt").write_text("Kawai K-300 order\n")
-    (tmp_path / "van.txt").write_text("Econoline E-150 rider\n")
-    pile = k.chunks(tmp_path)
-    served = [c for c in pile if c["path"] in ("po.txt", "piano.txt")]
-    assert k.missing(pile, served) == [
-        {
-            "why": "2025-013, 2025-019: not in books.csv",
-            "where": "books.csv names 10 of the 12 like them",
-        }
-    ]
-    books = [c for c in pile if c["path"] == "books.csv"]
-    assert k.missing(pile, books) == []  # the file being read isn't checked
-    assert k.ids("PO 2025-063 (575) 555-0161 2026-10-16 -x- 1/300") == [
-        "2025-063",
-        "555-0161",
-        "1/300",
-    ]
-    assert k.shape("WR-2026-0117") == "AA-9999-9999"
-
-
-def test_numbers_over_time_say_what_moved_and_never_judge(tmp_path):
-    """Laszlo's care log (demo/odile): the latest week can sit under the
-    cardiologist's 2 kg line while an earlier week crossed it, so both are
-    said. A ledger repeats its dates and is never read as a series."""
-    days = [("2026-10-0" + str(d) if d < 10 else f"2026-10-{d}") for d in range(1, 22)]
-    kg = [71.2] * 8 + [71.3, 71.9, 72.3, 72.5, 72.8, 73.2, 73.4, 73.8, 74.0]
-    kg += [74.3, 74.6, 75.0, 75.1]
-    note = {"2026-10-16": '"ankles, puffy"'}
-    log = "date,weight_kg,notes\n" + "".join(
-        f"{d},{w:.1f},{note.get(d, '')}\n" for d, w in zip(days, kg)
-    )
-    assert k.series("dad/care-log.csv", log) == [
-        {
-            "why": "weight_kg: 75.1 on 2026-10-21, up 1.9 from 73.2 on 2026-10-14;"
-            " the most in one week of the last 4: up 2.5, 2026-10-09 to 2026-10-16",
-            "where": "dad/care-log.csv: 21 dated rows, 2026-10-01 to 2026-10-21",
-        }
-    ]
-    ledger = "date,what,amount\n2026-10-01,a,5\n2026-10-01,b,6\n2026-10-09,c,7\n"
-    assert k.series("books.csv", ledger) == []
-    assert k.number("-0.30") == (-30, 2) and k.number("1.") is None
-    assert k.day("20240307") - k.day("20240229") == 7
-
-
 def test_a_folders_name_is_her_word(tmp_path):
     """ "Dad's weight": Laszlo's care log never says Dad, its folder does, and
     a client named Weight shouldn't outrank it (demo/odile, T1)."""
@@ -347,37 +293,6 @@ def test_a_folders_name_is_her_word(tmp_path):
     pile = k.chunks(tmp_path)
     assert k.rank(pile, "Dad's weight")[0]["path"] == "dad/care-log.csv"
     assert not any("dad" in h["why"] for h in k.look(pile, "Dad's weight", []))
-
-
-def test_a_date_gone_by_with_nothing_since_is_said(tmp_path):
-    """Who's due (demo/odile, N1): the latest entry under each heading whose
-    next date has passed, with nothing written under it since. A log kept a
-    file a year is read as one."""
-    (tmp_path / "tuning").mkdir()
-    (tmp_path / "tuning" / "2025.txt").write_text(
-        "2025-05-02  Ann - upright\n  next: May 2026\n\n"
-        "2025-06-01  Bo - grand\n  next: Jan 2026\n"
-    )
-    (tmp_path / "tuning" / "2026.txt").write_text(
-        "2026-02-10  Bo - grand\n  next: Feb 2027\n\n"
-        "2026-03-01  Cy - console\n  next: Dec. 1, 2026\n"
-    )
-    pile = k.chunks(tmp_path)
-    served = [c for c in pile if c["path"] == "tuning/2026.txt"]
-    assert k.gone_by(pile, served, "20261022", {"next"}, {}) == [
-        {
-            "why": "gone by, nothing written since: Ann - upright (May 2026)",
-            "where": "tuning/: 1 of 3 headings, as of 2026-10-22",
-        }
-    ]
-    assert k.gone_by(pile, served, "20260430", {"next"}, {}) == []
-    # said only where a date's own line holds the bite's words (or her list's)
-    assert k.gone_by(pile, served, "20261022", {"tired"}, {}) == []
-    assert k.gone_by(pile, served, "20261022", {"due"}, {"due": ["next"]})
-    assert k.written("next: Oct 2027; March 20, 2026; Octo 2026") == [
-        ("20271001", "Oct 2027"),
-        ("20260320", "March 20, 2026"),
-    ]
 
 
 def test_said_once_before_said_every_week_and_never_twice(tmp_path):

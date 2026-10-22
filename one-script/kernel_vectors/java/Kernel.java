@@ -67,7 +67,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -388,7 +387,6 @@ public final class Kernel {
     static String GENESIS;
     static int TOP, SNIFF, MAX_FILE, MAX_CHUNK, ECHO_RUN, HOLD_NUM, HOLD_DEN;
     static Set<String> FUNCTION, MAKE, ROW_KEYS;
-    static Map<String, Integer> MONTHS = new HashMap<>();
     static Map<String, String> NEXT;
     static String VERSION;
 
@@ -425,8 +423,6 @@ public final class Kernel {
         HOLD_NUM = ((BigInteger) hold.get(0)).intValue();
         HOLD_DEN = ((BigInteger) hold.get(1)).intValue();
         FUNCTION = strings((List<Object>) kc.get("FUNCTION"));
-        for (Map.Entry<String, Object> e : ((Map<String, Object>) kc.get("MONTHS")).entrySet())
-            MONTHS.put(e.getKey(), ((BigInteger) e.getValue()).intValue());
         MAKE = strings((List<Object>) kc.get("MAKE"));
         ROW_KEYS = strings((List<Object>) kc.get("ROW_KEYS"));
         NEXT = new HashMap<>();
@@ -972,355 +968,6 @@ public final class Kernel {
         return false;
     }
 
-    static boolean idChar(char c) {
-        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '/';
-    }
-
-    /** kernel.py's ids: the numbers that name one thing, in order, each once; never a date. */
-    static List<String> ids(String text) {
-        List<String> out = new ArrayList<>();
-        int i = 0;
-        while (i < text.length()) {
-            int j = i;
-            while (j < text.length() && idChar(text.charAt(j))) j++;
-            int a = i, b = j;
-            while (a < b && (text.charAt(a) == '-' || text.charAt(a) == '/')) a++;
-            while (b > a && (text.charAt(b - 1) == '-' || text.charAt(b - 1) == '/')) b--;
-            String run = text.substring(a, b);
-            boolean digit = false, mark = false;
-            for (char c : run.toCharArray()) {
-                if (c >= '0' && c <= '9') digit = true;
-                if (c == '-' || c == '/') mark = true;
-            }
-            if (digit && mark && newest(run).isEmpty() && !out.contains(run)) out.add(run);
-            i = j == i ? j + 1 : j;
-        }
-        return out;
-    }
-
-    /** kernel.py's shape: digits as 9, letters as A, marks kept. */
-    static String shape(String id) {
-        StringBuilder b = new StringBuilder();
-        for (char c : id.toCharArray()) b.append(c >= '0' && c <= '9' ? '9' : (c == '-' || c == '/') ? c : 'A');
-        return b.toString();
-    }
-
-    /** kernel.py's missing: what isn't there, beside the served chunks' files. */
-    static List<Map<String, Object>> missing(List<Chunk> pile, List<Chunk> served) {
-        Map<String, Set<String>> byFile = new TreeMap<>(BY_CODE_POINT);
-        for (Chunk c : pile) byFile.computeIfAbsent(c.path, x -> new HashSet<>()).addAll(ids(c.text));
-        Set<String> every = new HashSet<>();
-        for (Set<String> f : byFile.values()) every.addAll(f);
-        List<String> paths = new ArrayList<>();
-        for (Chunk c : served) if (!paths.contains(c.path)) paths.add(c.path);
-        Set<String> shapes = new LinkedHashSet<>(); // what she was shown names it
-        for (Chunk c : served) for (String id : ids(c.text)) shapes.add(shape(id));
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (String sh : shapes) {
-            Set<String> group = new HashSet<>();
-            for (String id : every) if (shape(id).equals(sh)) group.add(id);
-            for (Map.Entry<String, Set<String>> e : byFile.entrySet()) {
-                if (paths.contains(e.getKey())) continue;
-                Set<String> have = new HashSet<>(group);
-                have.retainAll(e.getValue());
-                int k = have.size();
-                if (!(2 * k >= group.size() && k < group.size())) continue;
-                List<String> gone = new ArrayList<>();
-                for (String id : group) {
-                    if (e.getValue().contains(id)) continue;
-                    for (Set<String> f : byFile.values()) {
-                        if (!f.contains(id)) continue;
-                        boolean beside = false;
-                        for (String h : have) if (f.contains(h)) { beside = true; break; }
-                        if (beside) { gone.add(id); break; }
-                    }
-                }
-                if (gone.isEmpty()) continue;
-                gone.sort(BY_CODE_POINT);
-                out.add(hint(String.join(", ", gone) + ": not in " + e.getKey(),
-                    e.getKey() + " names " + k + " of the " + group.size() + " like them", null));
-            }
-        }
-        return out;
-    }
-
-    /** kernel.py's cells: one line of comma-separated values, quotes kept whole. */
-    static List<String> cells(String line) {
-        List<String> out = new ArrayList<>();
-        StringBuilder cur = new StringBuilder();
-        boolean quoted = false;
-        for (int i = 0; i < line.length(); i++) {
-            char ch = line.charAt(i);
-            if (quoted && ch == '"' && i + 1 < line.length() && line.charAt(i + 1) == '"') {
-                cur.append('"');
-                i++;
-            } else if (ch == '"') {
-                quoted = !quoted;
-            } else if (ch == ',' && !quoted) {
-                out.add(cur.toString());
-                cur.setLength(0);
-            } else {
-                cur.append(ch);
-            }
-        }
-        out.add(cur.toString());
-        return out;
-    }
-
-    /** A decimal: its digits and its places (75.1 is 751, 1). */
-    static final class Num {
-        final BigInteger v;
-        final int places;
-
-        Num(BigInteger v, int places) { this.v = v; this.places = places; }
-    }
-
-    static boolean allDigits(String s) {
-        for (int i = 0; i < s.length(); i++) if (s.charAt(i) < '0' || s.charAt(i) > '9') return false;
-        return true;
-    }
-
-    /** kernel.py's number: a cell that is a decimal number, or null. */
-    static Num number(String cell) {
-        String s = strip(cell);
-        boolean neg = s.startsWith("-");
-        String body = neg ? s.substring(1) : s;
-        int dot = body.indexOf('.');
-        String whole = dot < 0 ? body : body.substring(0, dot), frac = dot < 0 ? "" : body.substring(dot + 1);
-        if (whole.isEmpty() || !allDigits(whole) || !allDigits(frac) || (dot >= 0 && frac.isEmpty())) return null;
-        BigInteger n = new BigInteger(whole + frac);
-        return new Num(neg ? n.negate() : n, frac.length());
-    }
-
-    /** kernel.py's day: days since 1970-01-01 for a YYYYMMDD. */
-    static long day(String d) {
-        long y = Long.parseLong(d.substring(0, 4)), m = Long.parseLong(d.substring(4, 6)), dd = Long.parseLong(d.substring(6));
-        if (m <= 2) y -= 1;
-        long era = Math.floorDiv(y, 400);
-        long yoe = y - era * 400;
-        long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
-        return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
-    }
-
-    static String shown(BigInteger v, int places) {
-        String digits = v.abs().toString();
-        while (digits.length() < places + 1) digits = "0" + digits;
-        String body = digits.substring(0, digits.length() - places) + (places > 0 ? "." + digits.substring(digits.length() - places) : "");
-        return (v.signum() < 0 ? "-" : "") + body;
-    }
-
-    static String iso(String d) { return d.substring(0, 4) + "-" + d.substring(4, 6) + "-" + d.substring(6); }
-
-    static Num change(Num a, Num b) {
-        int places = Math.max(a.places, b.places);
-        return new Num(b.v.multiply(BigInteger.TEN.pow(places - b.places)).subtract(a.v.multiply(BigInteger.TEN.pow(places - a.places))), places);
-    }
-
-    static boolean bigger(Num a, Num b) {
-        return a.v.abs().multiply(BigInteger.TEN.pow(b.places)).compareTo(b.v.abs().multiply(BigInteger.TEN.pow(a.places))) > 0;
-    }
-
-    static String moved(Num d) {
-        if (d.v.signum() == 0) return "no change";
-        return (d.v.signum() > 0 ? "up " : "down ") + shown(d.v.abs(), d.places);
-    }
-
-    /** The latest row at least a week before d, or -1 (an index into dates). */
-    static int weekBefore(List<String> dates, String d) {
-        int at = -1;
-        for (int i = 0; i < dates.size(); i++) if (day(dates.get(i)) <= day(d) - WEEK) at = i;
-        return at;
-    }
-
-    static final int WEEK = 7, WEEKS = 4;
-
-    /** kernel.py's series: numbers over time, in a table of dated rows. */
-    static List<Map<String, Object>> series(String path, String text) {
-        List<Map<String, Object>> out = new ArrayList<>();
-        List<String> lines = new ArrayList<>();
-        for (String ln : splitlines(text)) if (!strip(ln).isEmpty()) lines.add(ln);
-        if (lines.size() < 3) return out;
-        List<String> head = cells(lines.get(0));
-        if (!newest(lines.get(0)).isEmpty() || head.size() < 2) return out;
-        List<String> rowDates = new ArrayList<>();
-        List<List<String>> rowCells = new ArrayList<>();
-        for (String ln : lines.subList(1, lines.size())) {
-            List<String> cs = cells(ln);
-            String d = newest(cs.get(0));
-            String c0 = strip(cs.get(0));
-            if (!d.isEmpty() && (c0.equals(d) || c0.equals(iso(d)))) {
-                rowDates.add(d);
-                rowCells.add(cs);
-            }
-        }
-        if (rowDates.size() < 2) return out;
-        for (int i = 1; i < rowDates.size(); i++) if (rowDates.get(i).compareTo(rowDates.get(i - 1)) <= 0) return out;
-        for (int col = 1; col < head.size(); col++) {
-            List<String> ds = new ArrayList<>();
-            List<Num> ns = new ArrayList<>();
-            for (int r = 0; r < rowDates.size(); r++) {
-                List<String> cs = rowCells.get(r);
-                Num n = col < cs.size() ? number(cs.get(col)) : null;
-                if (n != null) {
-                    ds.add(rowDates.get(r));
-                    ns.add(n);
-                }
-            }
-            if (ds.size() < 2) continue;
-            String d1 = ds.get(ds.size() - 1);
-            Num last = ns.get(ns.size() - 1);
-            String name = strip(head.get(col)).isEmpty() ? "column " + (col + 1) : strip(head.get(col));
-            int b = weekBefore(ds, d1);
-            if (b < 0) continue;
-            String d0 = ds.get(b);
-            Num then = ns.get(b);
-            String why = name + ": " + shown(last.v, last.places) + " on " + iso(d1) + ", " + moved(change(then, last))
-                + " from " + shown(then.v, then.places) + " on " + iso(d0);
-            Num best = null;
-            String bFrom = null, bTo = null;
-            for (int i = 0; i < ds.size(); i++) {
-                String d = ds.get(i);
-                if (day(d) <= day(d1) - (long) WEEK * WEEKS) continue;
-                int w = weekBefore(ds, d);
-                if (w < 0) continue;
-                Num diff = change(ns.get(w), ns.get(i));
-                if (best == null || bigger(diff, best)) {
-                    best = diff;
-                    bFrom = ds.get(w);
-                    bTo = d;
-                }
-            }
-            if (best != null && !(bFrom.equals(d0) && bTo.equals(d1)))
-                why += "; the most in one week of the last " + WEEKS + ": " + moved(best) + ", " + iso(bFrom) + " to " + iso(bTo);
-            out.add(hint(why, path + ": " + rowDates.size() + " dated rows, " + iso(rowDates.get(0)) + " to "
-                + iso(rowDates.get(rowDates.size() - 1)), null));
-        }
-        return out;
-    }
-
-    static boolean digitAt(String t, int i) { return i < t.length() && t.charAt(i) >= '0' && t.charAt(i) <= '9'; }
-
-    static boolean letter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
-
-    /** kernel.py's written: every date written in text, as [YYYYMMDD, as written]. */
-    static List<String[]> written(String text) {
-        List<int[]> runs = new ArrayList<>();
-        int i = 0;
-        while (i < text.length()) {
-            char c = text.charAt(i);
-            boolean dig = c >= '0' && c <= '9';
-            if (!dig && !letter(c)) { i++; continue; }
-            int j = i;
-            while (j < text.length() && (dig ? digitAt(text, j) : letter(text.charAt(j)))) j++;
-            runs.add(new int[] {i, j});
-            i = j;
-        }
-        List<String[]> out = new ArrayList<>();
-        for (int k = 0; k < runs.size(); k++) {
-            int a = runs.get(k)[0], b = runs.get(k)[1];
-            String t = text.substring(a, b);
-            if (digitAt(t, 0)) {
-                if (t.length() == 8) {
-                    String d = newest(t);
-                    if (!d.isEmpty()) out.add(new String[] {d, t});
-                } else if (t.length() == 4) {
-                    String ten = text.substring(a, Math.min(a + 10, text.length()));
-                    String d = newest(ten);
-                    if (!d.isEmpty() && d.startsWith(t) && ten.equals(iso(d)) && !digitAt(text, a + 10))
-                        out.add(new String[] {d, iso(d)});
-                }
-                continue;
-            }
-            Integer mon = MONTHS.get(t.toLowerCase(java.util.Locale.ROOT));
-            if (mon == null || k + 1 >= runs.size()) continue;
-            String m = String.format("%02d", mon);
-            String nxt = text.substring(runs.get(k + 1)[0], runs.get(k + 1)[1]);
-            String y2 = k + 2 < runs.size() ? year(text, runs, k + 2) : null;
-            if (digitAt(nxt, 0) && nxt.length() <= 2 && Integer.parseInt(nxt) >= 1 && Integer.parseInt(nxt) <= 31
-                    && gap(text, runs, k + 1) && y2 != null) {
-                out.add(new String[] {y2 + m + String.format("%02d", Integer.parseInt(nxt)), text.substring(a, runs.get(k + 2)[1])});
-            } else {
-                String y1 = year(text, runs, k + 1);
-                if (y1 != null) out.add(new String[] {y1 + m + "01", text.substring(a, runs.get(k + 1)[1])});
-            }
-        }
-        return out;
-    }
-
-    static boolean gap(String text, List<int[]> runs, int x) {
-        String between = text.substring(runs.get(x - 1)[1], runs.get(x)[0]);
-        if (between.isEmpty()) return false;
-        for (char c : between.toCharArray()) if (c != ' ' && c != ',' && c != '.') return false;
-        return true;
-    }
-
-    static String year(String text, List<int[]> runs, int x) {
-        String y = text.substring(runs.get(x)[0], runs.get(x)[1]);
-        return y.length() == 4 && (y.startsWith("19") || y.startsWith("20")) && gap(text, runs, x) ? y : null;
-    }
-
-    /** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
-    static List<Map<String, Object>> goneBy(List<Chunk> pile, List<Chunk> served, String today,
-            List<String> want, Map<String, List<String>> alias) {
-        List<Map<String, Object>> out = new ArrayList<>();
-        List<String> folders = new ArrayList<>();
-        for (Chunk c : served) {
-            String f = c.path.contains("/") ? c.path.substring(0, c.path.lastIndexOf('/')) : "";
-            if (!folders.contains(f)) folders.add(f);
-        }
-        for (String folder : folders) {
-            List<Object[]> entries = new ArrayList<>(); // {date, heading, List<String[]> later}
-            String path = null;
-            Object[] cur = null;
-            for (Chunk c : pile) {
-                String f = c.path.contains("/") ? c.path.substring(0, c.path.lastIndexOf('/')) : "";
-                if (!f.equals(folder)) continue;
-                if (!c.path.equals(path)) { path = c.path; cur = null; }
-                for (String line : splitlines(c.text)) {
-                    String s = strip(line);
-                    String d = newest(s.substring(0, Math.min(10, s.length())));
-                    if (!d.isEmpty() && s.substring(0, Math.min(10, s.length())).equals(iso(d)) && !digitAt(s, 10)) {
-                        cur = new Object[] {d, strip(s.substring(10)), new ArrayList<String[]>()};
-                        entries.add(cur);
-                    }
-                    boolean asked = false; // a line that holds one of the bite's words
-                    Set<String> lineWords = new HashSet<>(words(s));
-                    for (String w : want) if (heldBy(w, lineWords, alias)) { asked = true; break; }
-                    if (cur != null && asked)
-                        for (String[] w : written(s)) if (w[0].compareTo((String) cur[0]) > 0) ((List<String[]>) cur[2]).add(w);
-                }
-            }
-            Map<String, Object[]> latest = new LinkedHashMap<>();
-            for (Object[] e : entries) {
-                String h = (String) e[1];
-                if (h.isEmpty()) continue;
-                Object[] have = latest.get(h);
-                if (have == null || ((String) e[0]).compareTo((String) have[0]) >= 0) latest.put(h, e);
-            }
-            List<String[]> due = new ArrayList<>(); // {date, written, heading}
-            for (Map.Entry<String, Object[]> e : latest.entrySet()) {
-                List<String[]> later = (List<String[]>) e.getValue()[2];
-                if (later.isEmpty()) continue;
-                String[] first = null;
-                for (String[] w : later)
-                    if (first == null || w[0].compareTo(first[0]) < 0 || (w[0].equals(first[0]) && BY_CODE_POINT.compare(w[1], first[1]) < 0)) first = w;
-                if (first[0].compareTo(today) <= 0) due.add(new String[] {first[0], first[1], e.getKey()});
-            }
-            if (due.isEmpty()) continue;
-            due.sort((x, y) -> {
-                int c = x[0].compareTo(y[0]);
-                if (c != 0) return c;
-                c = BY_CODE_POINT.compare(x[1], y[1]);
-                return c != 0 ? c : BY_CODE_POINT.compare(x[2], y[2]);
-            });
-            List<String> parts = new ArrayList<>();
-            for (String[] d : due) parts.add(d[2] + " (" + d[1] + ")");
-            out.add(hint("gone by, nothing written since: " + String.join("; ", parts),
-                (folder.isEmpty() ? "." : folder) + "/: " + due.size() + " of " + latest.size() + " headings, as of " + iso(today), null));
-        }
-        return out;
-    }
-
     /** How many ASCII digits run from {@code i}. */
     static int digits(String t, int i) {
         int j = i;
@@ -1431,7 +1078,7 @@ public final class Kernel {
     }
 
     static List<Map<String, Object>> look(List<Chunk> pile, String bite, List<Chunk> served,
-            Map<String, List<String>> alias, String today) {
+            Map<String, List<String>> alias) {
         List<Map<String, Object>> out = new ArrayList<>();
         List<String> ws = words(bite);
         List<String> want = new ArrayList<>();
@@ -1463,16 +1110,6 @@ public final class Kernel {
                     uses.isEmpty() ? "nothing else in your folder names it" : "also named in " + String.join(", ", uses),
                     NEXT.get("unused")));
             }
-        }
-        out.addAll(missing(pile, served));
-        if (!today.isEmpty()) out.addAll(goneBy(pile, served, today, want, alias));
-        List<String> seen = new ArrayList<>();
-        for (Chunk c : served) {
-            if (seen.contains(c.path)) continue;
-            seen.add(c.path);
-            List<String> texts = new ArrayList<>();
-            for (Chunk x : pile) if (x.path.equals(c.path)) texts.add(x.text);
-            out.addAll(series(c.path, String.join("\n", texts)));
         }
         if (!ws.isEmpty() && MAKE.contains(ws.get(0))) out.add(hint("this asks for something made", null, NEXT.get("made")));
         return out;
@@ -1801,8 +1438,7 @@ public final class Kernel {
             shown.add(m);
         }
         doc.put("served", shown);
-        List<Map<String, Object>> hints = look(pile, text, answers.isEmpty() ? new ArrayList<>() : served, alias,
-            newest(ts.substring(0, Math.min(10, ts.length()))));
+        List<Map<String, Object>> hints = look(pile, text, answers.isEmpty() ? new ArrayList<>() : served, alias);
         if (!hints.isEmpty()) doc.put("look", hints);
         System.out.println(dumpsSpacedUtf8(doc));
         return answers.isEmpty() ? ESCALATE : ALIVE;
@@ -2052,37 +1688,13 @@ public final class Kernel {
         }
         out.put("wordlist", wordlistOut);
 
-        List<Object> idsOut = new ArrayList<>();
-        for (Object o : (List<Object>) c.get("ids")) {
-            List<String> got = ids((String) ((Map<String, Object>) o).get("text"));
-            List<Object> shapes = new ArrayList<>();
-            for (String id : got) shapes.add(shape(id));
-            idsOut.add(fields("ids", new ArrayList<Object>(got), "shapes", shapes));
-        }
-        out.put("ids", idsOut);
-
-        List<Object> seriesOut = new ArrayList<>();
-        for (Object o : (List<Object>) c.get("series")) {
-            Map<String, Object> m = (Map<String, Object>) o;
-            seriesOut.add(fields("out", new ArrayList<Object>(series((String) m.get("path"), (String) m.get("text")))));
-        }
-        out.put("series", seriesOut);
-
-        List<Object> writtenOut = new ArrayList<>();
-        for (Object o : (List<Object>) c.get("written")) {
-            List<Object> ws = new ArrayList<>();
-            for (String[] w : written((String) ((Map<String, Object>) o).get("text"))) ws.add(new ArrayList<Object>(List.of(w[0], w[1])));
-            writtenOut.add(fields("written", ws));
-        }
-        out.put("written", writtenOut);
-
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {
             Map<String, Object> m = (Map<String, Object>) o;
             List<Chunk> pile = piles.get(((BigInteger) m.get("pile")).intValue());
             List<Chunk> served = new ArrayList<>();
             for (Object at : (List<Object>) m.get("served")) served.add(pile.get(((BigInteger) at).intValue()));
-            lookOut.add(fields("look", new ArrayList<Object>(look(pile, (String) m.get("bite"), served, aliasOf(m), (String) m.get("today")))));
+            lookOut.add(fields("look", new ArrayList<Object>(look(pile, (String) m.get("bite"), served, aliasOf(m)))));
         }
         out.put("look", lookOut);
 

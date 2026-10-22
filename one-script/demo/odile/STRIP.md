@@ -146,3 +146,12 @@ calendar: the reading reads her tuning folder, not her calendar.
 
 Six of seven by plain questions, two of them asked for by name. N7 is the one
 nobody asks, and her folder doesn't answer it either: the memos only shrink.
+
+## Where the readings live now
+
+Out of the kernel. The ranking the demo needed (newest first, path words, her
+words list, one text once, said once before routine) stays in `kernel.py`,
+because it decides what is served. The three readings that only speak beside
+an answer (what isn't there, numbers over time, a date gone by) are an adapter
+built on top: `adapters/readings/`. The kernel runs the same without it; run
+through it, her box answers as above.
