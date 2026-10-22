@@ -10,6 +10,8 @@ no reader, each outside read is `unreachable`, said.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -189,3 +191,144 @@ def test_102_the_spy_half_is_a_market_call(cfg):
     (w,) = [r for r in rows(box) if r["kind"] == "wager"]
     assert w["market"] == {"symbol": "SPY", "kind": "up", "close_date": DAY}
     assert 102 in ideas.BLOCKED  # the bot's half has no field
+
+
+# ── the loose chunks ────────────────────────────────────────────────────────
+from onescript import xref  # noqa: E402
+from onescript.tests.test_xref import make  # noqa: E402
+
+
+@pytest.fixture
+def two_repos(tmp_path):
+    a = make(
+        tmp_path,
+        "docs",
+        {
+            "notes.md": (
+                '# Notes\n\nThe operator, 2026-10-19: "build it, leaning towards the bot"\n\n'
+                + "\n\n".join(
+                    f"Paragraph {i} about the pile and its boxes." for i in range(6)
+                )
+            )
+        },
+    )
+    b = make(tmp_path, "code", {"run.py": "\n\n".join(
+        f"def step_{i}():\n    return {i}" for i in range(6)
+    )})  # fmt: skip
+    return xref.build([("docs", a), ("code", b)]), {"docs": a, "code": b}
+
+
+def test_1_quotes_are_harvested_as_hashes(two_repos):
+    index, repos = two_repos
+    (q,) = ideas.said(index, repos)
+    assert q["date"] == "2026-10-19" and q["where"] == "docs:notes.md:3"
+    assert len(q["quote_sha256"]) == 64 and "bot" not in json.dumps(q)
+
+
+def test_7_serendipity_picks_one_chunk_from_each_of_two_repos(two_repos):
+    index, repos = two_repos
+    got = ideas.serendipity(index, repos, RANDOMNESS)
+    assert got["state"] == POPULATED and got == ideas.serendipity(
+        index, repos, RANDOMNESS
+    )
+    assert {p["where"].split(":")[0] for p in got["pair"]} == {"docs", "code"}
+    assert 7 in ideas.BLOCKED  # serving the pair is the operator's call
+
+
+def test_11_sessions_end_sealed_or_waiting():
+    rows_ = [
+        {"n": 0, "kind": "invocation", "argv": ["checkin"]},
+        {"n": 1, "kind": "session", "from": 0, "subject": "session:" + "a" * 64},
+        {"n": 2, "kind": "invocation", "argv": ["checkin"]},
+        {"n": 3, "kind": "session", "from": 2, "subject": "session:" + "b" * 64},
+    ]
+    got = ideas.how_sessions_end(rows_, held={"session:" + "a" * 64})
+    assert {p["ending"]: p["n"] for p in got["pools"]} == {"sealed": 1, "waiting": 1}
+    assert ideas.how_sessions_end([], set())["state"] == "empty"
+
+
+def test_36_you_and_the_crowd_are_two_wagers(cfg):
+    web = Web({"https://api.manifold.markets/": b'{"probability": 0.27}'})
+    got = ideas.against_the_crowd(dataclasses.replace(cfg, fetch=web), "Abc1", 0.6)
+    assert got["state"] == POPULATED and got["p"] == 0.27
+    by = sorted(r["by"] for r in rows(cfg) if r["kind"] == "wager")
+    assert by == ["human", "oracle"]
+
+
+def test_40_dialect_says_unreachable_without_wordfreq():
+    class Store:
+        n_all = 100
+
+        def df(self, w):
+            return {"pile": 40, "seal": 10}.get(w, 0)
+
+    got = ideas.dialect(Store(), ["seal", "pile"])
+    assert got["mine"] == {"pile": 0.4, "seal": 0.1}
+    assert got["state"] in (POPULATED, UNREACHABLE)  # wordfreq is optional
+
+
+CSV = "Entity,Code,Year,Population\nNigeria,NGA,2020,208327405\nNigeria,NGA,2021,213401323\n"
+
+
+def test_47_the_quiz_reads_the_answer_exactly(cfg):
+    assert str(ideas.answer(CSV, "Nigeria", 2020)) == "208327405"
+    assert ideas.answer(CSV, "Chad", 2020) is None
+    box = dataclasses.replace(
+        cfg, fetch=Web({"https://ourworldindata.org/": CSV.encode()})
+    )
+    got = ideas.quiz(box, "population", "Nigeria", 2021, 2e8, 2.2e8)
+    assert got["hit"] is True and got["answer"] == "213401323"
+
+
+def test_59_the_flood_guard_drops_a_rare_name_traded_for_a_common_word():
+    seed_answer = {
+        "keys": [{"chunks": 4}, {"chunks": 6}, {"chunks": 12}],
+        "repair": {"repairs": [["gource", "source", 5850], ["tracery", "tracer", 1]]},
+    }
+    got = ideas.guard_repairs(seed_answer, flood=10)
+    assert got["median_chunks"] == 6
+    assert got["dropped"] == [["gource", "source", 5850]]
+    assert got["kept"] == [["tracery", "tracer", 1]]
+
+
+def test_62_no_repo_takes_more_than_its_share():
+    rank = [{"repo": "jeles"}] * 8 + [{"repo": "bot"}] * 3
+    got = ideas.cap_per_repo(rank, n=6, most=3)
+    assert [h["repo"] for h in got] == ["jeles"] * 3 + ["bot"] * 3
+
+
+def test_63_and_64_the_ids_the_pile_already_has():
+    assert ideas.swhid("ab" * 20, "https://x/y", "a.py", 3, 9) == (
+        f"swh:1:cnt:{'ab' * 20};origin=https://x/y;path=/a.py;lines=3-9"
+    )
+    sha = hashlib.sha256(b"hello world\n").hexdigest()
+    assert (
+        ideas.cid(sha) == "bafkreifjjcie6lypi6ny7amxnfftagclbuxndqonfipmb64f2km2devei4"
+    )
+
+
+def test_86_snippets_are_same_near_or_apart():
+    a = "the pile counts words and the ladder hashes a bite into a key"
+    assert ideas.relate(a, a)["rel"] == "same"
+    near = ideas.relate(a, a.replace("ladder", "rung"))
+    assert near["rel"] == "near" and any(x.startswith("+") for x in near["diff"])
+    assert ideas.relate(a, "chess puzzles of the day from lichess")["rel"] == "apart"
+
+
+def test_96_the_record_as_a_gource_log():
+    got = ideas.gource_log(
+        [
+            {"n": 0, "kind": "boot", "who": "run", "ts": "2026-10-21T22:32:00Z"},
+            {"n": 1, "kind": "seal", "who": "human", "ts": "not a time"},
+        ]
+    )
+    t = int(datetime(2026, 10, 21, 22, 32, tzinfo=timezone.utc).timestamp())
+    assert got == [f"{t}|run|A|boot/0"]
+
+
+def test_97_the_pile_writes_a_provable_poem():
+    pairs = ideas.strongest_pairs({"pairs": {"sealed scope": 0.9, "served table": 0.7}})
+    assert pairs == ["sealed scope", "served table"]
+    one = ideas.poem(pairs, RANDOMNESS)
+    assert len(one) == 3 and one == ideas.poem(pairs, RANDOMNESS)
+    assert ideas.poem(["alone"], RANDOMNESS) == []

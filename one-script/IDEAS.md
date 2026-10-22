@@ -1695,6 +1695,41 @@ in `compiled/ideas.py` carries the same notes.
 So most of the list compiles from what's here: 33 of 55 now need nothing
 new, and 10 more need one package.
 
+**The loose chunks, built** (2026-10-22). The test the operator set: *"use
+the new pile to fill in the gaps. This is kinda the test to see how easily
+chunks can be added now."* Each missing helper was asked of a fresh box in
+plain words (`lookup`) before a line was written:
+
+| Helper | Asked the pile | Top 4 held the piece? | Built on |
+|---|---|---|---|
+| `epoch` (96) | "seconds since the epoch from a timestamp" | yes, #2 | `beacon.epoch` |
+| `base32` (64) | "base32 encode bytes lowercase" | no (it's stdlib) | `base64.b32encode` |
+| `crowd` (36) | "forecast distribution yes no probability" | partly: test usage | `api.forecast`'s two paths |
+| `answer` (47) | "parse a csv row by date and read a column value" | yes, #1 | `market.parse_daily_csv`'s shape, `csv` |
+| `pile_files` (1) | "every indexed file read as text at its blob" | yes, #1 | `seed.Texts` |
+| `chunks_of` (7) | "the chunks the store holds for one repo" | partly | `seed.Texts` + `pile.chunks` |
+| `spec_for` (7) | "the spec that names the stack, handed back to serve" | yes, #2 | `api.scope` (and it showed serving is blocked) |
+| `bundle_as_round` (11) | "the session bundle actions and their states" | yes, #2 | `session.actions`, `pools.measure` |
+| `store_count` (40) | "how many chunks hold a word" | yes, #1 | `Cached.df` |
+| `median_chunks` (59) | "repair an unseen word one edit away" | no: README and tests above the code | the seed's `keys` and `repair` |
+| `cap_per_repo` (62) | "rank the chunks and fuse by rrf" | yes, #2 | the rank's own rows |
+| `strongest_pairs` (97) | "adjacent word pairs kept by npmi" | yes, #3 | the seed's `pairs` |
+| `shingles` (86) | "jaccard over features of a script" | yes, #2 | `script_match.jaccard`, `seed.WORD` |
+| `diff_hunks` (86) | "unified diff hunks keyed by content hash" | yes, #1 | `difflib` (diverge's rule, in miniature) |
+| `embed` (86) | "wordllama embedder rank fused with the words" | partly | not built: `close` needs the embedder on |
+
+11 of 15 straight from a plain question. All 13 helpers landed in
+`compiled/ideas.py` beside the 19, with tests (32 in
+`onescript/tests/test_compiled.py`). 59 and 62 are pure functions over a
+seed's answer and a rank, their thresholds placeholders: wiring either into
+the pile's ranking is the operator's call. 7's pick runs, but serving it
+needs a new table source, so it's in `BLOCKED` beside 4 and 102. Idea 60
+needed no code: the seed's `missed` checks a word as written and the miss
+row every form `rank` looks for, so they can differ.
+
+So: the gaps a sketch left were found by asking, mostly in one question,
+and filled in a few lines each, on top of what was there.
+
 ## What fell out of the second run
 
 2026-10-21, after the snapshot reader and the compile. A fresh box over
