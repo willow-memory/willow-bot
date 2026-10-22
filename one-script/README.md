@@ -389,11 +389,36 @@ hard-closes, as before.
 `--no-tests`, and a check-in nested inside the tests gate's own suite, each
 leave a `differently` row on the tests gate saying it was skipped and why.
 
+## Planting: a person's first run
+
+The seed's person-facing half (`onescript/plant.py`, IDEAS 121), in the one
+script's terms. Every seed before it (willow-seed, SEED9, the charter's
+SEED10) was the file a person runs first; the one script already had the
+mechanics, and this is what a person meets.
+
+- **`plant`**, once per box after its first check-in: the canon's six
+  movements to read, from `$WILLOW_HOME/seed/canon` or the Grove's
+  `governance/seed/canon` (the Grove's own order). The record keeps each
+  movement's hash, never its words. No canon is `unreachable`, said, and
+  nothing is planted.
+- **`consent`**, once per check-in: the repos this session may read, training
+  consent off unless given, expiring at check-out. On a planted box serve and
+  the prompt hook take no chunk from a repo the session didn't consent to;
+  NEEDS YOU says when a session hasn't. An unplanted box serves as before.
+- **`letter`**, the handoff letter for the next session, written into the
+  box's `letters/` through the record; NEEDS YOU names the latest.
+
+Not brought over, on purpose: SEED9's dashboard card and Nestor's seeded demo
+store, which belong to their own surfaces.
+
 ## Running it
 
 ```bash
 cd one-script
 python3 -m onescript checkin                       # boot: record, probes, the four gates
+python3 -m onescript plant --allow REPO            # once per box: the canon to read, this session's consent
+python3 -m onescript consent --allow REPO          # each later session: what it may read
+python3 -m onescript letter --file handoff.md      # the next session's letter (no --file: read the latest)
 python3 -m onescript seed "the first bite"         # its words against the box, once per check-in (--exact: files and lines)
 python3 -m onescript forge "the first bite"        # the Forge's entry, this session's pile as its box
 python3 -m onescript decline <key> --proof <p>     # a No to an offer; --proof seals it as the human's

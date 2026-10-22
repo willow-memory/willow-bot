@@ -67,6 +67,7 @@ from . import retire as retire_mod
 from . import jeles_store as jeles_mod
 from . import ladder
 from . import pile as pile_mod
+from . import plant_rule as plant_mod
 from . import seed as seed_mod
 from . import serve as served
 from . import session as session_mod
@@ -1366,6 +1367,10 @@ def serve(
         tables, card = _spec_tables(run, spec)
     except (ValueError, KeyError, TypeError) as e:
         return _refused(f"bad spec: {type(e).__name__}: {e}", 1)
+    # a planted box serves a repo's chunks only with this session's consent
+    repos = {t["source"]["chunk"].get("repo") for t in tables if served.is_chunk(t)}
+    if repos and (why := plant_mod.refusal(run.rec.rows(), repos)) is not None:
+        return _refused(why, 1)
     reader = None
     failed: list[tuple[dict, str]] = []
     if any(served.is_chunk(t) for t in tables):

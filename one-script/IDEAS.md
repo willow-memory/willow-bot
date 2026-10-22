@@ -2575,6 +2575,34 @@ line and willow-2.0, just not in the one script.
 Asked this way, hermes-agent's skill pages took the first answer for six
 questions about installing and data: 62's per-repo cap again.
 
+**Pulled in** (the operator: *"pull the missing seed pieces into the one
+script"*): `onescript/plant.py`, the person-facing half in the one script's
+own terms, with its rules in a leaf, `plant_rule.py`, so the prompt hook reads
+them without loading the rest.
+
+- `plant`, once per box: the canon's six movements from where the Grove reads
+  them (`$WILLOW_HOME/seed/canon`, then `governance/seed/canon`), handed back to
+  read, each one's hash on a `plant` row and never its words. Read live from
+  the Grove: "0 · The Covenant" through "5 · The World". No canon is
+  `unreachable`, said, and nothing is planted: where the Grove serves a stub,
+  the one script says so.
+- `consent`, once per check-in (willow-seed's "May I access your journal
+  today?", willow-2.0's fylgja session record): the repos this session may
+  read, training off unless given, expiring at check-out. On a planted box
+  serve refuses, and the prompt hook serves nothing, from a repo the session
+  didn't consent to; with no consent, from none. The hook reads it from the
+  record's sealed tip (`has_kind`, `since_last`), never a whole parse. NEEDS
+  YOU says when a session hasn't consented. An unplanted box serves as before.
+- `letter`, the handoff letter (willow-2.0's `handoff_write`, the charter's
+  letter): `letters/<day><a-z>.md` in the box, always lettered so the newest
+  sorts last, written through the record; NEEDS YOU names the latest.
+- Each gate was cut and its test failed: serve's consent check, the hook's
+  filter.
+
+Left where they are, on purpose: SEED9's dashboard card and Nestor's seeded
+demo store (their own surfaces). Of the fourteen jobs, the one script now
+holds ten, plus the first-run docs as a README section ("Planting").
+
 ## What the one script said about this list
 
 2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366

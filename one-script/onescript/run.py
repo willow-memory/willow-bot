@@ -25,6 +25,7 @@ from . import (
     mai_shape,
     nestor_seal,
     opening,
+    plant_rule,
     predict,
     proposals,
     record,
@@ -873,6 +874,10 @@ class Run:
             for n, s in sorted(session_mod.subjects(rows).items())
             if s not in held
         ]
+        # IDEAS.md 121: a planted box asks each session's consent, and the
+        # last session's handoff letter is the first thing to read
+        report["consent_missing"] = plant_rule.allowed_repos(rows) == frozenset()
+        report["letter"] = plant_rule.latest_letter(self.rec.box)
         return report
 
     def checkout(

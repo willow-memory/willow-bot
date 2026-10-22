@@ -676,6 +676,27 @@ def main(argv: list[str] | None = None) -> int:
         help="the closes for the symbols called on a date, as market rows",
     )
     mr.add_argument("close_date", help="YYYY-MM-DD, the close the calls name")
+    for verb, what in (
+        ("plant", "once per box: the canon to read, and this session's consent"),
+        ("consent", "this session's consent: the repos it may read"),
+    ):
+        pl = sub.add_parser(verb, help=what)
+        pl.add_argument(
+            "--allow",
+            action="append",
+            default=[],
+            metavar="REPO",
+            help="a repo this session may read (repeat); none consents to nothing",
+        )
+        pl.add_argument(
+            "--training",
+            action="store_true",
+            help="consent to training on this session's reads (off unless given)",
+        )
+    lt = sub.add_parser("letter", help="the handoff letter for the next session")
+    lt.add_argument(
+        "--file", type=Path, help="the letter, markdown; without it, read the latest"
+    )
     dw = sub.add_parser(
         "draw", help="two chunks from two repos, picked by randomness nobody chose"
     )
@@ -1166,6 +1187,27 @@ def main(argv: list[str] | None = None) -> int:
                 print("refused: --chosen is REPO:PATH:LINE")
                 return 1
         res = draw_mod.draw(cfg, args.randomness, chosen=chosen, argv=raw)
+    elif args.cmd in ("plant", "consent"):
+        from . import plant as plant_mod
+
+        verb = plant_mod.plant if args.cmd == "plant" else plant_mod.consent
+        res = verb(cfg, args.allow, training=args.training, argv=raw)
+    elif args.cmd == "letter":
+        from . import plant as plant_mod
+
+        if args.file is None:
+            latest = plant_mod.latest_letter(cfg.box)
+            if latest is None:
+                print("no letter yet")
+                return 42
+            print(f"{latest}\n\n{(cfg.box / latest).read_text(encoding='utf-8')}")
+            return 0
+        try:
+            text = args.file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"refused: the letter could not be read: {type(e).__name__}")
+            return 1
+        res = plant_mod.letter(cfg, text, argv=raw)
     elif args.cmd == "decline":
         res = api.decline_offer(cfg, args.key, argv=raw, proof=args.proof)
     elif args.cmd == "serve":
