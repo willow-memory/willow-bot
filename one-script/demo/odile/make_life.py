@@ -517,7 +517,7 @@ def write_texts(visits: list[dict]) -> int:
     lines.insert(
         5,
         "2020-11-29 19:40  Kati: new address! 4410 Larkspur Ct, Eugene OR 97401,"
-        f" cell still {phone(30)}, kati.varga@example.com",
+        f" cell still {phone(92)}, kati.varga@example.com",
     )
     write("texts/kati.txt", "Messages with Kati (export)\n\n" + "\n".join(lines) + "\n")
     n += len(lines)
