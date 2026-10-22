@@ -2158,6 +2158,29 @@ box couldn't before. Vault repos stay out.
 | the other eleven almanacs (climate, health, civic, economy, environment, and six with one entry each; almanac-data) | 26 to 48 files each; 58 catalog entries in all | June's weather: "daily rainfall and temperature at a station" finds NOAA's GHCN-Daily and NCEI's US climate normals; "drought this week" the US Drought Monitor. "Frost dates" finds nothing, though the climate normals hold them: the catalog never says "frost" (86 again). "Crop production by county" finds nothing either: agriculture-almanac has no USDA NASS entry yet, a good first issue for it | A bug in this PR's own snapshot reader: it promised an SPDX license and checked only the shape, so 50 of the 58 entries' licenses passed (`public-domain`, `Open`, `non-commercial`, `Copernicus`). Now an SPDX id carries its version or is one of the few that don't, and anything else is SPDX's own `LicenseRef-<words>`; 8 of the 58 take as they are, and a US agency's data goes in as `LicenseRef-public-domain`. |
 | terpsi-music | 312 files; design plus one library | none of the open needs | It has already done this crossing, by hand. Its `ARCHITECTURE.md` §14 maps the fleet's components ("Fleet components this maps onto") onto a music program's needs, and each row that claims something exists names the commit someone read it at ("VERIFIED 2026-08-01 at `c872d4c`"), with a test that fails an unpinned claim. Re-checked against the box's clones 12 weeks on: every file and symbol it names in a repo the box holds is still there (65 of 65 references, in 42 verified rows). The other 7 are in repos the box doesn't hold yet (safe-app-common-package, SAFE, willow-config, willow-2.0), and the vault row was left unread. Its rule is the one the crossing tables above need: a "lives in the box" with no commit is a claim, not a check. |
 
+**The shallow read.** The operator: *"Do a shallow read on the rest, to see if
+they possibly bring in something new."* README and tree only, nothing built:
+
+| Repo | Something new? |
+|---|---|
+| DispatchesFromReality (in the box) | The outside view: Case Study 4 is the one script told to an employer (three random streams, two chains, three seal paths made one). Lesson 03, "The Consent Ledger", is the record explained to a ninth grader: newcomer material for 114's onboarding gap |
+| willow-seed (private) | **Yes.** `seed.py` (244 lines) is an earlier kernel: check Python, find or clone Willow, hand off. Its README's session consent ("May I access your journal today?", gone when the app closes) is a first-bite question the kernel doesn't ask |
+| quick-stupids (private) | **Yes.** `the-box/` is a made-up legacy intranet: wrong READMEs kept wrong on purpose, `DO_NOT_DELETE_2.txt`, seven `EXCAVATION` notes. A stranger's messy folder, ready made, for the kernel's first bite |
+| SAFE (private) | `governance/HARD_STOPS.md` (the file terpsi's §14 couldn't reach), `SESSION_CONSENT.md`, `DUAL_COMMIT.md`; older than the one script, same ideas |
+| safe-app-common-package | `no_egress.py`, the fleet's canonical copy of the scan the kernel's test now carries; the test could import it instead, if the kernel may have a dependency (it may not) |
+| openclaw-sap-gate | SAP/1.0, fail-closed authorization for MCP tool calls; nothing the one script lacks |
+| quiet-corner | `session_scope`: a per-field sensitivity vocabulary (terpsi: "worth taking, enforced nowhere") |
+| safe-design | One token set, three renderers held to parity by a test; nothing for the one script |
+| the org `.github` repos (8) | Boilerplate plus each face's one-paragraph profile: six faces, one sentence each, the map a newcomer would want |
+| rudi193-cmd profile and site | The fleet's one-line pitch; the site copies the profile |
+| rudi193-cmd/Forge | An older copy of forge-play/Forge (116 files differ); no |
+| willow-tech-manual | A Mintlify book of the July platform; docs only |
+| tui-scaffold, aionic-claude-skills | A TUI starter; a skill anthology of metaphors. No |
+| willow-memory/Willow | Empty: no commits |
+| willow-compose (private) | Left unread past its README: "a self-portrait", a database dump of the operator and the collaboration (123 MB). Treat as vault: never in a box |
+| willow-config, yggdrasil-training-data | Not opened: config with token files, and training data; the operator's call |
+| glapagos (castroquiles) | Not the operator's; for the contributed-to pass |
+
 ## What the one script said about this list
 
 2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366
