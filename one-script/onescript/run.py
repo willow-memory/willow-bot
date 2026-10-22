@@ -33,6 +33,7 @@ from . import (
     serve,
     view,
 )
+from . import session as session_mod
 from .record import h256
 from .states import POPULATED, UNREACHABLE
 
@@ -863,6 +864,13 @@ class Run:
         )
         if shown is not None:
             report["table"] = shown
+        # IDEAS.md 104: a checked-out session with no held seal waits on the
+        # person; check-in counts them, so NEEDS YOU lists them too
+        report["sessions_waiting"] = [
+            {"from": n, "subject": s}
+            for n, s in sorted(session_mod.subjects(rows).items())
+            if s not in held
+        ]
         return report
 
     def checkout(

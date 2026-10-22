@@ -677,7 +677,7 @@ def _hidden(cfg: Config, ws: list[str], out: dict) -> dict:
     row = dict(out)
     if h is None:
         row.update(words=[], hidden="no store key: the bite's words are left out")
-        for k in ("keys", "missed", "pairs"):
+        for k in ("keys", "missed", "proposal_only", "pairs"):
             row.pop(k, None)
         if "repair" in row:
             row["repair"] = {"state": row["repair"]["state"], "repairs": []}
@@ -687,6 +687,8 @@ def _hidden(cfg: Config, ws: list[str], out: dict) -> dict:
         row["keys"] = [{**k, "word": h(k["word"])} for k in row["keys"]]
     if "missed" in row:
         row["missed"] = sorted(h(w) for w in row["missed"])
+    if "proposal_only" in row:
+        row["proposal_only"] = sorted(h(w) for w in row["proposal_only"])
     if "pairs" in row:
         row["pairs"] = {
             " ".join(h(t) for t in p.split(" ")): v for p, v in row["pairs"].items()

@@ -156,6 +156,10 @@ def needs_you(
         f"re-check row {s['row']} ({s['kind']}) · {s['why']}"
         for s in report["surfaced"]
     ]
+    needs += [  # IDEAS.md 104: what check-in counts as waiting on your seal
+        f"session from row {s['from']} · waiting on your seal · {s['subject']}"
+        for s in report.get("sessions_waiting", [])
+    ]
     for a in acts or []:  # layers 6 and 7: what would leave, what wasn't asked for
         if a["verdict"] != "pass":
             card = json.dumps(a.get("card", {}), sort_keys=True)

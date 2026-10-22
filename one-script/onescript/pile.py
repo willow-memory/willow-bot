@@ -986,6 +986,13 @@ class Cached:
                 self._memo[w] = [(c, p >> 2, p & 3) for c, p in zip(a, b)]
         return self._memo[w]
 
+    def known(self, w: str) -> list:
+        """`postings(w)` outside the proposal files (`seed.is_proposal`): where the
+        word is held as something other than an idea."""
+        hits = self.postings(w)
+        self._fetch(c for c, _, _ in hits)
+        return [h for h in hits if not seed.is_proposal(self.where[h[0]][1])]
+
     def df(self, w: str) -> int:
         """How many chunks hold `w`."""
         return len({c for c, _, _ in self.postings(w)})
@@ -996,14 +1003,16 @@ class Cached:
         the first `seed.ANCHORS` chunks' starts, rarest first. Chunks, not
         lines: the store keeps positions per chunk. The same three states as
         `seed.scan`; `unreachable` when the store can't be read."""
-        keys, missed = [], []
+        keys, missed, proposal_only = [], [], []
         try:
             for w in words:
                 hits = self.postings(w)
                 self._fetch(c for c, _, _ in hits)
                 at = sorted({self.where[c][:3] for c, _, _ in hits})
-                if not at:
-                    missed.append(w)
+                if not any(not seed.is_proposal(p) for _, p, _ in at):
+                    missed.append(w)  # held nowhere, or only as an idea (103)
+                    if at:
+                        proposal_only.append(w)
                     continue
                 keys.append(
                     {
@@ -1029,6 +1038,7 @@ class Cached:
             "state": state,
             "keys": keys,
             "missed": missed,
+            "proposal_only": proposal_only,
             "files_read": t["files_read"],
             "skipped": t["skipped"] or {},
             REPORT_UNREACHABLE: t[REPORT_UNREACHABLE] or {},

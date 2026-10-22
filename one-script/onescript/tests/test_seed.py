@@ -238,3 +238,43 @@ def test_the_cli_passes_exact(box, monkeypatch):
     assert got["exact"] is True
     cli.main(["--box", str(box["cfg"].box), "seed", "forge"])
     assert got["exact"] is False
+
+
+@pytest.fixture
+def ideas_box(cfg, tmp_path):  # noqa: F811
+    """A repo whose IDEAS.md holds a word nothing else does ("quokka"), and one
+    word ("forge") it shares with real files."""
+    grove = make(
+        tmp_path,
+        "docs",
+        {
+            "forge.md": "the forge asks\n",
+            "IDEAS.md": "# Ideas\n\nA quokka rung, and the forge again.\n",
+        },
+    )
+    index_into_box(cfg, grove)
+    assert api.checkin(cfg)["code"] == 0
+    return cfg
+
+
+def test_a_word_held_only_as_an_idea_is_still_missed(ideas_box):  # IDEAS.md 103
+    store = api.seed(ideas_box, "quokka forge")
+    assert api.checkin(ideas_box)["code"] == 0
+    scan = api.seed(ideas_box, "quokka forge", exact=True)
+    for res in (store, scan):
+        assert res["missed"] == ["quokka"] and res["proposal_only"] == ["quokka"]
+        assert [k["word"] for k in res["keys"]] == ["forge"]
+    assert store["miss"]["count"] == 1  # the miss row logs it too
+
+
+def test_the_seed_row_keeps_proposal_only_words_as_hashes(ideas_box):
+    api.seed(ideas_box, "quokka forge")
+    (row,) = [r for r in rows(ideas_box) if r["kind"] == "seed"]
+    assert len(row["proposal_only"]) == 1 and "quokka" not in json.dumps(row)
+
+
+def test_a_proposal_is_known_by_its_basename():
+    assert seed.is_proposal("one-script/IDEAS.md") and seed.is_proposal("IDEAS.md")
+    assert not seed.is_proposal("docs/IDEAS.md.bak") and not seed.is_proposal(
+        "ideas.md"
+    )
