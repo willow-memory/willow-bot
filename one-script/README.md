@@ -26,6 +26,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `foundation/` | `prompt.py`'s tests run on a bare interpreter, without pytest |
 | `scripts/scan/` | `script_match.py` (the gate's script index) and the table scans |
 | `scripts/flow/` | The view drafts: session maps and their merge |
+| `scripts/oauth/oauth_probe.py` | Deterministic OAuth: a wager per probe before it runs, then the live flow against willows-grove and willow-mcp serve mode on loopback, N runs each; disagreeing runs are `drift`; every outcome is a proposal for the human's seal |
 | `deep_thought.py` | The morning screen |
 
 ## The law comes from willows-grove
