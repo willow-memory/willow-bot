@@ -1,0 +1,19 @@
+INVOICE INV-0405
+
+Teodora Marinescu Bookkeeping
+Flat 2, 9 Example Row, Leeds LS99 9ZZ
+teo@marinescu-books.example.com  |  0113 555 0147
+
+Bill to: Fernside Dog Grooming
+Invoice date: 31/12/2025
+Payment due: 30/01/2026 (30 days)
+
+Services for December 2025:
+  - Monthly bookkeeping (cash basis)
+
+Total due: £182.50
+(Not VAT registered.)
+
+Pay by bank transfer to: T MARINESCU
+Northbank  sort code 00-00-00  account 00012345
+Please quote INV-0405 as reference.

@@ -1,0 +1,21 @@
+INVOICE INV-0386
+
+Teodora Marinescu Bookkeeping
+Flat 2, 9 Example Row, Leeds LS99 9ZZ
+teo@marinescu-books.example.com  |  0113 555 0147
+
+Bill to: Hargreaves Plumbing & Heating Ltd
+Invoice date: 31/08/2025
+Payment due: 30/09/2025 (30 days)
+
+Services for August 2025:
+  - Monthly bookkeeping and bank reconciliation
+  - Supplier invoice processing (Plumb Centre, merchants)
+  - CIS deductions summary
+
+Total due: £521.25
+(Not VAT registered.)
+
+Pay by bank transfer to: T MARINESCU
+Northbank  sort code 00-00-00  account 00012345
+Please quote INV-0386 as reference.
