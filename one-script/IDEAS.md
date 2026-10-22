@@ -2213,6 +2213,21 @@ willow-seed's session consent is built in `willow/fylgja/safety/session.py`
 written and the authorizations dropped at close). rudi193-cmd/Willow could
 not be attached here: a session can't hold two repos named `willow`.
 
+**willow-data-vault (the template).** Checked first: 20 files, schema,
+bootstrap and docs, no data and nothing key-shaped; "the blueprint ... never
+data". Then boxed, with the operator's word. It holds the kernel's rules
+from the other side: its `vault.key` is 0600, made locally and never in the
+repo (the kernel's key lives outside the box, 0600); its receipts verifier
+refuses a broken chain and tells "never chained" (exit 2) from "tampered"
+(exit 1), absence as a recorded value; and its covenant is the one script's
+own: "a clean chain says the rows were not altered after being written, not
+that anything in them was approved". What it adds is a fact about the
+fleet: there are two chain dialects. The vault's receipts and Nestor's
+ledger start from the string `genesis` and hash `json.dumps` with default
+separators in a fixed key order; the one script and the kernel start from
+64 zeros and hash sorted, compact JSON (family A). Neither verifier can
+check the other's chain, and nothing says so yet.
+
 ### 117. The kernel on the-box: what plopped out
 
 2026-10-22. The operator: *"run the kernel on the-box, and see what golden
