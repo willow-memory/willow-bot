@@ -2373,6 +2373,25 @@ withheld with its kind named (`[withheld: ssn, L5]`), never silently. The
 kernel takes the same set when its `look` and `served` text go anywhere but
 its owner's terminal.
 
+**Built** (the operator: *"build the pii set"*). `scrub.py` gains the `pii`
+set and `withhold(text, ceiling)`; each kind's rung is in `RUNGS`. Every
+copy's positives are its fixtures in `test_scrub.py` (homestead, willow-2.0's
+detector and nest scrub, corpus-lens, hermes) and homestead's negatives must
+stay untouched (the addresses, citations, hearing dates, ZIP+4, "into
+account"). Two choices, both from the copies' own reasons: a bare nine-digit
+SSN counts only beside its label (`ssn: 123456789`), and a bare 13-19 digit
+run is a card only when its Luhn check holds. Serve now applies it:
+`chunk._scrub` withholds anything over `SERVE_CEILING = 2` (a placeholder,
+the operator's number), so a chunk reaches the model with
+`[withheld: ssn, L5]` or `[withheld: email, L3]` in place of the value,
+and a case number still readable. The full suite held (1865 passed).
+`kernel.py` doesn't take it yet: it is one stdlib file that imports nothing,
+so it would carry its own copy, a second home (110).
+
+Found while building: willow-2.0's `scripts/pii_check.py` (a public,
+archived repo) is written as one person's literal details rather than
+shapes. It is left out of the set, and is the operator's to look at.
+
 ## What the one script said about this list
 
 2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366

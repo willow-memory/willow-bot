@@ -541,3 +541,94 @@ def test_every_set_named_in_the_docstring_exists():
         "git_trace",
     ):
         assert name in scrub.SETS and name in scrub.__doc__
+
+
+# -- pii (IDEAS 119): each copy's own positives, homestead's negatives ---------
+# Every value is a test value from its copy's suite (555 numbers, example.com,
+# the card networks' test numbers); none is anyone's.
+
+PII_POSITIVES = [
+    # homestead keep/advise.py, tests/test_invariants_advise.py POSITIVES
+    ("ssn", "school form needs SSN 123-45-6789 before Friday"),
+    ("credit_card", "retainer paid on card 4111 1111 1111 1111"),
+    ("dob", "child DOB: 2018-03-04, enrolled since"),
+    ("bank", "support deposits to routing 021000021 account 123456789"),
+    ("phone", "reach the other parent at 415-555-1234 after 6"),
+    ("email", "correspondence went to jordan.rivera@example.com twice"),
+    ("ein", "the business EIN 12-3456789 is on the filing"),
+    # willow-2.0 core/pii_detect.py, tests/test_pii_detect.py
+    ("ssn", "my ssn is 123-45-6789"),
+    ("ssn", "ssn: 123456789"),
+    ("credit_card", "card: 4532015112830366"),
+    ("email", "email me at test@example.com please"),
+    ("phone", "call 555-867-5309"),
+    ("phone", "reach me at (555) 867-5309"),
+    # willow-2.0 apps/nest/pipeline/scrub.py PII_PATTERNS
+    ("bank", "account number: 4417"),
+    ("case_no", "see claim no: WC-2026-0042"),
+    ("dob", "born 03/04/2018"),
+    # corpus-lens egress_shapes.py, tests/test_egress_shapes.py
+    ("home_path", "read from /home/jordan/.claude/projects"),
+    ("home_path", "/Users/jordan/logs"),
+    ("home_path", r"C:\Users\jordan\logs"),
+    # hermes-agent agent/redact.py
+    ("phone", "signal +15558675309 tonight"),
+    ("discord_user", "ping <@!123456789012345678> about it"),
+]
+
+#: homestead's NEGATIVES: what a PII pattern must not fire on.
+PII_NEGATIVES = [
+    "1420 Maple 87501",
+    "88 Ridgeline 90210",
+    "347 F.3d 1120",
+    "Hearing Aug 15, 2026 at 8:30am, Dept 3",
+    "2026-09-15 08:30 · Dept 4",
+    "Entry 14 — response filed 2026-08-01",
+    "Case FL-2026-00123, Superior Court",
+    "mailing ZIP is 87501-1234",
+    "Tue/Thu 3-7pm, alternating weekends",
+    "took that into account when scheduling 3 visits",
+    "the minor is 8 years old",
+    "Dept 4, Superior Court of California",
+    "card: 4532015112830360",  # willow-2.0: a failed Luhn check is no card
+]
+
+
+@pytest.mark.parametrize("kind,text", PII_POSITIVES)
+def test_the_pii_set_catches_every_copys_positives(kind, text):
+    assert kind in scrub.found_kinds(text, ("pii",))
+    out = scrub.withhold(text, 0)
+    assert f"[withheld: {kind}, L{scrub.RUNGS[kind]}]" in out
+
+
+@pytest.mark.parametrize("text", PII_NEGATIVES)
+def test_the_pii_set_leaves_homesteads_negatives_alone(text):
+    assert scrub.found_kinds(text, ("pii",)) == []
+
+
+def test_a_labelled_kind_runs_first_so_a_bank_number_is_not_also_an_ssn():
+    got = scrub.withhold("routing 021000021 account 123456789", 0)
+    assert got.count("[withheld: bank, L4]") == 2 and "ssn" not in got
+
+
+def test_the_ceiling_says_what_is_allowed_where():
+    text = "SSN 123-45-6789, DOB: 2018-03-04, mail jordan@example.com"
+    found: set = set()
+    model = scrub.withhold(text, 2, found=found)  # bound for a model
+    assert "123-45" not in model and "2018-03-04" not in model
+    assert "jordan@" not in model and found == {"ssn", "dob", "email"}
+    screen = scrub.withhold(text, 4)  # the person's own screen
+    assert "[withheld: ssn, L5]" in screen
+    assert "DOB: 2018-03-04" in screen and "jordan@example.com" in screen
+    assert scrub.withhold(text, 5) == text
+    assert set(scrub.RUNGS) == set(scrub.kinds_of(("pii",)))
+
+
+def test_a_served_chunk_carries_no_pii_over_the_serve_ceiling():
+    from onescript import chunk
+
+    text = "Case no: FL-2 · SSN 123-45-6789 · write to jordan@example.com"
+    got = chunk._scrub({"rows": [{"text": text}]})["rows"][0]["text"]
+    assert chunk.SERVE_CEILING == 2 and "Case no: FL-2" in got  # L2 passes
+    assert "[withheld: ssn, L5]" in got and "[withheld: email, L3]" in got
+    assert "6789" not in got and "jordan@" not in got

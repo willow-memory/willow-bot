@@ -29,6 +29,10 @@ sets it wants, in the order it wants, and the marker it prints:
                        set to a value, long hex, split hex, mixed base64
   secret_path          a string that names where secrets live (whole value)
   git_trace            a git/curl trace: the Authorization header, ``gh?_`` tokens
+  pii                  a person's data, each kind with its rung (``RUNGS``):
+                       SSN, card, birth date, bank and case numbers, phone,
+                       email, EIN, a home path, a Discord mention; ``withhold``
+                       keeps what a ceiling allows and names what it holds back
 
 and ``redact_url`` for a URL. Observability's sensitive *key* test is
 ``sensitive_key``.
@@ -381,6 +385,117 @@ _GENERIC = (
     Rule("base64", fn=_g_b64),
 )
 
+# -- pii: a person's data, each kind with its rung (IDEAS 119) -----------------
+#
+# The union of the fleet's personal-data checks, under this module's rule (it
+# may never catch less than any copy did; `test_scrub.py` keeps each copy's
+# positives): homestead `keep/advise.py` (the rungs and the labelled-only
+# kinds), willow-2.0 `core/pii_detect.py` (the bare card with a Luhn check, a
+# `+1` phone), its nest `pipeline/scrub.py` (account and case numbers),
+# corpus-lens `egress_shapes.py` (a home path, which carries a username) and
+# hermes-agent `agent/redact.py` (an E.164 phone, a Discord mention).
+# willow-2.0's `scripts/pii_check.py` is left out: its rules are one person's
+# literals, not shapes. A calendar date is left out too: a bare date is a
+# hearing date far more often than a birth date (homestead's reason).
+#
+# Rungs are homestead's (L1 lowest, L5 never crosses). A labelled kind is
+# matched only beside its label, and runs first, so `account 123456789` is a
+# bank number and not also a bare SSN.
+
+_DOB_LABEL = r"\b(?:dob|d\.o\.b\.?|date of birth|birth\s?date|born(?:\s+on)?)\b"
+_DOB = re.compile(
+    _DOB_LABEL + r"[\s:]*(?:\d{1,4}[-/]\d{1,2}[-/]\d{1,4}"
+    r"|[A-Za-z]+\.?\s+\d{1,2},?\s+\d{4})",
+    re.IGNORECASE,
+)
+_BANK = re.compile(
+    r"\b(?:routing|aba|acct|account(?:\s*(?:no|number|#))?)\b[\s#:.]*\d{4,17}\b",
+    re.IGNORECASE,
+)
+_SSN_LABELLED = re.compile(
+    r"\b(?:ssn|social security(?: number| no\.?)?)\b[\s#:.]*\d{3}-?\d{2}-?\d{4}\b",
+    re.IGNORECASE,
+)
+_CASE_NO = re.compile(r"\b(?:case|claim)\s*(?:no|number|#)[:\s]*[\w\-]+\b", re.I)
+_SSN = re.compile(r"\b\d{3}[-\s]\d{2}[-\s]\d{4}\b")
+_CARD_GROUPS = re.compile(r"\b(?:\d{4}[-\s]){3}\d{4}\b")
+_CARD_BARE = re.compile(r"\b\d{13,19}\b")
+_EIN = re.compile(r"\b\d{2}-\d{7}\b")
+_PHONE = re.compile(
+    r"(?<![\d+])(?:\+?1[-.\s]?)?(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]\d{4}(?!\d)"
+)
+_E164 = re.compile(r"\+[1-9]\d{6,14}(?![A-Za-z0-9])")
+_EMAIL = re.compile(r"[^\s@\"'<>()\[\],;:]+@[^\s@\"'<>()\[\],;:]+\.[A-Za-z]{2,}\b")
+_HOME_PATH = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\Users\\)[^/\\\s\"']+")
+_DISCORD_USER = re.compile(r"<@!?\d{17,20}>")
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, d in enumerate(int(c) for c in reversed(digits)):
+        total += (d * 2 - 9 if d * 2 > 9 else d * 2) if i % 2 else d
+    return total % 10 == 0
+
+
+def _p_card_bare(text: str, ctx: Ctx) -> str:
+    """A run of 13-19 digits is a card only when its Luhn check holds."""
+    return _CARD_BARE.sub(
+        lambda m: ctx.mark("credit_card") if _luhn(m.group(0)) else m.group(0), text
+    )
+
+
+_PII = (
+    Rule("ssn", _SSN_LABELLED),
+    Rule("dob", _DOB),
+    Rule("bank", _BANK),
+    Rule("case_no", _CASE_NO),
+    Rule("ssn", _SSN),
+    Rule("credit_card", _CARD_GROUPS),
+    Rule("credit_card", fn=_p_card_bare),
+    Rule("ein", _EIN),
+    Rule("phone", _PHONE),
+    Rule("phone", _E164),
+    Rule("email", _EMAIL),
+    Rule("home_path", _HOME_PATH),
+    Rule("discord_user", _DISCORD_USER),
+)
+
+#: Each pii kind's rung: 5 never crosses; 4 is money and birth; 3 resolves to a
+#: person; 2 names a matter.
+RUNGS: dict[str, int] = {
+    "ssn": 5,
+    "credit_card": 4,
+    "dob": 4,
+    "bank": 4,
+    "phone": 3,
+    "email": 3,
+    "ein": 3,
+    "home_path": 3,
+    "discord_user": 3,
+    "case_no": 2,
+}
+
+#: The marker for a withheld kind: what it was and its rung, never the value.
+WITHHELD_PII = "[withheld: {kind}, L{rung}]"
+
+
+def withhold(text: Any, ceiling: int, *, found: set | None = None):
+    """``text`` with every pii kind whose rung is over ``ceiling`` withheld and
+    named (``[withheld: ssn, L5]``); kinds at or under it stay, since what is
+    allowed depends on where the text is going. ``found`` gets the withheld
+    kinds. ``ceiling`` 5 withholds nothing; 0 withholds every kind."""
+    if not isinstance(text, str) or not text:
+        return text
+    ctx = Ctx(
+        lambda kind: WITHHELD_PII.format(kind=kind, rung=RUNGS[kind]),
+        found=found,
+    )
+    for rule in _PII:
+        if RUNGS[rule.kind] > ceiling:
+            text = _run(rule, text, ctx)
+    return text
+
+
 #: Every named set. A caller lists the sets it wants, in order, to ``apply``.
 SETS: dict[str, tuple] = {
     "hash64": (Rule("hash64", _HASH64),),
@@ -393,6 +508,7 @@ SETS: dict[str, tuple] = {
     "generic": _GENERIC,
     "secret_path": (Rule("secret_path", _SECRET_PATH, whole=True),),
     "git_trace": _GIT_TRACE,
+    "pii": _PII,
 }
 
 
