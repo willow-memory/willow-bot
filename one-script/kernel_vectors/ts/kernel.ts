@@ -717,6 +717,58 @@ const qCmp = (x: Q, y: Q) => {
   return l < r ? -1 : l > r ? 1 : 0;
 };
 
+type Alias = Map<string, string[]>;
+const WORDS_BAD = ": one word = one or more words, a comma between";
+
+/** kernel.py's parse_words: their words list as {their word: the folder's words}, or why not. */
+function parseWords(text: string): [Alias, string | null] {
+  const out: Alias = new Map();
+  const lines = splitlines(text);
+  for (let n = 1; n <= lines.length; n++) {
+    const s = strip(lines[n - 1]);
+    if (!s || s.startsWith("#")) continue;
+    const eq = s.indexOf("=");
+    const left = eq < 0 ? s : s.slice(0, eq);
+    const right = eq < 0 ? "" : s.slice(eq + 1);
+    const theirs = right.split(",").map((x) => words(x));
+    if (eq < 0 || words(left).length !== 1 || theirs.some((t) => t.length !== 1))
+      return [new Map(), `words list line ${n}${WORDS_BAD}`];
+    const her = words(left)[0];
+    if (!out.has(her)) out.set(her, []);
+    const mine = out.get(her)!;
+    for (const [t] of theirs) if (t !== her && !mine.includes(t)) mine.push(t);
+  }
+  const res: Alias = new Map();
+  for (const [w, ts] of out) if (ts.length) res.set(w, [...ts].sort(byCodePoint));
+  return [res, null];
+}
+
+/** kernel.py's read_words: [the list, its SHA-256, why not], kept like the key. */
+function readWords(file: string, box: string): [Alias | null, string, string | null] {
+  if (inside(file, box)) return [null, "", "the words list can't live inside the box"];
+  try {
+    if (process.platform !== "win32" && fs.statSync(file).mode & 0o077)
+      return [null, "", `${file} is readable beyond its owner; chmod 600 it`];
+    const raw = fs.readFileSync(file);
+    let text: string;
+    try {
+      text = UTF8.decode(raw);
+    } catch {
+      return [null, "", "the words list could not be read: UnicodeDecodeError"];
+    }
+    const [alias, why] = parseWords(text);
+    if (why !== null) return [null, "", why];
+    return [alias, crypto.createHash("sha256").update(raw).digest("hex"), null];
+  } catch (e) {
+    return [null, "", `the words list could not be read: ${pyErrName(e)}`];
+  }
+}
+
+/** Their word holds where it, or a word their list reads it as, does. */
+function heldBy(w: string, toks: Set<string>, alias: Alias): boolean {
+  return holds(w, toks) || (alias.get(w) ?? []).some((x) => holds(x, toks));
+}
+
 /** How many ASCII digits run from i. */
 function digits(t: string, i: number): number {
   let j = i;
@@ -769,14 +821,14 @@ function dates(pile: Chunk[]): number[] {
   return out;
 }
 
-function rank(pile: Chunk[], bite: string): Chunk[] {
+function rank(pile: Chunk[], bite: string, alias: Alias): Chunk[] {
   const want = new Set(words(bite).filter((w) => !T.FUNCTION.has(w)));
   if (!want.size) return [];
   const when = dates(pile);
   const held: [Chunk, Set<string>, number][] = [];
   pile.forEach((c, k) => {
     const toks = new Set(words(c.text));
-    const h = new Set([...want].filter((w) => holds(w, toks)));
+    const h = new Set([...want].filter((w) => heldBy(w, toks, alias)));
     if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h, when[k]]);
   });
   const df = new Map<string, bigint>();
@@ -799,7 +851,7 @@ function rank(pile: Chunk[], bite: string): Chunk[] {
   return scored.slice(0, T.TOP).map(([, c]) => c);
 }
 
-function look(pile: Chunk[], bite: string, served: Chunk[]): J[] {
+function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias): J[] {
   const out: J[] = [];
   const ws = words(bite);
   const want = [...new Set(ws)].filter((w) => !T.FUNCTION.has(w));
@@ -812,7 +864,13 @@ function look(pile: Chunk[], bite: string, served: Chunk[]): J[] {
   if (!want.length) out.push(hint("every word is a common one: name the thing you mean", null, null));
   const every = new Set<string>();
   for (const c of pile) for (const w of words(c.text)) every.add(w);
-  const absent = want.filter((w) => !holds(w, every));
+  const absent = want.filter((w) => !heldBy(w, every, alias));
+  for (const w of want) {
+    // said, so a match their list made is never taken for theirs
+    if (holds(w, every)) continue;
+    const read = (alias.get(w) ?? []).filter((x) => holds(x, every));
+    if (read.length) out.push(hint(`read ${w} as ${read.join(", ")}, from your words list`, null, null));
+  }
   if (absent.length)
     out.push(hint("no file in your folder has " + absent.join(", "), "it may be called something else there", T.NEXT.get("other words")!));
   for (const c of served) {
@@ -1018,7 +1076,7 @@ function readKey(file: string, box: string): [Buffer | null, string | null] {
   }
 }
 
-function init(box: string, pile: string, key: string, ts: string): number {
+function init(box: string, pile: string, key: string, ts: string, wl: string | null): number {
   if (fs.existsSync(path.join(box, "record.jsonl"))) {
     console.error("refused: this box already has a record");
     return REFUSED;
@@ -1031,6 +1089,13 @@ function init(box: string, pile: string, key: string, ts: string): number {
     console.error("refused: the key can't live inside the box");
     return REFUSED;
   }
+  if (wl !== null) {
+    const why = readWords(wl, box)[2];
+    if (why !== null) {
+      console.error(`refused: ${why}`);
+      return REFUSED;
+    }
+  }
   if (!fs.existsSync(key)) {
     fs.mkdirSync(path.dirname(path.resolve(key)), { recursive: true });
     const fd = fs.openSync(key, "wx", 0o600);
@@ -1042,6 +1107,7 @@ function init(box: string, pile: string, key: string, ts: string): number {
   }
   fs.mkdirSync(box, { recursive: true });
   const cfg: JMap = obj(["pile", resolved(pile)], ["key", resolved(key)]);
+  if (wl !== null) cfg.set("words", resolved(wl));
   fs.writeFileSync(path.join(box, "kernel.json"), dumpsDefault(cfg, true) + "\n");
   const row = append(box, ts, "boot", "kernel", obj(["loop", "open"], ["pile_sha256", h256(cfg.get("pile") as string)]));
   console.log(`open loop, row ${row.get("n")} ${(row.get("hash") as string).slice(0, 16)}: the box is yours`);
@@ -1087,11 +1153,23 @@ function bite(box: string, text: string, ts: string): number {
       return ALIVE;
     }
   }
-  const pile = chunks(config(box).get("pile") as string);
-  const served = rank(pile, text);
+  const cfg = config(box);
+  let alias: Alias = new Map();
+  const listed: [string, J][] = [];
+  if (cfg.has("words")) {
+    const [got, sha, why] = readWords(cfg.get("words") as string, box);
+    if (why !== null) {
+      console.error(`refused: ${why}`);
+      return REFUSED;
+    }
+    alias = got!;
+    listed.push(["words_sha256", sha]);
+  }
+  const pile = chunks(cfg.get("pile") as string);
+  const served = rank(pile, text, alias);
   const refs = served.map((c) => obj(["id", c.id], ["where", `${c.path}:${c.line}`], ["echo", echo(text, c.text)]));
   const answers = served.filter((_, i) => !refs[i].get("echo"));
-  append(box, ts, "bite", "kernel", obj(["bite_key", key], ["served", refs]));
+  append(box, ts, "bite", "kernel", obj(["bite_key", key], ["served", refs], ...listed));
   const state = answers.length ? "populated" : refs.length ? "echo" : "empty";
   const doc: JMap = obj(["state", state], ["bite_key", key]);
   doc.set(
@@ -1102,7 +1180,7 @@ function bite(box: string, text: string, ts: string): number {
       return shown;
     }),
   );
-  const hints = look(pile, text, answers.length ? served : []);
+  const hints = look(pile, text, answers.length ? served : [], alias);
   if (hints.length) doc.set("look", hints);
   console.log(dumpsShown(doc));
   return answers.length ? ALIVE : ESCALATE;
@@ -1242,14 +1320,24 @@ function vectors(casesFile: string, resultsFile: string): number {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   res.set("chunks", piles.map((ch) => obj(["chunks", ch.map(chunkJson)])));
-  res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string).map((x) => x.id)])));
+  // a case's words list, as the vectors hold it ({} when it has none)
+  const aliasOf = (o: JMap): Alias =>
+    new Map([...((o.get("alias") as JMap | undefined) ?? new Map())].map(([w, ts]) => [w, ts as string[]]));
+  res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string, aliasOf(o)).map((x) => x.id)])));
   res.set("newest", list("newest").map((o) => obj(["newest", newest(o.get("text") as string)])));
+  res.set(
+    "wordlist",
+    list("wordlist").map((o) => {
+      const [alias, why] = parseWords(o.get("text") as string);
+      return obj(["alias", new Map([...alias].map(([w, ts]) => [w, ts as J[]]))], ["why", why]);
+    }),
+  );
   res.set(
     "look",
     list("look").map((o) => {
       const pile = piles[Number(o.get("pile") as bigint)];
       const served = (o.get("served") as bigint[]).map((at) => pile[Number(at)]);
-      return obj(["look", look(pile, o.get("bite") as string, served)]);
+      return obj(["look", look(pile, o.get("bite") as string, served, aliasOf(o))]);
     }),
   );
   res.set(
@@ -1287,7 +1375,7 @@ function main(argv: string[]): number {
   const opts = new Map<string, string>();
   const args: string[] = [];
   for (let i = 1; i < argv.length; i++) {
-    if (["--box", "--pile", "--key", "--file", "--now"].includes(argv[i])) opts.set(argv[i], argv[++i] ?? "");
+    if (["--box", "--pile", "--key", "--file", "--now", "--words"].includes(argv[i])) opts.set(argv[i], argv[++i] ?? "");
     else args.push(argv[i]);
   }
   if (!opts.get("--box")) {
@@ -1297,7 +1385,7 @@ function main(argv: string[]): number {
   const box = opts.get("--box")!;
   const ts = opts.get("--now") || now();
   if (verb === "init" && opts.get("--pile") && opts.get("--key") && !args.length)
-    return init(box, opts.get("--pile")!, opts.get("--key")!, ts);
+    return init(box, opts.get("--pile")!, opts.get("--key")!, ts, opts.get("--words") || null);
   if (!fs.existsSync(path.join(box, "kernel.json"))) {
     console.error("refused: not a kernel box; init first");
     return REFUSED;

@@ -173,6 +173,7 @@ PARTS = {
     "chunks": ["chunks"],
     "rank": ["ids"],
     "newest": ["newest"],
+    "wordlist": ["alias", "why"],
     "look": ["look"],
     "door": ["why"],
     "subject": ["subject"],
@@ -254,7 +255,21 @@ def session(impl, root: Path) -> dict:
         shown.append([list(args[:1]), code, body])
         return code
 
-    step("init", *b, "--pile", str(pile), "--key", str(key))
+    mine = key.parent / "words.txt"  # their words list, kept like their key
+    for text, mode, where in (
+        ("sunlight = sun\n", 0o600, box / "words.txt"),  # inside the box
+        ("sunlight = sun\n", 0o644, mine),  # readable by others
+        ("sunlight sun\n", 0o600, mine),  # not a list line
+    ):
+        where.parent.mkdir(parents=True, exist_ok=True)
+        where.write_text(text)
+        where.chmod(mode)
+        step("init", *b, "--pile", str(pile), "--key", str(key), "--words", str(where))
+    shutil.rmtree(box)
+    mine.write_text("# mine\nsunlight = sun, light\r\ncold = frost\n")
+    step("init", *b, "--pile", str(pile), "--key", str(key), "--words", str(mine))
+    step("bite", *b, "how much sunlight do tomatoes want")
+    step("bite", *b, "when does the cold come")
     step("bite", *b, "when does the frost come")
     step("bite", *b, "what does this do")
     step("bite", *b, "the one ending 672841")

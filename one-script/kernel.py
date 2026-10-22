@@ -1,6 +1,6 @@
 """kernel.py: the smallest script that runs the whole loop, for anyone. Python 3.9+, stdlib only.
 
-    python kernel.py init    --box DIR --pile FOLDER --key FILE
+    python kernel.py init    --box DIR --pile FOLDER --key FILE [--words FILE]
     python kernel.py bite    --box DIR "your words"
     python kernel.py propose --box DIR --file ROWS.jsonl
     python kernel.py seal    --box DIR proposal:<sha256>
@@ -18,7 +18,9 @@ when a human sealed it, keep every step on a chain), and Nestor's
 `demo/sixty_seconds.py` tells it in eight beats. `test` runs those eight beats.
 
 The loop:
-    init     a box, and a key that is theirs (a file outside the box, 0600)
+    init     a box, and a key that is theirs (a file outside the box, 0600);
+             --words names their own words list, kept the same way: a line
+             `due = next` reads their word as their folder's
     bite     their words against their own files. A sealed answer for these
              words is served (exit 0: a human said it). Else their files'
              chunks that hold the words are served (exit 0: their pile is
@@ -205,7 +207,46 @@ def read_key(path: Path, box: Path) -> tuple[bytes | None, str | None]:
         return None, f"the key could not be read: {type(e).__name__}"
 
 
-def init(box: Path, pile: Path, key: Path, ts: str) -> int:
+def parse_words(text: str) -> tuple[dict[str, list[str]], str | None]:
+    """Their words list: a line `due = next, overdue` reads their word "due"
+    as any of their folder's words after the `=`. Blank lines and `#` lines
+    are skipped; one word on the left, one word between each comma."""
+    out: dict[str, list[str]] = {}
+    for n, line in enumerate(text.splitlines(), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        left, eq, right = s.partition("=")
+        theirs = [words(x) for x in right.split(",")]
+        if not eq or len(words(left)) != 1 or any(len(t) != 1 for t in theirs):
+            return (
+                {},
+                f"words list line {n}: one word = one or more words, a comma between",
+            )
+        mine = out.setdefault(words(left)[0], [])
+        for [t] in theirs:
+            if t != words(left)[0] and t not in mine:
+                mine.append(t)
+    return {w: sorted(ts) for w, ts in out.items() if ts}, None
+
+
+def read_words(path: Path, box: Path) -> tuple[dict | None, str, str | None]:
+    """Their words list, kept like their key: outside the box, readable only
+    by them. Returns (the list, its SHA-256, why not)."""
+    if path.resolve().is_relative_to(box.resolve()):
+        return None, "", "the words list can't live inside the box"
+    try:
+        if os.name == "posix" and path.stat().st_mode & 0o077:
+            return None, "", f"{path} is readable beyond its owner; chmod 600 it"
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
+    except (OSError, ValueError) as e:
+        return None, "", f"the words list could not be read: {type(e).__name__}"
+    alias, why = parse_words(text)
+    return (None, "", why) if why else (alias, hashlib.sha256(raw).hexdigest(), None)
+
+
+def init(box: Path, pile: Path, key: Path, ts: str, wl: Path | None = None) -> int:
     if (box / "record.jsonl").exists():
         print("refused: this box already has a record", file=sys.stderr)
         return REFUSED
@@ -215,6 +256,9 @@ def init(box: Path, pile: Path, key: Path, ts: str) -> int:
     if key.resolve().is_relative_to(box.resolve()):
         print("refused: the key can't live inside the box", file=sys.stderr)
         return REFUSED
+    if wl is not None and (why := read_words(wl, box)[2]) is not None:
+        print(f"refused: {why}", file=sys.stderr)
+        return REFUSED
     if not key.exists():
         key.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -222,6 +266,8 @@ def init(box: Path, pile: Path, key: Path, ts: str) -> int:
             f.write(secrets.token_hex(32) + "\n")
     box.mkdir(parents=True, exist_ok=True)
     cfg = {"pile": str(pile.resolve()), "key": str(key.resolve())}
+    if wl is not None:
+        cfg["words"] = str(wl.resolve())
     (box / "kernel.json").write_text(json.dumps(cfg, sort_keys=True) + "\n")
     row = append(box, ts, "boot", loop="open", pile_sha256=h256(cfg["pile"]))
     print(f"open loop, row {row['n']} {row['hash'][:16]}: the box is yours")
@@ -347,19 +393,25 @@ def newest(text: str) -> str:
     return best
 
 
-def rank(pile: list[dict], bite: str) -> list[dict]:
+def held_by(w: str, toks: set[str], alias: dict) -> bool:
+    """Their word holds where it, or a word their list reads it as, does."""
+    return any(holds(x, toks) for x in [w, *alias.get(w, [])])
+
+
+def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
     """The chunks holding at least `HOLD` of the bite's content words (not
     `FUNCTION`), rarest words weighing most; among equal scores, the newest
     first (`dates`), then by path, and in one file a dated chunk's later line
     first (a log grows downward). A chunk sharing only "the" or
     "how" and "do" doesn't hold "when does the frost come" or "how do I bake
     sourdough bread": an answer it doesn't have is never improvised (beat 1).
-    A bite of function words alone is held by nothing: say more."""
+    A bite of function words alone is held by nothing: say more. `alias` is
+    their words list (`parse_words`)."""
     want = set(words(bite)) - FUNCTION
     if not want:
         return []
     held = [
-        (c, d, {w for w in want if holds(w, set(words(c["text"])))})
+        (c, d, {w for w in want if held_by(w, set(words(c["text"])), alias or {})})
         for c, d in zip(pile, dates(pile))
     ]
     held = [(c, d, h) for c, d, h in held if len(h) >= HOLD * len(want)]
@@ -403,7 +455,9 @@ NEXT = {
 }
 
 
-def look(pile: list[dict], bite: str, served: list[dict]) -> list[dict]:
+def look(
+    pile: list[dict], bite: str, served: list[dict], alias: dict | None = None
+) -> list[dict]:
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
@@ -416,7 +470,13 @@ def look(pile: list[dict], bite: str, served: list[dict]) -> list[dict]:
     every = set()
     for c in pile:
         every |= set(words(c["text"]))
-    absent = [w for w in want if not holds(w, every)]
+    alias = alias or {}
+    absent = [w for w in want if not held_by(w, every, alias)]
+    for w in want:  # said, so a match their list made is never taken for theirs
+        if not holds(w, every) and (
+            read := [x for x in alias.get(w, []) if holds(x, every)]
+        ):
+            out.append({"why": f"read {w} as {', '.join(read)}, from your words list"})
     if absent:
         out.append(
             {
@@ -477,8 +537,15 @@ def bite(box: Path, text: str, ts: str) -> int:
             append(box, ts, "bite", bite_key=k, answered_by=subj, served=[])
             print(json.dumps({"state": "sealed", "answer": prop["data"], "by": subj}))
             return ALIVE
-    pile = chunks(Path(config(box)["pile"]))
-    served = rank(pile, text)
+    alias, listed = {}, {}
+    if "words" in (cfg := config(box)):
+        alias, sha, why = read_words(Path(cfg["words"]), box)
+        if why is not None:
+            print(f"refused: {why}", file=sys.stderr)
+            return REFUSED
+        listed = {"words_sha256": sha}
+    pile = chunks(Path(cfg["pile"]))
+    served = rank(pile, text, alias)
     refs = [
         {
             "id": c["id"],
@@ -487,12 +554,12 @@ def bite(box: Path, text: str, ts: str) -> int:
         }
         for c in served
     ]
-    append(box, ts, "bite", bite_key=k, served=refs)
+    append(box, ts, "bite", bite_key=k, served=refs, **listed)
     answers = [r for r in refs if not r["echo"]]
     state = "populated" if answers else "echo" if refs else "empty"
     doc = {"state": state, "bite_key": k}
     doc["served"] = [{**r, "text": c["text"]} for r, c in zip(refs, served)]
-    if hints := look(pile, text, served if answers else []):
+    if hints := look(pile, text, served if answers else [], alias):
         doc["look"] = hints  # printed for them; the record keeps no words
     print(json.dumps(doc, ensure_ascii=False))
     return ALIVE if answers else ESCALATE
@@ -730,7 +797,7 @@ def main(argv: list[str]) -> int:
     args: list[str] = []
     it = iter(rest)
     for a in it:
-        if a in ("--box", "--pile", "--key", "--file", "--now"):
+        if a in ("--box", "--pile", "--key", "--file", "--now", "--words"):
             opts[a] = next(it, "")
         else:
             args.append(a)
@@ -739,7 +806,8 @@ def main(argv: list[str]) -> int:
         return REFUSED
     box, ts = Path(opts["--box"]), opts.get("--now") or now()
     if verb == "init" and opts.get("--pile") and opts.get("--key") and not args:
-        return init(box, Path(opts["--pile"]), Path(opts["--key"]), ts)
+        wl = Path(opts["--words"]) if opts.get("--words") else None
+        return init(box, Path(opts["--pile"]), Path(opts["--key"]), ts, wl)
     if not (box / "kernel.json").exists():
         print("refused: not a kernel box; init first", file=sys.stderr)
         return REFUSED

@@ -885,6 +885,89 @@ public final class Kernel {
         @Override public int compareTo(Q o) { return n.multiply(o.d).compareTo(o.n.multiply(d)); }
     }
 
+    /** kernel.py's parse_words: their words list as {their word: the folder's words}, or why not. */
+    static Object[] parseWords(String text) {
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        List<String> lines = splitlines(text);
+        for (int n = 1; n <= lines.size(); n++) {
+            String s = strip(lines.get(n - 1));
+            if (s.isEmpty() || s.startsWith("#")) continue;
+            int eq = s.indexOf('=');
+            String left = eq < 0 ? s : s.substring(0, eq), right = eq < 0 ? "" : s.substring(eq + 1);
+            List<List<String>> theirs = new ArrayList<>();
+            for (String x : right.split(",", -1)) theirs.add(words(x));
+            boolean bad = eq < 0 || words(left).size() != 1;
+            for (List<String> t : theirs) if (t.size() != 1) bad = true;
+            if (bad)
+                return new Object[] {new LinkedHashMap<String, List<String>>(),
+                    "words list line " + n + ": one word = one or more words, a comma between"};
+            String her = words(left).get(0);
+            List<String> mine = out.computeIfAbsent(her, x -> new ArrayList<>());
+            for (List<String> t : theirs) if (!t.get(0).equals(her) && !mine.contains(t.get(0))) mine.add(t.get(0));
+        }
+        Map<String, List<String>> res = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> e : out.entrySet()) {
+            if (e.getValue().isEmpty()) continue;
+            List<String> v = new ArrayList<>(e.getValue());
+            v.sort(BY_CODE_POINT);
+            res.put(e.getKey(), v);
+        }
+        return new Object[] {res, null};
+    }
+
+    /** kernel.py's read_words: [the list, its SHA-256, why not], kept like the key. */
+    @SuppressWarnings("unchecked")
+    static Object[] readWords(Path path, Path box) {
+        if (inside(path, box)) return new Object[] {null, "", "the words list can't live inside the box"};
+        try {
+            try {
+                for (PosixFilePermission x : Files.getPosixFilePermissions(path))
+                    if (x.name().startsWith("GROUP") || x.name().startsWith("OTHERS"))
+                        return new Object[] {null, "", path + " is readable beyond its owner; chmod 600 it"};
+            } catch (UnsupportedOperationException e) {
+                // not POSIX: as kernel.py, no mode check
+            }
+            byte[] raw = Files.readAllBytes(path);
+            String text;
+            try {
+                text = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(raw)).toString();
+            } catch (java.nio.charset.CharacterCodingException e) {
+                return new Object[] {null, "", "the words list could not be read: UnicodeDecodeError"};
+            }
+            Object[] got = parseWords(text);
+            if (got[1] != null) return new Object[] {null, "", got[1]};
+            return new Object[] {got[0], hex(MessageDigest.getInstance("SHA-256").digest(raw)), null};
+        } catch (IOException e) {
+            return new Object[] {null, "", "the words list could not be read: " + pyErr(e)};
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** A case's words list, as the vectors hold it ({} when it has none). */
+    @SuppressWarnings("unchecked")
+    static Map<String, List<String>> aliasOf(Map<String, Object> m) {
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        Object a = m.get("alias");
+        if (a instanceof Map)
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) a).entrySet()) {
+                List<String> v = new ArrayList<>();
+                for (Object x : (List<Object>) e.getValue()) v.add((String) x);
+                out.put(e.getKey(), v);
+            }
+        return out;
+    }
+
+    /** Their word holds where it, or a word their list reads it as, does. */
+    static boolean heldBy(String w, Set<String> toks, Map<String, List<String>> alias) {
+        if (holds(w, toks)) return true;
+        for (String x : alias.getOrDefault(w, List.of())) if (holds(x, toks)) return true;
+        return false;
+    }
+
     /** How many ASCII digits run from {@code i}. */
     static int digits(String t, int i) {
         int j = i;
@@ -934,7 +1017,7 @@ public final class Kernel {
         return out;
     }
 
-    static List<Chunk> rank(List<Chunk> pile, String bite) {
+    static List<Chunk> rank(List<Chunk> pile, String bite, Map<String, List<String>> alias) {
         Set<String> want = new LinkedHashSet<>(words(bite));
         want.removeAll(FUNCTION);
         if (want.isEmpty()) return new ArrayList<>();
@@ -946,7 +1029,7 @@ public final class Kernel {
             Chunk c = pile.get(k);
             Set<String> toks = new HashSet<>(words(c.text));
             Set<String> h = new HashSet<>();
-            for (String w : want) if (holds(w, toks)) h.add(w);
+            for (String w : want) if (heldBy(w, toks, alias)) h.add(w);
             if ((long) h.size() * HOLD_DEN >= (long) HOLD_NUM * want.size()) {
                 heldC.add(c);
                 heldH.add(h);
@@ -983,7 +1066,8 @@ public final class Kernel {
         return out;
     }
 
-    static List<Map<String, Object>> look(List<Chunk> pile, String bite, List<Chunk> served) {
+    static List<Map<String, Object>> look(List<Chunk> pile, String bite, List<Chunk> served,
+            Map<String, List<String>> alias) {
         List<Map<String, Object>> out = new ArrayList<>();
         List<String> ws = words(bite);
         List<String> want = new ArrayList<>();
@@ -992,7 +1076,14 @@ public final class Kernel {
         Set<String> every = new HashSet<>();
         for (Chunk c : pile) every.addAll(words(c.text));
         List<String> absent = new ArrayList<>();
-        for (String w : want) if (!holds(w, every)) absent.add(w);
+        for (String w : want) if (!heldBy(w, every, alias)) absent.add(w);
+        for (String w : want) { // said, so a match their list made is never taken for theirs
+            if (holds(w, every)) continue;
+            List<String> read = new ArrayList<>();
+            for (String x : alias.getOrDefault(w, List.of())) if (holds(x, every)) read.add(x);
+            if (!read.isEmpty())
+                out.add(hint("read " + w + " as " + String.join(", ", read) + ", from your words list", null, null));
+        }
         if (!absent.isEmpty())
             out.add(hint("no file in your folder has " + String.join(", ", absent),
                 "it may be called something else there", NEXT.get("other words")));
@@ -1200,7 +1291,7 @@ public final class Kernel {
         return "OSError";
     }
 
-    static int init(Path box, Path pile, Path key, String ts) throws IOException {
+    static int init(Path box, Path pile, Path key, String ts, Path wl) throws IOException {
         if (Files.exists(box.resolve("record.jsonl"))) {
             System.err.println("refused: this box already has a record");
             return REFUSED;
@@ -1212,6 +1303,13 @@ public final class Kernel {
         if (inside(key, box)) {
             System.err.println("refused: the key can't live inside the box");
             return REFUSED;
+        }
+        if (wl != null) {
+            Object why = readWords(wl, box)[2];
+            if (why != null) {
+                System.err.println("refused: " + why);
+                return REFUSED;
+            }
         }
         if (!Files.exists(key)) {
             if (key.toAbsolutePath().getParent() != null) Files.createDirectories(key.toAbsolutePath().getParent());
@@ -1228,6 +1326,7 @@ public final class Kernel {
         Map<String, Object> cfg = new LinkedHashMap<>();
         cfg.put("pile", resolved(pile).toString());
         cfg.put("key", resolved(key).toString());
+        if (wl != null) cfg.put("words", resolved(wl).toString());
         Files.writeString(box.resolve("kernel.json"), dumpsDefault(cfg, true) + "\n");
         Map<String, Object> row = append(box, ts, "boot", "kernel",
             fields("loop", "open", "pile_sha256", h256((String) cfg.get("pile"))));
@@ -1290,8 +1389,20 @@ public final class Kernel {
                 return ALIVE;
             }
         }
-        List<Chunk> pile = chunks(Path.of((String) config(box).get("pile")));
-        List<Chunk> served = rank(pile, text);
+        Map<String, Object> cfg = config(box);
+        Map<String, List<String>> alias = new LinkedHashMap<>();
+        Map<String, Object> listed = new LinkedHashMap<>();
+        if (cfg.containsKey("words")) {
+            Object[] got = readWords(Path.of((String) cfg.get("words")), box);
+            if (got[2] != null) {
+                System.err.println("refused: " + got[2]);
+                return REFUSED;
+            }
+            alias = (Map<String, List<String>>) got[0];
+            listed.put("words_sha256", got[1]);
+        }
+        List<Chunk> pile = chunks(Path.of((String) cfg.get("pile")));
+        List<Chunk> served = rank(pile, text, alias);
         List<Object> refs = new ArrayList<>();
         List<Chunk> answers = new ArrayList<>();
         for (Chunk c : served) {
@@ -1299,7 +1410,9 @@ public final class Kernel {
             refs.add(fields("id", c.id, "where", c.path + ":" + c.line, "echo", e));
             if (!e) answers.add(c);
         }
-        append(box, ts, "bite", "kernel", fields("bite_key", key, "served", refs));
+        Map<String, Object> biteRow = fields("bite_key", key, "served", refs);
+        biteRow.putAll(listed);
+        append(box, ts, "bite", "kernel", biteRow);
         String state = !answers.isEmpty() ? "populated" : !refs.isEmpty() ? "echo" : "empty";
         Map<String, Object> doc = new LinkedHashMap<>();
         doc.put("state", state);
@@ -1311,7 +1424,7 @@ public final class Kernel {
             shown.add(m);
         }
         doc.put("served", shown);
-        List<Map<String, Object>> hints = look(pile, text, answers.isEmpty() ? new ArrayList<>() : served);
+        List<Map<String, Object>> hints = look(pile, text, answers.isEmpty() ? new ArrayList<>() : served, alias);
         if (!hints.isEmpty()) doc.put("look", hints);
         System.out.println(dumpsSpacedUtf8(doc));
         return answers.isEmpty() ? ESCALATE : ALIVE;
@@ -1544,7 +1657,7 @@ public final class Kernel {
         for (Object o : (List<Object>) c.get("rank")) {
             Map<String, Object> m = (Map<String, Object>) o;
             List<Object> ids = new ArrayList<>();
-            for (Chunk x : rank(piles.get(((BigInteger) m.get("pile")).intValue()), (String) m.get("bite"))) ids.add(x.id);
+            for (Chunk x : rank(piles.get(((BigInteger) m.get("pile")).intValue()), (String) m.get("bite"), aliasOf(m))) ids.add(x.id);
             rankOut.add(fields("ids", ids));
         }
         out.put("rank", rankOut);
@@ -1554,13 +1667,20 @@ public final class Kernel {
             newestOut.add(fields("newest", newest((String) ((Map<String, Object>) o).get("text"))));
         out.put("newest", newestOut);
 
+        List<Object> wordlistOut = new ArrayList<>();
+        for (Object o : (List<Object>) c.get("wordlist")) {
+            Object[] got = parseWords((String) ((Map<String, Object>) o).get("text"));
+            wordlistOut.add(fields("alias", got[0], "why", got[1] == null ? NULL : got[1]));
+        }
+        out.put("wordlist", wordlistOut);
+
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {
             Map<String, Object> m = (Map<String, Object>) o;
             List<Chunk> pile = piles.get(((BigInteger) m.get("pile")).intValue());
             List<Chunk> served = new ArrayList<>();
             for (Object at : (List<Object>) m.get("served")) served.add(pile.get(((BigInteger) at).intValue()));
-            lookOut.add(fields("look", new ArrayList<Object>(look(pile, (String) m.get("bite"), served))));
+            lookOut.add(fields("look", new ArrayList<Object>(look(pile, (String) m.get("bite"), served, aliasOf(m)))));
         }
         out.put("look", lookOut);
 
@@ -1636,7 +1756,7 @@ public final class Kernel {
         List<String> args = new ArrayList<>();
         for (int i = 1; i < argv.length; i++) {
             String a = argv[i];
-            if (List.of("--box", "--pile", "--key", "--file", "--now").contains(a)) {
+            if (List.of("--box", "--pile", "--key", "--file", "--now", "--words").contains(a)) {
                 opts.put(a, i + 1 < argv.length ? argv[++i] : "");
             } else {
                 args.add(a);
@@ -1651,7 +1771,8 @@ public final class Kernel {
         if (ts.isEmpty()) ts = now();
         if (verb.equals("init") && !opts.getOrDefault("--pile", "").isEmpty()
             && !opts.getOrDefault("--key", "").isEmpty() && args.isEmpty())
-            return init(box, Path.of(opts.get("--pile")), Path.of(opts.get("--key")), ts);
+            return init(box, Path.of(opts.get("--pile")), Path.of(opts.get("--key")), ts,
+                opts.getOrDefault("--words", "").isEmpty() ? null : Path.of(opts.get("--words")));
         if (!Files.exists(box.resolve("kernel.json"))) {
             System.err.println("refused: not a kernel box; init first");
             return REFUSED;

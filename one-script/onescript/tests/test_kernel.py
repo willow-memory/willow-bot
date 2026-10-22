@@ -242,3 +242,43 @@ def test_among_equal_answers_the_newest_comes_first(tmp_path):
     assert "==" not in got[0]["text"]  # dated only by the heading above it
     assert k.dates(pile)[[c["line"] for c in pile].index(last)] == 20260410
     assert k.newest("2026-10-14 20261015 12026-10-16 2026-13-01") == "20261015"
+
+
+def test_her_words_list_reads_her_word_as_her_folders(tmp_path):
+    """Odile asks who's due; her tuning log says `next:` (demo/odile/STRIP.md).
+    Her own list, kept like her key, reads one as the other, says so when
+    it did, and the record keeps the list's hash, never its words."""
+    pile, box, mine = tmp_path / "pile", tmp_path / "box", tmp_path / "mine"
+    pile.mkdir()
+    (pile / "log.txt").write_text("2026-10-16 Calvin\n  next: Oct 2027\n")
+    mine.mkdir(mode=0o700)
+    wl = mine / "words.txt"
+    wl.write_text("# what I call things\ndue = next, overdue\n")
+    wl.chmod(0o600)
+    b = ["--box", str(box), "--now", "2026-10-22T00:00:00Z"]
+    key = ["--key", str(mine / "k.hex")]
+    assert (
+        cli("init", *b, "--pile", str(pile), *key, "--words", str(wl)).returncode == 0
+    )
+    got = cli("bite", *b, "who's due")
+    doc = json.loads(got.stdout)
+    assert got.returncode == 0 and doc["served"][0]["where"] == "log.txt:1"
+    assert {"why": "read due as next, from your words list"} in doc["look"]
+    row = json.loads((box / "record.jsonl").read_text().splitlines()[-1])
+    assert row["words_sha256"] == k.hashlib.sha256(wl.read_bytes()).hexdigest()
+    assert "next" not in json.dumps(row) and "due" not in json.dumps(row)
+    wl.chmod(0o644)  # readable by others: refused, nothing written
+    before = (box / "record.jsonl").read_text()
+    assert cli("bite", *b, "who's due").returncode == 2
+    assert (box / "record.jsonl").read_text() == before
+
+
+def test_a_words_list_line_is_one_word_then_words():
+    assert k.parse_words("due = next, overdue\nDUE = Next") == (
+        {"due": ["next", "overdue"]},
+        None,
+    )
+    for bad in ("due next", "due =", "a b = c", "due = next,", "due = next soon"):
+        assert k.parse_words(bad)[1] == (
+            "words list line 1: one word = one or more words, a comma between"
+        ), bad

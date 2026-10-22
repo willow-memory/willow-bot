@@ -688,6 +688,76 @@ def dated_pile() -> list:
     ]
 
 
+#: Bites run with a words list (their word -> their folder's words), by pile:
+#: the garden's and the dated pile's, a word the list reads as one that's
+#: there, one it reads as one that isn't, and one already there itself.
+ALIASED = {
+    0: [
+        ("when does the cold snap come", {"cold": ["frost"], "snap": ["date"]}),
+        ("how much sunlight", {"sunlight": ["sun", "light"]}),
+        ("how much sunlight", {"sunlight": ["moonlight"]}),
+        ("tomatoes want sun", {"tomatoes": ["sun"], "sun": ["water"]}),
+        ("water the shed", {"shed": ["garden", "root"], "zzz": ["water"]}),
+    ],
+    10: [
+        ("how are the hives", {"hives": ["bees"]}),
+        ("is everything okay", {"everything": ["eggs", "frames"]}),
+        ("bees calm", {"calm": ["okay", "fine"]}),
+    ],
+}
+
+
+def wordlist_cases() -> list[dict]:
+    texts = [
+        "",
+        "due = next",
+        "due = next, next\nDue = overdue",
+        "due =",
+        "due = next,",
+        "a b = c",
+        "due next",
+        "# x\n\n  due=next  ",
+        "due = due, next",
+        "due = 2026-10",
+        "=next",
+        "due = next = soon",
+        "due = next\r\nlate = overdue",
+        "DUE = Next, NEXT",
+        "café = cafe",
+        "due = next\u2028late = over",
+        "  # only a comment",
+        "due = next,,soon",
+        "due\t=\tnext",
+        "１ = one",
+        # written out of order: the list is held sorted, by code point
+        "due = zebra, apple",
+        "late = overdue, behind\nlate = after",
+        "x = é, e, z, É",
+    ]
+    bits = [
+        "due",
+        "next",
+        " ",
+        "=",
+        ",",
+        "#",
+        "\n",
+        "late",
+        "x y",
+        "\u00e9",
+        "2026",
+        "\t",
+    ]
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 14))) for _ in range(200)
+    ]
+    out = []
+    for t in texts:
+        alias, why = k.parse_words(t)
+        out.append({"text": t, "alias": alias, "why": why})
+    return out
+
+
 def newest_cases() -> list[dict]:
     texts = [
         "",
@@ -851,11 +921,13 @@ def pile_based_cases() -> dict:
             chunks_out.append({"pile": encode_pile(pile), "chunks": ch})
             bites = BITES + [" ".join(R.sample(BITES, 2))[:60] for _ in range(10)]
             bites += extra_bites(i)
-            for bite in bites:
-                served = k.rank(ch, bite)
+            runs = [(b, {}) for b in bites] + [(b, a) for b, a in ALIASED.get(i, [])]
+            for bite, alias in runs:
+                served = k.rank(ch, bite, alias)
                 rank_out.append(
-                    {"pile": i, "bite": bite, "ids": [c["id"] for c in served]}
-                )
+                    {"pile": i, "bite": bite, "alias": alias,
+                     "ids": [c["id"] for c in served]}
+                )  # fmt: skip
                 answers = [c for c in served if not k.echo(bite, c["text"])]
                 # served by place in the pile, not by id: two chunks with the
                 # same text share an id, and look() tells them apart by identity
@@ -864,8 +936,9 @@ def pile_based_cases() -> dict:
                     {
                         "pile": i,
                         "bite": bite,
+                        "alias": alias,
                         "served": at,
-                        "look": k.look(ch, bite, answers),
+                        "look": k.look(ch, bite, answers, alias),
                     }
                 )
     return {"chunks": chunks_out, "rank": rank_out, "look": look_out}
@@ -953,6 +1026,7 @@ def main(argv: list[str]) -> int:
         "echo": echo_cases(),
         **pile_based_cases(),
         "newest": newest_cases(),
+        "wordlist": wordlist_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

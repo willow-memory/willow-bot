@@ -784,6 +784,59 @@ public static class Kernel
         public int CompareTo(Q o) => (N * o.D).CompareTo(o.N * D);
     }
 
+    /** kernel.py's parse_words: their words list as {their word: the folder's words}, or why not. */
+    static (Dictionary<string, List<string>> alias, string? why) ParseWords(string text)
+    {
+        var o = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var order = new List<string>();
+        var lines = Splitlines(text);
+        for (int n = 1; n <= lines.Count; n++)
+        {
+            var s = Strip(lines[n - 1]);
+            if (s.Length == 0 || s.StartsWith('#')) continue;
+            int eq = s.IndexOf('=');
+            var left = eq < 0 ? s : s.Substring(0, eq);
+            var right = eq < 0 ? "" : s.Substring(eq + 1);
+            var theirs = right.Split(',').Select(x => Words(x)).ToList();
+            if (eq < 0 || Words(left).Count != 1 || theirs.Any(t => t.Count != 1))
+                return (new Dictionary<string, List<string>>(StringComparer.Ordinal),
+                    $"words list line {n}: one word = one or more words, a comma between");
+            var her = Words(left)[0];
+            if (!o.ContainsKey(her)) { o[her] = new List<string>(); order.Add(her); }
+            foreach (var t in theirs) if (t[0] != her && !o[her].Contains(t[0])) o[her].Add(t[0]);
+        }
+        var res = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var w in order)
+            if (o[w].Count > 0) { var v = o[w].ToList(); v.Sort(CodePointOrder.It); res[w] = v; }
+        return (res, null);
+    }
+
+    /** kernel.py's read_words: the list, its SHA-256, why not; kept like the key. */
+    static (Dictionary<string, List<string>>? alias, string sha, string? why) ReadWords(string file, string box)
+    {
+        if (Inside(file, box)) return (null, "", "the words list can't live inside the box");
+        try
+        {
+            if (!OperatingSystem.IsWindows() && (Libc.Mode(file) & 0x3F) != 0) // 0o077
+                return (null, "", $"{file} is readable beyond its owner; chmod 600 it");
+            var raw = File.ReadAllBytes(file);
+            string text;
+            try { text = Utf8.GetString(raw); }
+            catch (DecoderFallbackException) { return (null, "", "the words list could not be read: UnicodeDecodeError"); }
+            var (alias, why) = ParseWords(text);
+            if (why != null) return (null, "", why);
+            return (alias, Hex(SHA256.HashData(raw)), null);
+        }
+        catch (FileNotFoundException) { return (null, "", "the words list could not be read: FileNotFoundError"); }
+        catch (DirectoryNotFoundException) { return (null, "", "the words list could not be read: FileNotFoundError"); }
+        catch (UnauthorizedAccessException) { return (null, "", "the words list could not be read: PermissionError"); }
+        catch (IOException) { return (null, "", "the words list could not be read: OSError"); }
+    }
+
+    /** Their word holds where it, or a word their list reads it as, does. */
+    static bool HeldBy(string w, HashSet<string> toks, Dictionary<string, List<string>> alias) =>
+        Holds(w, toks) || (alias.TryGetValue(w, out var xs) && xs.Any(x => Holds(x, toks)));
+
     /** How many ASCII digits run from i. */
     static int Digits(string t, int i)
     {
@@ -841,7 +894,7 @@ public static class Kernel
         return o;
     }
 
-    static List<Chunk> Rank(List<Chunk> pile, string bite)
+    static List<Chunk> Rank(List<Chunk> pile, string bite, Dictionary<string, List<string>> alias)
     {
         var want = new List<string>();
         foreach (var w in Words(bite)) if (!FUNCTION.Contains(w) && !want.Contains(w)) want.Add(w);
@@ -852,7 +905,7 @@ public static class Kernel
         {
             var c = pile[k];
             var toks = new HashSet<string>(Words(c.Text), StringComparer.Ordinal);
-            var h = want.Where(w => Holds(w, toks)).ToHashSet(StringComparer.Ordinal);
+            var h = want.Where(w => HeldBy(w, toks, alias)).ToHashSet(StringComparer.Ordinal);
             if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h, when[k]));
         }
         var df = want.ToDictionary(w => w, w => held.Count(x => x.h.Contains(w)), StringComparer.Ordinal);
@@ -885,7 +938,7 @@ public static class Kernel
         return m;
     }
 
-    static List<object?> Look(List<Chunk> pile, string bite, List<Chunk> served)
+    static List<object?> Look(List<Chunk> pile, string bite, List<Chunk> served, Dictionary<string, List<string>> alias)
     {
         var o = new List<object?>();
         var ws = Words(bite);
@@ -894,7 +947,13 @@ public static class Kernel
         if (want.Count == 0) o.Add(Hint("every word is a common one: name the thing you mean", null, null));
         var every = new HashSet<string>(StringComparer.Ordinal);
         foreach (var c in pile) every.UnionWith(Words(c.Text));
-        var absent = want.Where(w => !Holds(w, every)).ToList();
+        var absent = want.Where(w => !HeldBy(w, every, alias)).ToList();
+        foreach (var w in want) // said, so a match their list made is never taken for theirs
+        {
+            if (Holds(w, every) || !alias.TryGetValue(w, out var xs)) continue;
+            var read = xs.Where(x => Holds(x, every)).ToList();
+            if (read.Count > 0) o.Add(Hint($"read {w} as {string.Join(", ", read)}, from your words list", null, null));
+        }
         if (absent.Count > 0)
             o.Add(Hint("no file in your folder has " + string.Join(", ", absent), "it may be called something else there", NEXT["other words"]));
         foreach (var c in served)
@@ -1165,11 +1224,12 @@ public static class Kernel
         catch (IOException) { return (null, "the key could not be read: OSError"); }
     }
 
-    static int Init(string box, string pile, string key, string ts)
+    static int Init(string box, string pile, string key, string ts, string? wl)
     {
         if (File.Exists(System.IO.Path.Combine(box, "record.jsonl"))) { Console.Error.WriteLine("refused: this box already has a record"); return REFUSED; }
         if (!Directory.Exists(pile)) { Console.Error.WriteLine($"refused: {pile} is not a folder"); return REFUSED; }
         if (Inside(key, box)) { Console.Error.WriteLine("refused: the key can't live inside the box"); return REFUSED; }
+        if (wl != null && ReadWords(wl, box).why is string why) { Console.Error.WriteLine($"refused: {why}"); return REFUSED; }
         if (!File.Exists(key))
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(key))!);
@@ -1180,6 +1240,7 @@ public static class Kernel
         }
         Directory.CreateDirectory(box);
         var cfg = Obj("pile", Resolved(pile), "key", Resolved(key));
+        if (wl != null) cfg["words"] = Resolved(wl);
         File.WriteAllText(System.IO.Path.Combine(box, "kernel.json"), DumpsDefault(cfg, true) + "\n", Utf8);
         var row = Append(box, ts, "boot", "kernel", Obj("loop", "open", "pile_sha256", H256((string)cfg["pile"]!)));
         Console.WriteLine($"open loop, row {PyStr(row["n"])} {((string)row["hash"]!).Substring(0, 16)}: the box is yours");
@@ -1235,8 +1296,18 @@ public static class Kernel
                 return ALIVE;
             }
         }
-        var pile = Chunks((string)Config(box)["pile"]!);
-        var served = Rank(pile, text);
+        var cfg = Config(box);
+        var alias = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        string? listed = null;
+        if (cfg.Has("words"))
+        {
+            var (got, sha, why) = ReadWords((string)cfg["words"]!, box);
+            if (why != null) { Console.Error.WriteLine($"refused: {why}"); return REFUSED; }
+            alias = got!;
+            listed = sha;
+        }
+        var pile = Chunks((string)cfg["pile"]!);
+        var served = Rank(pile, text, alias);
         var refs = new List<object?>();
         var answers = new List<Chunk>();
         foreach (var c in served)
@@ -1245,7 +1316,9 @@ public static class Kernel
             refs.Add(Obj("id", c.Id, "where", c.Path + ":" + c.Line, "echo", e));
             if (!e) answers.Add(c);
         }
-        Append(box, ts, "bite", "kernel", Obj("bite_key", key, "served", refs));
+        var biteRow = Obj("bite_key", key, "served", refs);
+        if (listed != null) biteRow["words_sha256"] = listed;
+        Append(box, ts, "bite", "kernel", biteRow);
         var state = answers.Count > 0 ? "populated" : refs.Count > 0 ? "echo" : "empty";
         var doc = Obj("state", state, "bite_key", key);
         var shown = new List<object?>();
@@ -1256,7 +1329,7 @@ public static class Kernel
             shown.Add(m);
         }
         doc["served"] = shown;
-        var hints = Look(pile, text, answers.Count > 0 ? served : new List<Chunk>());
+        var hints = Look(pile, text, answers.Count > 0 ? served : new List<Chunk>(), alias);
         if (hints.Count > 0) doc["look"] = hints;
         Console.WriteLine(DumpsShown(doc));
         return answers.Count > 0 ? ALIVE : ESCALATE;
@@ -1378,13 +1451,27 @@ public static class Kernel
         }
         finally { Directory.Delete(tmp, true); }
         res["chunks"] = piles.Select(ch => (object?)Obj("chunks", ch.Select(x => (object?)x.Json()).ToList())).ToList();
-        res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!).Select(x => (object?)x.Id).ToList())).ToList();
+        // a case's words list, as the vectors hold it ({} when it has none)
+        Dictionary<string, List<string>> AliasOf(JObj o)
+        {
+            var a = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            if (o.Get("alias") is JObj m) foreach (var w in m.Keys) a[w] = L(m[w]).Select(x => (string)x!).ToList();
+            return a;
+        }
+        res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!, AliasOf(o)).Select(x => (object?)x.Id).ToList())).ToList();
         res["newest"] = Part("newest").Select(o => (object?)Obj("newest", Newest((string)o["text"]!))).ToList();
+        res["wordlist"] = Part("wordlist").Select(o =>
+        {
+            var (alias, why) = ParseWords((string)o["text"]!);
+            var m = Obj();
+            foreach (var (w, ts) in alias) m[w] = ts.Select(x => (object?)x).ToList();
+            return (object?)Obj("alias", m, "why", why);
+        }).ToList();
         res["look"] = Part("look").Select(o =>
         {
             var pile = piles[I(o["pile"])];
             var served = L(o["served"]).Select(at => pile[I(at)]).ToList();
-            return (object?)Obj("look", Look(pile, (string)o["bite"]!, served));
+            return (object?)Obj("look", Look(pile, (string)o["bite"]!, served, AliasOf(o)));
         }).ToList();
         res["door"] = Part("door").Select(o =>
         {
@@ -1418,14 +1505,14 @@ public static class Kernel
         var args = new List<string>();
         for (int i = 1; i < argv.Length; i++)
         {
-            if (new[] { "--box", "--pile", "--key", "--file", "--now" }.Contains(argv[i])) opts[argv[i]] = i + 1 < argv.Length ? argv[++i] : "";
+            if (new[] { "--box", "--pile", "--key", "--file", "--now", "--words" }.Contains(argv[i])) opts[argv[i]] = i + 1 < argv.Length ? argv[++i] : "";
             else args.Add(argv[i]);
         }
         string Opt(string k) => opts.TryGetValue(k, out var v) ? v : "";
         if (Opt("--box") == "") { Console.Error.WriteLine(USAGE); return REFUSED; }
         var box = Opt("--box");
         var ts = Opt("--now") != "" ? Opt("--now") : DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
-        if (verb == "init" && Opt("--pile") != "" && Opt("--key") != "" && args.Count == 0) return Init(box, Opt("--pile"), Opt("--key"), ts);
+        if (verb == "init" && Opt("--pile") != "" && Opt("--key") != "" && args.Count == 0) return Init(box, Opt("--pile"), Opt("--key"), ts, Opt("--words") != "" ? Opt("--words") : null);
         if (!File.Exists(System.IO.Path.Combine(box, "kernel.json"))) { Console.Error.WriteLine("refused: not a kernel box; init first"); return REFUSED; }
         if (verb == "bite" && args.Count == 1) return Bite(box, args[0], ts);
         if (verb == "propose" && Opt("--file") != "" && args.Count == 0) return Propose(box, Splitlines(Utf8.GetString(File.ReadAllBytes(Opt("--file")))), ts);
