@@ -571,6 +571,17 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument(
         "--proposal", type=Path, help="the model's rows: JSONL of path/data/cites/claim"
     )
+    rt = sub.add_parser(
+        "retire",
+        help="propose dropping served rows a caller names, each gated on a human seal",
+    )
+    rt.add_argument(
+        "--candidates",
+        type=Path,
+        required=True,
+        help="JSON list of {cite, reason, detail}: a served id to drop, why, and the bytes",
+    )
+    rt.add_argument("--bite", default="retire", help="the bite the turn records")
     es = sub.add_parser(
         "escalate", help="the deterministic chain on the sealed served scope"
     )
@@ -1074,6 +1085,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)
+    elif args.cmd == "retire":
+        try:
+            cands = json.loads(args.candidates.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        if not isinstance(cands, list):
+            print("refused: --candidates must be a JSON list of {cite, reason, detail}")
+            return 2
+        res = api.retire(cfg, cands, bite=args.bite, argv=raw)
     elif args.cmd == "escalate":
         res = api.escalate(
             cfg,
@@ -1144,6 +1165,8 @@ def main(argv: list[str] | None = None) -> int:
                 for p in out["proposals"]
             ]
         print(json.dumps(out, indent=1, default=str))
+    elif args.cmd == "retire":
+        _print_json({k: v for k, v in res.items() if k != "code"})
     else:
         _print_json({k: v for k, v in res.items() if k != "code"})
     return res["code"]
