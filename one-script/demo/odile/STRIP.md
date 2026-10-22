@@ -89,3 +89,27 @@ two the first time. Asked and found: one more than before (N2).
 - **N1 needs a fifth thing.** "Due" is a `next:` date that has passed with no
   visit since: a date compared with today, which none of the four readings
   does. Newest first orders dates; it never asks whether one has gone by.
+
+## The fifth reading: has this date passed
+
+In a log (lines that start with a date, and the lines under each), the latest
+entry under each heading that names a later date, now gone by, with nothing
+written under that heading since. Dates as she writes them count: "next: May
+2026", "March 20, 2026". Today is the bite's own time. Her log is a file a
+year, so the served file's whole folder is one log.
+
+"Who's due" on her box:
+
+> gone by, nothing written since: Everett Montaño - Samick console (1999),
+> 2203 Pinon St (Jan 2023); Ada Kerrigan - Story & Clark console (1984), 983
+> Cholla St (Jul 2023); Winifred Marchetti - Steinway K-52 (1981), 1657 Railroad
+> St (Nov 2023); Renata Lindahl - Chickering upright (1908), 1763 Railroad St
+> (Jun 2026); Loretta Tremaine - Mason & Hamlin A (1919), 2140 Cholla St (Aug
+> 2026); Imogen Sandoval - Everett studio (1974), 725 Cholla St (Sep 2026);
+> Benedikt Ybarra - Wurlitzer console (1971), 904 Pinon St (Oct 2026)
+> (tuning/: 7 of 66 headings, as of 2026-10-22)
+
+**N1 found, asked.** Checked against her log by a separate script: the same
+seven. Three are clients who moved away in 2023; her log never says so, so the
+reading can't. One, Benedikt Ybarra, is already booked for Oct 28 in her
+calendar: the reading reads her tuning folder, not her calendar.

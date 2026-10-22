@@ -30,7 +30,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `scripts/oauth/oauth_probe.py` | Deterministic OAuth: blind wagers forecast before they run, pins for answers already seen; the live flow against willows-grove and willow-mcp serve mode on loopback and Google's hosted MCP servers (read-only, no credentials), N runs each; disagreeing runs are `drift`, a pin that moves is `changed` |
 | `deep_thought.py` | The morning screen |
 | `kernel.py` | The smallest script for anyone: the whole loop on their own folder, stdlib only (IDEAS 113) |
-| `kernel_vectors/` | `kernel.py` in any language: generated tables, 4,185 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
+| `kernel_vectors/` | `kernel.py` in any language: generated tables, 4,532 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
 
 ## OAuth: which server a token is for
 

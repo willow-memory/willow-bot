@@ -666,8 +666,137 @@ def series(path: str, text: str) -> list[dict]:
     return out
 
 
+MONTHS = {
+    m: n
+    for n, names in enumerate(
+        [
+            ("jan", "january"), ("feb", "february"), ("mar", "march"),
+            ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+            ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"),
+            ("nov", "november"), ("dec", "december"),
+        ],
+        1,
+    )
+    for m in names
+}  # fmt: skip
+
+
+def _digit(ch: str) -> bool:
+    return len(ch) == 1 and "0" <= ch <= "9"
+
+
+def _letter(ch: str) -> bool:
+    return len(ch) == 1 and ("a" <= ch <= "z" or "A" <= ch <= "Z")
+
+
+def _runs(text: str) -> list[tuple[int, int]]:
+    """Where each run of ASCII letters, or of ASCII digits, starts and ends."""
+    out, i = [], 0
+    while i < len(text):
+        same = _digit if _digit(text[i]) else _letter if _letter(text[i]) else None
+        if same is None:
+            i += 1
+            continue
+        j = i
+        while j < len(text) and same(text[j]):
+            j += 1
+        out.append((i, j))
+        i = j
+    return out
+
+
+def written(text: str) -> list[tuple[str, str]]:
+    """Every date written in `text`, in order, as (YYYYMMDD, as written): ISO
+    and compact (`newest`'s), and English month names with a year, a day or
+    not between ("Oct 2027" is its first; "March 20, 2026"). Between a month
+    and the rest, only spaces, commas and points."""
+    out, runs = [], _runs(text)
+    for k, (a, b) in enumerate(runs):
+        t = text[a:b]
+        if _digit(t[0]):
+            if len(t) == 8 and (d := newest(t)):
+                out.append((d, t))
+            elif len(t) == 4 and (d := newest(text[a : a + 10])) and d[:4] == t:
+                if text[a : a + 10] == iso(d) and not _digit(text[a + 10 : a + 11]):
+                    out.append((d, iso(d)))
+            continue
+        if t.lower() not in MONTHS or k + 1 >= len(runs):
+            continue
+
+        def gap(x: int) -> bool:
+            between = text[runs[x - 1][1] : runs[x][0]]
+            return bool(between) and all(c in " ,." for c in between)
+
+        def year(x: int) -> str | None:
+            y = text[runs[x][0] : runs[x][1]]
+            return y if len(y) == 4 and y[:2] in ("19", "20") and gap(x) else None
+
+        m = f"{MONTHS[t.lower()]:02d}"
+        nxt = text[runs[k + 1][0] : runs[k + 1][1]]
+        if (
+            _digit(nxt[0])
+            and len(nxt) <= 2
+            and 1 <= int(nxt) <= 31
+            and gap(k + 1)
+            and k + 2 < len(runs)
+            and (y := year(k + 2))
+        ):
+            out.append((y + m + f"{int(nxt):02d}", text[a : runs[k + 2][1]]))
+        elif y := year(k + 1):
+            out.append((y + m + "01", text[a : runs[k + 1][1]]))
+    return out
+
+
+def gone_by(pile: list[dict], served: list[dict], today: str) -> list[dict]:
+    """Has this date passed: in a log (lines that start with an ISO date, and
+    the lines under each), the latest entry under each heading (its first
+    line, less the date) that names a later date, now gone by, with nothing
+    written under that heading since. A log kept a file a year is one log: the
+    served file's whole folder is read. Odile's "next: May 2026" under
+    Harriet's last visit, and no visit since, is a tuning due."""
+    out = []
+    for folder in dict.fromkeys(c["path"].rpartition("/")[0] for c in served):
+        entries, path, cur = [], None, None
+        for c in pile:  # chunks order: a file's chunks in a row
+            if c["path"].rpartition("/")[0] != folder:
+                continue
+            if c["path"] != path:
+                path, cur = c["path"], None
+            for line in c["text"].splitlines():
+                s = line.strip()
+                d = newest(s[:10])
+                if d and s[:10] == iso(d) and not _digit(s[10:11]):
+                    cur = (d, s[10:].strip(), [])
+                    entries.append(cur)
+                if cur is not None:
+                    cur[2].extend(w for w in written(s) if w[0] > cur[0])
+        latest: dict[str, tuple] = {}
+        for e in entries:  # a later entry, or a later line on the same day, wins
+            if e[1] and e[0] >= latest.get(e[1], ("",))[0]:
+                latest[e[1]] = e
+        due = sorted(
+            (min(e[2]), head)
+            for head, e in latest.items()
+            if e[2] and min(e[2])[0] <= today
+        )
+        if due:
+            out.append(
+                {
+                    "why": "gone by, nothing written since: "
+                    + "; ".join(f"{h} ({w})" for (_, w), h in due),
+                    "where": f"{folder or '.'}/: {len(due)} of {len(latest)} "
+                    f"headings, as of {iso(today)}",
+                }
+            )
+    return out
+
+
 def look(
-    pile: list[dict], bite: str, served: list[dict], alias: dict | None = None
+    pile: list[dict],
+    bite: str,
+    served: list[dict],
+    alias: dict | None = None,
+    today: str = "",
 ) -> list[dict]:
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
@@ -714,6 +843,8 @@ def look(
                 }
             )
     out += missing(pile, served)
+    if today:
+        out += gone_by(pile, served, today)
     for path in dict.fromkeys(c["path"] for c in served):  # the whole table
         out += series(path, "\n".join(c["text"] for c in pile if c["path"] == path))
     if ws and ws[0] in MAKE:
@@ -774,7 +905,8 @@ def bite(box: Path, text: str, ts: str) -> int:
     state = "populated" if answers else "echo" if refs else "empty"
     doc = {"state": state, "bite_key": k}
     doc["served"] = [{**r, "text": c["text"]} for r, c in zip(refs, served)]
-    if hints := look(pile, text, served if answers else [], alias):
+    today = newest(ts[:10])
+    if hints := look(pile, text, served if answers else [], alias, today):
         doc["look"] = hints  # printed for them; the record keeps no words
     print(json.dumps(doc, ensure_ascii=False))
     return ALIVE if answers else ESCALATE

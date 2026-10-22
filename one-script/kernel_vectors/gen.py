@@ -118,6 +118,7 @@ def tables() -> dict:
             "MAKE": sorted(k.MAKE),
             "NEXT": k.NEXT,
             "ROW_KEYS": sorted(k.ROW_KEYS),
+            "MONTHS": k.MONTHS,
         },
     }
 
@@ -659,7 +660,46 @@ def pile_cases() -> list[dict]:
     piles.append(dated_pile())
     piles.append(ledger_pile())
     piles.append(series_pile())
+    piles.append(log_pile())
     return piles
+
+
+TODAY = "20261022"  # what the look cases take as today
+
+
+def log_pile() -> list:
+    """Has this date passed: a log kept a file a year, entries under headings
+    with a later date written in them. Ann is due (May 2026, nothing since);
+    Bo was seen again; Cy's next is ahead; Jo's date is today, Kit's tomorrow; Ed's entry runs
+    past a chunk cut; Fay has two entries on one day; and lines that start
+    with a date but name nothing later, or don't start with one, are not."""
+    pad = "\n".join("  notes " + "x" * 60 for _ in range(9))  # past MAX_CHUNK
+    return [
+        (
+            ["log", "2025.txt"],
+            (
+                "2025-05-02  Ann - upright\n  next: May 2026\n\n"
+                "2025-06-01  Bo - grand\n  next: Jan 2026\n\n"
+                "2025-07-01  Ed - spinet\n" + pad + "\n  next: March 3, 2026\n\n"
+                "2025-08-01  Fay - studio\n  next: Jan 2026\n"
+                "2025-08-01  Fay - studio\n  next: 2027-01-05\n"
+            ).encode(),
+        ),
+        (
+            ["log", "2026.txt"],
+            (
+                "2026-02-10  Bo - grand\n  next: Feb 2027\n\n"
+                "2026-03-01  Cy - console\n  next: Dec. 1, 2026\n\n"
+                "2026-04-01  Di - upright\n  due 20261022, or Oct 2026 at latest\n\n"
+                "2026-04-02  Gil\n  no next date written\n\n"
+                "2026-05-01  Jo - upright\n  next: 2026-10-22, today\n\n"
+                "2026-05-02  Kit - upright\n  next: 2026-10-23, tomorrow\n\n"
+                "  2026-04-03\n  next: May 2026 (no heading)\n\n"
+                "said 2026-04-04  Hal - console, next: May 2026\n"
+            ).encode(),
+        ),
+        (["other.txt"], b"2025-01-01  Ann - upright\n  next: Feb 2025\n"),
+    ]
 
 
 def series_pile() -> list:
@@ -822,6 +862,24 @@ def series_cases() -> list[dict]:
         )  # fmt: skip
     hand += [(f"t{n}.csv", t) for n, t in enumerate(tables)]
     return [{"path": p, "text": t, "out": k.series(p, t)} for p, t in hand]
+
+
+def written_cases() -> list[dict]:
+    texts = [
+        "", "next: Oct 2027", "March 20, 2026", "Mar. 5 2024", "Octo 2026",
+        "Oct2026", "may 1999", "May 32 2026", "Sept 9, 2026", "sep 2026",
+        "DEC  2025", "Oct \u0661\u0662 2026", "2026-10-14\u0663", "2026-10-149",
+        "x2026-10-14", "20261015", "Jun 0 2026", "Jul 1 1899", "Aug 1, 2100",
+        "Nov 30, 2026 and Nov 2026", "Feb 31 2026", "Oct-2026", "Oct, 2026",
+        "May\t2026", "January 2026 February 2, 2026", "\u212aov 2026",
+        "Oct 2026 Oct 2026", "1 Oct 2026", "Oct 1 2026x", "Oct 012 2026",
+    ]  # fmt: skip
+    bits = ["Oct", "may", "Sept", " ", ",", ".", "2026", "1", "31", "-", "x",
+            "2026-10-14", "\u0662", "\t"]  # fmt: skip
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 9))) for _ in range(250)
+    ]
+    return [{"text": t, "written": [list(w) for w in k.written(t)]} for t in texts]
 
 
 def ids_cases() -> list[dict]:
@@ -1006,7 +1064,7 @@ FLOAT_TIES = float_tie_piles()
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
     (8), random handfuls of the dense-ties pile's vocabulary (9), the dated
-    pile's (10), the ledger's (11) and the care log's (12)."""
+    pile's (10), the ledger's (11), the care log's (12) and the log's (13)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -1018,6 +1076,9 @@ def extra_bites(i: int) -> list[str]:
         ]
     if i == 10:
         return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
+    if i == 13:
+        return ["next", "upright", "grand", "console", "spinet", "studio", "due",
+                "notes"]  # fmt: skip
     if i == 12:
         # dad, care, log and csv are only in a path: a folder's name is a word
         return ["weight", "ankles", "pulse", "what amount", "weight kg", "dad",
@@ -1106,7 +1167,8 @@ def pile_based_cases() -> dict:
                         "bite": bite,
                         "alias": alias,
                         "served": at,
-                        "look": k.look(ch, bite, answers, alias),
+                        "today": TODAY,
+                        "look": k.look(ch, bite, answers, alias, TODAY),
                     }
                 )
     return {"chunks": chunks_out, "rank": rank_out, "look": look_out}
@@ -1197,6 +1259,7 @@ def main(argv: list[str]) -> int:
         "wordlist": wordlist_cases(),
         "ids": ids_cases(),
         "series": series_cases(),
+        "written": written_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

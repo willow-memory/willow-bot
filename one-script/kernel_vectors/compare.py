@@ -176,6 +176,7 @@ PARTS = {
     "wordlist": ["alias", "why"],
     "ids": ["ids", "shapes"],
     "series": ["out"],
+    "written": ["written"],
     "look": ["look"],
     "door": ["why"],
     "subject": ["subject"],
@@ -229,6 +230,8 @@ def _key(path: Path) -> None:
 
 
 GARDEN = {
+    # a log whose date has passed by the session's --now: today is the bite's
+    "visits.md": "2026-01-02  raised bed\n  next: Feb 2026\n",
     "garden.md": "Tomatoes want six hours of sun.\n\nWater at the root.\n",
     "lot.html": "<html><script>var lot = 1;</script>\n<p>The blue Civic, VIN 1HGEJ6672841, one owner.</p></html>\n",
     "faq.md": "Has the shed been painted this year?\n",
@@ -302,6 +305,7 @@ def session(impl, root: Path) -> dict:
     step("seal", *b, k.subject_of(good))
     step("bite", *b, "How much SUN do tomatoes want?!")  # sealed now
     step("bite", *b, "tomatoes want how much sun")  # other words: not sealed
+    step("bite", *b, "the raised bed")
     step("bite", *b, "water them at the root?")
     rows = k.read(box / "record.jsonl")[0]
     water = rows[-1]["served"][0]["id"]

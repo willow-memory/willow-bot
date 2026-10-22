@@ -388,6 +388,7 @@ public final class Kernel {
     static String GENESIS;
     static int TOP, SNIFF, MAX_FILE, MAX_CHUNK, ECHO_RUN, HOLD_NUM, HOLD_DEN;
     static Set<String> FUNCTION, MAKE, ROW_KEYS;
+    static Map<String, Integer> MONTHS = new HashMap<>();
     static Map<String, String> NEXT;
     static String VERSION;
 
@@ -424,6 +425,8 @@ public final class Kernel {
         HOLD_NUM = ((BigInteger) hold.get(0)).intValue();
         HOLD_DEN = ((BigInteger) hold.get(1)).intValue();
         FUNCTION = strings((List<Object>) kc.get("FUNCTION"));
+        for (Map.Entry<String, Object> e : ((Map<String, Object>) kc.get("MONTHS")).entrySet())
+            MONTHS.put(e.getKey(), ((BigInteger) e.getValue()).intValue());
         MAKE = strings((List<Object>) kc.get("MAKE"));
         ROW_KEYS = strings((List<Object>) kc.get("ROW_KEYS"));
         NEXT = new HashMap<>();
@@ -1197,6 +1200,125 @@ public final class Kernel {
         return out;
     }
 
+    static boolean digitAt(String t, int i) { return i < t.length() && t.charAt(i) >= '0' && t.charAt(i) <= '9'; }
+
+    static boolean letter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+
+    /** kernel.py's written: every date written in text, as [YYYYMMDD, as written]. */
+    static List<String[]> written(String text) {
+        List<int[]> runs = new ArrayList<>();
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            boolean dig = c >= '0' && c <= '9';
+            if (!dig && !letter(c)) { i++; continue; }
+            int j = i;
+            while (j < text.length() && (dig ? digitAt(text, j) : letter(text.charAt(j)))) j++;
+            runs.add(new int[] {i, j});
+            i = j;
+        }
+        List<String[]> out = new ArrayList<>();
+        for (int k = 0; k < runs.size(); k++) {
+            int a = runs.get(k)[0], b = runs.get(k)[1];
+            String t = text.substring(a, b);
+            if (digitAt(t, 0)) {
+                if (t.length() == 8) {
+                    String d = newest(t);
+                    if (!d.isEmpty()) out.add(new String[] {d, t});
+                } else if (t.length() == 4) {
+                    String ten = text.substring(a, Math.min(a + 10, text.length()));
+                    String d = newest(ten);
+                    if (!d.isEmpty() && d.startsWith(t) && ten.equals(iso(d)) && !digitAt(text, a + 10))
+                        out.add(new String[] {d, iso(d)});
+                }
+                continue;
+            }
+            Integer mon = MONTHS.get(t.toLowerCase(java.util.Locale.ROOT));
+            if (mon == null || k + 1 >= runs.size()) continue;
+            String m = String.format("%02d", mon);
+            String nxt = text.substring(runs.get(k + 1)[0], runs.get(k + 1)[1]);
+            String y2 = k + 2 < runs.size() ? year(text, runs, k + 2) : null;
+            if (digitAt(nxt, 0) && nxt.length() <= 2 && Integer.parseInt(nxt) >= 1 && Integer.parseInt(nxt) <= 31
+                    && gap(text, runs, k + 1) && y2 != null) {
+                out.add(new String[] {y2 + m + String.format("%02d", Integer.parseInt(nxt)), text.substring(a, runs.get(k + 2)[1])});
+            } else {
+                String y1 = year(text, runs, k + 1);
+                if (y1 != null) out.add(new String[] {y1 + m + "01", text.substring(a, runs.get(k + 1)[1])});
+            }
+        }
+        return out;
+    }
+
+    static boolean gap(String text, List<int[]> runs, int x) {
+        String between = text.substring(runs.get(x - 1)[1], runs.get(x)[0]);
+        if (between.isEmpty()) return false;
+        for (char c : between.toCharArray()) if (c != ' ' && c != ',' && c != '.') return false;
+        return true;
+    }
+
+    static String year(String text, List<int[]> runs, int x) {
+        String y = text.substring(runs.get(x)[0], runs.get(x)[1]);
+        return y.length() == 4 && (y.startsWith("19") || y.startsWith("20")) && gap(text, runs, x) ? y : null;
+    }
+
+    /** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
+    static List<Map<String, Object>> goneBy(List<Chunk> pile, List<Chunk> served, String today) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        List<String> folders = new ArrayList<>();
+        for (Chunk c : served) {
+            String f = c.path.contains("/") ? c.path.substring(0, c.path.lastIndexOf('/')) : "";
+            if (!folders.contains(f)) folders.add(f);
+        }
+        for (String folder : folders) {
+            List<Object[]> entries = new ArrayList<>(); // {date, heading, List<String[]> later}
+            String path = null;
+            Object[] cur = null;
+            for (Chunk c : pile) {
+                String f = c.path.contains("/") ? c.path.substring(0, c.path.lastIndexOf('/')) : "";
+                if (!f.equals(folder)) continue;
+                if (!c.path.equals(path)) { path = c.path; cur = null; }
+                for (String line : splitlines(c.text)) {
+                    String s = strip(line);
+                    String d = newest(s.substring(0, Math.min(10, s.length())));
+                    if (!d.isEmpty() && s.substring(0, Math.min(10, s.length())).equals(iso(d)) && !digitAt(s, 10)) {
+                        cur = new Object[] {d, strip(s.substring(10)), new ArrayList<String[]>()};
+                        entries.add(cur);
+                    }
+                    if (cur != null)
+                        for (String[] w : written(s)) if (w[0].compareTo((String) cur[0]) > 0) ((List<String[]>) cur[2]).add(w);
+                }
+            }
+            Map<String, Object[]> latest = new LinkedHashMap<>();
+            for (Object[] e : entries) {
+                String h = (String) e[1];
+                if (h.isEmpty()) continue;
+                Object[] have = latest.get(h);
+                if (have == null || ((String) e[0]).compareTo((String) have[0]) >= 0) latest.put(h, e);
+            }
+            List<String[]> due = new ArrayList<>(); // {date, written, heading}
+            for (Map.Entry<String, Object[]> e : latest.entrySet()) {
+                List<String[]> later = (List<String[]>) e.getValue()[2];
+                if (later.isEmpty()) continue;
+                String[] first = null;
+                for (String[] w : later)
+                    if (first == null || w[0].compareTo(first[0]) < 0 || (w[0].equals(first[0]) && BY_CODE_POINT.compare(w[1], first[1]) < 0)) first = w;
+                if (first[0].compareTo(today) <= 0) due.add(new String[] {first[0], first[1], e.getKey()});
+            }
+            if (due.isEmpty()) continue;
+            due.sort((x, y) -> {
+                int c = x[0].compareTo(y[0]);
+                if (c != 0) return c;
+                c = BY_CODE_POINT.compare(x[1], y[1]);
+                return c != 0 ? c : BY_CODE_POINT.compare(x[2], y[2]);
+            });
+            List<String> parts = new ArrayList<>();
+            for (String[] d : due) parts.add(d[2] + " (" + d[1] + ")");
+            out.add(hint("gone by, nothing written since: " + String.join("; ", parts),
+                (folder.isEmpty() ? "." : folder) + "/: " + due.size() + " of " + latest.size() + " headings, as of " + iso(today), null));
+        }
+        return out;
+    }
+
     /** How many ASCII digits run from {@code i}. */
     static int digits(String t, int i) {
         int j = i;
@@ -1297,7 +1419,7 @@ public final class Kernel {
     }
 
     static List<Map<String, Object>> look(List<Chunk> pile, String bite, List<Chunk> served,
-            Map<String, List<String>> alias) {
+            Map<String, List<String>> alias, String today) {
         List<Map<String, Object>> out = new ArrayList<>();
         List<String> ws = words(bite);
         List<String> want = new ArrayList<>();
@@ -1331,6 +1453,7 @@ public final class Kernel {
             }
         }
         out.addAll(missing(pile, served));
+        if (!today.isEmpty()) out.addAll(goneBy(pile, served, today));
         List<String> seen = new ArrayList<>();
         for (Chunk c : served) {
             if (seen.contains(c.path)) continue;
@@ -1666,7 +1789,8 @@ public final class Kernel {
             shown.add(m);
         }
         doc.put("served", shown);
-        List<Map<String, Object>> hints = look(pile, text, answers.isEmpty() ? new ArrayList<>() : served, alias);
+        List<Map<String, Object>> hints = look(pile, text, answers.isEmpty() ? new ArrayList<>() : served, alias,
+            newest(ts.substring(0, Math.min(10, ts.length()))));
         if (!hints.isEmpty()) doc.put("look", hints);
         System.out.println(dumpsSpacedUtf8(doc));
         return answers.isEmpty() ? ESCALATE : ALIVE;
@@ -1932,13 +2056,21 @@ public final class Kernel {
         }
         out.put("series", seriesOut);
 
+        List<Object> writtenOut = new ArrayList<>();
+        for (Object o : (List<Object>) c.get("written")) {
+            List<Object> ws = new ArrayList<>();
+            for (String[] w : written((String) ((Map<String, Object>) o).get("text"))) ws.add(new ArrayList<Object>(List.of(w[0], w[1])));
+            writtenOut.add(fields("written", ws));
+        }
+        out.put("written", writtenOut);
+
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {
             Map<String, Object> m = (Map<String, Object>) o;
             List<Chunk> pile = piles.get(((BigInteger) m.get("pile")).intValue());
             List<Chunk> served = new ArrayList<>();
             for (Object at : (List<Object>) m.get("served")) served.add(pile.get(((BigInteger) at).intValue()));
-            lookOut.add(fields("look", new ArrayList<Object>(look(pile, (String) m.get("bite"), served, aliasOf(m)))));
+            lookOut.add(fields("look", new ArrayList<Object>(look(pile, (String) m.get("bite"), served, aliasOf(m), (String) m.get("today")))));
         }
         out.put("look", lookOut);
 

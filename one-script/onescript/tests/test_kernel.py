@@ -347,3 +347,31 @@ def test_a_folders_name_is_her_word(tmp_path):
     pile = k.chunks(tmp_path)
     assert k.rank(pile, "Dad's weight")[0]["path"] == "dad/care-log.csv"
     assert not any("dad" in h["why"] for h in k.look(pile, "Dad's weight", []))
+
+
+def test_a_date_gone_by_with_nothing_since_is_said(tmp_path):
+    """Who's due (demo/odile, N1): the latest entry under each heading whose
+    next date has passed, with nothing written under it since. A log kept a
+    file a year is read as one."""
+    (tmp_path / "tuning").mkdir()
+    (tmp_path / "tuning" / "2025.txt").write_text(
+        "2025-05-02  Ann - upright\n  next: May 2026\n\n"
+        "2025-06-01  Bo - grand\n  next: Jan 2026\n"
+    )
+    (tmp_path / "tuning" / "2026.txt").write_text(
+        "2026-02-10  Bo - grand\n  next: Feb 2027\n\n"
+        "2026-03-01  Cy - console\n  next: Dec. 1, 2026\n"
+    )
+    pile = k.chunks(tmp_path)
+    served = [c for c in pile if c["path"] == "tuning/2026.txt"]
+    assert k.gone_by(pile, served, "20261022") == [
+        {
+            "why": "gone by, nothing written since: Ann - upright (May 2026)",
+            "where": "tuning/: 1 of 3 headings, as of 2026-10-22",
+        }
+    ]
+    assert k.gone_by(pile, served, "20260430") == []
+    assert k.written("next: Oct 2027; March 20, 2026; Octo 2026") == [
+        ("20271001", "Oct 2027"),
+        ("20260320", "March 20, 2026"),
+    ]
