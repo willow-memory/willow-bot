@@ -30,16 +30,34 @@ def test_the_vectors_are_kernel_pys_as_it_is_now(tmp_path):
         "kernel.py changed since the vectors were made: run"
         " `python3 kernel_vectors/gen.py` and commit cases.json and kernel_tables.json"
     )
+    tables = (VEC / "kernel_tables.json").read_bytes()
+    assert pinned["tables_sha256"] == hashlib.sha256(tables).hexdigest(), (
+        "cases.json and kernel_tables.json weren't made together: regenerate both"
+    )
     got = subprocess.run(
         [sys.executable, str(VEC / "gen.py"), str(tmp_path)],
         capture_output=True,
         text=True,
     )
     assert got.returncode == 0, got.stderr
-    for name in ("cases.json", "kernel_tables.json"):
-        assert (tmp_path / name).read_bytes() == (VEC / name).read_bytes(), (
-            f"{name} isn't what gen.py makes from this Python: regenerate it"
-        )
+    # The cases are the kernel's answers, the same on every Python. The tables
+    # carry this Python's Unicode, so they are held byte for byte only where
+    # the Unicode is the one they were made from; which Python made them, and
+    # the hash that names it, are left out.
+    made, here = (
+        json.loads(f.read_text()) for f in (tmp_path / "cases.json", VEC / "cases.json")
+    )
+    made.pop("tables_sha256"), here.pop("tables_sha256")
+    assert made == here, (
+        "cases.json isn't what gen.py makes from kernel.py: regenerate it"
+    )
+    made, here = (
+        json.loads(f.read_text())
+        for f in (tmp_path / "kernel_tables.json", VEC / "kernel_tables.json")
+    )
+    if made["unicode"] == here["unicode"]:
+        made.pop("python"), here.pop("python")
+        assert made == here, "kernel_tables.json isn't what gen.py makes: regenerate it"
 
 
 @pytest.mark.skipif(
