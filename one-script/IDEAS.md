@@ -199,6 +199,7 @@ here reads, writes or caches vault material.
 **The hidden egg**
 
 113. [Every demo is one loop, and the kernel is it](#113-every-demo-is-one-loop-and-the-kernel-is-it)
+114. [What the demos' characters needed](#114-what-the-demos-characters-needed)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2034,6 +2035,32 @@ Fixed: `FUNCTION` words never count toward holding a bite, so bread is 42,
 "what does this do" is 42 (say more), and "who is big jim" goes straight to
 `big_jim.py`. Open: `HOLD` (0.5) and `FUNCTION` (English) are placeholders,
 the operator's to set.
+
+### 114. What the demos' characters needed
+
+2026-10-22. The operator: *"Keep pushing on what that characters would need.
+There's more than big jim in that pile."* Each character in the merged demo
+box got a kernel box with only their own story as the pile, and asked the
+questions their demo asks (the string arguments of every `lookup` and `ask`
+call), plus a few their story implies. The eight writing styles in
+corpus-lens's `styles-corpus` asked their openers against the whole box.
+
+| Who | Asked | What they needed | Now |
+|---|---|---|---|
+| Big Jim | "that one ending 672841" | a serial matched by its ending (the VIN `1HGEJ6672841` is one token) | **Built**: `holds`, a word with a digit matches a token that starts or ends with it |
+| Nieves | "mi terremoto", "my little earthquake" | her story is a web page; she was served `<button>` bars | **Built**: `html_text`, pages read as the text they show. "my little earthquake" now finds the ruling `seal("mi terremoto", "my earthquake")` |
+| June | "what is june growing" | the same: her farm is a page | Built (same fix); her page is mostly interface, so there is little farm in it |
+| The Dispatches author | "has the essays folder been audited for contradictions?" | the demo's trap: "a question nobody audited must NOT be answered", and the kernel served the question back | **Built**: `echo`, a chunk holding the bite's own words in order is served marked and answers nothing; only echoes is 42 |
+| Attercliffe Medical | the pump CH-4471, three ways | the near miss to refuse | Holds: its only chunk is the fixture's copy of the near miss, an echo, so 42 |
+| The eight styles | their openers | every opener was "found" in `build.py`, the script that wrote them | **Built**: `ECHO_RUN`, 8 words in a row in the bite's order make an echo; all eight are 42 now (the questioner still gets two real chunks) |
+| Rosalind | "a tool for my scooter rally photographs" | served her story; what she wants is something built, which is the Forge's tier, not the kernel's | Open: a 42 that names the next tier |
+| A Law Gazelle client | "what is my next court deadline" | 42, rightly: the deadlines are generated into SQLite at run time, never text | Open, the operator's call: whether the kernel reads generated data |
+
+Open, the operator's call: whether a hit in a newcomer's *own unsorted
+files* should be 0 at all. F-43 makes the operator's pile a yes because it
+is things already said yes to; a newcomer's folder isn't that yet. The
+echo rule keeps the worst case (a question served as its own answer) at
+42; the rest is a ruling.
 
 ## What the one script said about this list
 

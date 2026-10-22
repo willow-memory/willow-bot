@@ -22,7 +22,9 @@ The loop:
     bite     their words against their own files. A sealed answer for these
              words is served (exit 0: a human said it). Else their files'
              chunks that hold the words are served (exit 0: their pile is
-             things they already said yes to). Else nothing (exit 42)
+             things they already said yes to); a chunk that only asks the
+             question back is marked `echo` and answers nothing. Else nothing
+             (exit 42). Pages are read as the text they show
     propose  a model's rows, one JSON object a line: {path, data, cites,
              claim}. Through the door: a plain relative path, a claim that says
              why, and cites only from what the last bite served. A pass waits
@@ -53,6 +55,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import json
 import os
 import re
@@ -232,6 +235,50 @@ def init(box: Path, pile: Path, key: Path, ts: str) -> int:
 
 
 # ── the pile: their own folder, chunked by paragraph ────────────────────────
+_HIDDEN = re.compile(r"<(script|style)\b.*?</\1\s*>|<!--.*?-->", re.S | re.I)
+_TAG = re.compile(r"<[^>]*>", re.S)
+
+
+def _lines_kept(m: re.Match) -> str:
+    return " " + "\n" * m.group(0).count("\n")  # line numbers still point home
+
+
+def html_text(text: str) -> str:
+    """The words a page shows: scripts, styles, comments and tags out, entities
+    read, every line where it was. A first bite on a page is never served
+    `<button>` and `<!doctype>` (Nieves's shoebox, June's farm)."""
+    return html.unescape(_TAG.sub(_lines_kept, _HIDDEN.sub(_lines_kept, text)))
+
+
+def holds(w: str, toks: set[str]) -> bool:
+    """A word holds where it is a token; one with a digit in it (a VIN, a
+    serial, a case number) also holds where a token starts or ends with it:
+    "that one ending 672841" finds 1HGEJ6672841 (Big Jim's lot)."""
+    if w in toks:
+        return True
+    return (
+        len(w) >= 4
+        and any(c.isdigit() for c in w)
+        and any(t.endswith(w) or t.startswith(w) for t in toks)
+    )
+
+
+ECHO_RUN = 8  # words in a row, in the bite's order, that make a chunk an echo
+
+
+def echo(bite: str, text: str) -> bool:
+    """Whether `text` holds the bite's own words in its own order: the whole
+    bite, or `ECHO_RUN` of its words in a row (a long opener never fits in one
+    chunk whole). The question asked back is not its answer (the Dispatches
+    audit's trap: "a question nobody audited must NOT be answered")."""
+    ws, ts = words(bite), words(text)
+    n = min(len(ws), ECHO_RUN)
+    if n < 3:
+        return False
+    runs = {tuple(ts[i : i + n]) for i in range(len(ts) - n + 1)}
+    return any(tuple(ws[i : i + n]) in runs for i in range(len(ws) - n + 1))
+
+
 def chunks(pile: Path) -> list[dict]:
     """Every paragraph of every text file under `pile`, cut into runs of at most
     `MAX_CHUNK` characters (a file with no blank lines would otherwise be one
@@ -251,6 +298,8 @@ def chunks(pile: Path) -> list[dict]:
             text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        if p.suffix.lower() == ".html":
+            text = html_text(text)
         para, start, size = [], 1, 0
         for i, line in enumerate(text.splitlines() + [""], 1):
             if para and (not line.strip() or size + len(line) > MAX_CHUNK):
@@ -276,7 +325,7 @@ def rank(pile: list[dict], bite: str) -> list[dict]:
     want = set(words(bite)) - FUNCTION
     if not want:
         return []
-    held = [(c, want & set(words(c["text"]))) for c in pile]
+    held = [(c, {w for w in want if holds(w, set(words(c["text"])))}) for c in pile]
     held = [(c, h) for c, h in held if len(h) >= HOLD * len(want)]
     df = {w: sum(w in h for _, h in held) for w in want}
     scored = [
@@ -317,12 +366,21 @@ def bite(box: Path, text: str, ts: str) -> int:
             print(json.dumps({"state": "sealed", "answer": prop["data"], "by": subj}))
             return ALIVE
     served = rank(chunks(Path(config(box)["pile"])), text)
-    refs = [{"id": c["id"], "where": f"{c['path']}:{c['line']}"} for c in served]
+    refs = [
+        {
+            "id": c["id"],
+            "where": f"{c['path']}:{c['line']}",
+            "echo": echo(text, c["text"]),
+        }
+        for c in served
+    ]
     append(box, ts, "bite", bite_key=k, served=refs)
-    doc = {"state": "populated" if served else "empty", "bite_key": k}
+    answers = [r for r in refs if not r["echo"]]
+    state = "populated" if answers else "echo" if refs else "empty"
+    doc = {"state": state, "bite_key": k}
     doc["served"] = [{**r, "text": c["text"]} for r, c in zip(refs, served)]
     print(json.dumps(doc, ensure_ascii=False))
-    return ALIVE if served else ESCALATE
+    return ALIVE if answers else ESCALATE
 
 
 def door(prop: object, served: set[str]) -> str | None:
@@ -469,6 +527,26 @@ def test() -> None:
         assert quiet(bite, box, "when does the frost come", ts)[0] == ESCALATE
         assert quiet(bite, box, "how do I bake sourdough bread", ts)[0] == ESCALATE
         assert quiet(bite, box, "what does this do", ts)[0] == ESCALATE  # say more
+        # what the demos' characters needed: a page read as text, a serial by
+        # its ending, and a question asked back not taken for its answer
+        (pile / "lot.html").write_text(
+            "<html><script>var lot = 1;</script>\n<p>The blue Civic,"
+            " VIN 1HGEJ6672841, one owner.</p></html>\n"
+        )
+        code, said = quiet(bite, box, "the one ending 672841", ts)
+        hit = json.loads(said)["served"][0]
+        assert (
+            code == ALIVE and hit["where"] == "lot.html:2" and "<p>" not in hit["text"]
+        )
+        (pile / "faq.md").write_text("Has the shed been painted this year?\n")
+        code, said = quiet(bite, box, "has the shed been painted this year", ts)
+        assert code == ESCALATE and json.loads(said)["state"] == "echo"
+        (pile / "shed.md").write_text(
+            "Has the shed out back been painted this year or not, and by whom?\n"
+        )
+        long = "so I was out back this morning and wondered: has the shed out back been painted this year"
+        code, said = quiet(bite, box, long, ts)  # a long opener holding the question
+        assert code == ESCALATE and json.loads(said)["state"] == "echo"
         assert all(len(c["text"]) <= MAX_CHUNK for c in chunks(pile))
         # their own pile answers what it holds (things they already said yes to)
         code, said = quiet(bite, box, "how much sun do tomatoes want", ts)
