@@ -196,6 +196,10 @@ here reads, writes or caches vault material.
 111. [Every commit asks old boxes to re-check their writes](#111-every-commit-asks-old-boxes-to-re-check-their-writes)
 112. ["What's blocked" doesn't find the blocked list](#112-whats-blocked-doesnt-find-the-blocked-list)
 
+**The hidden egg**
+
+113. [Every demo is one loop, and the kernel is it](#113-every-demo-is-one-loop-and-the-kernel-is-it)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -1988,6 +1992,45 @@ governance and design docs first; `compiled/ideas.py`'s `BLOCKED` (4, 7,
 102) isn't in the top 8. The list of calls waiting on the operator lives in
 a Python dict, where NEEDS YOU can't see it. A shape: each `BLOCKED` entry
 becomes a NEEDS YOU line, since that's what it is.
+
+## The hidden egg
+
+### 113. Every demo is one loop, and the kernel is it
+
+2026-10-22. The operator: *"put all that data in one box, and see what comes
+out the other end. Think of it as merging the demos, to find the hidden
+egg."* Every demo file from nine repos (Nestor 48, the Grove 29,
+safe-app-store 9, corpus-lens 15, Forge 3, and four more; 109 files, 4,201
+chunks) went into one box, read with the box's own tools:
+
+- **Little text is shared:** two real near-copies (Nestor's `shoebox.py`
+  and the Grove's `shoebox-stream` HTML, 0.43; one `demo.sh` byte for
+  byte in two repos).
+- **One shape is shared.** Of 24 Python demos, 12 make a temp box, work,
+  and remove it; 11 import `nestor.memory`. The calls that do the work:
+  `add_pair` (7 demos), `SqliteStore` (7), `lookup` (6), `best_sealed`
+  (6), `set_ledger_path` (6). Something is said, kept, looked up, served
+  only when a human sealed it, and every step chained.
+- **Nestor's `demo/sixty_seconds.py`** tells that loop in eight beats; the
+  Forge's `demo/the_first_bite.py` says "the box has never been
+  demonstrated as one thing".
+
+The eight beats are the one script's loop, and genesis's record: 42 when
+nothing is verified, a seal, 0 once a human said it, a near miss refused, a
+forged seal refused, the chain verified, an edit seen. So the smallest
+script for anyone is that loop on their own folder.
+
+**Built: `one-script/kernel.py`.** One stdlib file, Python 3.9+:
+`init`, `bite`, `propose`, `seal`, `verify`, `out`. Its pile is the person's
+own folder, its key theirs, nothing of the operator's. Its rows, seal and
+bite key are the one script's byte for byte (`test_kernel.py` holds it), so
+`Record.verify_chain` checks a kernel box. `kernel.py test` runs the eight
+beats. Run on Nestor's demos as a stranger's pile, a first bite about the
+shoebox found the shoebox story first.
+
+Open: `HOLD` (the share of a bite's words a chunk must hold, 0.5) is a
+placeholder; common words still lift a chunk over it, so weighting rare
+words in the hold rule is the next step.
 
 ## What the one script said about this list
 
