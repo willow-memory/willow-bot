@@ -47,8 +47,13 @@ keep. Everything else in a bigger tool is what to take away.
 | Newest first | "how are the bees" serves 2026's last inspection, not 2021's first; "is Dad okay" her latest night memos |
 | Her word | with `due = next` in her own list, "who's due" serves her latest `next:` lines, and says her list did it |
 | What isn't there | "purchase order": `2023-040, 2025-063, 2026-095: not in money/teo-books.csv` (N4's two, and T3's cash order, which only her memo can tell apart) |
-| Numbers over time | not built yet |
+| Numbers over time | served her care log ("ankles"): `weight_kg: 75.1 on 2026-10-21, up 1.9 from 73.2 on 2026-10-14; the most in one week of the last 4: up 2.5, 2026-10-09 to 2026-10-16`, beside the cardiologist's "more than 2 kg in a week" (N2) |
 
 What isn't there misses N3: the 2026 case number has no reply, but nothing names
 it beside the 2024 one, so by the rule it has no group. Her plain "what do I
 need to do" still finds the notice.
+
+"Dad's weight" still doesn't serve the care log: the file never says "Dad"
+(only its folder, `dad/`, does), and the client named Weight (T1) takes a
+place. The reading works once the log is served; getting it served is a
+ranking question, not a reading one.

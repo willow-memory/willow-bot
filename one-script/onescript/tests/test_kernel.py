@@ -312,3 +312,27 @@ def test_what_isnt_there_is_said_beside_what_was_served(tmp_path):
         "1/300",
     ]
     assert k.shape("WR-2026-0117") == "AA-9999-9999"
+
+
+def test_numbers_over_time_say_what_moved_and_never_judge(tmp_path):
+    """Laszlo's care log (demo/odile): the latest week can sit under the
+    cardiologist's 2 kg line while an earlier week crossed it, so both are
+    said. A ledger repeats its dates and is never read as a series."""
+    days = [("2026-10-0" + str(d) if d < 10 else f"2026-10-{d}") for d in range(1, 22)]
+    kg = [71.2] * 8 + [71.3, 71.9, 72.3, 72.5, 72.8, 73.2, 73.4, 73.8, 74.0]
+    kg += [74.3, 74.6, 75.0, 75.1]
+    note = {"2026-10-16": '"ankles, puffy"'}
+    log = "date,weight_kg,notes\n" + "".join(
+        f"{d},{w:.1f},{note.get(d, '')}\n" for d, w in zip(days, kg)
+    )
+    assert k.series("dad/care-log.csv", log) == [
+        {
+            "why": "weight_kg: 75.1 on 2026-10-21, up 1.9 from 73.2 on 2026-10-14;"
+            " the most in one week of the last 4: up 2.5, 2026-10-09 to 2026-10-16",
+            "where": "dad/care-log.csv: 21 dated rows, 2026-10-01 to 2026-10-21",
+        }
+    ]
+    ledger = "date,what,amount\n2026-10-01,a,5\n2026-10-01,b,6\n2026-10-09,c,7\n"
+    assert k.series("books.csv", ledger) == []
+    assert k.number("-0.30") == (-30, 2) and k.number("1.") is None
+    assert k.day("20240307") - k.day("20240229") == 7

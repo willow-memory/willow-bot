@@ -825,6 +825,128 @@ function missing(pile: Chunk[], served: Chunk[]): J[] {
   return out;
 }
 
+/** kernel.py's cells: one line of comma-separated values, quotes kept whole. */
+function cells(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted && ch === '"' && line[i + 1] === '"') {
+      cur += '"';
+      i++;
+    } else if (ch === '"') quoted = !quoted;
+    else if (ch === "," && !quoted) {
+      out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** A decimal: its digits and its places (75.1 is [751n, 1]). */
+type Num = [bigint, number];
+const allDigits = (s: string) => [...s].every((c) => c >= "0" && c <= "9");
+
+/** kernel.py's number: a cell that is a decimal number, or null. */
+function number(cell: string): Num | null {
+  const s = strip(cell);
+  const neg = s.startsWith("-");
+  const body = neg ? s.slice(1) : s;
+  const dot = body.indexOf(".");
+  const whole = dot < 0 ? body : body.slice(0, dot);
+  const frac = dot < 0 ? "" : body.slice(dot + 1);
+  if (!whole || !allDigits(whole) || !allDigits(frac) || (dot >= 0 && !frac)) return null;
+  const n = BigInt(whole + frac);
+  return [neg ? -n : n, frac.length];
+}
+
+/** kernel.py's day: days since 1970-01-01 for a YYYYMMDD. */
+function day(d: string): number {
+  let y = Number(d.slice(0, 4));
+  const m = Number(d.slice(4, 6));
+  const dd = Number(d.slice(6));
+  if (m <= 2) y -= 1;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + dd - 1;
+  return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468;
+}
+
+function shown([v, places]: Num): string {
+  const digits = (v < 0n ? -v : v).toString().padStart(places + 1, "0");
+  const body = digits.slice(0, digits.length - places) + (places ? "." + digits.slice(digits.length - places) : "");
+  return (v < 0n ? "-" : "") + body;
+}
+
+const isoDate = (d: string) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`;
+const pow10 = (n: number) => 10n ** BigInt(n);
+
+function change(a: Num, b: Num): Num {
+  const places = Math.max(a[1], b[1]);
+  return [b[0] * pow10(places - b[1]) - a[0] * pow10(places - a[1]), places];
+}
+
+const absN = (v: bigint) => (v < 0n ? -v : v);
+const bigger = (a: Num, b: Num) => absN(a[0]) * pow10(b[1]) > absN(b[0]) * pow10(a[1]);
+const moved = (d: Num) => (d[0] === 0n ? "no change" : `${d[0] > 0n ? "up" : "down"} ${shown([absN(d[0]), d[1]])}`);
+const WEEK = 7;
+const WEEKS = 4;
+
+/** The latest row at least a week before d, or -1. */
+function weekBefore(dates: string[], d: string): number {
+  let at = -1;
+  dates.forEach((x, i) => {
+    if (day(x) <= day(d) - WEEK) at = i;
+  });
+  return at;
+}
+
+/** kernel.py's series: numbers over time, in a table of dated rows. */
+function series(file: string, text: string): J[] {
+  const out: J[] = [];
+  const lines = splitlines(text).filter((ln) => strip(ln));
+  if (lines.length < 3) return out;
+  const head = cells(lines[0]);
+  if (newest(lines[0]) || head.length < 2) return out;
+  const rows: [string, string[]][] = [];
+  for (const ln of lines.slice(1)) {
+    const cs = cells(ln);
+    const d = newest(cs[0]);
+    const c0 = strip(cs[0]);
+    if (d && (c0 === d || c0 === isoDate(d))) rows.push([d, cs]);
+  }
+  if (rows.length < 2 || rows.some((r, i) => i > 0 && r[0] <= rows[i - 1][0])) return out;
+  for (let col = 1; col < head.length; col++) {
+    const got: [string, Num][] = [];
+    for (const [d, cs] of rows) {
+      const n = col < cs.length ? number(cs[col]) : null;
+      if (n) got.push([d, n]);
+    }
+    if (got.length < 2) continue;
+    const ds = got.map(([d]) => d);
+    const [d1, last] = got[got.length - 1];
+    const name = strip(head[col]) || `column ${col + 1}`;
+    const b = weekBefore(ds, d1);
+    if (b < 0) continue;
+    const [d0, then] = got[b];
+    let why = `${name}: ${shown(last)} on ${isoDate(d1)}, ${moved(change(then, last))} from ${shown(then)} on ${isoDate(d0)}`;
+    let best: [Num, string, string] | null = null;
+    for (const [d, n] of got) {
+      if (day(d) <= day(d1) - WEEK * WEEKS) continue;
+      const w = weekBefore(ds, d);
+      if (w < 0) continue;
+      const diff = change(got[w][1], n);
+      if (best === null || bigger(diff, best[0])) best = [diff, got[w][0], d];
+    }
+    if (best !== null && !(best[1] === d0 && best[2] === d1))
+      why += `; the most in one week of the last ${WEEKS}: ${moved(best[0])}, ${isoDate(best[1])} to ${isoDate(best[2])}`;
+    out.push(obj(["why", why], ["where", `${file}: ${rows.length} dated rows, ${isoDate(rows[0][0])} to ${isoDate(rows[rows.length - 1][0])}`]));
+  }
+  return out;
+}
+
 /** How many ASCII digits run from i. */
 function digits(t: string, i: number): number {
   let j = i;
@@ -945,6 +1067,8 @@ function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias): J[] {
     }
   }
   out.push(...missing(pile, served));
+  for (const p of new Set(served.map((c) => c.path)))
+    out.push(...series(p, pile.filter((x) => x.path === p).map((x) => x.text).join("\n")));
   if (ws.length && T.MAKE.has(ws[0])) out.push(hint("this asks for something made", null, T.NEXT.get("made")!));
   return out;
 }
@@ -1382,6 +1506,7 @@ function vectors(casesFile: string, resultsFile: string): number {
     new Map([...((o.get("alias") as JMap | undefined) ?? new Map())].map(([w, ts]) => [w, ts as string[]]));
   res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string, aliasOf(o)).map((x) => x.id)])));
   res.set("newest", list("newest").map((o) => obj(["newest", newest(o.get("text") as string)])));
+  res.set("series", list("series").map((o) => obj(["out", series(o.get("path") as string, o.get("text") as string)])));
   res.set(
     "ids",
     list("ids").map((o) => {

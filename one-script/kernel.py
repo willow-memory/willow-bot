@@ -528,14 +528,145 @@ def missing(pile: list[dict], served: list[dict]) -> list[dict]:
     return out
 
 
+def cells(line: str) -> list[str]:
+    """One line of comma-separated values: a cell in double quotes may hold
+    commas, and "" inside it is one quote."""
+    out, cur, quoted, i = [], [], False, 0
+    while i < len(line):
+        ch = line[i]
+        if quoted and ch == '"' and line[i + 1 : i + 2] == '"':
+            cur.append('"')
+            i += 1
+        elif ch == '"':
+            quoted = not quoted
+        elif ch == "," and not quoted:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    return out + ["".join(cur)]
+
+
+def number(cell: str) -> tuple[int, int] | None:
+    """A cell that is a decimal number, as (digits, places): 75.1 is (751, 1).
+    ASCII digits, an optional minus and point, nothing else."""
+    s = cell.strip()
+    whole, _, frac = s[1:].partition(".") if s[:1] == "-" else s.partition(".")
+    ok = whole and all("0" <= c <= "9" for c in whole + frac) and (frac or "." not in s)
+    if not ok:
+        return None
+    n = int(whole + frac)
+    return (-n if s[:1] == "-" else n), len(frac)
+
+
+def day(d: str) -> int:
+    """Days since 1970-01-01 for a YYYYMMDD, by integer arithmetic alone."""
+    y, m, dd = int(d[:4]), int(d[4:6]), int(d[6:])
+    y -= m <= 2
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + dd - 1
+    return era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy - 719468
+
+
+def shown(n: tuple[int, int]) -> str:
+    v, places = n
+    digits = str(abs(v)).rjust(places + 1, "0")
+    body = digits[: len(digits) - places] + ("." + digits[-places:] if places else "")
+    return ("-" if v < 0 else "") + body
+
+
+def iso(d: str) -> str:
+    return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+
+
+WEEK = 7  # days: a change is said against the row a week before the latest
+WEEKS = 4  # and the biggest move in any one week, over this many back
+
+
+def change(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+    """b - a, exactly, at the finer of their two places."""
+    places = max(a[1], b[1])
+    return b[0] * 10 ** (places - b[1]) - a[0] * 10 ** (places - a[1]), places
+
+
+def bigger(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """|a| > |b|, exactly: each scaled by the other's places."""
+    return abs(a[0]) * 10 ** b[1] > abs(b[0]) * 10 ** a[1]
+
+
+def moved(diff: tuple[int, int]) -> str:
+    if diff[0] == 0:
+        return "no change"
+    return f"{'up' if diff[0] > 0 else 'down'} {shown((abs(diff[0]), diff[1]))}"
+
+
+def week_before(got: list, d: str) -> tuple[str, tuple[int, int]] | None:
+    """The latest row at least a week before `d`, or None."""
+    before = [(x, n) for x, n in got if day(x) <= day(d) - WEEK]
+    return before[-1] if before else None
+
+
+def series(path: str, text: str) -> list[dict]:
+    """Numbers over time: a table (comma-separated, a header first) whose rows
+    start with a date, each later than the last, says for each column of
+    numbers its latest value and how it stands to the one a week before. A
+    ledger repeats its dates, so it is never a series; the kernel says what
+    moved, never whether it matters."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 3:
+        return []
+    head, rows = cells(lines[0]), []
+    if newest(lines[0]) or len(head) < 2:
+        return []
+    for ln in lines[1:]:
+        cs = cells(ln)
+        d = newest(cs[0])
+        if d and cs[0].strip() in (d, iso(d)):
+            rows.append((d, cs))
+    if len(rows) < 2 or any(b[0] <= a[0] for a, b in zip(rows, rows[1:])):
+        return []
+    out = []
+    for col in range(1, len(head)):
+        got = [(d, n) for d, cs in rows if col < len(cs) and (n := number(cs[col]))]
+        if len(got) < 2:
+            continue
+        (d1, last), name = got[-1], head[col].strip() or f"column {col + 1}"
+        if (b := week_before(got, d1)) is None:
+            continue
+        d0, then = b
+        why = f"{name}: {shown(last)} on {iso(d1)}, {moved(change(then, last))} from "
+        why += f"{shown(then)} on {iso(d0)}"
+        # the biggest move in one week, among the last WEEKS: the latest week
+        # can sit under a line that an earlier one crossed
+        best = None
+        for d, n in got:
+            if day(d) > day(d1) - WEEK * WEEKS and (b := week_before(got, d)):
+                diff = change(b[1], n)
+                if best is None or bigger(diff, best[0]):  # a tie keeps the earlier
+                    best = (diff, b[0], d)
+        if best is not None and (best[1], best[2]) != (d0, d1):
+            why += f"; the most in one week of the last {WEEKS}: {moved(best[0])}"
+            why += f", {iso(best[1])} to {iso(best[2])}"
+        out.append(
+            {
+                "why": why,
+                "where": f"{path}: {len(rows)} dated rows, {iso(rows[0][0])} to "
+                f"{iso(rows[-1][0])}",
+            }
+        )
+    return out
+
+
 def look(
     pile: list[dict], bite: str, served: list[dict], alias: dict | None = None
 ) -> list[dict]:
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
-    it); what isn't there (`missing`); a bite of common words only; a request
-    to make something."""
+    it); what isn't there (`missing`); numbers over time (`series`); a bite of
+    common words only; a request to make something."""
     out = []
     ws = words(bite)
     want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
@@ -576,6 +707,8 @@ def look(
                 }
             )
     out += missing(pile, served)
+    for path in dict.fromkeys(c["path"] for c in served):  # the whole table
+        out += series(path, "\n".join(c["text"] for c in pile if c["path"] == path))
     if ws and ws[0] in MAKE:
         out.append({"why": "this asks for something made", "next": NEXT["made"]})
     return out

@@ -1043,6 +1043,160 @@ public final class Kernel {
         return out;
     }
 
+    /** kernel.py's cells: one line of comma-separated values, quotes kept whole. */
+    static List<String> cells(String line) {
+        List<String> out = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            char ch = line.charAt(i);
+            if (quoted && ch == '"' && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                cur.append('"');
+                i++;
+            } else if (ch == '"') {
+                quoted = !quoted;
+            } else if (ch == ',' && !quoted) {
+                out.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(ch);
+            }
+        }
+        out.add(cur.toString());
+        return out;
+    }
+
+    /** A decimal: its digits and its places (75.1 is 751, 1). */
+    static final class Num {
+        final BigInteger v;
+        final int places;
+
+        Num(BigInteger v, int places) { this.v = v; this.places = places; }
+    }
+
+    static boolean allDigits(String s) {
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) < '0' || s.charAt(i) > '9') return false;
+        return true;
+    }
+
+    /** kernel.py's number: a cell that is a decimal number, or null. */
+    static Num number(String cell) {
+        String s = strip(cell);
+        boolean neg = s.startsWith("-");
+        String body = neg ? s.substring(1) : s;
+        int dot = body.indexOf('.');
+        String whole = dot < 0 ? body : body.substring(0, dot), frac = dot < 0 ? "" : body.substring(dot + 1);
+        if (whole.isEmpty() || !allDigits(whole) || !allDigits(frac) || (dot >= 0 && frac.isEmpty())) return null;
+        BigInteger n = new BigInteger(whole + frac);
+        return new Num(neg ? n.negate() : n, frac.length());
+    }
+
+    /** kernel.py's day: days since 1970-01-01 for a YYYYMMDD. */
+    static long day(String d) {
+        long y = Long.parseLong(d.substring(0, 4)), m = Long.parseLong(d.substring(4, 6)), dd = Long.parseLong(d.substring(6));
+        if (m <= 2) y -= 1;
+        long era = Math.floorDiv(y, 400);
+        long yoe = y - era * 400;
+        long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+        return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    }
+
+    static String shown(BigInteger v, int places) {
+        String digits = v.abs().toString();
+        while (digits.length() < places + 1) digits = "0" + digits;
+        String body = digits.substring(0, digits.length() - places) + (places > 0 ? "." + digits.substring(digits.length() - places) : "");
+        return (v.signum() < 0 ? "-" : "") + body;
+    }
+
+    static String iso(String d) { return d.substring(0, 4) + "-" + d.substring(4, 6) + "-" + d.substring(6); }
+
+    static Num change(Num a, Num b) {
+        int places = Math.max(a.places, b.places);
+        return new Num(b.v.multiply(BigInteger.TEN.pow(places - b.places)).subtract(a.v.multiply(BigInteger.TEN.pow(places - a.places))), places);
+    }
+
+    static boolean bigger(Num a, Num b) {
+        return a.v.abs().multiply(BigInteger.TEN.pow(b.places)).compareTo(b.v.abs().multiply(BigInteger.TEN.pow(a.places))) > 0;
+    }
+
+    static String moved(Num d) {
+        if (d.v.signum() == 0) return "no change";
+        return (d.v.signum() > 0 ? "up " : "down ") + shown(d.v.abs(), d.places);
+    }
+
+    /** The latest row at least a week before d, or -1 (an index into dates). */
+    static int weekBefore(List<String> dates, String d) {
+        int at = -1;
+        for (int i = 0; i < dates.size(); i++) if (day(dates.get(i)) <= day(d) - WEEK) at = i;
+        return at;
+    }
+
+    static final int WEEK = 7, WEEKS = 4;
+
+    /** kernel.py's series: numbers over time, in a table of dated rows. */
+    static List<Map<String, Object>> series(String path, String text) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
+        for (String ln : splitlines(text)) if (!strip(ln).isEmpty()) lines.add(ln);
+        if (lines.size() < 3) return out;
+        List<String> head = cells(lines.get(0));
+        if (!newest(lines.get(0)).isEmpty() || head.size() < 2) return out;
+        List<String> rowDates = new ArrayList<>();
+        List<List<String>> rowCells = new ArrayList<>();
+        for (String ln : lines.subList(1, lines.size())) {
+            List<String> cs = cells(ln);
+            String d = newest(cs.get(0));
+            String c0 = strip(cs.get(0));
+            if (!d.isEmpty() && (c0.equals(d) || c0.equals(iso(d)))) {
+                rowDates.add(d);
+                rowCells.add(cs);
+            }
+        }
+        if (rowDates.size() < 2) return out;
+        for (int i = 1; i < rowDates.size(); i++) if (rowDates.get(i).compareTo(rowDates.get(i - 1)) <= 0) return out;
+        for (int col = 1; col < head.size(); col++) {
+            List<String> ds = new ArrayList<>();
+            List<Num> ns = new ArrayList<>();
+            for (int r = 0; r < rowDates.size(); r++) {
+                List<String> cs = rowCells.get(r);
+                Num n = col < cs.size() ? number(cs.get(col)) : null;
+                if (n != null) {
+                    ds.add(rowDates.get(r));
+                    ns.add(n);
+                }
+            }
+            if (ds.size() < 2) continue;
+            String d1 = ds.get(ds.size() - 1);
+            Num last = ns.get(ns.size() - 1);
+            String name = strip(head.get(col)).isEmpty() ? "column " + (col + 1) : strip(head.get(col));
+            int b = weekBefore(ds, d1);
+            if (b < 0) continue;
+            String d0 = ds.get(b);
+            Num then = ns.get(b);
+            String why = name + ": " + shown(last.v, last.places) + " on " + iso(d1) + ", " + moved(change(then, last))
+                + " from " + shown(then.v, then.places) + " on " + iso(d0);
+            Num best = null;
+            String bFrom = null, bTo = null;
+            for (int i = 0; i < ds.size(); i++) {
+                String d = ds.get(i);
+                if (day(d) <= day(d1) - (long) WEEK * WEEKS) continue;
+                int w = weekBefore(ds, d);
+                if (w < 0) continue;
+                Num diff = change(ns.get(w), ns.get(i));
+                if (best == null || bigger(diff, best)) {
+                    best = diff;
+                    bFrom = ds.get(w);
+                    bTo = d;
+                }
+            }
+            if (best != null && !(bFrom.equals(d0) && bTo.equals(d1)))
+                why += "; the most in one week of the last " + WEEKS + ": " + moved(best) + ", " + iso(bFrom) + " to " + iso(bTo);
+            out.add(hint(why, path + ": " + rowDates.size() + " dated rows, " + iso(rowDates.get(0)) + " to "
+                + iso(rowDates.get(rowDates.size() - 1)), null));
+        }
+        return out;
+    }
+
     /** How many ASCII digits run from {@code i}. */
     static int digits(String t, int i) {
         int j = i;
@@ -1173,6 +1327,14 @@ public final class Kernel {
             }
         }
         out.addAll(missing(pile, served));
+        List<String> seen = new ArrayList<>();
+        for (Chunk c : served) {
+            if (seen.contains(c.path)) continue;
+            seen.add(c.path);
+            List<String> texts = new ArrayList<>();
+            for (Chunk x : pile) if (x.path.equals(c.path)) texts.add(x.text);
+            out.addAll(series(c.path, String.join("\n", texts)));
+        }
         if (!ws.isEmpty() && MAKE.contains(ws.get(0))) out.add(hint("this asks for something made", null, NEXT.get("made")));
         return out;
     }
@@ -1758,6 +1920,13 @@ public final class Kernel {
             idsOut.add(fields("ids", new ArrayList<Object>(got), "shapes", shapes));
         }
         out.put("ids", idsOut);
+
+        List<Object> seriesOut = new ArrayList<>();
+        for (Object o : (List<Object>) c.get("series")) {
+            Map<String, Object> m = (Map<String, Object>) o;
+            seriesOut.add(fields("out", new ArrayList<Object>(series((String) m.get("path"), (String) m.get("text")))));
+        }
+        out.put("series", seriesOut);
 
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {

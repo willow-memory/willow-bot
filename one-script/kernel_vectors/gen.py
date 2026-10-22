@@ -658,7 +658,23 @@ def pile_cases() -> list[dict]:
     )
     piles.append(dated_pile())
     piles.append(ledger_pile())
+    piles.append(series_pile())
     return piles
+
+
+def series_pile() -> list:
+    """A care log the kernel reads as numbers over time, and a ledger it
+    doesn't (dates repeat), each long enough to be cut into chunks."""
+    log = "date,weight_kg,pulse,notes\n" + "".join(
+        f"2026-{9 + (d > 30):02d}-{d - 30 * (d > 30):02d},{71 + d / 10:.1f},{60 + d % 7},"
+        + ('"ankles, puffy"' if d == 40 else "")
+        + "\n"
+        for d in range(1, 52)
+    )
+    books = "date,what,amount\n" + "".join(
+        f"2026-10-{1 + d // 3:02d},weight {d},{d * 5}\n" for d in range(40)
+    )
+    return [(["dad", "care-log.csv"], log.encode()), (["books.csv"], books.encode())]
 
 
 def ledger_pile() -> list:
@@ -733,6 +749,79 @@ ALIASED = {
         ("bees calm", {"calm": ["okay", "fine"]}),
     ],
 }
+
+
+def _table(head: str, start: str, n: int, step: int, cols) -> str:
+    """A dated table: `n` rows from `start` (YYYY-MM-DD), `step` days apart."""
+    y, m, d = map(int, start.split("-"))
+    first = k.day(f"{y:04d}{m:02d}{d:02d}")
+    rows = [head]
+    for i in range(n):
+        x = first + i * step + 719468  # back to a civil date (Hinnant's)
+        era = x // 146097
+        doe = x - era * 146097
+        yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+        doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+        mp = (5 * doy + 2) // 153
+        dd = doy - (153 * mp + 2) // 5 + 1
+        mm = mp + 3 if mp < 10 else mp - 9
+        yy = yoe + era * 400 + (mm <= 2)
+        rows.append(f"{yy:04d}-{mm:02d}-{dd:02d}," + ",".join(c(i) for c in cols))
+    return "\n".join(rows) + "\n"
+
+
+def series_cases() -> list[dict]:
+    hand = [
+        (
+            "care.csv",
+            "date,weight_kg,bp,pulse,notes\n2026-10-01,71.2,120/70,60,\n"
+            '2026-10-08,71.3,118/72,62,\n2026-10-15,73.8,121/70,61,"ankles, puffy"\n'
+            "2026-10-21,75.1,112/78,64,\n",
+        ),
+        (
+            "ledger.csv",
+            "date,what,in\n2026-10-01,a,5\n2026-10-01,b,6\n2026-10-09,c,7\n",
+        ),
+        ("back.csv", "date,v\n2026-10-09,1\n2026-10-01,2\n2026-10-20,3\n"),
+        ("short.csv", "date,v\n2026-10-01,1\n"),
+        ("nohead.csv", "2026-10-01,1\n2026-10-09,2\n2026-10-20,3\n"),
+        ("onecol.csv", "date\n2026-10-01\n2026-10-09\n"),
+        ("leap.csv", "day,v\n2024-02-29,1.5\n2024-03-07,1.25\n"),
+        ("compact.csv", "d,v\n20261001,-3\n20261008,-3\n20261016,-0.5\n"),
+        ("places.csv", "d,v\n2026-10-01,0.0000000000001\n2026-10-09,0.0000000000003\n"),
+        (
+            "ties.csv",
+            "d,v\n2026-09-01,0\n2026-09-08,2\n2026-09-15,0\n2026-09-22,2\n"
+            "2026-09-29,0\n2026-10-06,2\n2026-10-13,0\n2026-10-20,1\n",
+        ),
+        ("gaps.csv", "d,a,b\n2026-10-01,1,\n2026-10-09,,x\n2026-10-20,3,1.\n"),
+        ("quoted.csv", 'd,"a, b","q""x"\n2026-10-01,"1","2"\n2026-10-09," 4 ",5\n'),
+        ("spaced.csv", "d , v \n 2026-10-01 , 1\n\n 2026-10-09 , 2 \n"),
+        ("odd.csv", "d,v\n2026-10-01x,1\n2026-10-09,1\n2026-10-17,1\n"),
+        (
+            "big.csv",
+            "d,v\n2026-10-01,99999999999999999999\n2026-10-09,-99999999999999999999\n",
+        ),
+        ("old.csv", "d,v\n1899-12-25,1\n1999-12-25,2\n2000-01-01,3\n"),
+        ("unicode.csv", "d,v\n2026-10-01,\u0661\n2026-10-09,\uff11\n2026-10-17,1\n"),
+    ]
+    tables = [
+        _table("date,w,p", "2025-08-18", 430, 1,
+               [lambda i: f"{71 + RN.randint(-9, 30) / 10:.1f}", lambda i: str(RN.randint(55, 80))]),
+        _table("date,x", "2023-12-20", 40, 3, [lambda i: str(RN.randint(-5, 5))]),
+    ]  # fmt: skip
+    for n in range(40):
+        cols = [
+            lambda i: RN.choice(["", "1", "-2", "3.5", "0.25", "x", "10", "-0.75"])
+            for _ in range(RN.randint(1, 3))
+        ]
+        tables.append(
+            _table("d," + ",".join(f"c{j}" for j in range(len(cols))),
+                   RN.choice(["2026-01-01", "2024-02-20", "1999-12-01"]),
+                   RN.randint(2, 30), RN.randint(1, 5), cols)
+        )  # fmt: skip
+    hand += [(f"t{n}.csv", t) for n, t in enumerate(tables)]
+    return [{"path": p, "text": t, "out": k.series(p, t)} for p, t in hand]
 
 
 def ids_cases() -> list[dict]:
@@ -917,7 +1006,7 @@ FLOAT_TIES = float_tie_piles()
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
     (8), random handfuls of the dense-ties pile's vocabulary (9), the dated
-    pile's (10) and the ledger's (11)."""
+    pile's (10), the ledger's (11) and the care log's (12)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -929,6 +1018,8 @@ def extra_bites(i: int) -> list[str]:
         ]
     if i == 10:
         return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
+    if i == 12:
+        return ["weight", "ankles", "pulse", "what amount", "weight kg"]
     if i == 11:
         return ["purchase order", "order", "reply", "case", "rider", "Kawai", "call",
                 "DEP", "lot", "auction"]  # fmt: skip
@@ -1103,6 +1194,7 @@ def main(argv: list[str]) -> int:
         "newest": newest_cases(),
         "wordlist": wordlist_cases(),
         "ids": ids_cases(),
+        "series": series_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

@@ -901,6 +901,132 @@ public static class Kernel
         return o;
     }
 
+    /** kernel.py's cells: one line of comma-separated values, quotes kept whole. */
+    static List<string> Cells(string line)
+    {
+        var o = new List<string>();
+        var cur = new StringBuilder();
+        bool quoted = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char ch = line[i];
+            if (quoted && ch == '"' && i + 1 < line.Length && line[i + 1] == '"') { cur.Append('"'); i++; }
+            else if (ch == '"') quoted = !quoted;
+            else if (ch == ',' && !quoted) { o.Add(cur.ToString()); cur.Clear(); }
+            else cur.Append(ch);
+        }
+        o.Add(cur.ToString());
+        return o;
+    }
+
+    static bool AllDigits(string s) => s.All(c => c >= '0' && c <= '9');
+
+    /** kernel.py's number: a cell that is a decimal number (digits, places), or null. */
+    static (BigInteger v, int places)? Number(string cell)
+    {
+        var s = Strip(cell);
+        bool neg = s.StartsWith('-');
+        var body = neg ? s.Substring(1) : s;
+        int dot = body.IndexOf('.');
+        var whole = dot < 0 ? body : body.Substring(0, dot);
+        var frac = dot < 0 ? "" : body.Substring(dot + 1);
+        if (whole.Length == 0 || !AllDigits(whole) || !AllDigits(frac) || (dot >= 0 && frac.Length == 0)) return null;
+        var n = BigInteger.Parse(whole + frac, CultureInfo.InvariantCulture);
+        return (neg ? -n : n, frac.Length);
+    }
+
+    /** kernel.py's day: days since 1970-01-01 for a YYYYMMDD. */
+    static long Day(string d)
+    {
+        long y = long.Parse(d.Substring(0, 4), CultureInfo.InvariantCulture);
+        long m = long.Parse(d.Substring(4, 2), CultureInfo.InvariantCulture);
+        long dd = long.Parse(d.Substring(6), CultureInfo.InvariantCulture);
+        if (m <= 2) y -= 1;
+        long era = (long)Math.Floor(y / 400.0);
+        long yoe = y - era * 400;
+        long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+        return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    }
+
+    static string Shown((BigInteger v, int places) n)
+    {
+        var digits = BigInteger.Abs(n.v).ToString(CultureInfo.InvariantCulture).PadLeft(n.places + 1, '0');
+        var body = digits.Substring(0, digits.Length - n.places) + (n.places > 0 ? "." + digits.Substring(digits.Length - n.places) : "");
+        return (n.v.Sign < 0 ? "-" : "") + body;
+    }
+
+    static string Iso(string d) => $"{d.Substring(0, 4)}-{d.Substring(4, 2)}-{d.Substring(6)}";
+
+    static (BigInteger v, int places) Change((BigInteger v, int places) a, (BigInteger v, int places) b)
+    {
+        int places = Math.Max(a.places, b.places);
+        return (b.v * BigInteger.Pow(10, places - b.places) - a.v * BigInteger.Pow(10, places - a.places), places);
+    }
+
+    static bool Bigger((BigInteger v, int places) a, (BigInteger v, int places) b) =>
+        BigInteger.Abs(a.v) * BigInteger.Pow(10, b.places) > BigInteger.Abs(b.v) * BigInteger.Pow(10, a.places);
+
+    static string Moved((BigInteger v, int places) d) =>
+        d.v.IsZero ? "no change" : (d.v.Sign > 0 ? "up " : "down ") + Shown((BigInteger.Abs(d.v), d.places));
+
+    const int WEEK = 7, WEEKS = 4;
+
+    /** The latest row at least a week before d, or -1. */
+    static int WeekBefore(List<string> dates, string d)
+    {
+        int at = -1;
+        for (int i = 0; i < dates.Count; i++) if (Day(dates[i]) <= Day(d) - WEEK) at = i;
+        return at;
+    }
+
+    /** kernel.py's series: numbers over time, in a table of dated rows. */
+    static List<object?> Series(string path, string text)
+    {
+        var o = new List<object?>();
+        var lines = Splitlines(text).Where(ln => Strip(ln).Length > 0).ToList();
+        if (lines.Count < 3) return o;
+        var head = Cells(lines[0]);
+        if (Newest(lines[0]).Length > 0 || head.Count < 2) return o;
+        var rows = new List<(string d, List<string> cs)>();
+        foreach (var ln in lines.Skip(1))
+        {
+            var cs = Cells(ln);
+            var d = Newest(cs[0]);
+            var c0 = Strip(cs[0]);
+            if (d.Length > 0 && (c0 == d || c0 == Iso(d))) rows.Add((d, cs));
+        }
+        if (rows.Count < 2) return o;
+        for (int i = 1; i < rows.Count; i++) if (string.CompareOrdinal(rows[i].d, rows[i - 1].d) <= 0) return o;
+        for (int col = 1; col < head.Count; col++)
+        {
+            var got = new List<(string d, (BigInteger v, int places) n)>();
+            foreach (var (d, cs) in rows)
+                if (col < cs.Count && Number(cs[col]) is (BigInteger, int) n) got.Add((d, n));
+            if (got.Count < 2) continue;
+            var ds = got.Select(g => g.d).ToList();
+            var (d1, last) = got[^1];
+            var name = Strip(head[col]).Length > 0 ? Strip(head[col]) : $"column {col + 1}";
+            int b = WeekBefore(ds, d1);
+            if (b < 0) continue;
+            var (d0, then) = got[b];
+            var why = $"{name}: {Shown(last)} on {Iso(d1)}, {Moved(Change(then, last))} from {Shown(then)} on {Iso(d0)}";
+            (BigInteger v, int places)? best = null;
+            string? bFrom = null, bTo = null;
+            foreach (var (d, n) in got)
+            {
+                if (Day(d) <= Day(d1) - (long)WEEK * WEEKS) continue;
+                int w = WeekBefore(ds, d);
+                if (w < 0) continue;
+                var diff = Change(got[w].n, n);
+                if (best == null || Bigger(diff, best.Value)) { best = diff; bFrom = got[w].d; bTo = d; }
+            }
+            if (best != null && !(bFrom == d0 && bTo == d1))
+                why += $"; the most in one week of the last {WEEKS}: {Moved(best.Value)}, {Iso(bFrom!)} to {Iso(bTo!)}";
+            o.Add(Hint(why, $"{path}: {rows.Count} dated rows, {Iso(rows[0].d)} to {Iso(rows[^1].d)}", null));
+        }
+        return o;
+    }
+
     /** How many ASCII digits run from i. */
     static int Digits(string t, int i)
     {
@@ -1034,6 +1160,8 @@ public static class Kernel
             }
         }
         o.AddRange(Missing(pile, served));
+        foreach (var p in served.Select(c => c.Path).Distinct().ToList())
+            o.AddRange(Series(p, string.Join("\n", pile.Where(x => x.Path == p).Select(x => x.Text))));
         if (ws.Count > 0 && MAKE.Contains(ws[0])) o.Add(Hint("this asks for something made", null, NEXT["made"]));
         return o;
     }
@@ -1525,6 +1653,7 @@ public static class Kernel
         }
         res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!, AliasOf(o)).Select(x => (object?)x.Id).ToList())).ToList();
         res["newest"] = Part("newest").Select(o => (object?)Obj("newest", Newest((string)o["text"]!))).ToList();
+        res["series"] = Part("series").Select(o => (object?)Obj("out", Series((string)o["path"]!, (string)o["text"]!))).ToList();
         res["ids"] = Part("ids").Select(o =>
         {
             var got = Ids((string)o["text"]!);
