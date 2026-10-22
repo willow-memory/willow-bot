@@ -26,8 +26,42 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `foundation/` | `prompt.py`'s tests run on a bare interpreter, without pytest |
 | `scripts/scan/` | `script_match.py` (the gate's script index) and the table scans |
 | `scripts/flow/` | The view drafts: session maps and their merge |
-| `scripts/oauth/oauth_probe.py` | Deterministic OAuth: a wager per probe before it runs, then the live flow against willows-grove and willow-mcp serve mode on loopback, N runs each; disagreeing runs are `drift`; every outcome is a proposal for the human's seal |
+| `onescript/oauth_resource.py` | `bind()`: every OAuth code and token carries the resource it was issued for, so a server can turn on `validate_token_resource` without refusing its own tokens. Not wired into Grove or willow-mcp yet |
+| `scripts/oauth/oauth_probe.py` | Deterministic OAuth: blind wagers forecast before they run, pins for answers already seen; the live flow against willows-grove and willow-mcp serve mode on loopback and Google's hosted MCP servers (read-only, no credentials), N runs each; disagreeing runs are `drift`, a pin that moves is `changed` |
 | `deep_thought.py` | The morning screen |
+
+## OAuth: which server a token is for
+
+Found 2026-10-21 by `oauth_probe`, run on this box: Grove accepts an access
+token minted for another server (`g.audience.foreign_resource`: accepted).
+The MCP SDK's `validate_token_resource` would refuse it, but neither Grove's
+provider nor willow-mcp's records a token's resource, so turning the setting
+on alone refuses every token, the honest ones too (tried on a throwaway Grove
+copy: `g.mcp.with_token` went to 401).
+
+`onescript/oauth_resource.py` is the fix as an addition here, not a patch
+there. `bind(provider, resource=..., legacy_until=...)` stamps the resource on
+the code, the access and refresh tokens, and every refresh. Wired into a
+throwaway Grove copy with the check on, five runs: the foreign token is
+refused, the honest one still works, every other pin and wager holds, no
+drift. Its tests run on the real `GroveOAuthProvider`.
+
+Open, for the operator (G1 to G4 in the module):
+
+| Gap | What's left |
+|---|---|
+| G1 | Tokens minted before binding: refuse now (`legacy_until=None`) or honour for a window. No default, on purpose |
+| G2 | A foreign resource is bound and refused at the bearer check; refusing it at authorize (`invalid_target`) isn't done |
+| G3 | Grove advertises `/mcp` and serves `/`; willow-mcp advertises `/` and serves `/mcp` |
+| G4 | Neither server has a revocation endpoint (Google's does) |
+| Wiring | Two lines in each server, beside the provider: `bind(...)`, then `validate_token_resource=True` |
+
+After wiring, `oauth_probe` should show exactly one pin moving,
+`g.audience.foreign_resource` from `accepted` to `http_401`; re-pin it then.
+Compared against Google's hosted Gmail, Drive and Calendar MCP servers the
+same night: they serve `initialize` and `tools/list` with no token and
+challenge per tool; both of ours refuse at the door. Google still allows
+`plain` PKCE; ours don't.
 
 ## The law comes from willows-grove
 
