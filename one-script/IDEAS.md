@@ -2429,7 +2429,29 @@ and any other PII set that isn't already covered at least at baseline"*):
   `$password = [REDACTED:password];`), every client address in `error_log`
   is withheld at serve's ceiling, and nothing else in the folder is touched.
 
-Still not covered, because no pattern can do it: a person's name and a
+**The cross-check with the demos' names** (the operator: *"We have lists of
+people's names in the demos. Maybe it's time to do a cross check again."*):
+
+- The demos' cast (the Aguirres, the Acorns, Fern Nutkin, Willow Burr,
+  James Beauregard, Rosalind Ffoulkes, June Akiyama, Pastor Linda, Big Jim),
+  looked for across every repo crossed so far: it stays where it was made.
+  Each name lives in its own repo's demos, docs and tests; June Akiyama and
+  Pastor Linda also sit in Nestor's and the Grove's data bundles. None
+  reaches homestead, the almanacs or the forks.
+- The real find was not the cast. Nestor's `docs/agent-log.md` and its
+  copy in `demo/ideas-store/nestor.bundle.json` (a public repo) carry a
+  git-author table with 16 email addresses, several of them other people
+  who share the operator's first name, marked "somebody else". The pii set
+  withholds 15 of the 16 at serve's ceiling (the sixteenth is a local
+  `user@host` with no domain); the names beside them pass. Those two files
+  are the operator's to clean.
+- So names get a door: `withhold(..., names=[...])` takes a list the person
+  gives (their household, their clients) and withholds each whole, in any
+  case, longest first, as `name` (L3). It is willow-2.0's `pii_check`
+  configured-names idea without its literals: the list is the caller's and
+  never kept in the module. The cast is its test fixture.
+
+Still not covered by any pattern: a person's name nobody listed, and a
 street address. Both need a model or a list of the person's own names,
 which is willow-2.0's planned phase 3, and the pii set's limit is said here
 rather than implied.

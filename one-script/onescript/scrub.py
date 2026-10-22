@@ -583,6 +583,7 @@ RUNGS: dict[str, int] = {
     "ip": 3,
     "mac": 3,
     "location": 3,
+    "name": 3,
     "case_no": 2,
 }
 
@@ -590,18 +591,33 @@ RUNGS: dict[str, int] = {
 WITHHELD_PII = "[withheld: {kind}, L{rung}]"
 
 
-def withhold(text: Any, ceiling: int, *, found: set | None = None):
+def names_rule(names) -> Rule | None:
+    """A ``name`` rule for the names a person gives (their household, their
+    clients): each whole, any case, longest first so "Jose Aguirre" goes
+    before "Jose". No pattern finds a name; a list of the ones that matter
+    does (willow-2.0's ``pii_check`` configured names). The list is the
+    caller's and is never kept here."""
+    names = sorted({n.strip() for n in names if n and n.strip()}, key=len, reverse=True)
+    if not names:
+        return None
+    alt = "|".join(r"\s+".join(map(re.escape, n.split())) for n in names)
+    return Rule("name", re.compile(rf"(?<!\w)(?:{alt})(?!\w)", re.IGNORECASE))
+
+
+def withhold(text: Any, ceiling: int, *, names=(), found: set | None = None):
     """``text`` with every pii kind whose rung is over ``ceiling`` withheld and
     named (``[withheld: ssn, L5]``); kinds at or under it stay, since what is
-    allowed depends on where the text is going. ``found`` gets the withheld
-    kinds. ``ceiling`` 5 withholds nothing; 0 withholds every kind."""
+    allowed depends on where the text is going. ``names``, when given, are
+    withheld as ``name`` (`names_rule`). ``found`` gets the withheld kinds.
+    ``ceiling`` 5 withholds nothing; 0 withholds every kind."""
     if not isinstance(text, str) or not text:
         return text
     ctx = Ctx(
         lambda kind: WITHHELD_PII.format(kind=kind, rung=RUNGS[kind]),
         found=found,
     )
-    for rule in _PII:
+    rules = _PII + ((r,) if (r := names_rule(names)) else ())
+    for rule in rules:
         if RUNGS[rule.kind] > ceiling:
             text = _run(rule, text, ctx)
     return text

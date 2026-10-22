@@ -642,7 +642,7 @@ def test_the_ceiling_says_what_is_allowed_where():
     assert "[withheld: ssn, L5]" in screen
     assert "DOB: 2018-03-04" in screen and "jordan@example.com" in screen
     assert scrub.withhold(text, 5) == text
-    assert set(scrub.RUNGS) == set(scrub.kinds_of(("pii",)))
+    assert set(scrub.RUNGS) - {"name"} == set(scrub.kinds_of(("pii",)))
 
 
 def test_a_served_chunk_carries_no_pii_over_the_serve_ceiling():
@@ -695,3 +695,25 @@ def test_serve_takes_the_typed_password_and_the_ip():
     got = chunk._scrub("ftp (user: cwcftp pw: widgets1998) from 10.0.0.68")
     assert "widgets1998" not in got and "pw: [REDACTED:password]" in got
     assert "[withheld: ip, L3]" in got
+
+
+# -- names: a list the person gives, never a pattern ---------------------------
+#: The demos' cast (Nestor's shoebox and Big Jim, safe-app-store's acorns, the
+#: Forge's first bite, the Grove's June): made-up people, used as the fixture.
+CAST = ["Jose Aguirre", "Nieves Aguirre", "Hazel Acorn", "Rosalind Ffoulkes",
+        "June Akiyama", "Big Jim", "Nieves"]  # fmt: skip
+
+
+def test_a_given_name_is_withheld_whole_and_in_any_case():
+    text = "Nieves Aguirre met BIG  JIM; Nieves paid. Big Jimmy did not."
+    got = scrub.withhold(text, 2, names=CAST)
+    assert got.count("[withheld: name, L3]") == 3
+    assert "Big Jimmy" in got  # a longer word is not the name
+    assert "Aguirre" not in got  # the full name goes before the first name
+
+
+def test_without_names_no_name_is_found_and_the_ceiling_still_rules():
+    text = "Rosalind Ffoulkes wants a tool for her rally photos"
+    assert scrub.withhold(text, 2) == text
+    assert scrub.withhold(text, 3, names=CAST) == text  # names are L3
+    assert scrub.names_rule([" ", ""]) is None
