@@ -302,7 +302,7 @@ def write_dad() -> list[tuple[date, float]]:
         "  aspirin 81 mg - morning\n"
         "  tamsulosin 0.4 mg - night\n"
         "  vitamin D 1000 IU - morning\n"
-        "Pharmacy: Calloway Drug " + phone(60) + "\n"
+        "Pharmacy: Calloway Drug " + phone(90) + "\n"
     )
     write("dad/meds.txt", meds)
     write(
@@ -316,7 +316,7 @@ def write_dad() -> list[tuple[date, float]]:
         "Call the office if weight goes up more than 2 kg (about 4-5 lb)\n"
         "in a week, or 1 kg overnight, or if ankles swell or he has to\n"
         "sleep sitting up.\n\n"
-        "Office " + phone(61) + ". Next visit: January 2027.\n",
+        "Office " + phone(91) + ". Next visit: January 2027.\n",
     )
     weights, rows, w, at = [], [], 70.6, MOVED_IN
     while at < TODAY:
