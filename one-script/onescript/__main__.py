@@ -21,6 +21,8 @@
     python3 -m onescript market-reveal DATE  # the closes as market rows (--prices, --drand)
     python3 -m onescript snapshot NAME URL --license SPDX  # outside data, once (--fetch)
     python3 -m onescript snapshot-read NAME  # the held snapshot, offline
+    python3 -m onescript draw [--randomness HEX]  # two chunks nobody chose (--drand)
+    python3 -m onescript scope --by '' --draw  # the draw's pair, as the stack
     python3 -m onescript market-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
@@ -94,12 +96,13 @@ def _load_everything() -> None:
     and in `main` for any verb but the hook's. Idempotent."""
     global api, boot, nestor_seal, escalate_mod, beacon, deck, diverge
     global jeles_store, market, merge_check, snapshot, table, view, _last_boot
-    global OK_STATES
+    global OK_STATES, draw_mod
     if "api" in globals():
         return
     from . import api, boot, nestor_seal  # noqa: F401  (tests patch cli.boot.probes)
     from . import escalate as escalate_mod
     from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
+    from . import draw as draw_mod
     from . import snapshot
     from .api import _last_boot  # noqa: F401  (re-exported: the tests read it)
     from .writeback import PROPOSED
@@ -657,6 +660,19 @@ def main(argv: list[str] | None = None) -> int:
         help="the closes for the symbols called on a date, as market rows",
     )
     mr.add_argument("close_date", help="YYYY-MM-DD, the close the calls name")
+    dw = sub.add_parser(
+        "draw", help="two chunks from two repos, picked by randomness nobody chose"
+    )
+    dw.add_argument(
+        "--randomness",
+        help="hex to pick by, recorded as given; without it, the newest drand round",
+    )
+    dw.add_argument(
+        "--chosen",
+        action="append",
+        metavar="REPO:PATH:LINE",
+        help="name the two chunks instead (twice); recorded as chosen, not chance",
+    )
     sn = sub.add_parser(
         "snapshot", help="outside data read once into the box, kept under its hash"
     )
@@ -795,6 +811,12 @@ def main(argv: list[str] | None = None) -> int:
             type=int,
             help="the cap on served text; over it, empty (scope: says if it fits)",
         )
+        if name == "scope":
+            s.add_argument(
+                "--draw",
+                action="store_true",
+                help="stack this check-in's draw's two chunks (--by '' for those alone)",
+            )
         if name == "serve":
             s.add_argument("--seed-row", type=int, help="the seed row scope named")
     sl = sub.add_parser("seal")
@@ -1114,7 +1136,20 @@ def main(argv: list[str] | None = None) -> int:
             argv=raw,
             seed_top=args.seed_top,
             max_chars=args.max_chars,
+            draw=args.draw,
         )
+    elif args.cmd == "draw":
+        chosen = None
+        if args.chosen:
+            try:
+                chosen = [
+                    {"repo": r, "path": p, "line": int(n)}
+                    for r, p, n in (c.rsplit(":", 2) for c in args.chosen)
+                ]
+            except ValueError:
+                print("refused: --chosen is REPO:PATH:LINE")
+                return 1
+        res = draw_mod.draw(cfg, args.randomness, chosen=chosen, argv=raw)
     elif args.cmd == "decline":
         res = api.decline_offer(cfg, args.key, argv=raw, proof=args.proof)
     elif args.cmd == "serve":

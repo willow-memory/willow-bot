@@ -639,10 +639,16 @@ def _receipt(table: dict, rows: list[dict]) -> None:
         raise gate.Refused("a pile's receipt doesn't match the record; nothing served")
 
 
+#: The rows that can be a chunk's receipt: a seed's ranks, or a draw's pair
+#: (`draw.py`, IDEAS.md 7). Both hold `rank` as [{repo, path, line, chunk}].
+RECEIPTS = ("seed", "draw")
+
+
 def _seed_receipt(table: dict, rows: list[dict]) -> None:
-    """A chunk's receipt is its seed row, checked against the chain like a
-    pile's: the row at that number is a seed row, carries that hash, hashes to
-    it, and ranks this very chunk. A chunk without one is never served."""
+    """A chunk's receipt is its seed (or draw) row, checked against the chain
+    like a pile's: the row at that number is a receipt row (`RECEIPTS`),
+    carries that hash, hashes to it, and ranks this very chunk. A chunk
+    without one is never served."""
     src, ch = table["source"], table["source"]["chunk"]
     rc = src.get("seed")
     if not (
@@ -658,7 +664,7 @@ def _seed_receipt(table: dict, rows: list[dict]) -> None:
     if (
         row is None
         or row.get("n") != n
-        or row.get("kind") != "seed"
+        or row.get("kind") not in RECEIPTS
         or row.get("hash") != h
         or h256(canon(body)) != h
         or not any(

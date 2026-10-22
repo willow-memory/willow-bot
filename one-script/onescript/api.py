@@ -1086,9 +1086,11 @@ def _spec_tables(run: Run, spec: dict) -> tuple[list[dict], dict]:
             or not isinstance(n, int)
             or not (0 <= n < len(rows))
             or rows[n].get("n") != n
-            or rows[n].get("kind") != "seed"
+            or rows[n].get("kind") not in served.RECEIPTS
         ):
-            raise ValueError(f"row {n} is not a seed row at or before row {upto}")
+            raise ValueError(
+                f"row {n} is not a seed or draw row at or before row {upto}"
+            )
         chunks = served.chunk_tables(rows[n], seed["top"])
         more = served.propose_chunks(chunks)
         tables = tables + chunks
@@ -1113,6 +1115,7 @@ def scope(
     argv: Iterable[str] = ("scope",),
     seed_top: int | None = None,
     max_chars: int | None = None,
+    draw: bool = False,
 ) -> dict:
     """Code proposes the stack. Returns the card for the human and the exact
     `subject` whose seal makes it a scope, plus the `spec` that names the stack:
@@ -1120,7 +1123,10 @@ def scope(
     this check-in's seed's top chunks of the repos (by=() for those alone).
     The card gives each chunk's size in characters, read at its blob (never
     its text), and the total; with `max_chars`, whether the stack fits
-    (`_sizes`)."""
+    (`_sizes`). With `draw`, the stack holds this check-in's newest draw's two
+    chunks instead (`draw.py`: by=() for those alone)."""
+    if draw and seed_top is not None:
+        return _refused("a stack takes the seed's chunks or the draw's, not both", 1)
     run, info = _open(cfg, "scope", argv)
     if run is None:
         return info
@@ -1137,6 +1143,14 @@ def scope(
         if sd is None:
             return _refused("no seed in this check-in; the first bite seeds", 1)
         spec["seed"] = {"row": sd["n"], "top": seed_top}
+    if draw:
+        dr = next(
+            (r for r in reversed(seed_mod.since_boot(rows)) if r["kind"] == "draw"),
+            None,
+        )
+        if dr is None:
+            return _refused("no draw in this check-in; `draw` picks the pair", 1)
+        spec["seed"] = {"row": dr["n"], "top": len(dr.get("rank") or [])}
     try:
         tables, card = _spec_tables(run, spec)
     except ValueError as e:
