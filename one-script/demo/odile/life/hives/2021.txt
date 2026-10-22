@@ -1,0 +1,134 @@
+HIVE NOTES 2021
+
+== 2021-03-12  windy
+  H1: 6 fr bees, eggs yes, brood 3 fr, queen not seen, mites 1/300, swarm cells, cut
+  H2: 10 fr bees, eggs yes, brood 6 fr, queen not seen, mites 2/300, swarm cells, cut
+  H3: 10 fr bees, eggs not seen, brood 4 fr, queen not seen, mites 2/300
+  H4: 10 fr bees, eggs yes, brood 4 fr, queen seen, mites 3/300, swarm cells, cut
+  H5: 9 fr bees, eggs yes, brood 6 fr, queen not seen, mites 6/300
+  H6: 5 fr bees, eggs yes, brood 3 fr, queen not seen, mites 4/300, fed 1:1
+== 2021-03-26  sunny
+  H1: 6 fr bees, eggs yes, brood 3 fr, queen seen, mites 6/300
+  H2: 9 fr bees, eggs yes, brood 3 fr, queen not seen, mites 6/300
+  H3: 8 fr bees, eggs yes, brood 2 fr, queen seen, mites 0/300, added a super
+  H4: 7 fr bees, eggs yes, brood 5 fr, queen not seen, mites 2/300
+  H5: 5 fr bees, eggs yes, brood 7 fr, queen seen, mites 6/300, added a super
+  H6: 5 fr bees, eggs yes, brood 6 fr, queen not seen, mites 2/300
+== 2021-04-05  cool
+  H1: 6 fr bees, eggs yes, brood 6 fr, queen not seen, mites 2/300, swarm cells, cut
+  H2: 9 fr bees, eggs yes, brood 5 fr, queen seen, mites 4/300, fed 1:1
+  H3: 7 fr bees, eggs yes, brood 4 fr, queen seen, mites 4/300, fed 1:1
+  H4: 7 fr bees, eggs yes, brood 6 fr, queen not seen, mites 1/300, swarm cells, cut
+  H5: 7 fr bees, eggs yes, brood 5 fr, queen not seen, mites 1/300, fed 1:1
+  H6: 6 fr bees, eggs yes, brood 4 fr, queen seen, mites 3/300, fed 1:1
+== 2021-04-19  sunny
+  H1: 9 fr bees, eggs yes, brood 5 fr, queen not seen, mites 0/300, swarm cells, cut
+  H2: 10 fr bees, eggs yes, brood 3 fr, queen not seen, mites 2/300
+  H3: 9 fr bees, eggs yes, brood 3 fr, queen seen, mites 2/300, swarm cells, cut
+  H4: 8 fr bees, eggs not seen, brood 5 fr, queen seen, mites 2/300, fed 1:1
+  H5: 9 fr bees, eggs yes, brood 6 fr, queen not seen, mites 1/300
+  H6: 5 fr bees, eggs yes, brood 2 fr, queen not seen, mites 1/300, fed 1:1
+== 2021-05-02  hot
+  H1: 9 fr bees, eggs yes, brood 7 fr, queen not seen, mites 3/300, added a super
+  H2: 5 fr bees, eggs yes, brood 2 fr, queen seen, mites 2/300
+  H3: 8 fr bees, eggs yes, brood 7 fr, queen not seen, mites 6/300
+  H4: 7 fr bees, eggs yes, brood 7 fr, queen not seen, mites 2/300, swarm cells, cut
+  H5: 5 fr bees, eggs yes, brood 5 fr, queen not seen, mites 1/300
+  H6: 9 fr bees, eggs yes, brood 4 fr, queen not seen, mites 1/300
+  H7 (Petrak orchard): 6 fr bees, eggs yes, brood 3 fr, queen not seen, mites 2/300
+== 2021-05-17  hot
+  H1: 6 fr bees, eggs yes, brood 4 fr, queen seen, mites 2/300, swarm cells, cut
+  H2: 9 fr bees, eggs yes, brood 7 fr, queen not seen, mites 2/300, added a super
+  H3: 5 fr bees, eggs yes, brood 7 fr, queen not seen, mites 4/300
+  H4: 5 fr bees, eggs yes, brood 7 fr, queen seen, mites 3/300, fed 1:1
+  H5: 8 fr bees, eggs yes, brood 7 fr, queen seen, mites 0/300
+  H6: 7 fr bees, eggs yes, brood 7 fr, queen not seen, mites 1/300
+== 2021-05-29  cool
+  H1: 5 fr bees, eggs yes, brood 4 fr, queen not seen, mites 6/300, swarm cells, cut
+  H2: 7 fr bees, eggs yes, brood 3 fr, queen not seen, mites 1/300, added a super
+  H3: 10 fr bees, eggs yes, brood 7 fr, queen not seen, mites 2/300, fed 1:1
+  H4: 6 fr bees, eggs yes, brood 2 fr, queen seen, mites 1/300
+  H5: 10 fr bees, eggs yes, brood 5 fr, queen not seen, mites 0/300, swarm cells, cut
+  H6: 5 fr bees, eggs yes, brood 4 fr, queen seen, mites 1/300
+== 2021-06-11  hot
+  H1: 7 fr bees, eggs yes, brood 3 fr, queen not seen, mites 2/300, fed 1:1
+  H2: 6 fr bees, eggs yes, brood 3 fr, queen seen, mites 6/300, fed 1:1
+  H3: 5 fr bees, eggs yes, brood 2 fr, queen not seen, mites 1/300, swarm cells, cut
+  H4: 7 fr bees, eggs yes, brood 4 fr, queen not seen, mites 0/300
+  H5: 9 fr bees, eggs yes, brood 6 fr, queen not seen, mites 0/300
+  H6: 7 fr bees, eggs yes, brood 6 fr, queen seen, mites 2/300
+  H7 (Petrak orchard): 7 fr bees, eggs yes, brood 2 fr, queen not seen, mites 1/300
+== 2021-06-21  cool
+  H1: 7 fr bees, eggs yes, brood 3 fr, queen seen, mites 2/300
+  H2: 5 fr bees, eggs yes, brood 2 fr, queen not seen, mites 1/300, swarm cells, cut
+  H3: 10 fr bees, eggs yes, brood 5 fr, queen seen, mites 1/300
+  H4: 6 fr bees, eggs yes, brood 4 fr, queen not seen, mites 1/300, swarm cells, cut
+  H5: 9 fr bees, eggs yes, brood 4 fr, queen seen, mites 6/300
+  H6: 8 fr bees, eggs yes, brood 4 fr, queen not seen, mites 6/300
+  H7 (Petrak orchard): 5 fr bees, eggs yes, brood 2 fr, queen seen, mites 1/300, swarm cells, cut
+== 2021-07-01  sunny
+  H1: 10 fr bees, eggs yes, brood 4 fr, queen seen, mites 6/300
+  H2: 8 fr bees, eggs yes, brood 6 fr, queen not seen, mites 1/300, added a super
+  H3: 8 fr bees, eggs yes, brood 4 fr, queen not seen, mites 3/300
+  H4: 5 fr bees, eggs yes, brood 2 fr, queen seen, mites 6/300
+  H5: 10 fr bees, eggs yes, brood 4 fr, queen not seen, mites 6/300, added a super
+  H6: 7 fr bees, eggs yes, brood 5 fr, queen not seen, mites 3/300
+  H7 (Petrak orchard): 5 fr bees, eggs yes, brood 3 fr, queen seen, mites 2/300, swarm cells, cut
+== 2021-07-12  sunny
+  H1: 7 fr bees, eggs not seen, brood 2 fr, queen seen, mites 2/300
+  H2: 6 fr bees, eggs not seen, brood 3 fr, queen not seen, mites 1/300, added a super
+  H3: 5 fr bees, eggs yes, brood 4 fr, queen seen, mites 4/300
+  H4: 10 fr bees, eggs yes, brood 3 fr, queen seen, mites 4/300, fed 1:1
+  H5: 7 fr bees, eggs yes, brood 4 fr, queen seen, mites 3/300, added a super
+  H6: 7 fr bees, eggs yes, brood 5 fr, queen not seen, mites 2/300, fed 1:1
+== 2021-07-24  windy
+  H1: 10 fr bees, eggs yes, brood 2 fr, queen not seen, mites 2/300
+  H2: 7 fr bees, eggs yes, brood 6 fr, queen seen, mites 2/300
+  H3: 5 fr bees, eggs not seen, brood 4 fr, queen not seen, mites 2/300, swarm cells, cut
+  H4: 9 fr bees, eggs not seen, brood 2 fr, queen not seen, mites 0/300, fed 1:1
+  H5: 9 fr bees, eggs yes, brood 4 fr, queen not seen, mites 3/300, added a super
+  H6: 10 fr bees, eggs yes, brood 2 fr, queen not seen, mites 0/300
+== 2021-08-07  hot
+  H1: 7 fr bees, eggs not seen, brood 6 fr, queen seen, mites 6/300, fed 1:1
+  H2: 9 fr bees, eggs yes, brood 7 fr, queen not seen, mites 1/300, swarm cells, cut
+  H3: 10 fr bees, eggs yes, brood 7 fr, queen not seen, mites 3/300, swarm cells, cut
+  H4: 5 fr bees, eggs yes, brood 7 fr, queen not seen, mites 4/300
+  H5: 8 fr bees, eggs yes, brood 2 fr, queen not seen, mites 2/300
+  H6: 8 fr bees, eggs yes, brood 6 fr, queen seen, mites 1/300, fed 1:1
+== 2021-08-17  windy
+  H1: 9 fr bees, eggs yes, brood 5 fr, queen seen, mites 2/300, added a super
+  H2: 7 fr bees, eggs yes, brood 2 fr, queen seen, mites 4/300
+  H3: 5 fr bees, eggs yes, brood 5 fr, queen not seen, mites 0/300, fed 1:1
+  H4: 10 fr bees, eggs yes, brood 2 fr, queen seen, mites 2/300
+  H5: 8 fr bees, eggs yes, brood 2 fr, queen seen, mites 6/300
+  H6: 5 fr bees, eggs yes, brood 6 fr, queen not seen, mites 3/300
+== 2021-08-31  cool
+  H1: 7 fr bees, eggs yes, brood 4 fr, queen seen, mites 4/300, fed 1:1
+  H2: 10 fr bees, eggs yes, brood 6 fr, queen not seen, mites 1/300
+  H3: 10 fr bees, eggs not seen, brood 6 fr, queen not seen, mites 3/300
+  H4: 6 fr bees, eggs yes, brood 7 fr, queen not seen, mites 1/300
+  H5: 6 fr bees, eggs yes, brood 4 fr, queen seen, mites 2/300, added a super
+  H6: 5 fr bees, eggs yes, brood 5 fr, queen not seen, mites 3/300, added a super
+== 2021-09-13  cool
+  H1: 7 fr bees, eggs yes, brood 2 fr, queen not seen, mites 2/300
+  H2: 7 fr bees, eggs yes, brood 4 fr, queen not seen, mites 3/300
+  H3: 9 fr bees, eggs not seen, brood 5 fr, queen not seen, mites 6/300, added a super
+  H4: 8 fr bees, eggs yes, brood 5 fr, queen not seen, mites 1/300, swarm cells, cut
+  H5: 9 fr bees, eggs not seen, brood 2 fr, queen seen, mites 2/300, swarm cells, cut
+  H6: 10 fr bees, eggs yes, brood 4 fr, queen seen, mites 3/300, swarm cells, cut
+  H7 (Petrak orchard): 8 fr bees, eggs yes, brood 4 fr, queen not seen, mites 3/300
+== 2021-09-28  windy
+  H1: 7 fr bees, eggs not seen, brood 7 fr, queen seen, mites 3/300, added a super
+  H2: 9 fr bees, eggs yes, brood 5 fr, queen seen, mites 2/300
+  H3: 5 fr bees, eggs yes, brood 6 fr, queen not seen, mites 0/300
+  H4: 8 fr bees, eggs yes, brood 2 fr, queen not seen, mites 0/300, swarm cells, cut
+  H5: 9 fr bees, eggs not seen, brood 3 fr, queen not seen, mites 4/300
+  H6: 10 fr bees, eggs yes, brood 6 fr, queen not seen, mites 2/300
+== 2021-10-11  sunny
+  H1: 5 fr bees, eggs yes, brood 3 fr, queen not seen, mites 2/300
+  H2: 7 fr bees, eggs yes, brood 5 fr, queen seen, mites 3/300
+  H3: 6 fr bees, eggs yes, brood 2 fr, queen not seen, mites 6/300
+  H4: 9 fr bees, eggs yes, brood 5 fr, queen not seen, mites 2/300
+  H5: 10 fr bees, eggs yes, brood 3 fr, queen seen, mites 2/300
+  H6: 10 fr bees, eggs not seen, brood 5 fr, queen seen, mites 2/300
+  H7 (Petrak orchard): 8 fr bees, eggs yes, brood 2 fr, queen not seen, mites 2/300

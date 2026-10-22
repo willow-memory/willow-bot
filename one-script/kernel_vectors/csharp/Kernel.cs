@@ -343,6 +343,7 @@ public static class Kernel
     static int TOP, SNIFF, MAX_FILE, MAX_CHUNK, ECHO_RUN;
     static BigInteger HOLD_NUM, HOLD_DEN;
     static HashSet<string> FUNCTION = null!, MAKE = null!;
+    static Dictionary<string, int> MONTHS = new(StringComparer.Ordinal);
     static List<string> ROW_KEYS = null!;
     static string VERSION = "";
 
@@ -381,6 +382,8 @@ public static class Kernel
         HOLD_NUM = (BigInteger)hold[0]!;
         HOLD_DEN = (BigInteger)hold[1]!;
         FUNCTION = L(kc["FUNCTION"]).Select(x => (string)x!).ToHashSet(StringComparer.Ordinal);
+        var months = (JObj)kc["MONTHS"]!;
+        foreach (var m in months.Keys) MONTHS[m] = I(months[m]);
         MAKE = L(kc["MAKE"]).Select(x => (string)x!).ToHashSet(StringComparer.Ordinal);
         var next = (JObj)kc["NEXT"]!;
         NEXT = next.Keys.ToDictionary(k => k, k => (string)next[k]!, StringComparer.Ordinal);
@@ -784,35 +787,461 @@ public static class Kernel
         public int CompareTo(Q o) => (N * o.D).CompareTo(o.N * D);
     }
 
-    static List<Chunk> Rank(List<Chunk> pile, string bite)
+    /** kernel.py's parse_words: their words list as {their word: the folder's words}, or why not. */
+    static (Dictionary<string, List<string>> alias, string? why) ParseWords(string text)
+    {
+        var o = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var order = new List<string>();
+        var lines = Splitlines(text);
+        for (int n = 1; n <= lines.Count; n++)
+        {
+            var s = Strip(lines[n - 1]);
+            if (s.Length == 0 || s.StartsWith('#')) continue;
+            int eq = s.IndexOf('=');
+            var left = eq < 0 ? s : s.Substring(0, eq);
+            var right = eq < 0 ? "" : s.Substring(eq + 1);
+            var theirs = right.Split(',').Select(x => Words(x)).ToList();
+            if (eq < 0 || Words(left).Count != 1 || theirs.Any(t => t.Count != 1))
+                return (new Dictionary<string, List<string>>(StringComparer.Ordinal),
+                    $"words list line {n}: one word = one or more words, a comma between");
+            var her = Words(left)[0];
+            if (!o.ContainsKey(her)) { o[her] = new List<string>(); order.Add(her); }
+            foreach (var t in theirs) if (t[0] != her && !o[her].Contains(t[0])) o[her].Add(t[0]);
+        }
+        var res = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var w in order)
+            if (o[w].Count > 0) { var v = o[w].ToList(); v.Sort(CodePointOrder.It); res[w] = v; }
+        return (res, null);
+    }
+
+    /** kernel.py's read_words: the list, its SHA-256, why not; kept like the key. */
+    static (Dictionary<string, List<string>>? alias, string sha, string? why) ReadWords(string file, string box)
+    {
+        if (Inside(file, box)) return (null, "", "the words list can't live inside the box");
+        try
+        {
+            if (!OperatingSystem.IsWindows() && (Libc.Mode(file) & 0x3F) != 0) // 0o077
+                return (null, "", $"{file} is readable beyond its owner; chmod 600 it");
+            var raw = File.ReadAllBytes(file);
+            string text;
+            try { text = Utf8.GetString(raw); }
+            catch (DecoderFallbackException) { return (null, "", "the words list could not be read: UnicodeDecodeError"); }
+            var (alias, why) = ParseWords(text);
+            if (why != null) return (null, "", why);
+            return (alias, Hex(SHA256.HashData(raw)), null);
+        }
+        catch (FileNotFoundException) { return (null, "", "the words list could not be read: FileNotFoundError"); }
+        catch (DirectoryNotFoundException) { return (null, "", "the words list could not be read: FileNotFoundError"); }
+        catch (UnauthorizedAccessException) { return (null, "", "the words list could not be read: PermissionError"); }
+        catch (IOException) { return (null, "", "the words list could not be read: OSError"); }
+    }
+
+    /** Their word holds where it, or a word their list reads it as, does. */
+    static bool HeldBy(string w, HashSet<string> toks, Dictionary<string, List<string>> alias) =>
+        Holds(w, toks) || (alias.TryGetValue(w, out var xs) && xs.Any(x => Holds(x, toks)));
+
+    static bool IdChar(char c) => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '/';
+    static bool IsMark(char c) => c == '-' || c == '/';
+
+    /** kernel.py's ids: the numbers that name one thing, in order, each once; never a date. */
+    static List<string> Ids(string text)
+    {
+        var o = new List<string>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            int j = i;
+            while (j < text.Length && IdChar(text[j])) j++;
+            int a = i, b = j;
+            while (a < b && IsMark(text[a])) a++;
+            while (b > a && IsMark(text[b - 1])) b--;
+            var run = text.Substring(a, b - a);
+            if (run.Any(c => c >= '0' && c <= '9') && run.Any(IsMark) && Newest(run).Length == 0 && !o.Contains(run)) o.Add(run);
+            i = j == i ? j + 1 : j;
+        }
+        return o;
+    }
+
+    /** kernel.py's shape: digits as 9, letters as A, marks kept. */
+    static string Shape(string id) => new string(id.Select(c => c >= '0' && c <= '9' ? '9' : IsMark(c) ? c : 'A').ToArray());
+
+    /** kernel.py's missing: what isn't there, beside the served chunks' files. */
+    static List<object?> Missing(List<Chunk> pile, List<Chunk> served)
+    {
+        var byFile = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var c in pile)
+        {
+            if (!byFile.ContainsKey(c.Path)) byFile[c.Path] = new HashSet<string>(StringComparer.Ordinal);
+            byFile[c.Path].UnionWith(Ids(c.Text));
+        }
+        var every = new HashSet<string>(byFile.Values.SelectMany(f => f), StringComparer.Ordinal);
+        var paths = served.Select(c => c.Path).Distinct().ToList();
+        var shapes = new List<string>();
+        foreach (var c in served) // what she was shown names it
+            foreach (var id in Ids(c.Text))
+                if (!shapes.Contains(Shape(id))) shapes.Add(Shape(id));
+        var o = new List<object?>();
+        var files = byFile.Keys.ToList();
+        files.Sort(CodePointOrder.It);
+        foreach (var sh in shapes)
+        {
+            var group = every.Where(id => Shape(id) == sh).ToList();
+            foreach (var path in files)
+            {
+                if (paths.Contains(path)) continue;
+                var mine = byFile[path];
+                var have = group.Where(mine.Contains).ToList();
+                int k = have.Count;
+                if (!(2 * k >= group.Count && k < group.Count)) continue;
+                var gone = group.Where(id => !mine.Contains(id) && byFile.Values.Any(f => f.Contains(id) && have.Any(f.Contains))).ToList();
+                if (gone.Count == 0) continue;
+                gone.Sort(CodePointOrder.It);
+                o.Add(Hint($"{string.Join(", ", gone)}: not in {path}", $"{path} names {k} of the {group.Count} like them", null));
+            }
+        }
+        return o;
+    }
+
+    /** kernel.py's cells: one line of comma-separated values, quotes kept whole. */
+    static List<string> Cells(string line)
+    {
+        var o = new List<string>();
+        var cur = new StringBuilder();
+        bool quoted = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            char ch = line[i];
+            if (quoted && ch == '"' && i + 1 < line.Length && line[i + 1] == '"') { cur.Append('"'); i++; }
+            else if (ch == '"') quoted = !quoted;
+            else if (ch == ',' && !quoted) { o.Add(cur.ToString()); cur.Clear(); }
+            else cur.Append(ch);
+        }
+        o.Add(cur.ToString());
+        return o;
+    }
+
+    static bool AllDigits(string s) => s.All(c => c >= '0' && c <= '9');
+
+    /** kernel.py's number: a cell that is a decimal number (digits, places), or null. */
+    static (BigInteger v, int places)? Number(string cell)
+    {
+        var s = Strip(cell);
+        bool neg = s.StartsWith('-');
+        var body = neg ? s.Substring(1) : s;
+        int dot = body.IndexOf('.');
+        var whole = dot < 0 ? body : body.Substring(0, dot);
+        var frac = dot < 0 ? "" : body.Substring(dot + 1);
+        if (whole.Length == 0 || !AllDigits(whole) || !AllDigits(frac) || (dot >= 0 && frac.Length == 0)) return null;
+        var n = BigInteger.Parse(whole + frac, CultureInfo.InvariantCulture);
+        return (neg ? -n : n, frac.Length);
+    }
+
+    /** kernel.py's day: days since 1970-01-01 for a YYYYMMDD. */
+    static long Day(string d)
+    {
+        long y = long.Parse(d.Substring(0, 4), CultureInfo.InvariantCulture);
+        long m = long.Parse(d.Substring(4, 2), CultureInfo.InvariantCulture);
+        long dd = long.Parse(d.Substring(6), CultureInfo.InvariantCulture);
+        if (m <= 2) y -= 1;
+        long era = (long)Math.Floor(y / 400.0);
+        long yoe = y - era * 400;
+        long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + dd - 1;
+        return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    }
+
+    static string Shown((BigInteger v, int places) n)
+    {
+        var digits = BigInteger.Abs(n.v).ToString(CultureInfo.InvariantCulture).PadLeft(n.places + 1, '0');
+        var body = digits.Substring(0, digits.Length - n.places) + (n.places > 0 ? "." + digits.Substring(digits.Length - n.places) : "");
+        return (n.v.Sign < 0 ? "-" : "") + body;
+    }
+
+    static string Iso(string d) => $"{d.Substring(0, 4)}-{d.Substring(4, 2)}-{d.Substring(6)}";
+
+    static (BigInteger v, int places) Change((BigInteger v, int places) a, (BigInteger v, int places) b)
+    {
+        int places = Math.Max(a.places, b.places);
+        return (b.v * BigInteger.Pow(10, places - b.places) - a.v * BigInteger.Pow(10, places - a.places), places);
+    }
+
+    static bool Bigger((BigInteger v, int places) a, (BigInteger v, int places) b) =>
+        BigInteger.Abs(a.v) * BigInteger.Pow(10, b.places) > BigInteger.Abs(b.v) * BigInteger.Pow(10, a.places);
+
+    static string Moved((BigInteger v, int places) d) =>
+        d.v.IsZero ? "no change" : (d.v.Sign > 0 ? "up " : "down ") + Shown((BigInteger.Abs(d.v), d.places));
+
+    const int WEEK = 7, WEEKS = 4;
+
+    /** The latest row at least a week before d, or -1. */
+    static int WeekBefore(List<string> dates, string d)
+    {
+        int at = -1;
+        for (int i = 0; i < dates.Count; i++) if (Day(dates[i]) <= Day(d) - WEEK) at = i;
+        return at;
+    }
+
+    /** kernel.py's series: numbers over time, in a table of dated rows. */
+    static List<object?> Series(string path, string text)
+    {
+        var o = new List<object?>();
+        var lines = Splitlines(text).Where(ln => Strip(ln).Length > 0).ToList();
+        if (lines.Count < 3) return o;
+        var head = Cells(lines[0]);
+        if (Newest(lines[0]).Length > 0 || head.Count < 2) return o;
+        var rows = new List<(string d, List<string> cs)>();
+        foreach (var ln in lines.Skip(1))
+        {
+            var cs = Cells(ln);
+            var d = Newest(cs[0]);
+            var c0 = Strip(cs[0]);
+            if (d.Length > 0 && (c0 == d || c0 == Iso(d))) rows.Add((d, cs));
+        }
+        if (rows.Count < 2) return o;
+        for (int i = 1; i < rows.Count; i++) if (string.CompareOrdinal(rows[i].d, rows[i - 1].d) <= 0) return o;
+        for (int col = 1; col < head.Count; col++)
+        {
+            var got = new List<(string d, (BigInteger v, int places) n)>();
+            foreach (var (d, cs) in rows)
+                if (col < cs.Count && Number(cs[col]) is (BigInteger, int) n) got.Add((d, n));
+            if (got.Count < 2) continue;
+            var ds = got.Select(g => g.d).ToList();
+            var (d1, last) = got[^1];
+            var name = Strip(head[col]).Length > 0 ? Strip(head[col]) : $"column {col + 1}";
+            int b = WeekBefore(ds, d1);
+            if (b < 0) continue;
+            var (d0, then) = got[b];
+            var why = $"{name}: {Shown(last)} on {Iso(d1)}, {Moved(Change(then, last))} from {Shown(then)} on {Iso(d0)}";
+            (BigInteger v, int places)? best = null;
+            string? bFrom = null, bTo = null;
+            foreach (var (d, n) in got)
+            {
+                if (Day(d) <= Day(d1) - (long)WEEK * WEEKS) continue;
+                int w = WeekBefore(ds, d);
+                if (w < 0) continue;
+                var diff = Change(got[w].n, n);
+                if (best == null || Bigger(diff, best.Value)) { best = diff; bFrom = got[w].d; bTo = d; }
+            }
+            if (best != null && !(bFrom == d0 && bTo == d1))
+                why += $"; the most in one week of the last {WEEKS}: {Moved(best.Value)}, {Iso(bFrom!)} to {Iso(bTo!)}";
+            o.Add(Hint(why, $"{path}: {rows.Count} dated rows, {Iso(rows[0].d)} to {Iso(rows[^1].d)}", null));
+        }
+        return o;
+    }
+
+    static bool DigitAt(string t, int i) => i < t.Length && t[i] >= '0' && t[i] <= '9';
+    static bool IsLetter(char c) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+
+    /** kernel.py's written: every date written in text, as (YYYYMMDD, as written). */
+    static List<(string d, string as_)> Written(string text)
+    {
+        var runs = new List<(int a, int b)>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            bool dig = DigitAt(text, i);
+            if (!dig && !IsLetter(text[i])) { i++; continue; }
+            int j = i;
+            while (j < text.Length && (dig ? DigitAt(text, j) : IsLetter(text[j]))) j++;
+            runs.Add((i, j));
+            i = j;
+        }
+        bool Gap(int x)
+        {
+            var between = text.Substring(runs[x - 1].b, runs[x].a - runs[x - 1].b);
+            return between.Length > 0 && between.All(c => c == ' ' || c == ',' || c == '.');
+        }
+        string? Year(int x)
+        {
+            var y = text.Substring(runs[x].a, runs[x].b - runs[x].a);
+            return y.Length == 4 && (y.StartsWith("19", StringComparison.Ordinal) || y.StartsWith("20", StringComparison.Ordinal)) && Gap(x) ? y : null;
+        }
+        var o = new List<(string, string)>();
+        for (int k = 0; k < runs.Count; k++)
+        {
+            var (a, b) = runs[k];
+            var t = text.Substring(a, b - a);
+            if (DigitAt(t, 0))
+            {
+                if (t.Length == 8) { var d = Newest(t); if (d.Length > 0) o.Add((d, t)); }
+                else if (t.Length == 4)
+                {
+                    var ten = text.Substring(a, Math.Min(10, text.Length - a));
+                    var d = Newest(ten);
+                    if (d.Length > 0 && d.StartsWith(t, StringComparison.Ordinal) && ten == Iso(d) && !DigitAt(text, a + 10)) o.Add((d, Iso(d)));
+                }
+                continue;
+            }
+            if (!MONTHS.TryGetValue(t.ToLowerInvariant(), out var mon) || k + 1 >= runs.Count) continue;
+            var m = mon.ToString("00", CultureInfo.InvariantCulture);
+            var nxt = text.Substring(runs[k + 1].a, runs[k + 1].b - runs[k + 1].a);
+            var y2 = k + 2 < runs.Count ? Year(k + 2) : null;
+            if (DigitAt(nxt, 0) && nxt.Length <= 2 && int.Parse(nxt, CultureInfo.InvariantCulture) is var day && day >= 1 && day <= 31 && Gap(k + 1) && y2 != null)
+                o.Add((y2 + m + day.ToString("00", CultureInfo.InvariantCulture), text.Substring(a, runs[k + 2].b - a)));
+            else if (Year(k + 1) is string y1)
+                o.Add((y1 + m + "01", text.Substring(a, runs[k + 1].b - a)));
+        }
+        return o;
+    }
+
+    static string FolderOf(string p) => p.Contains('/') ? p.Substring(0, p.LastIndexOf('/')) : "";
+
+    /** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
+    static List<object?> GoneBy(List<Chunk> pile, List<Chunk> served, string today, List<string> want, Dictionary<string, List<string>> alias)
+    {
+        var o = new List<object?>();
+        foreach (var folder in served.Select(c => FolderOf(c.Path)).Distinct().ToList())
+        {
+            var entries = new List<(string d, string head, List<(string d, string as_)> later)>();
+            string? path = null;
+            int cur = -1;
+            foreach (var c in pile)
+            {
+                if (FolderOf(c.Path) != folder) continue;
+                if (c.Path != path) { path = c.Path; cur = -1; }
+                foreach (var line in Splitlines(c.Text))
+                {
+                    var s = Strip(line);
+                    var d = Newest(s.Substring(0, Math.Min(10, s.Length)));
+                    if (d.Length > 0 && s.Substring(0, Math.Min(10, s.Length)) == Iso(d) && !DigitAt(s, 10))
+                    {
+                        entries.Add((d, Strip(s.Substring(10)), new List<(string, string)>()));
+                        cur = entries.Count - 1;
+                    }
+                    var lineWords = new HashSet<string>(Words(s), StringComparer.Ordinal); // a line that holds one of the bite's words
+                    if (cur >= 0 && want.Any(w => HeldBy(w, lineWords, alias))) foreach (var w in Written(s)) if (string.CompareOrdinal(w.d, entries[cur].d) > 0) entries[cur].later.Add(w);
+                }
+            }
+            var latest = new Dictionary<string, (string d, string head, List<(string d, string as_)> later)>(StringComparer.Ordinal);
+            foreach (var e in entries)
+            {
+                if (e.head.Length == 0) continue;
+                if (!latest.TryGetValue(e.head, out var have) || string.CompareOrdinal(e.d, have.d) >= 0) latest[e.head] = e;
+            }
+            var due = new List<(string d, string as_, string head)>();
+            foreach (var (head, e) in latest)
+            {
+                if (e.later.Count == 0) continue;
+                var first = e.later[0];
+                foreach (var w in e.later)
+                    if (string.CompareOrdinal(w.d, first.d) < 0 || (w.d == first.d && CodePointOrder.It.Compare(w.as_, first.as_) < 0)) first = w;
+                if (string.CompareOrdinal(first.d, today) <= 0) due.Add((first.d, first.as_, head));
+            }
+            if (due.Count == 0) continue;
+            due.Sort((x, y) =>
+            {
+                int c = string.CompareOrdinal(x.d, y.d);
+                if (c != 0) return c;
+                c = CodePointOrder.It.Compare(x.as_, y.as_);
+                return c != 0 ? c : CodePointOrder.It.Compare(x.head, y.head);
+            });
+            o.Add(Hint("gone by, nothing written since: " + string.Join("; ", due.Select(x => $"{x.head} ({x.as_})")),
+                $"{(folder.Length > 0 ? folder : ".")}/: {due.Count} of {latest.Count} headings, as of {Iso(today)}", null));
+        }
+        return o;
+    }
+
+    /** How many ASCII digits run from i. */
+    static int Digits(string t, int i)
+    {
+        int j = i;
+        while (j < t.Length && t[j] >= '0' && t[j] <= '9') j++;
+        return Math.Max(0, j - i);
+    }
+
+    static string Date(string y, string m, string d)
+    {
+        bool ok = (y.StartsWith("19", StringComparison.Ordinal) || y.StartsWith("20", StringComparison.Ordinal))
+            && string.CompareOrdinal(m, "01") >= 0 && string.CompareOrdinal(m, "12") <= 0
+            && string.CompareOrdinal(d, "01") >= 0 && string.CompareOrdinal(d, "31") <= 0;
+        return ok ? y + m + d : "";
+    }
+
+    /** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+    static string Newest(string t)
+    {
+        string best = "";
+        int i = 0;
+        while (i < t.Length)
+        {
+            int n = Digits(t, i);
+            if (n == 0) { i++; continue; }
+            string got = "";
+            if (n == 8)
+                got = Date(t.Substring(i, 4), t.Substring(i + 4, 2), t.Substring(i + 6, 2));
+            else if (n == 4 && i + 4 < t.Length && t[i + 4] == '-' && Digits(t, i + 5) == 2
+                     && i + 7 < t.Length && t[i + 7] == '-' && Digits(t, i + 8) == 2)
+            {
+                got = Date(t.Substring(i, 4), t.Substring(i + 5, 2), t.Substring(i + 8, 2));
+                if (got.Length > 0) n = 10;
+            }
+            if (string.CompareOrdinal(got, best) > 0) best = got;
+            i += n;
+        }
+        return best;
+    }
+
+    /** kernel.py's dates: each chunk's date, carried down its file; 0 for none. */
+    static int[] Dates(List<Chunk> pile)
+    {
+        var o = new int[pile.Count];
+        string? path = null;
+        string cur = "";
+        for (int i = 0; i < pile.Count; i++)
+        {
+            var c = pile[i];
+            if (c.Path != path) { path = c.Path; cur = Newest(c.Path); }
+            var t = Newest(c.Text);
+            if (string.CompareOrdinal(t, cur) > 0) cur = t;
+            o[i] = cur.Length == 0 ? 0 : int.Parse(cur, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return o;
+    }
+
+    static List<Chunk> Rank(List<Chunk> pile, string bite, Dictionary<string, List<string>> alias)
     {
         var want = new List<string>();
         foreach (var w in Words(bite)) if (!FUNCTION.Contains(w) && !want.Contains(w)) want.Add(w);
         if (want.Count == 0) return new List<Chunk>();
-        var held = new List<(Chunk c, HashSet<string> h)>();
-        foreach (var c in pile)
+        var when = Dates(pile);
+        var held = new List<(Chunk c, HashSet<string> h, int d)>();
+        for (int k = 0; k < pile.Count; k++)
         {
+            var c = pile[k];
             var toks = new HashSet<string>(Words(c.Text), StringComparer.Ordinal);
-            var h = want.Where(w => Holds(w, toks)).ToHashSet(StringComparer.Ordinal);
-            if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h));
+            toks.UnionWith(Words(c.Path)); // a folder's name is the person's word too
+            var h = want.Where(w => HeldBy(w, toks, alias)).ToHashSet(StringComparer.Ordinal);
+            if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h, when[k]));
         }
         var df = want.ToDictionary(w => w, w => held.Count(x => x.h.Contains(w)), StringComparer.Ordinal);
-        var scored = new List<(Q s, Chunk c)>();
-        foreach (var (c, h) in held)
+        var scored = new List<(Q s, Chunk c, int d)>();
+        foreach (var (c, h, d) in held)
         {
             if (h.Count == 0) continue;
             var s = new Q(0, 1);
             foreach (var w in h) s = s.Plus(new Q(1, df[w]));
-            scored.Add((s, c));
+            scored.Add((s, c, d));
         }
+        var copies = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var c in pile) copies[c.Id] = copies.TryGetValue(c.Id, out var n) ? n + 1 : 1;
         scored.Sort((x, y) =>
         {
             int c = y.s.CompareTo(x.s);
             if (c != 0) return c;
+            c = copies[x.c.Id].CompareTo(copies[y.c.Id]); // said once before said every week
+            if (c != 0) return c;
+            if (x.d != y.d) return y.d.CompareTo(x.d);
             c = CodePointOrder.It.Compare(x.c.Path, y.c.Path);
-            return c != 0 ? c : x.c.Line.CompareTo(y.c.Line);
+            if (c != 0) return c;
+            // a log grows downward: on one date, the later line is the newer one
+            return x.d != 0 ? y.c.Line.CompareTo(x.c.Line) : x.c.Line.CompareTo(y.c.Line);
         });
-        return scored.Take(TOP).Select(x => x.c).ToList();
+        var o = new List<Chunk>(); // one id, one place
+        foreach (var x in scored)
+        {
+            if (o.Count == TOP) break;
+            if (!o.Any(y => y.Id == x.c.Id)) o.Add(x.c);
+        }
+        return o;
     }
 
     static JObj Hint(string why, string? where, string? next)
@@ -823,7 +1252,7 @@ public static class Kernel
         return m;
     }
 
-    static List<object?> Look(List<Chunk> pile, string bite, List<Chunk> served)
+    static List<object?> Look(List<Chunk> pile, string bite, List<Chunk> served, Dictionary<string, List<string>> alias, string today)
     {
         var o = new List<object?>();
         var ws = Words(bite);
@@ -831,8 +1260,14 @@ public static class Kernel
         foreach (var w in ws) if (!FUNCTION.Contains(w) && !want.Contains(w)) want.Add(w);
         if (want.Count == 0) o.Add(Hint("every word is a common one: name the thing you mean", null, null));
         var every = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var c in pile) every.UnionWith(Words(c.Text));
-        var absent = want.Where(w => !Holds(w, every)).ToList();
+        foreach (var c in pile) { every.UnionWith(Words(c.Text)); every.UnionWith(Words(c.Path)); }
+        var absent = want.Where(w => !HeldBy(w, every, alias)).ToList();
+        foreach (var w in want) // said, so a match their list made is never taken for theirs
+        {
+            if (Holds(w, every) || !alias.TryGetValue(w, out var xs)) continue;
+            var read = xs.Where(x => Holds(x, every)).ToList();
+            if (read.Count > 0) o.Add(Hint($"read {w} as {string.Join(", ", read)}, from your words list", null, null));
+        }
         if (absent.Count > 0)
             o.Add(Hint("no file in your folder has " + string.Join(", ", absent), "it may be called something else there", NEXT["other words"]));
         foreach (var c in served)
@@ -848,6 +1283,10 @@ public static class Kernel
                     uses.Count > 0 ? "also named in " + string.Join(", ", uses) : "nothing else in your folder names it", NEXT["unused"]));
             }
         }
+        o.AddRange(Missing(pile, served));
+        if (today.Length > 0) o.AddRange(GoneBy(pile, served, today, want, alias));
+        foreach (var p in served.Select(c => c.Path).Distinct().ToList())
+            o.AddRange(Series(p, string.Join("\n", pile.Where(x => x.Path == p).Select(x => x.Text))));
         if (ws.Count > 0 && MAKE.Contains(ws[0])) o.Add(Hint("this asks for something made", null, NEXT["made"]));
         return o;
     }
@@ -1103,11 +1542,12 @@ public static class Kernel
         catch (IOException) { return (null, "the key could not be read: OSError"); }
     }
 
-    static int Init(string box, string pile, string key, string ts)
+    static int Init(string box, string pile, string key, string ts, string? wl)
     {
         if (File.Exists(System.IO.Path.Combine(box, "record.jsonl"))) { Console.Error.WriteLine("refused: this box already has a record"); return REFUSED; }
         if (!Directory.Exists(pile)) { Console.Error.WriteLine($"refused: {pile} is not a folder"); return REFUSED; }
         if (Inside(key, box)) { Console.Error.WriteLine("refused: the key can't live inside the box"); return REFUSED; }
+        if (wl != null && ReadWords(wl, box).why is string why) { Console.Error.WriteLine($"refused: {why}"); return REFUSED; }
         if (!File.Exists(key))
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(key))!);
@@ -1118,6 +1558,7 @@ public static class Kernel
         }
         Directory.CreateDirectory(box);
         var cfg = Obj("pile", Resolved(pile), "key", Resolved(key));
+        if (wl != null) cfg["words"] = Resolved(wl);
         File.WriteAllText(System.IO.Path.Combine(box, "kernel.json"), DumpsDefault(cfg, true) + "\n", Utf8);
         var row = Append(box, ts, "boot", "kernel", Obj("loop", "open", "pile_sha256", H256((string)cfg["pile"]!)));
         Console.WriteLine($"open loop, row {PyStr(row["n"])} {((string)row["hash"]!).Substring(0, 16)}: the box is yours");
@@ -1173,8 +1614,18 @@ public static class Kernel
                 return ALIVE;
             }
         }
-        var pile = Chunks((string)Config(box)["pile"]!);
-        var served = Rank(pile, text);
+        var cfg = Config(box);
+        var alias = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        string? listed = null;
+        if (cfg.Has("words"))
+        {
+            var (got, sha, why) = ReadWords((string)cfg["words"]!, box);
+            if (why != null) { Console.Error.WriteLine($"refused: {why}"); return REFUSED; }
+            alias = got!;
+            listed = sha;
+        }
+        var pile = Chunks((string)cfg["pile"]!);
+        var served = Rank(pile, text, alias);
         var refs = new List<object?>();
         var answers = new List<Chunk>();
         foreach (var c in served)
@@ -1183,7 +1634,9 @@ public static class Kernel
             refs.Add(Obj("id", c.Id, "where", c.Path + ":" + c.Line, "echo", e));
             if (!e) answers.Add(c);
         }
-        Append(box, ts, "bite", "kernel", Obj("bite_key", key, "served", refs));
+        var biteRow = Obj("bite_key", key, "served", refs);
+        if (listed != null) biteRow["words_sha256"] = listed;
+        Append(box, ts, "bite", "kernel", biteRow);
         var state = answers.Count > 0 ? "populated" : refs.Count > 0 ? "echo" : "empty";
         var doc = Obj("state", state, "bite_key", key);
         var shown = new List<object?>();
@@ -1194,7 +1647,7 @@ public static class Kernel
             shown.Add(m);
         }
         doc["served"] = shown;
-        var hints = Look(pile, text, answers.Count > 0 ? served : new List<Chunk>());
+        var hints = Look(pile, text, answers.Count > 0 ? served : new List<Chunk>(), alias, Newest(ts.Substring(0, Math.Min(10, ts.Length))));
         if (hints.Count > 0) doc["look"] = hints;
         Console.WriteLine(DumpsShown(doc));
         return answers.Count > 0 ? ALIVE : ESCALATE;
@@ -1316,12 +1769,34 @@ public static class Kernel
         }
         finally { Directory.Delete(tmp, true); }
         res["chunks"] = piles.Select(ch => (object?)Obj("chunks", ch.Select(x => (object?)x.Json()).ToList())).ToList();
-        res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!).Select(x => (object?)x.Id).ToList())).ToList();
+        // a case's words list, as the vectors hold it ({} when it has none)
+        Dictionary<string, List<string>> AliasOf(JObj o)
+        {
+            var a = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            if (o.Get("alias") is JObj m) foreach (var w in m.Keys) a[w] = L(m[w]).Select(x => (string)x!).ToList();
+            return a;
+        }
+        res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!, AliasOf(o)).Select(x => (object?)x.Id).ToList())).ToList();
+        res["newest"] = Part("newest").Select(o => (object?)Obj("newest", Newest((string)o["text"]!))).ToList();
+        res["written"] = Part("written").Select(o => (object?)Obj("written", Written((string)o["text"]!).Select(w => (object?)new List<object?> { w.d, w.as_ }).ToList())).ToList();
+        res["series"] = Part("series").Select(o => (object?)Obj("out", Series((string)o["path"]!, (string)o["text"]!))).ToList();
+        res["ids"] = Part("ids").Select(o =>
+        {
+            var got = Ids((string)o["text"]!);
+            return (object?)Obj("ids", got.Select(x => (object?)x).ToList(), "shapes", got.Select(x => (object?)Shape(x)).ToList());
+        }).ToList();
+        res["wordlist"] = Part("wordlist").Select(o =>
+        {
+            var (alias, why) = ParseWords((string)o["text"]!);
+            var m = Obj();
+            foreach (var (w, ts) in alias) m[w] = ts.Select(x => (object?)x).ToList();
+            return (object?)Obj("alias", m, "why", why);
+        }).ToList();
         res["look"] = Part("look").Select(o =>
         {
             var pile = piles[I(o["pile"])];
             var served = L(o["served"]).Select(at => pile[I(at)]).ToList();
-            return (object?)Obj("look", Look(pile, (string)o["bite"]!, served));
+            return (object?)Obj("look", Look(pile, (string)o["bite"]!, served, AliasOf(o), (string)o["today"]!));
         }).ToList();
         res["door"] = Part("door").Select(o =>
         {
@@ -1355,14 +1830,14 @@ public static class Kernel
         var args = new List<string>();
         for (int i = 1; i < argv.Length; i++)
         {
-            if (new[] { "--box", "--pile", "--key", "--file", "--now" }.Contains(argv[i])) opts[argv[i]] = i + 1 < argv.Length ? argv[++i] : "";
+            if (new[] { "--box", "--pile", "--key", "--file", "--now", "--words" }.Contains(argv[i])) opts[argv[i]] = i + 1 < argv.Length ? argv[++i] : "";
             else args.Add(argv[i]);
         }
         string Opt(string k) => opts.TryGetValue(k, out var v) ? v : "";
         if (Opt("--box") == "") { Console.Error.WriteLine(USAGE); return REFUSED; }
         var box = Opt("--box");
         var ts = Opt("--now") != "" ? Opt("--now") : DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
-        if (verb == "init" && Opt("--pile") != "" && Opt("--key") != "" && args.Count == 0) return Init(box, Opt("--pile"), Opt("--key"), ts);
+        if (verb == "init" && Opt("--pile") != "" && Opt("--key") != "" && args.Count == 0) return Init(box, Opt("--pile"), Opt("--key"), ts, Opt("--words") != "" ? Opt("--words") : null);
         if (!File.Exists(System.IO.Path.Combine(box, "kernel.json"))) { Console.Error.WriteLine("refused: not a kernel box; init first"); return REFUSED; }
         if (verb == "bite" && args.Count == 1) return Bite(box, args[0], ts);
         if (verb == "propose" && Opt("--file") != "" && args.Count == 0) return Propose(box, Splitlines(Utf8.GetString(File.ReadAllBytes(Opt("--file")))), ts);

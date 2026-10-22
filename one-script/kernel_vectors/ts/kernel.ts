@@ -273,6 +273,7 @@ interface Tables {
   ECHO_RUN: number;
   HOLD: [bigint, bigint];
   FUNCTION: Set<string>;
+  MONTHS: Map<string, number>;
   MAKE: Set<string>;
   NEXT: Map<string, string>;
   ROW_KEYS: string[];
@@ -314,6 +315,7 @@ function loadTables(file: string): void {
     ECHO_RUN: num(kc.get("ECHO_RUN")!),
     HOLD: [hold[0] as bigint, hold[1] as bigint],
     FUNCTION: new Set(strs(kc.get("FUNCTION")!)),
+    MONTHS: new Map([...(kc.get("MONTHS") as JMap)].map(([m, n]) => [m, Number(n as bigint)])),
     MAKE: new Set(strs(kc.get("MAKE")!)),
     NEXT: new Map(Array.from(kc.get("NEXT") as JMap).map(([k, v]) => [k, v as string])),
     ROW_KEYS: strs(kc.get("ROW_KEYS")!),
@@ -717,29 +719,434 @@ const qCmp = (x: Q, y: Q) => {
   return l < r ? -1 : l > r ? 1 : 0;
 };
 
-function rank(pile: Chunk[], bite: string): Chunk[] {
+type Alias = Map<string, string[]>;
+const WORDS_BAD = ": one word = one or more words, a comma between";
+
+/** kernel.py's parse_words: their words list as {their word: the folder's words}, or why not. */
+function parseWords(text: string): [Alias, string | null] {
+  const out: Alias = new Map();
+  const lines = splitlines(text);
+  for (let n = 1; n <= lines.length; n++) {
+    const s = strip(lines[n - 1]);
+    if (!s || s.startsWith("#")) continue;
+    const eq = s.indexOf("=");
+    const left = eq < 0 ? s : s.slice(0, eq);
+    const right = eq < 0 ? "" : s.slice(eq + 1);
+    const theirs = right.split(",").map((x) => words(x));
+    if (eq < 0 || words(left).length !== 1 || theirs.some((t) => t.length !== 1))
+      return [new Map(), `words list line ${n}${WORDS_BAD}`];
+    const her = words(left)[0];
+    if (!out.has(her)) out.set(her, []);
+    const mine = out.get(her)!;
+    for (const [t] of theirs) if (t !== her && !mine.includes(t)) mine.push(t);
+  }
+  const res: Alias = new Map();
+  for (const [w, ts] of out) if (ts.length) res.set(w, [...ts].sort(byCodePoint));
+  return [res, null];
+}
+
+/** kernel.py's read_words: [the list, its SHA-256, why not], kept like the key. */
+function readWords(file: string, box: string): [Alias | null, string, string | null] {
+  if (inside(file, box)) return [null, "", "the words list can't live inside the box"];
+  try {
+    if (process.platform !== "win32" && fs.statSync(file).mode & 0o077)
+      return [null, "", `${file} is readable beyond its owner; chmod 600 it`];
+    const raw = fs.readFileSync(file);
+    let text: string;
+    try {
+      text = UTF8.decode(raw);
+    } catch {
+      return [null, "", "the words list could not be read: UnicodeDecodeError"];
+    }
+    const [alias, why] = parseWords(text);
+    if (why !== null) return [null, "", why];
+    return [alias, crypto.createHash("sha256").update(raw).digest("hex"), null];
+  } catch (e) {
+    return [null, "", `the words list could not be read: ${pyErrName(e)}`];
+  }
+}
+
+/** Their word holds where it, or a word their list reads it as, does. */
+function heldBy(w: string, toks: Set<string>, alias: Alias): boolean {
+  return holds(w, toks) || (alias.get(w) ?? []).some((x) => holds(x, toks));
+}
+
+const idChar = (c: string) => (c >= "0" && c <= "9") || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "-" || c === "/";
+const isMark = (c: string) => c === "-" || c === "/";
+
+/** kernel.py's ids: the numbers that name one thing, in order, each once; never a date. */
+function ids(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    let j = i;
+    while (j < text.length && idChar(text[j])) j++;
+    let a = i;
+    let b = j;
+    while (a < b && isMark(text[a])) a++;
+    while (b > a && isMark(text[b - 1])) b--;
+    const run = text.slice(a, b);
+    if (/[0-9]/.test(run) && /[-/]/.test(run) && !newest(run) && !out.includes(run)) out.push(run);
+    i = j === i ? j + 1 : j;
+  }
+  return out;
+}
+
+/** kernel.py's shape: digits as 9, letters as A, marks kept. */
+const shape = (id: string) => [...id].map((c) => (c >= "0" && c <= "9" ? "9" : isMark(c) ? c : "A")).join("");
+
+/** kernel.py's missing: what isn't there, beside the served chunks' files. */
+function missing(pile: Chunk[], served: Chunk[]): J[] {
+  const byFile = new Map<string, Set<string>>();
+  for (const c of pile) {
+    if (!byFile.has(c.path)) byFile.set(c.path, new Set());
+    for (const id of ids(c.text)) byFile.get(c.path)!.add(id);
+  }
+  const every = new Set<string>();
+  for (const f of byFile.values()) for (const id of f) every.add(id);
+  const paths = [...new Set(served.map((c) => c.path))];
+  const shapes = new Set<string>();
+  for (const c of served) for (const id of ids(c.text)) shapes.add(shape(id)); // what she was shown names it
+  const out: J[] = [];
+  const files = [...byFile.keys()].sort(byCodePoint);
+  for (const sh of shapes) {
+    const group = [...every].filter((id) => shape(id) === sh);
+    for (const path of files) {
+      if (paths.includes(path)) continue;
+      const mine = byFile.get(path)!;
+      const have = group.filter((id) => mine.has(id));
+      const k = have.length;
+      if (!(2 * k >= group.length && k < group.length)) continue;
+      const gone = group
+        .filter((id) => !mine.has(id) && [...byFile.values()].some((f) => f.has(id) && have.some((h) => f.has(h))))
+        .sort(byCodePoint);
+      if (!gone.length) continue;
+      out.push(obj(["why", `${gone.join(", ")}: not in ${path}`], ["where", `${path} names ${k} of the ${group.length} like them`]));
+    }
+  }
+  return out;
+}
+
+/** kernel.py's cells: one line of comma-separated values, quotes kept whole. */
+function cells(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted && ch === '"' && line[i + 1] === '"') {
+      cur += '"';
+      i++;
+    } else if (ch === '"') quoted = !quoted;
+    else if (ch === "," && !quoted) {
+      out.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** A decimal: its digits and its places (75.1 is [751n, 1]). */
+type Num = [bigint, number];
+const allDigits = (s: string) => [...s].every((c) => c >= "0" && c <= "9");
+
+/** kernel.py's number: a cell that is a decimal number, or null. */
+function number(cell: string): Num | null {
+  const s = strip(cell);
+  const neg = s.startsWith("-");
+  const body = neg ? s.slice(1) : s;
+  const dot = body.indexOf(".");
+  const whole = dot < 0 ? body : body.slice(0, dot);
+  const frac = dot < 0 ? "" : body.slice(dot + 1);
+  if (!whole || !allDigits(whole) || !allDigits(frac) || (dot >= 0 && !frac)) return null;
+  const n = BigInt(whole + frac);
+  return [neg ? -n : n, frac.length];
+}
+
+/** kernel.py's day: days since 1970-01-01 for a YYYYMMDD. */
+function day(d: string): number {
+  let y = Number(d.slice(0, 4));
+  const m = Number(d.slice(4, 6));
+  const dd = Number(d.slice(6));
+  if (m <= 2) y -= 1;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + dd - 1;
+  return era * 146097 + yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy - 719468;
+}
+
+function shown([v, places]: Num): string {
+  const digits = (v < 0n ? -v : v).toString().padStart(places + 1, "0");
+  const body = digits.slice(0, digits.length - places) + (places ? "." + digits.slice(digits.length - places) : "");
+  return (v < 0n ? "-" : "") + body;
+}
+
+const isoDate = (d: string) => `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}`;
+const pow10 = (n: number) => 10n ** BigInt(n);
+
+function change(a: Num, b: Num): Num {
+  const places = Math.max(a[1], b[1]);
+  return [b[0] * pow10(places - b[1]) - a[0] * pow10(places - a[1]), places];
+}
+
+const absN = (v: bigint) => (v < 0n ? -v : v);
+const bigger = (a: Num, b: Num) => absN(a[0]) * pow10(b[1]) > absN(b[0]) * pow10(a[1]);
+const moved = (d: Num) => (d[0] === 0n ? "no change" : `${d[0] > 0n ? "up" : "down"} ${shown([absN(d[0]), d[1]])}`);
+const WEEK = 7;
+const WEEKS = 4;
+
+/** The latest row at least a week before d, or -1. */
+function weekBefore(dates: string[], d: string): number {
+  let at = -1;
+  dates.forEach((x, i) => {
+    if (day(x) <= day(d) - WEEK) at = i;
+  });
+  return at;
+}
+
+/** kernel.py's series: numbers over time, in a table of dated rows. */
+function series(file: string, text: string): J[] {
+  const out: J[] = [];
+  const lines = splitlines(text).filter((ln) => strip(ln));
+  if (lines.length < 3) return out;
+  const head = cells(lines[0]);
+  if (newest(lines[0]) || head.length < 2) return out;
+  const rows: [string, string[]][] = [];
+  for (const ln of lines.slice(1)) {
+    const cs = cells(ln);
+    const d = newest(cs[0]);
+    const c0 = strip(cs[0]);
+    if (d && (c0 === d || c0 === isoDate(d))) rows.push([d, cs]);
+  }
+  if (rows.length < 2 || rows.some((r, i) => i > 0 && r[0] <= rows[i - 1][0])) return out;
+  for (let col = 1; col < head.length; col++) {
+    const got: [string, Num][] = [];
+    for (const [d, cs] of rows) {
+      const n = col < cs.length ? number(cs[col]) : null;
+      if (n) got.push([d, n]);
+    }
+    if (got.length < 2) continue;
+    const ds = got.map(([d]) => d);
+    const [d1, last] = got[got.length - 1];
+    const name = strip(head[col]) || `column ${col + 1}`;
+    const b = weekBefore(ds, d1);
+    if (b < 0) continue;
+    const [d0, then] = got[b];
+    let why = `${name}: ${shown(last)} on ${isoDate(d1)}, ${moved(change(then, last))} from ${shown(then)} on ${isoDate(d0)}`;
+    let best: [Num, string, string] | null = null;
+    for (const [d, n] of got) {
+      if (day(d) <= day(d1) - WEEK * WEEKS) continue;
+      const w = weekBefore(ds, d);
+      if (w < 0) continue;
+      const diff = change(got[w][1], n);
+      if (best === null || bigger(diff, best[0])) best = [diff, got[w][0], d];
+    }
+    if (best !== null && !(best[1] === d0 && best[2] === d1))
+      why += `; the most in one week of the last ${WEEKS}: ${moved(best[0])}, ${isoDate(best[1])} to ${isoDate(best[2])}`;
+    out.push(obj(["why", why], ["where", `${file}: ${rows.length} dated rows, ${isoDate(rows[0][0])} to ${isoDate(rows[rows.length - 1][0])}`]));
+  }
+  return out;
+}
+
+const digitAt = (t: string, i: number) => i < t.length && t[i] >= "0" && t[i] <= "9";
+const isLetter = (c: string) => (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
+
+/** kernel.py's written: every date written in text, as [YYYYMMDD, as written]. */
+function written(text: string): [string, string][] {
+  const runs: [number, number][] = [];
+  let i = 0;
+  while (i < text.length) {
+    const dig = digitAt(text, i);
+    if (!dig && !isLetter(text[i])) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < text.length && (dig ? digitAt(text, j) : isLetter(text[j]))) j++;
+    runs.push([i, j]);
+    i = j;
+  }
+  const gap = (x: number) => {
+    const between = text.slice(runs[x - 1][1], runs[x][0]);
+    return between.length > 0 && [...between].every((c) => c === " " || c === "," || c === ".");
+  };
+  const year = (x: number) => {
+    const y = text.slice(runs[x][0], runs[x][1]);
+    return y.length === 4 && (y.startsWith("19") || y.startsWith("20")) && gap(x) ? y : null;
+  };
+  const out: [string, string][] = [];
+  runs.forEach(([a, b], k) => {
+    const t = text.slice(a, b);
+    if (digitAt(t, 0)) {
+      if (t.length === 8) {
+        const d = newest(t);
+        if (d) out.push([d, t]);
+      } else if (t.length === 4) {
+        const ten = text.slice(a, a + 10);
+        const d = newest(ten);
+        if (d && d.startsWith(t) && ten === isoDate(d) && !digitAt(text, a + 10)) out.push([d, isoDate(d)]);
+      }
+      return;
+    }
+    const mon = T.MONTHS.get(t.toLowerCase());
+    if (mon === undefined || k + 1 >= runs.length) return;
+    const m = String(mon).padStart(2, "0");
+    const nxt = text.slice(runs[k + 1][0], runs[k + 1][1]);
+    const y2 = k + 2 < runs.length ? year(k + 2) : null;
+    if (digitAt(nxt, 0) && nxt.length <= 2 && Number(nxt) >= 1 && Number(nxt) <= 31 && gap(k + 1) && y2 !== null) {
+      out.push([y2 + m + String(Number(nxt)).padStart(2, "0"), text.slice(a, runs[k + 2][1])]);
+    } else {
+      const y1 = year(k + 1);
+      if (y1 !== null) out.push([y1 + m + "01", text.slice(a, runs[k + 1][1])]);
+    }
+  });
+  return out;
+}
+
+const folderOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+
+/** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
+function goneBy(pile: Chunk[], served: Chunk[], today: string, want: string[], alias: Alias): J[] {
+  const out: J[] = [];
+  for (const folder of new Set(served.map((c) => folderOf(c.path)))) {
+    const entries: [string, string, [string, string][]][] = [];
+    let path: string | null = null;
+    let cur: [string, string, [string, string][]] | null = null;
+    for (const c of pile) {
+      if (folderOf(c.path) !== folder) continue;
+      if (c.path !== path) {
+        path = c.path;
+        cur = null;
+      }
+      for (const line of splitlines(c.text)) {
+        const s = strip(line);
+        const d = newest(s.slice(0, 10));
+        if (d && s.slice(0, 10) === isoDate(d) && !digitAt(s, 10)) {
+          cur = [d, strip(s.slice(10)), []];
+          entries.push(cur);
+        }
+        const lineWords = new Set(words(s)); // a line that holds one of the bite's words
+        if (cur !== null && want.some((w) => heldBy(w, lineWords, alias)))
+          for (const w of written(s)) if (w[0] > cur[0]) cur[2].push(w);
+      }
+    }
+    const latest = new Map<string, [string, string, [string, string][]]>();
+    for (const e of entries) {
+      if (!e[1]) continue;
+      const have = latest.get(e[1]);
+      if (have === undefined || e[0] >= have[0]) latest.set(e[1], e);
+    }
+    const due: [string, string, string][] = [];
+    for (const [head, e] of latest) {
+      if (!e[2].length) continue;
+      let first = e[2][0];
+      for (const w of e[2]) if (w[0] < first[0] || (w[0] === first[0] && byCodePoint(w[1], first[1]) < 0)) first = w;
+      if (first[0] <= today) due.push([first[0], first[1], head]);
+    }
+    if (!due.length) continue;
+    due.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : byCodePoint(x[1], y[1]) || byCodePoint(x[2], y[2])));
+    out.push(
+      obj(
+        ["why", "gone by, nothing written since: " + due.map(([, w, h]) => `${h} (${w})`).join("; ")],
+        ["where", `${folder || "."}/: ${due.length} of ${latest.size} headings, as of ${isoDate(today)}`],
+      ),
+    );
+  }
+  return out;
+}
+
+/** How many ASCII digits run from i. */
+function digits(t: string, i: number): number {
+  let j = i;
+  while (j < t.length && t[j] >= "0" && t[j] <= "9") j++;
+  return Math.max(0, j - i);
+}
+
+function date(y: string, m: string, d: string): string {
+  const ok = (y.startsWith("19") || y.startsWith("20")) && m >= "01" && m <= "12" && d >= "01" && d <= "31";
+  return ok ? y + m + d : "";
+}
+
+/** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+function newest(t: string): string {
+  let best = "";
+  let i = 0;
+  while (i < t.length) {
+    let n = digits(t, i);
+    if (n === 0) {
+      i++;
+      continue;
+    }
+    let got = "";
+    if (n === 8) {
+      got = date(t.slice(i, i + 4), t.slice(i + 4, i + 6), t.slice(i + 6, i + 8));
+    } else if (n === 4 && t[i + 4] === "-" && digits(t, i + 5) === 2 && t[i + 7] === "-" && digits(t, i + 8) === 2) {
+      got = date(t.slice(i, i + 4), t.slice(i + 5, i + 7), t.slice(i + 8, i + 10));
+      if (got) n = 10;
+    }
+    if (got > best) best = got;
+    i += n;
+  }
+  return best;
+}
+
+/** kernel.py's dates: each chunk's date, carried down its file; 0 for none. */
+function dates(pile: Chunk[]): number[] {
+  const out: number[] = [];
+  let path: string | null = null;
+  let cur = "";
+  for (const c of pile) {
+    if (c.path !== path) {
+      path = c.path;
+      cur = newest(c.path);
+    }
+    const t = newest(c.text);
+    if (t > cur) cur = t;
+    out.push(cur ? Number(cur) : 0);
+  }
+  return out;
+}
+
+function rank(pile: Chunk[], bite: string, alias: Alias): Chunk[] {
   const want = new Set(words(bite).filter((w) => !T.FUNCTION.has(w)));
   if (!want.size) return [];
-  const held: [Chunk, Set<string>][] = [];
-  for (const c of pile) {
-    const toks = new Set(words(c.text));
-    const h = new Set([...want].filter((w) => holds(w, toks)));
-    if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h]);
-  }
+  const when = dates(pile);
+  const held: [Chunk, Set<string>, number][] = [];
+  pile.forEach((c, k) => {
+    const toks = new Set([...words(c.text), ...words(c.path)]); // a folder's name is the person's word too
+    const h = new Set([...want].filter((w) => heldBy(w, toks, alias)));
+    if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h, when[k]]);
+  });
   const df = new Map<string, bigint>();
   for (const w of want) df.set(w, BigInt(held.filter(([, h]) => h.has(w)).length));
-  const scored: [Q, Chunk][] = [];
-  for (const [c, h] of held) {
+  const scored: [Q, Chunk, number][] = [];
+  for (const [c, h, d] of held) {
     if (!h.size) continue;
     let s: Q = [0n, 1n];
     for (const w of h) s = qAdd(s, [1n, df.get(w)!]);
-    scored.push([s, c]);
+    scored.push([s, c, d]);
   }
-  scored.sort((x, y) => qCmp(y[0], x[0]) || byCodePoint(x[1].path, y[1].path) || x[1].line - y[1].line);
-  return scored.slice(0, T.TOP).map(([, c]) => c);
+  // a log grows downward: on one date, the later line is the newer one
+  const copies = new Map<string, number>();
+  for (const c of pile) copies.set(c.id, (copies.get(c.id) ?? 0) + 1);
+  scored.sort(
+    (x, y) =>
+      qCmp(y[0], x[0]) ||
+      copies.get(x[1].id)! - copies.get(y[1].id)! || // said once before said every week
+      y[2] - x[2] ||
+      byCodePoint(x[1].path, y[1].path) ||
+      (x[2] ? y[1].line - x[1].line : x[1].line - y[1].line),
+  );
+  const out: Chunk[] = []; // one id, one place
+  for (const [, c] of scored) {
+    if (out.length === T.TOP) break;
+    if (!out.some((x) => x.id === c.id)) out.push(c);
+  }
+  return out;
 }
 
-function look(pile: Chunk[], bite: string, served: Chunk[]): J[] {
+function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias, today: string): J[] {
   const out: J[] = [];
   const ws = words(bite);
   const want = [...new Set(ws)].filter((w) => !T.FUNCTION.has(w));
@@ -751,8 +1158,14 @@ function look(pile: Chunk[], bite: string, served: Chunk[]): J[] {
   };
   if (!want.length) out.push(hint("every word is a common one: name the thing you mean", null, null));
   const every = new Set<string>();
-  for (const c of pile) for (const w of words(c.text)) every.add(w);
-  const absent = want.filter((w) => !holds(w, every));
+  for (const c of pile) for (const w of [...words(c.text), ...words(c.path)]) every.add(w);
+  const absent = want.filter((w) => !heldBy(w, every, alias));
+  for (const w of want) {
+    // said, so a match their list made is never taken for theirs
+    if (holds(w, every)) continue;
+    const read = (alias.get(w) ?? []).filter((x) => holds(x, every));
+    if (read.length) out.push(hint(`read ${w} as ${read.join(", ")}, from your words list`, null, null));
+  }
   if (absent.length)
     out.push(hint("no file in your folder has " + absent.join(", "), "it may be called something else there", T.NEXT.get("other words")!));
   for (const c of served) {
@@ -770,6 +1183,10 @@ function look(pile: Chunk[], bite: string, served: Chunk[]): J[] {
       );
     }
   }
+  out.push(...missing(pile, served));
+  if (today) out.push(...goneBy(pile, served, today, want, alias));
+  for (const p of new Set(served.map((c) => c.path)))
+    out.push(...series(p, pile.filter((x) => x.path === p).map((x) => x.text).join("\n")));
   if (ws.length && T.MAKE.has(ws[0])) out.push(hint("this asks for something made", null, T.NEXT.get("made")!));
   return out;
 }
@@ -958,7 +1375,7 @@ function readKey(file: string, box: string): [Buffer | null, string | null] {
   }
 }
 
-function init(box: string, pile: string, key: string, ts: string): number {
+function init(box: string, pile: string, key: string, ts: string, wl: string | null): number {
   if (fs.existsSync(path.join(box, "record.jsonl"))) {
     console.error("refused: this box already has a record");
     return REFUSED;
@@ -971,6 +1388,13 @@ function init(box: string, pile: string, key: string, ts: string): number {
     console.error("refused: the key can't live inside the box");
     return REFUSED;
   }
+  if (wl !== null) {
+    const why = readWords(wl, box)[2];
+    if (why !== null) {
+      console.error(`refused: ${why}`);
+      return REFUSED;
+    }
+  }
   if (!fs.existsSync(key)) {
     fs.mkdirSync(path.dirname(path.resolve(key)), { recursive: true });
     const fd = fs.openSync(key, "wx", 0o600);
@@ -982,6 +1406,7 @@ function init(box: string, pile: string, key: string, ts: string): number {
   }
   fs.mkdirSync(box, { recursive: true });
   const cfg: JMap = obj(["pile", resolved(pile)], ["key", resolved(key)]);
+  if (wl !== null) cfg.set("words", resolved(wl));
   fs.writeFileSync(path.join(box, "kernel.json"), dumpsDefault(cfg, true) + "\n");
   const row = append(box, ts, "boot", "kernel", obj(["loop", "open"], ["pile_sha256", h256(cfg.get("pile") as string)]));
   console.log(`open loop, row ${row.get("n")} ${(row.get("hash") as string).slice(0, 16)}: the box is yours`);
@@ -1027,11 +1452,23 @@ function bite(box: string, text: string, ts: string): number {
       return ALIVE;
     }
   }
-  const pile = chunks(config(box).get("pile") as string);
-  const served = rank(pile, text);
+  const cfg = config(box);
+  let alias: Alias = new Map();
+  const listed: [string, J][] = [];
+  if (cfg.has("words")) {
+    const [got, sha, why] = readWords(cfg.get("words") as string, box);
+    if (why !== null) {
+      console.error(`refused: ${why}`);
+      return REFUSED;
+    }
+    alias = got!;
+    listed.push(["words_sha256", sha]);
+  }
+  const pile = chunks(cfg.get("pile") as string);
+  const served = rank(pile, text, alias);
   const refs = served.map((c) => obj(["id", c.id], ["where", `${c.path}:${c.line}`], ["echo", echo(text, c.text)]));
   const answers = served.filter((_, i) => !refs[i].get("echo"));
-  append(box, ts, "bite", "kernel", obj(["bite_key", key], ["served", refs]));
+  append(box, ts, "bite", "kernel", obj(["bite_key", key], ["served", refs], ...listed));
   const state = answers.length ? "populated" : refs.length ? "echo" : "empty";
   const doc: JMap = obj(["state", state], ["bite_key", key]);
   doc.set(
@@ -1042,7 +1479,7 @@ function bite(box: string, text: string, ts: string): number {
       return shown;
     }),
   );
-  const hints = look(pile, text, answers.length ? served : []);
+  const hints = look(pile, text, answers.length ? served : [], alias, newest(ts.slice(0, 10)));
   if (hints.length) doc.set("look", hints);
   console.log(dumpsShown(doc));
   return answers.length ? ALIVE : ESCALATE;
@@ -1182,13 +1619,33 @@ function vectors(casesFile: string, resultsFile: string): number {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   res.set("chunks", piles.map((ch) => obj(["chunks", ch.map(chunkJson)])));
-  res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string).map((x) => x.id)])));
+  // a case's words list, as the vectors hold it ({} when it has none)
+  const aliasOf = (o: JMap): Alias =>
+    new Map([...((o.get("alias") as JMap | undefined) ?? new Map())].map(([w, ts]) => [w, ts as string[]]));
+  res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string, aliasOf(o)).map((x) => x.id)])));
+  res.set("newest", list("newest").map((o) => obj(["newest", newest(o.get("text") as string)])));
+  res.set("written", list("written").map((o) => obj(["written", written(o.get("text") as string).map((w) => [...w] as J[])])));
+  res.set("series", list("series").map((o) => obj(["out", series(o.get("path") as string, o.get("text") as string)])));
+  res.set(
+    "ids",
+    list("ids").map((o) => {
+      const got = ids(o.get("text") as string);
+      return obj(["ids", got], ["shapes", got.map(shape)]);
+    }),
+  );
+  res.set(
+    "wordlist",
+    list("wordlist").map((o) => {
+      const [alias, why] = parseWords(o.get("text") as string);
+      return obj(["alias", new Map([...alias].map(([w, ts]) => [w, ts as J[]]))], ["why", why]);
+    }),
+  );
   res.set(
     "look",
     list("look").map((o) => {
       const pile = piles[Number(o.get("pile") as bigint)];
       const served = (o.get("served") as bigint[]).map((at) => pile[Number(at)]);
-      return obj(["look", look(pile, o.get("bite") as string, served)]);
+      return obj(["look", look(pile, o.get("bite") as string, served, aliasOf(o), o.get("today") as string)]);
     }),
   );
   res.set(
@@ -1226,7 +1683,7 @@ function main(argv: string[]): number {
   const opts = new Map<string, string>();
   const args: string[] = [];
   for (let i = 1; i < argv.length; i++) {
-    if (["--box", "--pile", "--key", "--file", "--now"].includes(argv[i])) opts.set(argv[i], argv[++i] ?? "");
+    if (["--box", "--pile", "--key", "--file", "--now", "--words"].includes(argv[i])) opts.set(argv[i], argv[++i] ?? "");
     else args.push(argv[i]);
   }
   if (!opts.get("--box")) {
@@ -1236,7 +1693,7 @@ function main(argv: string[]): number {
   const box = opts.get("--box")!;
   const ts = opts.get("--now") || now();
   if (verb === "init" && opts.get("--pile") && opts.get("--key") && !args.length)
-    return init(box, opts.get("--pile")!, opts.get("--key")!, ts);
+    return init(box, opts.get("--pile")!, opts.get("--key")!, ts, opts.get("--words") || null);
   if (!fs.existsSync(path.join(box, "kernel.json"))) {
     console.error("refused: not a kernel box; init first");
     return REFUSED;

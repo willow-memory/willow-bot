@@ -1,6 +1,6 @@
 """kernel.py: the smallest script that runs the whole loop, for anyone. Python 3.9+, stdlib only.
 
-    python kernel.py init    --box DIR --pile FOLDER --key FILE
+    python kernel.py init    --box DIR --pile FOLDER --key FILE [--words FILE]
     python kernel.py bite    --box DIR "your words"
     python kernel.py propose --box DIR --file ROWS.jsonl
     python kernel.py seal    --box DIR proposal:<sha256>
@@ -18,7 +18,9 @@ when a human sealed it, keep every step on a chain), and Nestor's
 `demo/sixty_seconds.py` tells it in eight beats. `test` runs those eight beats.
 
 The loop:
-    init     a box, and a key that is theirs (a file outside the box, 0600)
+    init     a box, and a key that is theirs (a file outside the box, 0600);
+             --words names their own words list, kept the same way: a line
+             `due = next` reads their word as their folder's
     bite     their words against their own files. A sealed answer for these
              words is served (exit 0: a human said it). Else their files'
              chunks that hold the words are served (exit 0: their pile is
@@ -205,7 +207,46 @@ def read_key(path: Path, box: Path) -> tuple[bytes | None, str | None]:
         return None, f"the key could not be read: {type(e).__name__}"
 
 
-def init(box: Path, pile: Path, key: Path, ts: str) -> int:
+def parse_words(text: str) -> tuple[dict[str, list[str]], str | None]:
+    """Their words list: a line `due = next, overdue` reads their word "due"
+    as any of their folder's words after the `=`. Blank lines and `#` lines
+    are skipped; one word on the left, one word between each comma."""
+    out: dict[str, list[str]] = {}
+    for n, line in enumerate(text.splitlines(), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        left, eq, right = s.partition("=")
+        theirs = [words(x) for x in right.split(",")]
+        if not eq or len(words(left)) != 1 or any(len(t) != 1 for t in theirs):
+            return (
+                {},
+                f"words list line {n}: one word = one or more words, a comma between",
+            )
+        mine = out.setdefault(words(left)[0], [])
+        for [t] in theirs:
+            if t != words(left)[0] and t not in mine:
+                mine.append(t)
+    return {w: sorted(ts) for w, ts in out.items() if ts}, None
+
+
+def read_words(path: Path, box: Path) -> tuple[dict | None, str, str | None]:
+    """Their words list, kept like their key: outside the box, readable only
+    by them. Returns (the list, its SHA-256, why not)."""
+    if path.resolve().is_relative_to(box.resolve()):
+        return None, "", "the words list can't live inside the box"
+    try:
+        if os.name == "posix" and path.stat().st_mode & 0o077:
+            return None, "", f"{path} is readable beyond its owner; chmod 600 it"
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
+    except (OSError, ValueError) as e:
+        return None, "", f"the words list could not be read: {type(e).__name__}"
+    alias, why = parse_words(text)
+    return (None, "", why) if why else (alias, hashlib.sha256(raw).hexdigest(), None)
+
+
+def init(box: Path, pile: Path, key: Path, ts: str, wl: Path | None = None) -> int:
     if (box / "record.jsonl").exists():
         print("refused: this box already has a record", file=sys.stderr)
         return REFUSED
@@ -215,6 +256,9 @@ def init(box: Path, pile: Path, key: Path, ts: str) -> int:
     if key.resolve().is_relative_to(box.resolve()):
         print("refused: the key can't live inside the box", file=sys.stderr)
         return REFUSED
+    if wl is not None and (why := read_words(wl, box)[2]) is not None:
+        print(f"refused: {why}", file=sys.stderr)
+        return REFUSED
     if not key.exists():
         key.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -222,6 +266,8 @@ def init(box: Path, pile: Path, key: Path, ts: str) -> int:
             f.write(secrets.token_hex(32) + "\n")
     box.mkdir(parents=True, exist_ok=True)
     cfg = {"pile": str(pile.resolve()), "key": str(key.resolve())}
+    if wl is not None:
+        cfg["words"] = str(wl.resolve())
     (box / "kernel.json").write_text(json.dumps(cfg, sort_keys=True) + "\n")
     row = append(box, ts, "boot", loop="open", pile_sha256=h256(cfg["pile"]))
     print(f"open loop, row {row['n']} {row['hash'][:16]}: the box is yours")
@@ -309,28 +355,116 @@ def chunks(pile: Path) -> list[dict]:
     return out
 
 
-def rank(pile: list[dict], bite: str) -> list[dict]:
+def _digits(text: str, i: int) -> int:
+    """How many ASCII digits run from `i`."""
+    j = i
+    while j < len(text) and "0" <= text[j] <= "9":
+        j += 1
+    return j - i
+
+
+def _date(y: str, m: str, d: str) -> str:
+    """YYYYMMDD when it reads as a date (years 1900-2099), else ""."""
+    ok = y[:2] in ("19", "20") and "01" <= m <= "12" and "01" <= d <= "31"
+    return y + m + d if ok else ""
+
+
+def newest(text: str) -> str:
+    """The latest date written in `text`, as YYYYMMDD, or "" for none: an ISO
+    date (2026-10-14) or a compact one (20261014, a calendar's), each a whole
+    run of ASCII digits, never part of a longer number. Read by hand, not by
+    a regex, so a port reads the same dates."""
+    best, i = "", 0
+    while i < len(text):
+        n = _digits(text, i)
+        if n == 0:
+            i += 1
+            continue
+        got = ""
+        if n == 8:
+            got = _date(text[i : i + 4], text[i + 4 : i + 6], text[i + 6 : i + 8])
+        elif n == 4 and text[i + 4 : i + 5] == "-" and _digits(text, i + 5) == 2:
+            if text[i + 7 : i + 8] == "-" and _digits(text, i + 8) == 2:
+                got = _date(text[i : i + 4], text[i + 5 : i + 7], text[i + 8 : i + 10])
+                if got:
+                    n = 10
+        best = max(best, got)
+        i += n
+    return best
+
+
+def toks(c: dict) -> set[str]:
+    """A chunk's words: its text's and its path's. A folder's name is the
+    person's word too: Laszlo's care log never says "Dad", its folder does."""
+    return set(words(c["text"])) | set(words(c["path"]))
+
+
+def held_by(w: str, toks: set[str], alias: dict) -> bool:
+    """Their word holds where it, or a word their list reads it as, does."""
+    return any(holds(x, toks) for x in [w, *alias.get(w, [])])
+
+
+def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
     """The chunks holding at least `HOLD` of the bite's content words (not
-    `FUNCTION`), rarest words weighing most. A chunk sharing only "the" or
+    `FUNCTION`) in their text or their path (`toks`), rarest words weighing
+    most; among equal scores, the newest
+    first (`dates`), then by path, and in one file a dated chunk's later line
+    first (a log grows downward). A chunk sharing only "the" or
     "how" and "do" doesn't hold "when does the frost come" or "how do I bake
     sourdough bread": an answer it doesn't have is never improvised (beat 1).
-    A bite of function words alone is held by nothing: say more."""
+    A bite of function words alone is held by nothing: say more. `alias` is
+    their words list (`parse_words`)."""
     want = set(words(bite)) - FUNCTION
     if not want:
         return []
-    held = [(c, {w for w in want if holds(w, set(words(c["text"])))}) for c in pile]
-    held = [(c, h) for c, h in held if len(h) >= HOLD * len(want)]
-    df = {w: sum(w in h for _, h in held) for w in want}
+    held = [
+        (c, d, {w for w in want if held_by(w, toks(c), alias or {})})
+        for c, d in zip(pile, dates(pile))
+    ]
+    held = [(c, d, h) for c, d, h in held if len(h) >= HOLD * len(want)]
+    df = {w: sum(w in h for *_, h in held) for w in want}
     # exact, not float: a float sum's last bit depends on the order the set is
     # walked in, which is the process's hash seed, so on Python 3.9-3.11 the
     # same folder and bite ranked differently from run to run (13 runs in 400
     # on one pile); 3.12's compensated sum hides it, and a port can't copy that
     scored = [
-        (sum(Fraction(1, df[w]) for w in h), c["path"], c["line"], c)
-        for c, h in held
+        (sum(Fraction(1, df[w]) for w in h), d, c["path"], c["line"], c)
+        for c, d, h in held
         if h
     ]
-    return [c for *_, c in sorted(scored, key=lambda s: (-s[0], s[1], s[2]))[:TOP]]
+    # a log grows downward: on one date, the later line is the newer one
+    # among equal scores, what was said once before what is said every week
+    # (the same text, one id, many places), then the newest
+    copies: dict[str, int] = {}
+    for c in pile:
+        copies[c["id"]] = copies.get(c["id"], 0) + 1
+    order = sorted(
+        scored,
+        key=lambda s: (-s[0], copies[s[4]["id"]], -s[1], s[2], -s[3] if s[1] else s[3]),
+    )
+    # a place is for something not yet shown: a memo she dictates every month
+    # is one text, one id, and served once (Odile's jar order, twice, pushed
+    # out the van memo she still has to act on)
+    out: list[dict] = []
+    for *_, c in order:
+        if len(out) == TOP:
+            break
+        if all(c["id"] != x["id"] for x in out):
+            out.append(c)
+    return out
+
+
+def dates(pile: list[dict]) -> list[int]:
+    """Each chunk's date as a number to sort by (0 for none): the latest date
+    in its path or text, or above it in its file, since a log's date heading
+    covers the lines under it. `pile` is in `chunks` order."""
+    out, path, cur = [], None, ""
+    for c in pile:
+        if c["path"] != path:
+            path, cur = c["path"], newest(c["path"])
+        cur = max(cur, newest(c["text"]))
+        out.append(int(cur or 0))
+    return out
 
 
 # ── where to look: what a 42 (or a served definition) can still say ─────────
@@ -345,11 +479,353 @@ NEXT = {
 }
 
 
-def look(pile: list[dict], bite: str, served: list[dict]) -> list[dict]:
+def _id_char(ch: str) -> bool:
+    return ch.isascii() and (ch.isalnum() or ch in "-/")
+
+
+def ids(text: str) -> list[str]:
+    """The numbers in `text` that name one thing: a run of ASCII letters,
+    digits, `-` and `/`, trimmed of its end marks, holding a digit and a mark
+    inside (a purchase order's 2025-063, a case's WR-2026-0117, a phone's
+    555-0161). A date isn't one (`newest` reads it): dates are the newest
+    reading's. In order, each once."""
+    out, i = [], 0
+    while i < len(text):
+        j = i
+        while j < len(text) and _id_char(text[j]):
+            j += 1
+        run = text[i:j].strip("-/")
+        if (
+            any(c.isdigit() for c in run)
+            and any(c in "-/" for c in run)
+            and not newest(run)
+            and run not in out
+        ):
+            out.append(run)
+        i = j + 1 if j == i else j
+    return out
+
+
+def shape(i: str) -> str:
+    """What an id looks like: digits as 9, letters as A, marks kept."""
+    return "".join("9" if c.isdigit() else "A" if c.isalpha() else c for c in i)
+
+
+def missing(pile: list[dict], served: list[dict]) -> list[dict]:
+    """What isn't there: for each shape of id in a served chunk, every
+    other file (not one the answer came from: that one is being read) that
+    names at least half the folder's ids of that shape but not all, and the
+    ones it doesn't that another file names beside ones it does. Odile's books name 21 of her 24 purchase orders; the
+    three they don't are the question."""
+    by_file: dict[str, set[str]] = {}
+    for c in pile:
+        by_file.setdefault(c["path"], set()).update(ids(c["text"]))
+    every = set().union(*by_file.values()) if by_file else set()
+    out = []
+    # what she was shown names it, not just a file it came from: an order
+    # somewhere in her tuning log is no reason to say it under "I'm tired"
+    paths = list(dict.fromkeys(c["path"] for c in served))
+    shapes = dict.fromkeys(shape(i) for c in served for i in ids(c["text"]))
+    for sh in shapes:
+        group = {i for i in every if shape(i) == sh}
+        for path in sorted(set(by_file) - set(paths)):
+            k = len(group & by_file[path])
+            if 2 * k >= len(group) and k < len(group):
+                have = group & by_file[path]
+                # missing only where another file names it beside ones this
+                # file has: a Kawai's K-300 and a van's E-150 share a shape,
+                # never a page, so neither is missing from the other's file
+                gone = sorted(
+                    i
+                    for i in group - by_file[path]
+                    if any(i in f and f & have for f in by_file.values())
+                )
+                if not gone:
+                    continue
+                out.append(
+                    {
+                        "why": f"{', '.join(gone)}: not in {path}",
+                        "where": f"{path} names {k} of the {len(group)} like them",
+                    }
+                )
+    return out
+
+
+def cells(line: str) -> list[str]:
+    """One line of comma-separated values: a cell in double quotes may hold
+    commas, and "" inside it is one quote."""
+    out, cur, quoted, i = [], [], False, 0
+    while i < len(line):
+        ch = line[i]
+        if quoted and ch == '"' and line[i + 1 : i + 2] == '"':
+            cur.append('"')
+            i += 1
+        elif ch == '"':
+            quoted = not quoted
+        elif ch == "," and not quoted:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    return out + ["".join(cur)]
+
+
+def number(cell: str) -> tuple[int, int] | None:
+    """A cell that is a decimal number, as (digits, places): 75.1 is (751, 1).
+    ASCII digits, an optional minus and point, nothing else."""
+    s = cell.strip()
+    whole, _, frac = s[1:].partition(".") if s[:1] == "-" else s.partition(".")
+    ok = whole and all("0" <= c <= "9" for c in whole + frac) and (frac or "." not in s)
+    if not ok:
+        return None
+    n = int(whole + frac)
+    return (-n if s[:1] == "-" else n), len(frac)
+
+
+def day(d: str) -> int:
+    """Days since 1970-01-01 for a YYYYMMDD, by integer arithmetic alone."""
+    y, m, dd = int(d[:4]), int(d[4:6]), int(d[6:])
+    y -= m <= 2
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + dd - 1
+    return era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy - 719468
+
+
+def shown(n: tuple[int, int]) -> str:
+    v, places = n
+    digits = str(abs(v)).rjust(places + 1, "0")
+    body = digits[: len(digits) - places] + ("." + digits[-places:] if places else "")
+    return ("-" if v < 0 else "") + body
+
+
+def iso(d: str) -> str:
+    return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+
+
+WEEK = 7  # days: a change is said against the row a week before the latest
+WEEKS = 4  # and the biggest move in any one week, over this many back
+
+
+def change(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+    """b - a, exactly, at the finer of their two places."""
+    places = max(a[1], b[1])
+    return b[0] * 10 ** (places - b[1]) - a[0] * 10 ** (places - a[1]), places
+
+
+def bigger(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    """|a| > |b|, exactly: each scaled by the other's places."""
+    return abs(a[0]) * 10 ** b[1] > abs(b[0]) * 10 ** a[1]
+
+
+def moved(diff: tuple[int, int]) -> str:
+    if diff[0] == 0:
+        return "no change"
+    return f"{'up' if diff[0] > 0 else 'down'} {shown((abs(diff[0]), diff[1]))}"
+
+
+def week_before(got: list, d: str) -> tuple[str, tuple[int, int]] | None:
+    """The latest row at least a week before `d`, or None."""
+    before = [(x, n) for x, n in got if day(x) <= day(d) - WEEK]
+    return before[-1] if before else None
+
+
+def series(path: str, text: str) -> list[dict]:
+    """Numbers over time: a table (comma-separated, a header first) whose rows
+    start with a date, each later than the last, says for each column of
+    numbers its latest value and how it stands to the one a week before. A
+    ledger repeats its dates, so it is never a series; the kernel says what
+    moved, never whether it matters."""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 3:
+        return []
+    head, rows = cells(lines[0]), []
+    if newest(lines[0]) or len(head) < 2:
+        return []
+    for ln in lines[1:]:
+        cs = cells(ln)
+        d = newest(cs[0])
+        if d and cs[0].strip() in (d, iso(d)):
+            rows.append((d, cs))
+    if len(rows) < 2 or any(b[0] <= a[0] for a, b in zip(rows, rows[1:])):
+        return []
+    out = []
+    for col in range(1, len(head)):
+        got = [(d, n) for d, cs in rows if col < len(cs) and (n := number(cs[col]))]
+        if len(got) < 2:
+            continue
+        (d1, last), name = got[-1], head[col].strip() or f"column {col + 1}"
+        if (b := week_before(got, d1)) is None:
+            continue
+        d0, then = b
+        why = f"{name}: {shown(last)} on {iso(d1)}, {moved(change(then, last))} from "
+        why += f"{shown(then)} on {iso(d0)}"
+        # the biggest move in one week, among the last WEEKS: the latest week
+        # can sit under a line that an earlier one crossed
+        best = None
+        for d, n in got:
+            if day(d) > day(d1) - WEEK * WEEKS and (b := week_before(got, d)):
+                diff = change(b[1], n)
+                if best is None or bigger(diff, best[0]):  # a tie keeps the earlier
+                    best = (diff, b[0], d)
+        if best is not None and (best[1], best[2]) != (d0, d1):
+            why += f"; the most in one week of the last {WEEKS}: {moved(best[0])}"
+            why += f", {iso(best[1])} to {iso(best[2])}"
+        out.append(
+            {
+                "why": why,
+                "where": f"{path}: {len(rows)} dated rows, {iso(rows[0][0])} to "
+                f"{iso(rows[-1][0])}",
+            }
+        )
+    return out
+
+
+MONTHS = {
+    m: n
+    for n, names in enumerate(
+        [
+            ("jan", "january"), ("feb", "february"), ("mar", "march"),
+            ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+            ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"),
+            ("nov", "november"), ("dec", "december"),
+        ],
+        1,
+    )
+    for m in names
+}  # fmt: skip
+
+
+def _digit(ch: str) -> bool:
+    return len(ch) == 1 and "0" <= ch <= "9"
+
+
+def _letter(ch: str) -> bool:
+    return len(ch) == 1 and ("a" <= ch <= "z" or "A" <= ch <= "Z")
+
+
+def _runs(text: str) -> list[tuple[int, int]]:
+    """Where each run of ASCII letters, or of ASCII digits, starts and ends."""
+    out, i = [], 0
+    while i < len(text):
+        same = _digit if _digit(text[i]) else _letter if _letter(text[i]) else None
+        if same is None:
+            i += 1
+            continue
+        j = i
+        while j < len(text) and same(text[j]):
+            j += 1
+        out.append((i, j))
+        i = j
+    return out
+
+
+def written(text: str) -> list[tuple[str, str]]:
+    """Every date written in `text`, in order, as (YYYYMMDD, as written): ISO
+    and compact (`newest`'s), and English month names with a year, a day or
+    not between ("Oct 2027" is its first; "March 20, 2026"). Between a month
+    and the rest, only spaces, commas and points."""
+    out, runs = [], _runs(text)
+    for k, (a, b) in enumerate(runs):
+        t = text[a:b]
+        if _digit(t[0]):
+            if len(t) == 8 and (d := newest(t)):
+                out.append((d, t))
+            elif len(t) == 4 and (d := newest(text[a : a + 10])) and d[:4] == t:
+                if text[a : a + 10] == iso(d) and not _digit(text[a + 10 : a + 11]):
+                    out.append((d, iso(d)))
+            continue
+        if t.lower() not in MONTHS or k + 1 >= len(runs):
+            continue
+
+        def gap(x: int) -> bool:
+            between = text[runs[x - 1][1] : runs[x][0]]
+            return bool(between) and all(c in " ,." for c in between)
+
+        def year(x: int) -> str | None:
+            y = text[runs[x][0] : runs[x][1]]
+            return y if len(y) == 4 and y[:2] in ("19", "20") and gap(x) else None
+
+        m = f"{MONTHS[t.lower()]:02d}"
+        nxt = text[runs[k + 1][0] : runs[k + 1][1]]
+        if (
+            _digit(nxt[0])
+            and len(nxt) <= 2
+            and 1 <= int(nxt) <= 31
+            and gap(k + 1)
+            and k + 2 < len(runs)
+            and (y := year(k + 2))
+        ):
+            out.append((y + m + f"{int(nxt):02d}", text[a : runs[k + 2][1]]))
+        elif y := year(k + 1):
+            out.append((y + m + "01", text[a : runs[k + 1][1]]))
+    return out
+
+
+def gone_by(
+    pile: list[dict], served: list[dict], today: str, want: set, alias: dict
+) -> list[dict]:
+    """Has this date passed: in a log (lines that start with an ISO date, and
+    the lines under each), the latest entry under each heading (its first
+    line, less the date) that names a later date, now gone by, with nothing
+    written under that heading since, on a line that holds one of the bite's
+    words. A log kept a file a year is one log: the served file's whole
+    folder is read. Odile's "next: May 2026" under
+    Harriet's last visit, and no visit since, is a tuning due."""
+    out = []
+    for folder in dict.fromkeys(c["path"].rpartition("/")[0] for c in served):
+        entries, path, cur = [], None, None
+        for c in pile:  # chunks order: a file's chunks in a row
+            if c["path"].rpartition("/")[0] != folder:
+                continue
+            if c["path"] != path:
+                path, cur = c["path"], None
+            for line in c["text"].splitlines():
+                s = line.strip()
+                d = newest(s[:10])
+                if d and s[:10] == iso(d) and not _digit(s[10:11]):
+                    cur = (d, s[10:].strip(), [])
+                    entries.append(cur)
+                # a date counts where its line holds one of the bite's words
+                # (or one their list reads it as): "who's due" reaches next:
+                if cur is not None and any(
+                    held_by(w, set(words(s)), alias) for w in want
+                ):
+                    cur[2].extend(w for w in written(s) if w[0] > cur[0])
+        latest: dict[str, tuple] = {}
+        for e in entries:  # a later entry, or a later line on the same day, wins
+            if e[1] and e[0] >= latest.get(e[1], ("",))[0]:
+                latest[e[1]] = e
+        due = sorted(
+            (min(e[2]), head)
+            for head, e in latest.items()
+            if e[2] and min(e[2])[0] <= today
+        )
+        if due:
+            out.append(
+                {
+                    "why": "gone by, nothing written since: "
+                    + "; ".join(f"{h} ({w})" for (_, w), h in due),
+                    "where": f"{folder or '.'}/: {len(due)} of {len(latest)} "
+                    f"headings, as of {iso(today)}",
+                }
+            )
+    return out
+
+
+def look(
+    pile: list[dict],
+    bite: str,
+    served: list[dict],
+    alias: dict | None = None,
+    today: str = "",
+) -> list[dict]:
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
-    it); a bite of common words only; a request to make something."""
+    it); what isn't there (`missing`); numbers over time (`series`); a bite of
+    common words only; a request to make something."""
     out = []
     ws = words(bite)
     want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
@@ -357,8 +833,14 @@ def look(pile: list[dict], bite: str, served: list[dict]) -> list[dict]:
         out.append({"why": "every word is a common one: name the thing you mean"})
     every = set()
     for c in pile:
-        every |= set(words(c["text"]))
-    absent = [w for w in want if not holds(w, every)]
+        every |= toks(c)
+    alias = alias or {}
+    absent = [w for w in want if not held_by(w, every, alias)]
+    for w in want:  # said, so a match their list made is never taken for theirs
+        if not holds(w, every) and (
+            read := [x for x in alias.get(w, []) if holds(x, every)]
+        ):
+            out.append({"why": f"read {w} as {', '.join(read)}, from your words list"})
     if absent:
         out.append(
             {
@@ -383,6 +865,11 @@ def look(pile: list[dict], bite: str, served: list[dict]) -> list[dict]:
                     "next": NEXT["unused"],
                 }
             )
+    out += missing(pile, served)
+    if today:
+        out += gone_by(pile, served, today, set(want), alias)
+    for path in dict.fromkeys(c["path"] for c in served):  # the whole table
+        out += series(path, "\n".join(c["text"] for c in pile if c["path"] == path))
     if ws and ws[0] in MAKE:
         out.append({"why": "this asks for something made", "next": NEXT["made"]})
     return out
@@ -419,8 +906,15 @@ def bite(box: Path, text: str, ts: str) -> int:
             append(box, ts, "bite", bite_key=k, answered_by=subj, served=[])
             print(json.dumps({"state": "sealed", "answer": prop["data"], "by": subj}))
             return ALIVE
-    pile = chunks(Path(config(box)["pile"]))
-    served = rank(pile, text)
+    alias, listed = {}, {}
+    if "words" in (cfg := config(box)):
+        alias, sha, why = read_words(Path(cfg["words"]), box)
+        if why is not None:
+            print(f"refused: {why}", file=sys.stderr)
+            return REFUSED
+        listed = {"words_sha256": sha}
+    pile = chunks(Path(cfg["pile"]))
+    served = rank(pile, text, alias)
     refs = [
         {
             "id": c["id"],
@@ -429,12 +923,13 @@ def bite(box: Path, text: str, ts: str) -> int:
         }
         for c in served
     ]
-    append(box, ts, "bite", bite_key=k, served=refs)
+    append(box, ts, "bite", bite_key=k, served=refs, **listed)
     answers = [r for r in refs if not r["echo"]]
     state = "populated" if answers else "echo" if refs else "empty"
     doc = {"state": state, "bite_key": k}
     doc["served"] = [{**r, "text": c["text"]} for r, c in zip(refs, served)]
-    if hints := look(pile, text, served if answers else []):
+    today = newest(ts[:10])
+    if hints := look(pile, text, served if answers else [], alias, today):
         doc["look"] = hints  # printed for them; the record keeps no words
     print(json.dumps(doc, ensure_ascii=False))
     return ALIVE if answers else ESCALATE
@@ -672,7 +1167,7 @@ def main(argv: list[str]) -> int:
     args: list[str] = []
     it = iter(rest)
     for a in it:
-        if a in ("--box", "--pile", "--key", "--file", "--now"):
+        if a in ("--box", "--pile", "--key", "--file", "--now", "--words"):
             opts[a] = next(it, "")
         else:
             args.append(a)
@@ -681,7 +1176,8 @@ def main(argv: list[str]) -> int:
         return REFUSED
     box, ts = Path(opts["--box"]), opts.get("--now") or now()
     if verb == "init" and opts.get("--pile") and opts.get("--key") and not args:
-        return init(box, Path(opts["--pile"]), Path(opts["--key"]), ts)
+        wl = Path(opts["--words"]) if opts.get("--words") else None
+        return init(box, Path(opts["--pile"]), Path(opts["--key"]), ts, wl)
     if not (box / "kernel.json").exists():
         print("refused: not a kernel box; init first", file=sys.stderr)
         return REFUSED

@@ -30,7 +30,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `scripts/oauth/oauth_probe.py` | Deterministic OAuth: blind wagers forecast before they run, pins for answers already seen; the live flow against willows-grove and willow-mcp serve mode on loopback and Google's hosted MCP servers (read-only, no credentials), N runs each; disagreeing runs are `drift`, a pin that moves is `changed` |
 | `deep_thought.py` | The morning screen |
 | `kernel.py` | The smallest script for anyone: the whole loop on their own folder, stdlib only (IDEAS 113) |
-| `kernel_vectors/` | `kernel.py` in any language: generated tables, 3,088 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
+| `kernel_vectors/` | `kernel.py` in any language: generated tables, 4,595 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
 
 ## OAuth: which server a token is for
 
@@ -435,6 +435,8 @@ python3 -m onescript turn "the bite" --proposal f.jsonl
 python3 -m onescript seal proposal:<hash>              # found in Nestor's store (--keyring/--nestor-db before the command)
 python3 -m onescript escalate "the task"           # D0, then small pieces to the local rung
 python3 -m onescript checkout                      # reverse, then the morning screen
+python3 -m onescript life g1 --soup odile          # Conway's Life as verdict rows (--board F.rle)
+python3 -m onescript life-check g1                 # played again from its open row
 
 python3 -m pytest -q onescript/tests            # its tests (willows-grove beside this repo)
 python3 foundation/run_prompt_tests.py          # prompt.py's tests on any Python

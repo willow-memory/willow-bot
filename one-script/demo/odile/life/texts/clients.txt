@@ -1,0 +1,563 @@
+Messages (export)
+
+2020-11-15 09:23  Harriet (575) 555-0120: Piano's sounding sour, can you fit us in
+2020-11-15 12:33  me: Nov 27 in the afternoon?
+2020-11-15 12:59  Harriet: perfect, thank you
+2021-06-04 09:30  Harriet (575) 555-0120: Can you come next week? Any day but Weds
+2021-06-04 12:17  me: Jun 11 in the afternoon?
+2021-06-04 12:30  Harriet: perfect, thank you
+2021-12-17 09:28  Harriet (575) 555-0120: Piano's sounding sour, can you fit us in
+2021-12-17 12:15  me: Dec 26 in the afternoon?
+2021-12-17 12:40  Harriet: perfect, thank you
+2023-11-17 09:22  Harriet (575) 555-0120: Piano's sounding sour, can you fit us in
+2023-11-17 12:19  me: Nov 28 in the afternoon?
+2023-11-17 12:40  Harriet: perfect, thank you
+2024-05-22 09:16  Harriet (575) 555-0120: Hi Odile, is it time for the piano again?
+2024-05-22 12:52  me: May 29 in the afternoon?
+2024-05-22 12:53  Harriet: perfect, thank you
+2025-05-02 09:38  Harriet (575) 555-0120: Piano's sounding sour, can you fit us in
+2025-05-02 12:22  me: May 13 in the afternoon?
+2025-05-02 12:33  Harriet: perfect, thank you
+2025-11-15 09:31  Harriet (575) 555-0120: Can you come next week? Any day but Weds
+2025-11-15 12:10  me: Nov 18 in the afternoon?
+2025-11-15 12:31  Harriet: perfect, thank you
+2026-06-03 09:22  Harriet (575) 555-0120: Can you come next week? Any day but Weds
+2026-06-03 12:59  me: Jun 8 in the afternoon?
+2026-06-03 12:36  Harriet: perfect, thank you
+2022-01-30 09:31  Marisol (575) 555-0121: Can you come next week? Any day but Weds
+2022-01-30 12:15  me: Feb 8 in the afternoon?
+2022-01-30 12:40  Marisol: perfect, thank you
+2023-02-18 09:12  Marisol (575) 555-0121: Hi Odile, is it time for the piano again?
+2023-02-18 12:37  me: Mar 2 in the afternoon?
+2023-02-18 12:45  Marisol: perfect, thank you
+2025-03-23 09:52  Marisol (575) 555-0121: Piano's sounding sour, can you fit us in
+2025-03-23 12:15  me: Apr 2 in the afternoon?
+2025-03-23 12:55  Marisol: perfect, thank you
+2026-03-31 09:38  Marisol (575) 555-0121: Can you come next week? Any day but Weds
+2026-03-31 12:46  me: Apr 8 in the afternoon?
+2026-03-31 12:44  Marisol: perfect, thank you
+2021-10-31 09:11  Wendell (575) 555-0122: Can you come next week? Any day but Weds
+2021-10-31 12:51  me: Nov 9 in the afternoon?
+2021-10-31 12:45  Wendell: perfect, thank you
+2022-10-14 09:22  Wendell (575) 555-0122: Can you come next week? Any day but Weds
+2022-10-14 12:10  me: Oct 26 in the afternoon?
+2022-10-14 12:42  Wendell: perfect, thank you
+2023-10-16 09:55  Wendell (575) 555-0122: Hi Odile, is it time for the piano again?
+2023-10-16 12:38  me: Oct 23 in the afternoon?
+2023-10-16 12:54  Wendell: perfect, thank you
+2024-11-12 09:19  Wendell (575) 555-0122: Can you come next week? Any day but Weds
+2024-11-12 12:28  me: Nov 16 in the afternoon?
+2024-11-12 12:36  Wendell: perfect, thank you
+2025-11-19 09:43  Wendell (575) 555-0122: Can you come next week? Any day but Weds
+2025-11-19 12:27  me: Nov 26 in the afternoon?
+2025-11-19 12:51  Wendell: perfect, thank you
+2026-02-19 09:38  Bea (575) 555-0123: Piano's sounding sour, can you fit us in
+2026-02-19 12:27  me: Feb 27 in the afternoon?
+2026-02-19 12:57  Bea: perfect, thank you
+2020-11-26 09:20  Ignacio (575) 555-0124: Can you come next week? Any day but Weds
+2020-11-26 12:51  me: Dec 6 in the afternoon?
+2020-11-26 12:49  Ignacio: perfect, thank you
+2021-11-14 09:22  Ignacio (575) 555-0124: Hi Odile, is it time for the piano again?
+2021-11-14 12:31  me: Nov 24 in the afternoon?
+2021-11-14 12:48  Ignacio: perfect, thank you
+2022-11-02 09:18  Ignacio (575) 555-0124: Piano's sounding sour, can you fit us in
+2022-11-02 12:11  me: Nov 10 in the afternoon?
+2022-11-02 12:52  Ignacio: perfect, thank you
+2024-11-03 09:59  Ignacio (575) 555-0124: Piano's sounding sour, can you fit us in
+2024-11-03 12:31  me: Nov 7 in the afternoon?
+2024-11-03 12:56  Ignacio: perfect, thank you
+2021-01-30 09:47  Loretta (575) 555-0125: Piano's sounding sour, can you fit us in
+2021-01-30 12:39  me: Feb 7 in the afternoon?
+2021-01-30 12:50  Loretta: perfect, thank you
+2021-07-20 09:46  Loretta (575) 555-0125: Can you come next week? Any day but Weds
+2021-07-20 12:49  me: Jul 26 in the afternoon?
+2021-07-20 12:44  Loretta: perfect, thank you
+2022-01-14 09:47  Loretta (575) 555-0125: Hi Odile, is it time for the piano again?
+2022-01-14 12:13  me: Jan 26 in the afternoon?
+2022-01-14 12:55  Loretta: perfect, thank you
+2023-02-02 09:41  Loretta (575) 555-0125: Hi Odile, is it time for the piano again?
+2023-02-02 12:52  me: Feb 11 in the afternoon?
+2023-02-02 12:52  Loretta: perfect, thank you
+2023-07-21 09:53  Loretta (575) 555-0125: Can you come next week? Any day but Weds
+2023-07-21 12:12  me: Aug 1 in the afternoon?
+2023-07-21 12:53  Loretta: perfect, thank you
+2024-02-12 09:15  Loretta (575) 555-0125: Hi Odile, is it time for the piano again?
+2024-02-12 12:41  me: Feb 23 in the afternoon?
+2024-02-12 12:48  Loretta: perfect, thank you
+2024-08-04 09:28  Loretta (575) 555-0125: Can you come next week? Any day but Weds
+2024-08-04 12:23  me: Aug 12 in the afternoon?
+2024-08-04 12:44  Loretta: perfect, thank you
+2025-03-01 09:23  Loretta (575) 555-0125: Can you come next week? Any day but Weds
+2025-03-01 12:54  me: Mar 9 in the afternoon?
+2025-03-01 12:44  Loretta: perfect, thank you
+2020-11-10 09:30  Amos (575) 555-0126: Piano's sounding sour, can you fit us in
+2020-11-10 12:55  me: Nov 14 in the afternoon?
+2020-11-10 12:30  Amos: perfect, thank you
+2022-10-20 09:14  Amos (575) 555-0126: Can you come next week? Any day but Weds
+2022-10-20 12:52  me: Oct 28 in the afternoon?
+2022-10-20 12:55  Amos: perfect, thank you
+2025-11-13 09:18  Amos (575) 555-0126: Piano's sounding sour, can you fit us in
+2025-11-13 12:36  me: Nov 22 in the afternoon?
+2025-11-13 12:34  Amos: perfect, thank you
+2022-01-15 09:52  Delphine (575) 555-0127: Hi Odile, is it time for the piano again?
+2022-01-15 12:23  me: Jan 22 in the afternoon?
+2022-01-15 12:36  Delphine: perfect, thank you
+2023-12-25 09:27  Delphine (575) 555-0127: Piano's sounding sour, can you fit us in
+2023-12-25 12:20  me: Dec 29 in the afternoon?
+2023-12-25 12:35  Delphine: perfect, thank you
+2026-01-02 09:19  Delphine (575) 555-0127: Hi Odile, is it time for the piano again?
+2026-01-02 12:19  me: Jan 12 in the afternoon?
+2026-01-02 12:43  Delphine: perfect, thank you
+2020-11-13 09:20  Ruben (575) 555-0128: Hi Odile, is it time for the piano again?
+2020-11-13 12:10  me: Nov 25 in the afternoon?
+2020-11-13 12:35  Ruben: perfect, thank you
+2021-11-09 09:18  Ruben (575) 555-0128: Can you come next week? Any day but Weds
+2021-11-09 12:30  me: Nov 12 in the afternoon?
+2021-11-09 12:34  Ruben: perfect, thank you
+2022-11-18 09:14  Ruben (575) 555-0128: Hi Odile, is it time for the piano again?
+2022-11-18 12:14  me: Nov 29 in the afternoon?
+2022-11-18 12:56  Ruben: perfect, thank you
+2023-11-15 09:55  Ruben (575) 555-0128: Piano's sounding sour, can you fit us in
+2023-11-15 12:43  me: Nov 18 in the afternoon?
+2023-11-15 12:32  Ruben: perfect, thank you
+2022-02-01 09:24  Cordelia (575) 555-0129: Hi Odile, is it time for the piano again?
+2022-02-01 12:57  me: Feb 6 in the afternoon?
+2022-02-01 12:48  Cordelia: perfect, thank you
+2023-02-20 09:22  Cordelia (575) 555-0129: Hi Odile, is it time for the piano again?
+2023-02-20 12:45  me: Feb 28 in the afternoon?
+2023-02-20 12:36  Cordelia: perfect, thank you
+2024-02-12 09:26  Cordelia (575) 555-0129: Can you come next week? Any day but Weds
+2024-02-12 12:54  me: Feb 24 in the afternoon?
+2024-02-12 12:56  Cordelia: perfect, thank you
+2026-01-14 09:25  Cordelia (575) 555-0129: Hi Odile, is it time for the piano again?
+2026-01-14 12:54  me: Jan 23 in the afternoon?
+2026-01-14 12:51  Cordelia: perfect, thank you
+2020-12-13 09:59  Hollis (575) 555-0130: Piano's sounding sour, can you fit us in
+2020-12-13 12:29  me: Dec 21 in the afternoon?
+2020-12-13 12:34  Hollis: perfect, thank you
+2021-06-06 09:24  Hollis (575) 555-0130: Piano's sounding sour, can you fit us in
+2021-06-06 12:10  me: Jun 12 in the afternoon?
+2021-06-06 12:34  Hollis: perfect, thank you
+2022-06-28 09:53  Hollis (575) 555-0130: Hi Odile, is it time for the piano again?
+2022-06-28 12:59  me: Jul 6 in the afternoon?
+2022-06-28 12:59  Hollis: perfect, thank you
+2023-01-16 09:34  Hollis (575) 555-0130: Can you come next week? Any day but Weds
+2023-01-16 12:42  me: Jan 19 in the afternoon?
+2023-01-16 12:53  Hollis: perfect, thank you
+2023-07-28 09:46  Hollis (575) 555-0130: Hi Odile, is it time for the piano again?
+2023-07-28 12:20  me: Aug 5 in the afternoon?
+2023-07-28 12:55  Hollis: perfect, thank you
+2024-01-19 09:59  Hollis (575) 555-0130: Can you come next week? Any day but Weds
+2024-01-19 12:34  me: Jan 30 in the afternoon?
+2024-01-19 12:33  Hollis: perfect, thank you
+2024-07-11 09:35  Hollis (575) 555-0130: Piano's sounding sour, can you fit us in
+2024-07-11 12:16  me: Jul 23 in the afternoon?
+2024-07-11 12:38  Hollis: perfect, thank you
+2025-01-07 09:41  Hollis (575) 555-0130: Piano's sounding sour, can you fit us in
+2025-01-07 12:55  me: Jan 10 in the afternoon?
+2025-01-07 12:30  Hollis: perfect, thank you
+2025-06-25 09:49  Hollis (575) 555-0130: Piano's sounding sour, can you fit us in
+2025-06-25 12:14  me: Jul 7 in the afternoon?
+2025-06-25 12:31  Hollis: perfect, thank you
+2026-06-07 09:19  Hollis (575) 555-0130: Can you come next week? Any day but Weds
+2026-06-07 12:47  me: Jun 13 in the afternoon?
+2026-06-07 12:38  Hollis: perfect, thank you
+2020-12-24 09:51  Pilar (575) 555-0131: Hi Odile, is it time for the piano again?
+2020-12-24 12:14  me: Dec 27 in the afternoon?
+2020-12-24 12:47  Pilar: perfect, thank you
+2022-01-15 09:12  Pilar (575) 555-0131: Hi Odile, is it time for the piano again?
+2022-01-15 12:33  me: Jan 19 in the afternoon?
+2022-01-15 12:37  Pilar: perfect, thank you
+2024-02-08 09:13  Pilar (575) 555-0131: Piano's sounding sour, can you fit us in
+2024-02-08 12:19  me: Feb 18 in the afternoon?
+2024-02-08 12:44  Pilar: perfect, thank you
+2021-01-01 09:50  Everett (575) 555-0132: Can you come next week? Any day but Weds
+2021-01-01 12:55  me: Jan 6 in the afternoon?
+2021-01-01 12:47  Everett: perfect, thank you
+2022-01-15 09:10  Everett (575) 555-0132: Hi Odile, is it time for the piano again?
+2022-01-15 12:28  me: Jan 25 in the afternoon?
+2022-01-15 12:33  Everett: perfect, thank you
+2020-12-03 09:14  Junia (575) 555-0133: Piano's sounding sour, can you fit us in
+2020-12-03 12:28  me: Dec 7 in the afternoon?
+2020-12-03 12:44  Junia: perfect, thank you
+2021-12-09 09:52  Junia (575) 555-0133: Can you come next week? Any day but Weds
+2021-12-09 12:22  me: Dec 12 in the afternoon?
+2021-12-09 12:48  Junia: perfect, thank you
+2022-12-11 09:29  Junia (575) 555-0133: Piano's sounding sour, can you fit us in
+2022-12-11 12:41  me: Dec 14 in the afternoon?
+2022-12-11 12:40  Junia: perfect, thank you
+2024-12-19 09:37  Junia (575) 555-0133: Can you come next week? Any day but Weds
+2024-12-19 12:34  me: Dec 25 in the afternoon?
+2024-12-19 12:56  Junia: perfect, thank you
+2025-12-17 09:11  Junia (575) 555-0133: Hi Odile, is it time for the piano again?
+2025-12-17 12:18  me: Dec 28 in the afternoon?
+2025-12-17 12:57  Junia: perfect, thank you
+2022-11-08 09:29  Matthias (575) 555-0134: Piano's sounding sour, can you fit us in
+2022-11-08 12:10  me: Nov 15 in the afternoon?
+2022-11-08 12:52  Matthias: perfect, thank you
+2023-10-23 09:38  Matthias (575) 555-0134: Hi Odile, is it time for the piano again?
+2023-10-23 12:30  me: Nov 4 in the afternoon?
+2023-10-23 12:32  Matthias: perfect, thank you
+2025-11-11 09:27  Matthias (575) 555-0134: Hi Odile, is it time for the piano again?
+2025-11-11 12:29  me: Nov 17 in the afternoon?
+2025-11-11 12:45  Matthias: perfect, thank you
+2021-08-05 09:28  Nell (575) 555-0135: Piano's sounding sour, can you fit us in
+2021-08-05 12:41  me: Aug 9 in the afternoon?
+2021-08-05 12:32  Nell: perfect, thank you
+2023-08-12 09:29  Nell (575) 555-0135: Can you come next week? Any day but Weds
+2023-08-12 12:43  me: Aug 16 in the afternoon?
+2023-08-12 12:32  Nell: perfect, thank you
+2024-02-04 09:53  Nell (575) 555-0135: Can you come next week? Any day but Weds
+2024-02-04 12:11  me: Feb 8 in the afternoon?
+2024-02-04 12:35  Nell: perfect, thank you
+2024-08-06 09:14  Nell (575) 555-0135: Can you come next week? Any day but Weds
+2024-08-06 12:48  me: Aug 13 in the afternoon?
+2024-08-06 12:37  Nell: perfect, thank you
+2025-02-01 09:21  Nell (575) 555-0135: Can you come next week? Any day but Weds
+2025-02-01 12:30  me: Feb 7 in the afternoon?
+2025-02-01 12:48  Nell: perfect, thank you
+2025-07-24 09:26  Nell (575) 555-0135: Can you come next week? Any day but Weds
+2025-07-24 12:40  me: Jul 29 in the afternoon?
+2025-07-24 12:32  Nell: perfect, thank you
+2026-07-03 09:10  Nell (575) 555-0135: Hi Odile, is it time for the piano again?
+2026-07-03 12:40  me: Jul 7 in the afternoon?
+2026-07-03 12:44  Nell: perfect, thank you
+2020-12-07 09:13  Orrin (575) 555-0136: Piano's sounding sour, can you fit us in
+2020-12-07 12:37  me: Dec 11 in the afternoon?
+2020-12-07 12:48  Orrin: perfect, thank you
+2021-12-21 09:24  Orrin (575) 555-0136: Can you come next week? Any day but Weds
+2021-12-21 12:46  me: Dec 24 in the afternoon?
+2021-12-21 12:56  Orrin: perfect, thank you
+2022-12-05 09:23  Orrin (575) 555-0136: Hi Odile, is it time for the piano again?
+2022-12-05 12:21  me: Dec 12 in the afternoon?
+2022-12-05 12:52  Orrin: perfect, thank you
+2024-11-11 09:20  Orrin (575) 555-0136: Hi Odile, is it time for the piano again?
+2024-11-11 12:35  me: Nov 23 in the afternoon?
+2024-11-11 12:43  Orrin: perfect, thank you
+2021-01-25 09:58  Teodora (575) 555-0137: Can you come next week? Any day but Weds
+2021-01-25 12:20  me: Jan 29 in the afternoon?
+2021-01-25 12:52  Teodora: perfect, thank you
+2023-02-06 09:14  Teodora (575) 555-0137: Can you come next week? Any day but Weds
+2023-02-06 12:24  me: Feb 18 in the afternoon?
+2023-02-06 12:48  Teodora: perfect, thank you
+2024-02-05 09:19  Teodora (575) 555-0137: Hi Odile, is it time for the piano again?
+2024-02-05 12:50  me: Feb 9 in the afternoon?
+2024-02-05 12:47  Teodora: perfect, thank you
+2026-02-24 09:54  Teodora (575) 555-0137: Piano's sounding sour, can you fit us in
+2026-02-24 12:31  me: Mar 1 in the afternoon?
+2026-02-24 12:33  Teodora: perfect, thank you
+2020-12-10 09:44  Calvin (575) 555-0138: Hi Odile, is it time for the piano again?
+2020-12-10 12:36  me: Dec 13 in the afternoon?
+2020-12-10 12:51  Calvin: perfect, thank you
+2022-11-21 09:16  Calvin (575) 555-0138: Piano's sounding sour, can you fit us in
+2022-11-21 12:14  me: Dec 1 in the afternoon?
+2022-11-21 12:58  Calvin: perfect, thank you
+2023-11-18 09:28  Calvin (575) 555-0138: Can you come next week? Any day but Weds
+2023-11-18 12:44  me: Nov 21 in the afternoon?
+2023-11-18 12:49  Calvin: perfect, thank you
+2024-11-07 09:49  Calvin (575) 555-0138: Piano's sounding sour, can you fit us in
+2024-11-07 12:43  me: Nov 13 in the afternoon?
+2024-11-07 12:47  Calvin: perfect, thank you
+2025-10-25 09:27  Calvin (575) 555-0138: Can you come next week? Any day but Weds
+2025-10-25 12:42  me: Oct 28 in the afternoon?
+2025-10-25 12:41  Calvin: perfect, thank you
+2026-10-07 09:22  Calvin (575) 555-0138: Piano's sounding sour, can you fit us in
+2026-10-07 12:30  me: Oct 16 in the afternoon?
+2026-10-07 12:35  Calvin: perfect, thank you
+2021-02-11 09:47  Esme (575) 555-0139: Hi Odile, is it time for the piano again?
+2021-02-11 12:56  me: Feb 22 in the afternoon?
+2021-02-11 12:51  Esme: perfect, thank you
+2022-03-12 09:43  Esme (575) 555-0139: Can you come next week? Any day but Weds
+2022-03-12 12:13  me: Mar 18 in the afternoon?
+2022-03-12 12:57  Esme: perfect, thank you
+2023-02-19 09:21  Esme (575) 555-0139: Can you come next week? Any day but Weds
+2023-02-19 12:32  me: Feb 26 in the afternoon?
+2023-02-19 12:52  Esme: perfect, thank you
+2026-03-29 09:10  Esme (575) 555-0139: Hi Odile, is it time for the piano again?
+2026-03-29 12:47  me: Apr 2 in the afternoon?
+2026-03-29 12:46  Esme: perfect, thank you
+2020-11-07 09:54  Sterling (575) 555-0140: Can you come next week? Any day but Weds
+2020-11-07 12:48  me: Nov 15 in the afternoon?
+2020-11-07 12:41  Sterling: perfect, thank you
+2021-11-23 09:14  Sterling (575) 555-0140: Hi Odile, is it time for the piano again?
+2021-11-23 12:34  me: Nov 27 in the afternoon?
+2021-11-23 12:51  Sterling: perfect, thank you
+2022-05-12 09:52  Sterling (575) 555-0140: Piano's sounding sour, can you fit us in
+2022-05-12 12:18  me: May 24 in the afternoon?
+2022-05-12 12:48  Sterling: perfect, thank you
+2024-11-30 09:24  Sterling (575) 555-0140: Can you come next week? Any day but Weds
+2024-11-30 12:54  me: Dec 7 in the afternoon?
+2024-11-30 12:46  Sterling: perfect, thank you
+2020-11-18 09:50  Ofelia (575) 555-0141: Hi Odile, is it time for the piano again?
+2020-11-18 12:50  me: Nov 30 in the afternoon?
+2020-11-18 12:32  Ofelia: perfect, thank you
+2021-12-06 09:35  Ofelia (575) 555-0141: Hi Odile, is it time for the piano again?
+2021-12-06 12:58  me: Dec 13 in the afternoon?
+2021-12-06 12:47  Ofelia: perfect, thank you
+2022-11-19 09:33  Ofelia (575) 555-0141: Can you come next week? Any day but Weds
+2022-11-19 12:25  me: Nov 30 in the afternoon?
+2022-11-19 12:42  Ofelia: perfect, thank you
+2023-11-15 09:34  Ofelia (575) 555-0141: Hi Odile, is it time for the piano again?
+2023-11-15 12:44  me: Nov 19 in the afternoon?
+2023-11-15 12:38  Ofelia: perfect, thank you
+2024-11-22 09:29  Ofelia (575) 555-0141: Hi Odile, is it time for the piano again?
+2024-11-22 12:38  me: Dec 3 in the afternoon?
+2024-11-22 12:54  Ofelia: perfect, thank you
+2025-12-04 09:38  Ofelia (575) 555-0141: Hi Odile, is it time for the piano again?
+2025-12-04 12:13  me: Dec 14 in the afternoon?
+2025-12-04 12:50  Ofelia: perfect, thank you
+2021-11-27 09:57  Gus (575) 555-0142: Can you come next week? Any day but Weds
+2021-11-27 12:41  me: Dec 8 in the afternoon?
+2021-11-27 12:35  Gus: perfect, thank you
+2022-12-01 09:41  Gus (575) 555-0142: Hi Odile, is it time for the piano again?
+2022-12-01 12:48  me: Dec 5 in the afternoon?
+2022-12-01 12:31  Gus: perfect, thank you
+2023-12-10 09:42  Gus (575) 555-0142: Piano's sounding sour, can you fit us in
+2023-12-10 12:19  me: Dec 17 in the afternoon?
+2023-12-10 12:36  Gus: perfect, thank you
+2025-01-04 09:14  Gus (575) 555-0142: Can you come next week? Any day but Weds
+2025-01-04 12:51  me: Jan 9 in the afternoon?
+2025-01-04 12:42  Gus: perfect, thank you
+2021-02-20 09:15  Ramona (575) 555-0143: Piano's sounding sour, can you fit us in
+2021-02-20 12:29  me: Feb 24 in the afternoon?
+2021-02-20 12:49  Ramona: perfect, thank you
+2022-02-24 09:28  Ramona (575) 555-0143: Can you come next week? Any day but Weds
+2022-02-24 12:36  me: Feb 27 in the afternoon?
+2022-02-24 12:52  Ramona: perfect, thank you
+2024-02-27 09:56  Ramona (575) 555-0143: Piano's sounding sour, can you fit us in
+2024-02-27 12:51  me: Mar 7 in the afternoon?
+2024-02-27 12:44  Ramona: perfect, thank you
+2025-02-10 09:36  Ramona (575) 555-0143: Hi Odile, is it time for the piano again?
+2025-02-10 12:27  me: Feb 21 in the afternoon?
+2025-02-10 12:52  Ramona: perfect, thank you
+2026-02-26 09:44  Ramona (575) 555-0143: Hi Odile, is it time for the piano again?
+2026-02-26 12:50  me: Mar 9 in the afternoon?
+2026-02-26 12:48  Ramona: perfect, thank you
+2024-01-02 09:25  Ansel (575) 555-0144: Hi Odile, is it time for the piano again?
+2024-01-02 12:48  me: Jan 12 in the afternoon?
+2024-01-02 12:35  Ansel: perfect, thank you
+2025-01-10 09:18  Ansel (575) 555-0144: Hi Odile, is it time for the piano again?
+2025-01-10 12:35  me: Jan 18 in the afternoon?
+2025-01-10 12:59  Ansel: perfect, thank you
+2021-02-05 09:40  Imogen (575) 555-0145: Can you come next week? Any day but Weds
+2021-02-05 12:41  me: Feb 17 in the afternoon?
+2021-02-05 12:58  Imogen: perfect, thank you
+2021-08-21 09:49  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2021-08-21 12:50  me: Aug 28 in the afternoon?
+2021-08-21 12:44  Imogen: perfect, thank you
+2022-02-02 09:36  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2022-02-02 12:41  me: Feb 14 in the afternoon?
+2022-02-02 12:37  Imogen: perfect, thank you
+2023-02-15 09:45  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2023-02-15 12:49  me: Feb 22 in the afternoon?
+2023-02-15 12:41  Imogen: perfect, thank you
+2024-02-28 09:30  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2024-02-28 12:11  me: Mar 2 in the afternoon?
+2024-02-28 12:51  Imogen: perfect, thank you
+2025-03-08 09:37  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2025-03-08 12:14  me: Mar 15 in the afternoon?
+2025-03-08 12:40  Imogen: perfect, thank you
+2025-08-29 09:25  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2025-08-29 12:33  me: Sep 2 in the afternoon?
+2025-08-29 12:37  Imogen: perfect, thank you
+2026-02-20 09:58  Imogen (575) 555-0145: Hi Odile, is it time for the piano again?
+2026-02-20 12:55  me: Mar 4 in the afternoon?
+2026-02-20 12:35  Imogen: perfect, thank you
+2021-12-08 09:53  Dario (575) 555-0146: Hi Odile, is it time for the piano again?
+2021-12-08 12:47  me: Dec 14 in the afternoon?
+2021-12-08 12:55  Dario: perfect, thank you
+2022-12-18 09:34  Dario (575) 555-0146: Can you come next week? Any day but Weds
+2022-12-18 12:32  me: Dec 22 in the afternoon?
+2022-12-18 12:31  Dario: perfect, thank you
+2023-12-29 09:26  Dario (575) 555-0146: Piano's sounding sour, can you fit us in
+2023-12-29 12:36  me: Jan 10 in the afternoon?
+2023-12-29 12:37  Dario: perfect, thank you
+2025-01-17 09:27  Dario (575) 555-0146: Piano's sounding sour, can you fit us in
+2025-01-17 12:53  me: Jan 23 in the afternoon?
+2025-01-17 12:36  Dario: perfect, thank you
+2020-11-14 09:27  Winifred (575) 555-0147: Piano's sounding sour, can you fit us in
+2020-11-14 12:14  me: Nov 21 in the afternoon?
+2020-11-14 12:32  Winifred: perfect, thank you
+2021-11-08 09:17  Winifred (575) 555-0147: Piano's sounding sour, can you fit us in
+2021-11-08 12:15  me: Nov 15 in the afternoon?
+2021-11-08 12:48  Winifred: perfect, thank you
+2022-10-31 09:32  Winifred (575) 555-0147: Piano's sounding sour, can you fit us in
+2022-10-31 12:32  me: Nov 12 in the afternoon?
+2022-10-31 12:40  Winifred: perfect, thank you
+2021-02-09 09:11  Lyle (575) 555-0148: Can you come next week? Any day but Weds
+2021-02-09 12:16  me: Feb 13 in the afternoon?
+2021-02-09 12:32  Lyle: perfect, thank you
+2023-02-10 09:44  Lyle (575) 555-0148: Can you come next week? Any day but Weds
+2023-02-10 12:56  me: Feb 15 in the afternoon?
+2023-02-10 12:59  Lyle: perfect, thank you
+2025-01-22 09:39  Lyle (575) 555-0148: Hi Odile, is it time for the piano again?
+2025-01-22 12:14  me: Jan 30 in the afternoon?
+2025-01-22 12:33  Lyle: perfect, thank you
+2026-02-05 09:54  Lyle (575) 555-0148: Can you come next week? Any day but Weds
+2026-02-05 12:33  me: Feb 9 in the afternoon?
+2026-02-05 12:57  Lyle: perfect, thank you
+2023-01-24 09:18  Paz (575) 555-0149: Piano's sounding sour, can you fit us in
+2023-01-24 12:22  me: Feb 1 in the afternoon?
+2023-01-24 12:49  Paz: perfect, thank you
+2025-02-01 09:11  Paz (575) 555-0149: Piano's sounding sour, can you fit us in
+2025-02-01 12:23  me: Feb 11 in the afternoon?
+2025-02-01 12:55  Paz: perfect, thank you
+2026-02-22 09:15  Paz (575) 555-0149: Piano's sounding sour, can you fit us in
+2026-02-22 12:17  me: Mar 6 in the afternoon?
+2026-02-22 12:30  Paz: perfect, thank you
+2020-12-22 09:54  Thaddeus (575) 555-0150: Hi Odile, is it time for the piano again?
+2020-12-22 12:29  me: Dec 29 in the afternoon?
+2020-12-22 12:39  Thaddeus: perfect, thank you
+2021-12-05 09:56  Thaddeus (575) 555-0150: Can you come next week? Any day but Weds
+2021-12-05 12:49  me: Dec 15 in the afternoon?
+2021-12-05 12:49  Thaddeus: perfect, thank you
+2022-12-09 09:29  Thaddeus (575) 555-0150: Hi Odile, is it time for the piano again?
+2022-12-09 12:41  me: Dec 19 in the afternoon?
+2022-12-09 12:46  Thaddeus: perfect, thank you
+2023-11-21 09:15  Thaddeus (575) 555-0150: Hi Odile, is it time for the piano again?
+2023-11-21 12:29  me: Dec 2 in the afternoon?
+2023-11-21 12:40  Thaddeus: perfect, thank you
+2024-11-24 09:52  Thaddeus (575) 555-0150: Piano's sounding sour, can you fit us in
+2024-11-24 12:12  me: Dec 6 in the afternoon?
+2024-11-24 12:48  Thaddeus: perfect, thank you
+2025-06-11 09:37  Thaddeus (575) 555-0150: Piano's sounding sour, can you fit us in
+2025-06-11 12:54  me: Jun 19 in the afternoon?
+2025-06-11 12:59  Thaddeus: perfect, thank you
+2023-05-31 09:10  Greer (575) 555-0151: Piano's sounding sour, can you fit us in
+2023-05-31 12:24  me: Jun 3 in the afternoon?
+2023-05-31 12:58  Greer: perfect, thank you
+2024-05-26 09:28  Greer (575) 555-0151: Can you come next week? Any day but Weds
+2024-05-26 12:53  me: May 30 in the afternoon?
+2024-05-26 12:46  Greer: perfect, thank you
+2025-04-29 09:57  Greer (575) 555-0151: Hi Odile, is it time for the piano again?
+2025-04-29 12:43  me: May 11 in the afternoon?
+2025-04-29 12:38  Greer: perfect, thank you
+2026-05-03 09:57  Greer (575) 555-0151: Piano's sounding sour, can you fit us in
+2026-05-03 12:30  me: May 14 in the afternoon?
+2026-05-03 12:58  Greer: perfect, thank you
+2021-10-16 09:58  Benedikt (575) 555-0152: Piano's sounding sour, can you fit us in
+2021-10-16 12:19  me: Oct 20 in the afternoon?
+2021-10-16 12:31  Benedikt: perfect, thank you
+2022-10-05 09:30  Benedikt (575) 555-0152: Hi Odile, is it time for the piano again?
+2022-10-05 12:30  me: Oct 12 in the afternoon?
+2022-10-05 12:46  Benedikt: perfect, thank you
+2023-09-29 09:43  Benedikt (575) 555-0152: Hi Odile, is it time for the piano again?
+2023-09-29 12:26  me: Oct 8 in the afternoon?
+2023-09-29 12:30  Benedikt: perfect, thank you
+2024-10-04 09:17  Benedikt (575) 555-0152: Piano's sounding sour, can you fit us in
+2024-10-04 12:50  me: Oct 9 in the afternoon?
+2024-10-04 12:35  Benedikt: perfect, thank you
+2021-01-31 09:41  Lupe (575) 555-0153: Can you come next week? Any day but Weds
+2021-01-31 12:39  me: Feb 7 in the afternoon?
+2021-01-31 12:45  Lupe: perfect, thank you
+2022-02-01 09:52  Lupe (575) 555-0153: Piano's sounding sour, can you fit us in
+2022-02-01 12:53  me: Feb 10 in the afternoon?
+2022-02-01 12:43  Lupe: perfect, thank you
+2024-03-07 09:57  Lupe (575) 555-0153: Hi Odile, is it time for the piano again?
+2024-03-07 12:44  me: Mar 10 in the afternoon?
+2024-03-07 12:57  Lupe: perfect, thank you
+2025-02-17 09:43  Lupe (575) 555-0153: Hi Odile, is it time for the piano again?
+2025-02-17 12:33  me: Feb 24 in the afternoon?
+2025-02-17 12:34  Lupe: perfect, thank you
+2026-02-08 09:13  Lupe (575) 555-0153: Hi Odile, is it time for the piano again?
+2026-02-08 12:38  me: Feb 12 in the afternoon?
+2026-02-08 12:40  Lupe: perfect, thank you
+2022-06-21 09:10  Merritt (575) 555-0154: Piano's sounding sour, can you fit us in
+2022-06-21 12:59  me: Jun 25 in the afternoon?
+2022-06-21 12:59  Merritt: perfect, thank you
+2023-06-20 09:28  Merritt (575) 555-0154: Hi Odile, is it time for the piano again?
+2023-06-20 12:52  me: Jun 24 in the afternoon?
+2023-06-20 12:56  Merritt: perfect, thank you
+2025-06-16 09:36  Merritt (575) 555-0154: Piano's sounding sour, can you fit us in
+2025-06-16 12:20  me: Jun 28 in the afternoon?
+2025-06-16 12:47  Merritt: perfect, thank you
+2021-01-08 09:27  Ada (575) 555-0155: Hi Odile, is it time for the piano again?
+2021-01-08 12:59  me: Jan 14 in the afternoon?
+2021-01-08 12:41  Ada: perfect, thank you
+2021-06-30 09:13  Ada (575) 555-0155: Hi Odile, is it time for the piano again?
+2021-06-30 12:28  me: Jul 7 in the afternoon?
+2021-06-30 12:58  Ada: perfect, thank you
+2021-12-30 09:50  Ada (575) 555-0155: Piano's sounding sour, can you fit us in
+2021-12-30 12:51  me: Jan 5 in the afternoon?
+2021-12-30 12:44  Ada: perfect, thank you
+2022-06-21 09:37  Ada (575) 555-0155: Hi Odile, is it time for the piano again?
+2022-06-21 12:22  me: Jul 2 in the afternoon?
+2022-06-21 12:40  Ada: perfect, thank you
+2023-01-11 09:32  Ada (575) 555-0155: Can you come next week? Any day but Weds
+2023-01-11 12:20  me: Jan 16 in the afternoon?
+2023-01-11 12:40  Ada: perfect, thank you
+2022-12-30 09:38  Silas (575) 555-0156: Hi Odile, is it time for the piano again?
+2022-12-30 12:41  me: Jan 11 in the afternoon?
+2022-12-30 12:58  Silas: perfect, thank you
+2025-02-14 09:52  Silas (575) 555-0156: Can you come next week? Any day but Weds
+2025-02-14 12:13  me: Feb 18 in the afternoon?
+2025-02-14 12:57  Silas: perfect, thank you
+2026-02-21 09:22  Silas (575) 555-0156: Can you come next week? Any day but Weds
+2026-02-21 12:38  me: Feb 27 in the afternoon?
+2026-02-21 12:30  Silas: perfect, thank you
+2024-06-22 09:30  Renata (575) 555-0157: Can you come next week? Any day but Weds
+2024-06-22 12:18  me: Jun 26 in the afternoon?
+2024-06-22 12:48  Renata: perfect, thank you
+2025-06-12 09:41  Renata (575) 555-0157: Hi Odile, is it time for the piano again?
+2025-06-12 12:35  me: Jun 18 in the afternoon?
+2025-06-12 12:45  Renata: perfect, thank you
+2021-10-12 09:45  Abel (575) 555-0158: Piano's sounding sour, can you fit us in
+2021-10-12 12:24  me: Oct 19 in the afternoon?
+2021-10-12 12:50  Abel: perfect, thank you
+2022-09-27 09:23  Abel (575) 555-0158: Hi Odile, is it time for the piano again?
+2022-09-27 12:16  me: Oct 9 in the afternoon?
+2022-09-27 12:49  Abel: perfect, thank you
+2022-02-08 09:36  Vesna (575) 555-0159: Can you come next week? Any day but Weds
+2022-02-08 12:33  me: Feb 16 in the afternoon?
+2022-02-08 12:48  Vesna: perfect, thank you
+2023-02-08 09:14  Vesna (575) 555-0159: Piano's sounding sour, can you fit us in
+2023-02-08 12:13  me: Feb 20 in the afternoon?
+2023-02-08 12:46  Vesna: perfect, thank you
+2024-02-06 09:14  Vesna (575) 555-0159: Piano's sounding sour, can you fit us in
+2024-02-06 12:48  me: Feb 16 in the afternoon?
+2024-02-06 12:30  Vesna: perfect, thank you
+2025-02-26 09:13  Vesna (575) 555-0159: Piano's sounding sour, can you fit us in
+2025-02-26 12:42  me: Mar 10 in the afternoon?
+2025-02-26 12:58  Vesna: perfect, thank you
+2026-03-20 09:42  Vesna (575) 555-0159: Piano's sounding sour, can you fit us in
+2026-03-20 12:18  me: Apr 1 in the afternoon?
+2026-03-20 12:46  Vesna: perfect, thank you
+2021-02-18 09:24  Cyrus (575) 555-0160: Piano's sounding sour, can you fit us in
+2021-02-18 12:58  me: Feb 26 in the afternoon?
+2021-02-18 12:51  Cyrus: perfect, thank you
+2021-08-05 09:41  Cyrus (575) 555-0160: Can you come next week? Any day but Weds
+2021-08-05 12:38  me: Aug 15 in the afternoon?
+2021-08-05 12:43  Cyrus: perfect, thank you
+2022-01-27 09:26  Cyrus (575) 555-0160: Piano's sounding sour, can you fit us in
+2022-01-27 12:35  me: Feb 7 in the afternoon?
+2022-01-27 12:51  Cyrus: perfect, thank you
+2022-08-23 09:59  Cyrus (575) 555-0160: Hi Odile, is it time for the piano again?
+2022-08-23 12:16  me: Sep 1 in the afternoon?
+2022-08-23 12:53  Cyrus: perfect, thank you
+2023-03-01 09:36  Cyrus (575) 555-0160: Can you come next week? Any day but Weds
+2023-03-01 12:30  me: Mar 11 in the afternoon?
+2023-03-01 12:33  Cyrus: perfect, thank you
+2024-03-23 09:29  Cyrus (575) 555-0160: Hi Odile, is it time for the piano again?
+2024-03-23 12:55  me: Mar 29 in the afternoon?
+2024-03-23 12:58  Cyrus: perfect, thank you
+2025-05-06 09:59  Cyrus (575) 555-0160: Hi Odile, is it time for the piano again?
+2025-05-06 12:46  me: May 17 in the afternoon?
+2025-05-06 12:34  Cyrus: perfect, thank you
+2025-11-06 09:31  Cyrus (575) 555-0160: Can you come next week? Any day but Weds
+2025-11-06 12:43  me: Nov 16 in the afternoon?
+2025-11-06 12:35  Cyrus: perfect, thank you
+2026-04-29 09:39  Cyrus (575) 555-0160: Hi Odile, is it time for the piano again?
+2026-04-29 12:28  me: May 7 in the afternoon?
+2026-04-29 12:37  Cyrus: perfect, thank you
+2021-11-09 09:18  Margit (575) 555-0161: Hi Odile, is it time for the piano again?
+2021-11-09 12:19  me: Nov 13 in the afternoon?
+2021-11-09 12:33  Margit: perfect, thank you
+2022-12-02 09:55  Margit (575) 555-0161: Piano's sounding sour, can you fit us in
+2022-12-02 12:27  me: Dec 7 in the afternoon?
+2022-12-02 12:36  Margit: perfect, thank you
+2025-01-10 09:20  Margit (575) 555-0161: Can you come next week? Any day but Weds
+2025-01-10 12:48  me: Jan 22 in the afternoon?
+2025-01-10 12:50  Margit: perfect, thank you
+2026-01-19 09:24  Margit (575) 555-0161: Hi Odile, is it time for the piano again?
+2026-01-19 12:20  me: Jan 29 in the afternoon?
+2026-01-19 12:39  Margit: perfect, thank you

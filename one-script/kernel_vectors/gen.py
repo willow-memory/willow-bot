@@ -118,6 +118,7 @@ def tables() -> dict:
             "MAKE": sorted(k.MAKE),
             "NEXT": k.NEXT,
             "ROW_KEYS": sorted(k.ROW_KEYS),
+            "MONTHS": k.MONTHS,
         },
     }
 
@@ -656,7 +657,377 @@ def pile_cases() -> list[dict]:
             for i in range(30)
         ]
     )
+    piles.append(dated_pile())
+    piles.append(ledger_pile())
+    piles.append(series_pile())
+    piles.append(log_pile())
+    piles.append(memo_pile())
     return piles
+
+
+def memo_pile() -> list:
+    """Said once before said every week: a routine memo four times (one text,
+    one id, one place), a one-off from 2021 that still matters, a letter."""
+    jar = b"Market Saturday, need forty jars.\n"
+    return [
+        *[(["memos", f"2026-0{m}-01_1000.txt"], jar) for m in (3, 5, 7, 9)],
+        (["memos", "2021-05-14_1502.txt"], b"Need to call the insurer. Later.\n"),
+        (["mail", "2026-03-20.txt"], b"You would need a separate permit.\n"),
+        (["mail", "2026-04-01.txt"], b"Need a permit renewal, also need a form.\n"),
+    ]
+
+
+TODAY = "20261022"  # what the look cases take as today
+
+
+def log_pile() -> list:
+    """Has this date passed: a log kept a file a year, entries under headings
+    with a later date written in them. Ann is due (May 2026, nothing since);
+    Bo was seen again; Cy's next is ahead; Jo's date is today, Kit's tomorrow; Ed's entry runs
+    past a chunk cut; Fay has two entries on one day; and lines that start
+    with a date but name nothing later, or don't start with one, are not."""
+    pad = "\n".join("  notes " + "x" * 60 for _ in range(9))  # past MAX_CHUNK
+    return [
+        (
+            ["log", "2025.txt"],
+            (
+                "2025-05-02  Ann - upright\n  next: May 2026\n\n"
+                "2025-06-01  Bo - grand\n  next: Jan 2026\n\n"
+                "2025-07-01  Ed - spinet\n" + pad + "\n  next: March 3, 2026\n\n"
+                "2025-08-01  Fay - studio\n  next: Jan 2026\n"
+                "2025-08-01  Fay - studio\n  next: 2027-01-05\n"
+            ).encode(),
+        ),
+        (
+            ["log", "2026.txt"],
+            (
+                "2026-02-10  Bo - grand\n  next: Feb 2027\n\n"
+                "2026-03-01  Cy - console\n  next: Dec. 1, 2026\n\n"
+                "2026-04-01  Di - upright\n  due 20261022, or Oct 2026 at latest\n\n"
+                "2026-04-02  Gil\n  no next date written\n\n"
+                "2026-05-01  Jo - upright\n  next: 2026-10-22, today\n\n"
+                "2026-05-02  Kit - upright\n  next: 2026-10-23, tomorrow\n\n"
+                "  2026-04-03\n  next: May 2026 (no heading)\n\n"
+                "said 2026-04-04  Hal - console, next: May 2026\n"
+            ).encode(),
+        ),
+        (["other.txt"], b"2025-01-01  Ann - upright\n  next: Feb 2025\n"),
+    ]
+
+
+def series_pile() -> list:
+    """A care log the kernel reads as numbers over time, and a ledger it
+    doesn't (dates repeat), each long enough to be cut into chunks."""
+    log = "date,weight_kg,pulse,notes\n" + "".join(
+        f"2026-{9 + (d > 30):02d}-{d - 30 * (d > 30):02d},{71 + d / 10:.1f},{60 + d % 7},"
+        + ('"ankles, puffy"' if d == 40 else "")
+        + "\n"
+        for d in range(1, 52)
+    )
+    books = "date,what,amount\n" + "".join(
+        f"2026-10-{1 + d // 3:02d},weight {d},{d * 5}\n" for d in range(40)
+    )
+    return [(["dad", "care-log.csv"], log.encode()), (["books.csv"], books.encode())]
+
+
+def ledger_pile() -> list:
+    """What isn't there: orders the books name all but two of (and a calendar
+    names together), a case number named once beside nothing, a piano model
+    and a van that share a shape and never a page, phones the texts don't
+    have, and a bare `-/-` run."""
+    pos = [f"2025-{n:03d}" for n in range(10, 22)]
+    paid = [p for p in pos if p not in ("2025-013", "2025-019")]
+    return [
+        (["books.csv"], ("".join(f"DEP PO {p}\n" for p in paid)).encode()),
+        (["calendar.txt"], (" ".join(f"PO {p}" for p in pos) + "\n").encode()),
+        *[
+            (["mail", f"po-{p}.txt"], f"PURCHASE ORDER PO {p}\n".encode())
+            for p in pos[:4]
+        ],
+        (["letter.txt"], b"RE: Case No. WR-2026-0117\n\nreply within 180 days\n"),
+        (["reply.txt"], b"my reply, Case No. WR-2024-0390\n"),
+        (["piano.txt"], b"Kawai K-300, purchase order pending\n"),
+        (["van.txt"], b"Econoline E-150 rider\n"),
+        (["texts.txt"], b"555-0120 555-0121 555-0122 order\n"),
+        (["pharmacy.txt"], b"call 555-0190 about the order\n"),
+        (["marks.txt"], b"-/- --2025-013-- a/b 1/300 2026-10-14 x-1-\n"),
+        # a pair named together, and a file with one of them: half is enough
+        (["both.txt"], b"auction: lot AB-11 and lot AB-12\n"),
+        (["one.txt"], b"sold lot AB-11\n"),
+        # served alone, the first chunk names no order: nothing is said
+        (["mail", "notes.txt"], b"memo notes, see below\n\nPO 2025-010\n"),
+    ]
+
+
+#: newest's own draw, apart from R, so adding it moved no earlier case
+RN = random.Random(20261022)
+
+
+def dated_pile() -> list:
+    """A log whose date headings fall in one chunk and cover the next, memos
+    dated only by name, a calendar's compact dates, and undated files: equal
+    scores fall to the newest, then the path, then a dated chunk's later line."""
+    log = []
+    for y in (2021, 2026):
+        for m, d in ((3, 12), (9, 27), (10, 12)):
+            log.append(f"== {y}-{m:02d}-{d:02d}")
+            log += [
+                f"  H{h}: bees frames {RN.randint(2, 9)}, eggs yes" for h in range(1, 9)
+            ]
+    memos = [
+        (["memos", f"2026-{m:02d}-{d:02d}_2310.txt"], b"Okay. bees fine\n")
+        for m, d in ((4, 16), (10, 9), (9, 19))
+    ]
+    return [
+        (["hives.txt"], ("\n".join(log) + "\n").encode()),
+        *memos,
+        (["cal.ics"], b"DTSTART;VALUE=DATE:20250828\nSUMMARY:bees inspection\n"),
+        (["undated.md"], b"bees okay, no date here\n\nbees okay again\n"),
+        (["phone.txt"], b"bees 2026-10-149 and 12026-10-14 and 20261332\n"),
+    ]
+
+
+#: Bites run with a words list (their word -> their folder's words), by pile:
+#: the garden's and the dated pile's, a word the list reads as one that's
+#: there, one it reads as one that isn't, and one already there itself.
+ALIASED = {
+    0: [
+        ("when does the cold snap come", {"cold": ["frost"], "snap": ["date"]}),
+        ("how much sunlight", {"sunlight": ["sun", "light"]}),
+        ("how much sunlight", {"sunlight": ["moonlight"]}),
+        ("tomatoes want sun", {"tomatoes": ["sun"], "sun": ["water"]}),
+        ("water the shed", {"shed": ["garden", "root"], "zzz": ["water"]}),
+    ],
+    10: [
+        ("how are the hives", {"hives": ["bees"]}),
+        ("is everything okay", {"everything": ["eggs", "frames"]}),
+        ("bees calm", {"calm": ["okay", "fine"]}),
+    ],
+}
+
+
+def _table(head: str, start: str, n: int, step: int, cols) -> str:
+    """A dated table: `n` rows from `start` (YYYY-MM-DD), `step` days apart."""
+    y, m, d = map(int, start.split("-"))
+    first = k.day(f"{y:04d}{m:02d}{d:02d}")
+    rows = [head]
+    for i in range(n):
+        x = first + i * step + 719468  # back to a civil date (Hinnant's)
+        era = x // 146097
+        doe = x - era * 146097
+        yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+        doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+        mp = (5 * doy + 2) // 153
+        dd = doy - (153 * mp + 2) // 5 + 1
+        mm = mp + 3 if mp < 10 else mp - 9
+        yy = yoe + era * 400 + (mm <= 2)
+        rows.append(f"{yy:04d}-{mm:02d}-{dd:02d}," + ",".join(c(i) for c in cols))
+    return "\n".join(rows) + "\n"
+
+
+def series_cases() -> list[dict]:
+    hand = [
+        (
+            "care.csv",
+            "date,weight_kg,bp,pulse,notes\n2026-10-01,71.2,120/70,60,\n"
+            '2026-10-08,71.3,118/72,62,\n2026-10-15,73.8,121/70,61,"ankles, puffy"\n'
+            "2026-10-21,75.1,112/78,64,\n",
+        ),
+        (
+            "ledger.csv",
+            "date,what,in\n2026-10-01,a,5\n2026-10-01,b,6\n2026-10-09,c,7\n",
+        ),
+        ("back.csv", "date,v\n2026-10-09,1\n2026-10-01,2\n2026-10-20,3\n"),
+        ("short.csv", "date,v\n2026-10-01,1\n"),
+        ("nohead.csv", "2026-10-01,1\n2026-10-09,2\n2026-10-20,3\n"),
+        ("onecol.csv", "date\n2026-10-01\n2026-10-09\n"),
+        ("leap.csv", "day,v\n2024-02-29,1.5\n2024-03-07,1.25\n"),
+        ("compact.csv", "d,v\n20261001,-3\n20261008,-3\n20261016,-0.5\n"),
+        ("places.csv", "d,v\n2026-10-01,0.0000000000001\n2026-10-09,0.0000000000003\n"),
+        (
+            "ties.csv",
+            "d,v\n2026-09-01,0\n2026-09-08,2\n2026-09-15,0\n2026-09-22,2\n"
+            "2026-09-29,0\n2026-10-06,2\n2026-10-13,0\n2026-10-20,1\n",
+        ),
+        ("gaps.csv", "d,a,b\n2026-10-01,1,\n2026-10-09,,x\n2026-10-20,3,1.\n"),
+        ("quoted.csv", 'd,"a, b","q""x"\n2026-10-01,"1","2"\n2026-10-09," 4 ",5\n'),
+        ("spaced.csv", "d , v \n 2026-10-01 , 1\n\n 2026-10-09 , 2 \n"),
+        ("odd.csv", "d,v\n2026-10-01x,1\n2026-10-09,1\n2026-10-17,1\n"),
+        (
+            "big.csv",
+            "d,v\n2026-10-01,99999999999999999999\n2026-10-09,-99999999999999999999\n",
+        ),
+        ("old.csv", "d,v\n1899-12-25,1\n1999-12-25,2\n2000-01-01,3\n"),
+        ("unicode.csv", "d,v\n2026-10-01,\u0661\n2026-10-09,\uff11\n2026-10-17,1\n"),
+    ]
+    tables = [
+        _table("date,w,p", "2025-08-18", 430, 1,
+               [lambda i: f"{71 + RN.randint(-9, 30) / 10:.1f}", lambda i: str(RN.randint(55, 80))]),
+        _table("date,x", "2023-12-20", 40, 3, [lambda i: str(RN.randint(-5, 5))]),
+    ]  # fmt: skip
+    for n in range(40):
+        cols = [
+            lambda i: RN.choice(["", "1", "-2", "3.5", "0.25", "x", "10", "-0.75"])
+            for _ in range(RN.randint(1, 3))
+        ]
+        tables.append(
+            _table("d," + ",".join(f"c{j}" for j in range(len(cols))),
+                   RN.choice(["2026-01-01", "2024-02-20", "1999-12-01"]),
+                   RN.randint(2, 30), RN.randint(1, 5), cols)
+        )  # fmt: skip
+    hand += [(f"t{n}.csv", t) for n, t in enumerate(tables)]
+    return [{"path": p, "text": t, "out": k.series(p, t)} for p, t in hand]
+
+
+def written_cases() -> list[dict]:
+    texts = [
+        "", "next: Oct 2027", "March 20, 2026", "Mar. 5 2024", "Octo 2026",
+        "Oct2026", "may 1999", "May 32 2026", "Sept 9, 2026", "sep 2026",
+        "DEC  2025", "Oct \u0661\u0662 2026", "2026-10-14\u0663", "2026-10-149",
+        "x2026-10-14", "20261015", "Jun 0 2026", "Jul 1 1899", "Aug 1, 2100",
+        "Nov 30, 2026 and Nov 2026", "Feb 31 2026", "Oct-2026", "Oct, 2026",
+        "May\t2026", "January 2026 February 2, 2026", "\u212aov 2026",
+        "Oct 2026 Oct 2026", "1 Oct 2026", "Oct 1 2026x", "Oct 012 2026",
+    ]  # fmt: skip
+    bits = ["Oct", "may", "Sept", " ", ",", ".", "2026", "1", "31", "-", "x",
+            "2026-10-14", "\u0662", "\t"]  # fmt: skip
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 9))) for _ in range(250)
+    ]
+    return [{"text": t, "written": [list(w) for w in k.written(t)]} for t in texts]
+
+
+def ids_cases() -> list[dict]:
+    texts = [
+        "",
+        "DCSD PO 2025-063 (575) 555-0161 2026-10-16 WR-2026-0117",
+        "mites 1/300 -x- a-b 4-5 -2025-063- K-52 caf\u00e9-9",
+        "--",
+        "-/-",
+        "a/b/c",
+        "2026-10-14",
+        "2026-10-14-5",
+        "2026-1014",
+        "x2026-10-14",
+        "20261014-1",
+        "\u0662-\u0663",
+        "1-\u0662",
+        "２-3",
+        "A-1 A-1 a-1",
+        "PO#2025-063.",
+        "x_1-2",
+    ]
+    bits = [
+        "2025",
+        "-",
+        "/",
+        "063",
+        "WR",
+        "a",
+        "1",
+        " ",
+        ".",
+        "_",
+        "\u00e9",
+        "10",
+        "14",
+    ]
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 12))) for _ in range(250)
+    ]
+    return [
+        {"text": t, "ids": k.ids(t), "shapes": [k.shape(i) for i in k.ids(t)]}
+        for t in texts
+    ]
+
+
+def wordlist_cases() -> list[dict]:
+    texts = [
+        "",
+        "due = next",
+        "due = next, next\nDue = overdue",
+        "due =",
+        "due = next,",
+        "a b = c",
+        "due next",
+        "# x\n\n  due=next  ",
+        "due = due, next",
+        "due = 2026-10",
+        "=next",
+        "due = next = soon",
+        "due = next\r\nlate = overdue",
+        "DUE = Next, NEXT",
+        "café = cafe",
+        "due = next\u2028late = over",
+        "  # only a comment",
+        "due = next,,soon",
+        "due\t=\tnext",
+        "１ = one",
+        # written out of order: the list is held sorted, by code point
+        "due = zebra, apple",
+        "late = overdue, behind\nlate = after",
+        "x = é, e, z, É",
+    ]
+    bits = [
+        "due",
+        "next",
+        " ",
+        "=",
+        ",",
+        "#",
+        "\n",
+        "late",
+        "x y",
+        "\u00e9",
+        "2026",
+        "\t",
+    ]
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 14))) for _ in range(200)
+    ]
+    out = []
+    for t in texts:
+        alias, why = k.parse_words(t)
+        out.append({"text": t, "alias": alias, "why": why})
+    return out
+
+
+def newest_cases() -> list[dict]:
+    texts = [
+        "",
+        "2026-10-14",
+        "20261014",
+        "2026-10-14 and 2021-03-12",
+        "DTSTART;VALUE=DATE:20250828",
+        "memos/2026-05-10_2310.txt",
+        "12026-10-14",
+        "2026-10-149",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-01-00",
+        "2026-01-32",
+        "1899-12-31",
+        "2100-01-01",
+        "1900-01-01",
+        "2099-12-31",
+        "2026-1-01",
+        "2026-10-1",
+        "000123456789",
+        "20261322",
+        "2026-10-14-5",
+        "x2099-12-31y",
+        "\u0662\u0660\u0662\u0666-10-14",
+        "２０２６-10-14",
+        "2026\u201110\u201114",
+        "2026-10-14\U0001f600 2027-01-01",
+        "202610140",
+    ]
+    bits = ["2026", "1999", "-", "10", "13", "00", "31", "32", "20261014", "1", "x",
+            " ", "\U0001F600", "\u0663", "19000101", "0"]  # fmt: skip
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 12))) for _ in range(300)
+    ]
+    return [{"text": t, "newest": k.newest(t)} for t in texts]
 
 
 def _fold(xs) -> float:
@@ -707,7 +1078,9 @@ FLOAT_TIES = float_tie_piles()
 
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
-    (8), and random handfuls of the dense-ties pile's vocabulary (9)."""
+    (8), random handfuls of the dense-ties pile's vocabulary (9), the dated
+    pile's (10), the ledger's (11), the care log's (12), the log's (13) and
+    the memos' (14)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -717,6 +1090,20 @@ def extra_bites(i: int) -> list[str]:
             "foo bar baz qux quux",
             "def x y functional thing",
         ]
+    if i == 10:
+        return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
+    if i == 14:
+        return ["need", "need jars", "need permit", "market", "later"]
+    if i == 13:
+        return ["next", "upright", "grand", "console", "spinet", "studio", "due",
+                "notes"]  # fmt: skip
+    if i == 12:
+        # dad, care, log and csv are only in a path: a folder's name is a word
+        return ["weight", "ankles", "pulse", "what amount", "weight kg", "dad",
+                "dad weight", "dad's weight", "care log", "books csv"]  # fmt: skip
+    if i == 11:
+        return ["purchase order", "order", "reply", "case", "rider", "Kawai", "call",
+                "DEP", "lot", "auction", "memo below"]  # fmt: skip
     if i != 9:
         return []
     vocab = [f"w{n}" for n in range(7)]
@@ -781,11 +1168,13 @@ def pile_based_cases() -> dict:
             chunks_out.append({"pile": encode_pile(pile), "chunks": ch})
             bites = BITES + [" ".join(R.sample(BITES, 2))[:60] for _ in range(10)]
             bites += extra_bites(i)
-            for bite in bites:
-                served = k.rank(ch, bite)
+            runs = [(b, {}) for b in bites] + [(b, a) for b, a in ALIASED.get(i, [])]
+            for bite, alias in runs:
+                served = k.rank(ch, bite, alias)
                 rank_out.append(
-                    {"pile": i, "bite": bite, "ids": [c["id"] for c in served]}
-                )
+                    {"pile": i, "bite": bite, "alias": alias,
+                     "ids": [c["id"] for c in served]}
+                )  # fmt: skip
                 answers = [c for c in served if not k.echo(bite, c["text"])]
                 # served by place in the pile, not by id: two chunks with the
                 # same text share an id, and look() tells them apart by identity
@@ -794,8 +1183,10 @@ def pile_based_cases() -> dict:
                     {
                         "pile": i,
                         "bite": bite,
+                        "alias": alias,
                         "served": at,
-                        "look": k.look(ch, bite, answers),
+                        "today": TODAY,
+                        "look": k.look(ch, bite, answers, alias, TODAY),
                     }
                 )
     return {"chunks": chunks_out, "rank": rank_out, "look": look_out}
@@ -882,6 +1273,11 @@ def main(argv: list[str]) -> int:
         "holds": holds_cases(),
         "echo": echo_cases(),
         **pile_based_cases(),
+        "newest": newest_cases(),
+        "wordlist": wordlist_cases(),
+        "ids": ids_cases(),
+        "series": series_cases(),
+        "written": written_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

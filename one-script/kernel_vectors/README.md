@@ -31,7 +31,7 @@ had. The pieces were already there; this puts them together for ports:
 |---|---|
 | `gen.py` | Makes `kernel_tables.json` and `cases.json` from `kernel.py`. Deterministic: the same bytes on every run and every hash seed |
 | `kernel_tables.json` | What Python decides that another language decides differently, read out of Python: word characters (`[^\W_]`), lowercasing and the final-sigma context, `str.strip`/`splitlines`/`isdigit`, the HTML5 entities and `html.unescape`'s tables, how `re.I` folds the letters of `script` and `style` and what its backreference calls equal, the kernel's constants. A port loads it, so its own Unicode version and regex engine never decide a word |
-| `cases.json` | 3,088 cases in 12 parts: canon, words and bite keys, RFC 4231 and seal proofs, page text, `holds`, `echo`, chunks of ten folders, rank, look, the door, subjects |
+| `cases.json` | 4,595 cases in 17 parts: canon, words and bite keys, RFC 4231 and seal proofs, page text, `holds`, `echo`, chunks of fourteen folders, rank and look (some with a words list; look says what isn't there, what moved, and what date has gone by), `newest` (the dates a chunk carries), `written` (dates as people write them), `wordlist` (a words list read), `ids` (what names one thing, and its shape), `series` (numbers over time), the door, subjects |
 | `compare.py` | Holds every port to `kernel.py`: every vector; one whole session through every command line on the same paths (exit codes, what the person saw, every row, every file); each box verified by every implementation and by the one script's `Record`. A port whose toolchain isn't here is skipped, and said so |
 
 ## Running it

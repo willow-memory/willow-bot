@@ -172,6 +172,11 @@ PARTS = {
     "echo": ["out"],
     "chunks": ["chunks"],
     "rank": ["ids"],
+    "newest": ["newest"],
+    "wordlist": ["alias", "why"],
+    "ids": ["ids", "shapes"],
+    "series": ["out"],
+    "written": ["written"],
     "look": ["look"],
     "door": ["why"],
     "subject": ["subject"],
@@ -225,6 +230,8 @@ def _key(path: Path) -> None:
 
 
 GARDEN = {
+    # a log whose date has passed by the session's --now: today is the bite's
+    "visits.md": "2026-01-02  raised bed\n  next bed check: Feb 2026\n",
     "garden.md": "Tomatoes want six hours of sun.\n\nWater at the root.\n",
     "lot.html": "<html><script>var lot = 1;</script>\n<p>The blue Civic, VIN 1HGEJ6672841, one owner.</p></html>\n",
     "faq.md": "Has the shed been painted this year?\n",
@@ -253,7 +260,21 @@ def session(impl, root: Path) -> dict:
         shown.append([list(args[:1]), code, body])
         return code
 
-    step("init", *b, "--pile", str(pile), "--key", str(key))
+    mine = key.parent / "words.txt"  # their words list, kept like their key
+    for text, mode, where in (
+        ("sunlight = sun\n", 0o600, box / "words.txt"),  # inside the box
+        ("sunlight = sun\n", 0o644, mine),  # readable by others
+        ("sunlight sun\n", 0o600, mine),  # not a list line
+    ):
+        where.parent.mkdir(parents=True, exist_ok=True)
+        where.write_text(text)
+        where.chmod(mode)
+        step("init", *b, "--pile", str(pile), "--key", str(key), "--words", str(where))
+    shutil.rmtree(box)
+    mine.write_text("# mine\nsunlight = sun, light\r\ncold = frost\n")
+    step("init", *b, "--pile", str(pile), "--key", str(key), "--words", str(mine))
+    step("bite", *b, "how much sunlight do tomatoes want")
+    step("bite", *b, "when does the cold come")
     step("bite", *b, "when does the frost come")
     step("bite", *b, "what does this do")
     step("bite", *b, "the one ending 672841")
@@ -284,6 +305,7 @@ def session(impl, root: Path) -> dict:
     step("seal", *b, k.subject_of(good))
     step("bite", *b, "How much SUN do tomatoes want?!")  # sealed now
     step("bite", *b, "tomatoes want how much sun")  # other words: not sealed
+    step("bite", *b, "the raised bed")
     step("bite", *b, "water them at the root?")
     rows = k.read(box / "record.jsonl")[0]
     water = rows[-1]["served"][0]["id"]
