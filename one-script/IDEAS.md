@@ -2451,6 +2451,16 @@ people's names in the demos. Maybe it's time to do a cross check again."*):
   configured-names idea without its literals: the list is the caller's and
   never kept in the module. The cast is its test fixture.
 
+**Then wired into serve** (the operator: *"wire the names list into
+serve"*): `Config.names`, read by `opening.read_names` from a file outside
+the box and readable only by its owner (a list of the people who matter is
+their data, so it is kept like the human key), set by `--names FILE` or
+`$ONESCRIPT_NAMES`; a file inside the box or open to others refuses the run
+rather than serving without it. Serve withholds the names last, after every
+other scrub, then checks the cap again before the file is written; the
+prompt hook does the same to its chunks. The record keeps places and
+hashes, never the names or the text they were withheld from.
+
 Still not covered by any pattern: a person's name nobody listed, and a
 street address. Both need a model or a list of the person's own names,
 which is willow-2.0's planned phase 3, and the pii set's limit is said here

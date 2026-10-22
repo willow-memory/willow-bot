@@ -365,6 +365,15 @@ def _add_globals(p: argparse.ArgumentParser) -> None:
         help="let `snapshot` read outside data over HTTPS, once, into the box. "
         "Without it a new snapshot is `unreachable`, said; held ones still read",
     )
+    p.add_argument(
+        "--names",
+        type=Path,
+        default=Path(os.environ["ONESCRIPT_NAMES"])
+        if os.environ.get("ONESCRIPT_NAMES")
+        else None,
+        help="a file of names to withhold from everything served, one per line, "
+        "outside the box and 0600 (default: $ONESCRIPT_NAMES)",
+    )
 
 
 def _add_prompt_args(pr: argparse.ArgumentParser) -> None:
@@ -397,7 +406,13 @@ def _prompt_only(argv: list[str]) -> bool:
 
 def _config(args, **more) -> opening.Config:
     """The box's config from the global options; `more` adds what a verb
-    beyond the hook's needs (the drand and price readers, Jeles)."""
+    beyond the hook's needs (the drand and price readers, Jeles). A names
+    file that can't be trusted (inside the box, readable by others) refuses
+    the run rather than serving without it."""
+    names, why = opening.read_names(args.names, args.box)
+    if why is not None:
+        print(f"refused: {why}", file=sys.stderr)
+        raise SystemExit(2)
     return opening.Config(
         box=args.box,
         keys=args.keys,
@@ -417,6 +432,7 @@ def _config(args, **more) -> opening.Config:
         forge=FORGE,
         index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
         seal_at_end=True,
+        names=names,
         **more,
     )
 

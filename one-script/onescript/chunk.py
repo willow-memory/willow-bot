@@ -41,6 +41,17 @@ def _scrub(value):
     return value
 
 
+def withhold_names(doc, names):
+    """A served document with every name the person gave withheld, wherever it
+    sits (``[withheld: name, L3]``): the last pass before the model reads it.
+    Nothing is touched when no names are given."""
+    if not names:
+        return doc
+    return scrub.walk_strings(
+        doc, lambda s: scrub.withhold(s, SERVE_CEILING, names=names)
+    )
+
+
 def chunk_name(table: dict) -> str:
     c = table["source"]["chunk"]
     return f"{c['repo']}:{c['path']}:{c['line']}"

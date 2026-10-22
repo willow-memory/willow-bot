@@ -58,6 +58,7 @@ from .chunk import (  # noqa: F401  (moved to chunk.py; read here as before)
     _scrub,
     chunk_name,
     served_id,
+    withhold_names,
 )
 from .record import Record, canon, h256
 from .states import EMPTY, POPULATED, UNREACHABLE
@@ -436,8 +437,11 @@ def serve(
     unpinned: tuple[int, str] | None = None,
     read_chunk=None,
     session=None,
+    names: tuple = (),
 ) -> dict:
     """Write the served file and record it. Returns the served document.
+    `names` (`Config.names`) are withheld from it last, before the cap is
+    checked again and the file is written.
     `read_chunk(chunk) -> (text, why)` reads a chunk table's text at its
     indexed blob (`pile.read_chunk`); without it a chunk is unreachable.
     The receipts and the scope stay in the record's row, never in the file.
@@ -487,6 +491,12 @@ def serve(
         doc = _nothing(EMPTY, str(e))
     except Exception as e:  # serve that can't think clearly serves nothing
         doc = _nothing(EMPTY, f"serve error, failing closed: {type(e).__name__}")
+    if names and doc["state"] == POPULATED:
+        doc = withhold_names(doc, names)
+        if max_chars is not None and len(canon(doc)) > max_chars:
+            doc = _nothing(
+                EMPTY, "the scope is too large for this model; narrow the stack"
+            )
     data = (canon(doc) + "\n").encode()
     untrusted = any(t["trust"] == "untrusted" for t in doc["tables"])
     rec.write_file(

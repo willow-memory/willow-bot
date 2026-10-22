@@ -124,7 +124,7 @@ def prompt(
         t = {"rows": [], "source": {"chunk": chunk_of(h)}}
         tables.append(chunk._chunk_entry(t, h["chunk"], run.serve_key, set(), read))
     tables.sort(key=lambda t: t["id"])
-    res = doc(POPULATED, "", tables)
+    res = doc(POPULATED, "", chunk.withhold_names(tables, cfg.names))
     if max_chars is not None and len(record.canon(res["doc"])) > max_chars:
         return doc(EMPTY, "the scope is too large for this model; narrow the stack")
     return res

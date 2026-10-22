@@ -166,9 +166,32 @@ class Config:
     #: asked, and a seed row is what it was before. The CLI turns it on when
     #: `jeles` is installed.
     jeles: Any = None
+    #: The names a person gives to be withheld from everything served to the
+    #: model (`chunk.withhold_names`, IDEAS 119): their household, their
+    #: clients. Read by `read_names` from a file outside the box; never written
+    #: to the record, which keeps only that a name was withheld, by its kind.
+    names: tuple = ()
 
 
 PUBLIC_KEYRING = "verifiers.public.json"
+
+
+def read_names(path: Path | None, box: Path) -> tuple[tuple, str | None]:
+    """The names to withhold, one per line (``#`` starts a comment), from a
+    file outside the box and readable only by its owner, as the human key is:
+    a list of the people who matter is itself their data. ((), None) with no
+    file; ((), why) refused."""
+    if path is None:
+        return (), None
+    if path.resolve().is_relative_to(box.resolve()):
+        return (), "the names file can't live inside the box"
+    try:
+        if path.stat().st_mode & 0o077:
+            return (), f"{path} is readable beyond its owner; chmod 600 it"
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as e:
+        return (), f"the names file could not be read: {type(e).__name__}"
+    return tuple(n for n in (ln.split("#", 1)[0].strip() for ln in lines) if n), None
 
 
 def default_keyring() -> Path | None:

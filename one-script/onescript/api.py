@@ -1389,7 +1389,12 @@ def serve(
     if cfg.seal_at_end:
         session = session_mod.servable(run.rec.rows(), run.held()[0])
     doc = run.serve(
-        tables, card["ids"], max_chars=max_chars, read_chunk=reader, session=session
+        tables,
+        card["ids"],
+        max_chars=max_chars,
+        read_chunk=reader,
+        session=session,
+        names=cfg.names,
     )
     if failed:
         _tombstones(cfg, run, index, repos, failed)

@@ -207,10 +207,11 @@ class Run:
         max_chars: int | None = None,
         read_chunk=None,
         session=None,
+        names: tuple = (),
     ) -> dict:
         """Write the one file the model reads. Before check-in there's no serve
         key, and serve fails closed. `max_chars` is the caller's cap; `session`
-        as `serve.serve` takes it."""
+        and `names` as `serve.serve` takes them."""
         return serve.serve(
             self.rec,
             tables,
@@ -219,6 +220,7 @@ class Run:
             max_chars=max_chars,
             read_chunk=read_chunk,
             session=session,
+            names=names,
             human_key=self.keys.get(gate.HUMAN),
             keyring=self.keyring,
             nestor_db=self.nestor_db,
