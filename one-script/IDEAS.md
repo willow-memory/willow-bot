@@ -203,6 +203,7 @@ here reads, writes or caches vault material.
 115. [Crossing the streams: what already lives in the box](#115-crossing-the-streams-what-already-lives-in-the-box)
 116. [One repo at a time](#116-one-repo-at-a-time)
 117. [The kernel on the-box: what plopped out](#117-the-kernel-on-the-box-what-plopped-out)
+118. [Asymmetric offsets: a puzzle from the Discord group](#118-asymmetric-offsets-a-puzzle-from-the-discord-group)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2240,6 +2241,37 @@ bite of common words only ("name the thing you mean"); and a request to
 make something. Facts about their folder come first; only then, under
 `next`, the kind of tool that does the rest, with the fleet's name for it
 (115's hand-off table), so a newcomer can ignore it.
+
+### 118. Asymmetric offsets: a puzzle from the Discord group
+
+2026-10-22. A problem from the operator's Discord group, no names: find every
+`(b - k) b^i = (c - m) c^j` with `b > k`, `c > m`, `b < c`, `i, j >= 1`; the
+group found one solution each for `(k, m) = (3, 2)`, `3 * 6^9 = 16 * 18^5 =
+30,233,088`, and `(8, 5)`, `12 * 20^5 = 75 * 80^3 = 38,400,000`, and said "only
+one*". Each solution is one number written as a single digit and zeros in two
+bases (`3000000000` in base 6, `(16)00000` in base 18; the message's `75000₈`
+is base 80).
+
+**What the box said:** nothing in the fleet does this; the lookups found
+noise. It is new, so it was built: `compiled/offsets.py`, stdlib.
+
+**What came out:**
+
+- Both claims hold as far as anyone looked: one solution each for every
+  `b <= 100,000` with the value below 10^40, and for every `b <= 600` with
+  the value below 10^400. That is the honest form of "only one*": the claim
+  with its bound attached, which a search can give and can't go past.
+- The asterisk is earned. Offsets `(9, 2)` have a small solution `(12, 3, 18,
+  2)` and then a 40-digit one, `(54, 22, 162, 17)`; a search stopping at 10^39
+  would have said "only one" there too.
+- Why they are rare: for a prime p dividing c but not m, p doesn't divide
+  `c - m`, so p's exponent in the value is exactly `j * v_p(c)`, and the same
+  on b's side. So b and c share their primes, each offset is built from
+  them, and every prime gives one linear equation in i and j, two unknowns.
+  In both solutions every prime lines up: `2^9 3^10` and `2^12 3^1 5^5`.
+- Across all offsets 1 to 10 (b <= 1000, value below 10^40), 14 pairs have
+  exactly one solution, 7 have none (`(6, 1)` to `(10, 1)`, `(6, 7)`, `(10, 3)`), and some have
+  infinite families from shared powers (`(1, 2)`: `2^(2j+1) = 2 * 4^j`).
 
 ## What the one script said about this list
 
