@@ -208,6 +208,7 @@ here reads, writes or caches vault material.
 120. [The OAuth handoff, and the box picking its own tests](#120-the-oauth-handoff-and-the-box-picking-its-own-tests)
 121. [The seed line: what the small script was before it was small](#121-the-seed-line-what-the-small-script-was-before-it-was-small)
 122. [The private chunks, scanned first, and SEED10 found](#122-the-private-chunks-scanned-first-and-seed10-found)
+123. [The kernel in three more languages, and the vectors that make them](#123-the-kernel-in-three-more-languages-and-the-vectors-that-make-them)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2653,6 +2654,37 @@ words kept in the box's `person.md` only with `--keep-who`, otherwise read
 once and not kept, the row saying which, never the words. Gerald showed up
 in the box along the way, in the Grove's design notes and the store's
 gerald-bot; his story stays in the vault.
+
+### 123. The kernel in three more languages, and the vectors that make them
+
+2026-10-22. A handoff from another cloud session: the operator asked how
+easy a converter would be from `kernel.py` to C++, Java and the like, then
+"Do TS, and C# as the bonus." Its answer, applied here as five commits:
+**the vectors are the converter.** `kernel_vectors/gen.py` reads the
+kernel's own tables and 3,088 cases out of `kernel.py`; a port loads them,
+answers every case byte for byte, writes boxes `kernel.py` verifies, and
+verifies boxes `kernel.py` wrote. Java, TypeScript and C# all pass.
+
+Run here: Java and TypeScript answer every part and all 20 session checks,
+and every box holds under every implementation, `unexplained differences:
+0`; .NET isn't installed, so C# was skipped and said so. The vectors
+regenerate to the committed bytes. Full suite 1946 passed.
+
+What the ports found in the kernel itself, fixed in the first two commits:
+
+- **A file name could brick a box for good.** A served `where` is kept raw,
+  and a name holding U+2028, U+2029 or U+0085 was cut by `splitlines()` on
+  read-back, after which every verb refused the box. The record is read on
+  `"\n"` only now, as `onescript/record.py` already did.
+- **The same bite could rank differently from run to run**: float scores
+  summed in a set's order, which is the hash seed (13 runs in 400 on 3.11).
+  Scores are exact fractions now.
+
+And the ports' own lessons (case folding inside a regex backreference, a
+UTF-8 locale for Java, Node dropping a BOM, three different file locks) are
+in the handoff and the ports. For the pull-out to come: the kernel now has
+three sibling implementations and a vector set beside it; whatever happens
+to `kernel.py` happens to `kernel_vectors/` too.
 
 ## What the one script said about this list
 
