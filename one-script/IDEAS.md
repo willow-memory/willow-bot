@@ -2388,6 +2388,28 @@ and a case number still readable. The full suite held (1865 passed).
 `kernel.py` doesn't take it yet: it is one stdlib file that imports nothing,
 so it would carry its own copy, a second home (110).
 
+**Run on the-box** (the operator: *"run the kernel on the-box again with
+the pii set"*). The twelve new-hire bites' served chunks, each passed
+through serve's own scrub (`chunk._scrub`): nothing withheld, and the
+whole pile scanned with every set agrees. That is right for what the set
+knows and shows what it doesn't:
+
+- **What's personal in the-box isn't a shape.** First names and initials
+  (Dave, Gary, Karen, Steve, "rm", "th"), a machine named `DAVE-DESKTOP`,
+  and 10.0.0.x client addresses in `error_log`. No check in the fleet
+  detects a name or an IP address; willow-2.0 only plans a model for names
+  (its phase 3).
+- **Serve lets both planted passwords through.** Serve scrubs hashes and
+  credential *shapes*, which are API keys. `login.php`'s `$password =
+  "password"` is caught only by `journal_kv` and `generic`, which serve
+  doesn't run, and `deploy.bat`'s `user: cwcftp pw: widgets1998` is caught by
+  no set at all: no rule knows `pw`. A password a person wrote reaches the
+  model.
+- **Why serve can't just add `generic`:** its base64 rule takes
+  `/var/www/final_v2_REAL_USE_THIS_ONE/payments` for base64, more than 300
+  times in `error_log`. A scrubber that cries wolf on every path gets
+  turned off.
+
 Found while building: willow-2.0's `scripts/pii_check.py` (a public,
 archived repo) is written as one person's literal details rather than
 shapes. It is left out of the set, and is the operator's to look at.
