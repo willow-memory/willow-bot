@@ -35,6 +35,7 @@ import html.entities
 import importlib.util
 import json
 import random
+import re
 import sys
 import tempfile
 import unicodedata
@@ -90,6 +91,16 @@ def tables() -> dict:
         "digit": ranges(str.isdigit),
         "line_breaks": [ord(c) for c in _line_breaks()],
         "html5": html.entities.html5,
+        # for a port without a regex engine that can say it (.NET can't put an
+        # astral code point in a class; RE2 and Rust's regex have no
+        # backreference): which code points re.I lets stand for each letter of
+        # "script" and "style", and which pairs of those its backreference
+        # (\1 under re.I, a simple lowercase per code point) calls equal
+        "tag_fold": {t: _fold_set(t) for t in sorted(set("scriptstyle"))},
+        "tag_backref": {
+            t: [[a, b] for a in _fold_set(t) for b in _fold_set(t) if _backref_eq(a, b)]
+            for t in sorted(set("scriptstyle"))
+        },
         "invalid_charrefs": {
             str(n): v
             for n, v in vars(html)["_invalid_charrefs"].items()  # noqa: SLF001
@@ -109,6 +120,33 @@ def tables() -> dict:
             "ROW_KEYS": sorted(k.ROW_KEYS),
         },
     }
+
+
+def _near_tag_letters() -> dict[str, list[int]]:
+    """Code points with a letter of "script"/"style" somewhere in their case
+    mappings: the only ones re.I could fold to that letter. Asked once."""
+    out: dict[str, list[int]] = {t: [] for t in set("scriptstyle")}
+    for c in cps():
+        ch = chr(c)
+        mapped = (ch.lower() + ch.upper() + ch.casefold()).lower()
+        for t in out:
+            if t in mapped:
+                out[t].append(c)
+    return out
+
+
+_NEAR: dict[str, list[int]] = {}
+
+
+def _fold_set(letter: str) -> list[int]:
+    # re itself decides; the case mappings only pick which code points to ask
+    if not _NEAR:
+        _NEAR.update(_near_tag_letters())
+    return [c for c in _NEAR[letter] if re.fullmatch(letter, chr(c), re.I)]
+
+
+def _backref_eq(a: int, b: int) -> bool:
+    return bool(re.fullmatch(r"(.)\1", chr(a) + chr(b), re.I | re.S))
 
 
 def _final(s: str) -> bool:
@@ -306,6 +344,31 @@ def hmac_cases() -> dict:
 
 
 HTML_TEXTS = [
+    # the tag scanner's edges: folds, the backreference, the boundary
+    "<\u017fcript>a</SCRIPT>b",
+    "<SCRIPT>a</\u017fcript>b",
+    "<script>a</SCRIPT>b",
+    "<scr\u0131pt>dotless</scr\u0131pt>c",
+    "<scr\u0131pt>dotless</scrIpt>c",
+    "<scrIpt>a</scr\u0130pt>b",
+    "<script_x>a</script>b",
+    "<scripts>a</scripts>b",
+    "<script1>a</script>b",
+    "<script-x>a</script>b",
+    "<script\u00e9>a</script>b",
+    "<script>a</script\n\t\u3000>b",
+    "<script>a</script b>c</script>d",
+    "<script>one</script><style>two</style><!--three-->four",
+    "<script><!-- x --></script>y",
+    "<!-->a<!--->b<!---->c",
+    "<!-- unclosed",
+    "<script>a<script>b</script>c</script>d",
+    "<>empty<a>",
+    "&#x;&#;&#xg;&#12a;&#x1F600;&#128512;",
+    "&" + "b" * 33 + ";",
+    "&\U0001f600" * 3 + ";",
+    "&notin&notit&not;&",
+    "&amp;&amp&AMP&ampamp",
     "<script>x</script\u00a0>after",
     "<style>y</style\u3000\n>z",
     "<script>q</script\u2003\x1c>w",
@@ -559,6 +622,28 @@ def pile_cases() -> list[dict]:
     )
     for pile, _ in FLOAT_TIES:
         piles.append(pile)
+    # the definition scanner's edges (look): keywords, boundaries, spaces
+    # Python counts as \s, names that are and aren't identifiers
+    piles.append(
+        [
+            (
+                ["code.txt"],
+                (
+                    "function foo() {}\nclass Bar:\nfn baz()\nsub qux\nfunc  quux\n"
+                    "undef x\nxdef y\ndef\u3000spaced\ndef_x y\nfunctional thing\n"
+                    "def a1_b2\nclass _Hidden\nfn\nnewline_name\ndef \u00e9x\n"
+                    "def foo\ndef 9bad\nfunction\tfoo\n"
+                ).encode(),
+            ),
+            (
+                ["use.txt"],
+                b"foo() and foo_bar and afoo and Bar() and quux\nspaced a1_b2\n",
+            ),
+            (["other.txt"], b"baz qux _Hidden newline_name\n"),
+            # names only as the front or back of a longer word: never a use
+            (["prefix.txt"], b"quuxify Barn _Hiddenness bazooka afoo spacedout\n"),
+        ]
+    )
     # dense ties: a small vocabulary, so many chunks score alike and the order
     # falls to exact arithmetic, then path, then line
     vocab = [f"w{i}" for i in range(7)]
@@ -621,11 +706,18 @@ FLOAT_TIES = float_tie_piles()
 
 
 def extra_bites(i: int) -> list[str]:
-    """More bites: the float-tie piles' own bite (piles 5-7), and random
-    handfuls of the dense-ties pile's vocabulary (pile 8)."""
+    """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
+    (8), and random handfuls of the dense-ties pile's vocabulary (9)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
-    if i != 8:
+    if i == 8:
+        return [
+            "function foo class bar fn baz sub qux func quux",
+            "def spaced a1_b2 hidden newline_name",
+            "foo bar baz qux quux",
+            "def x y functional thing",
+        ]
+    if i != 9:
         return []
     vocab = [f"w{n}" for n in range(7)]
     return [" ".join(R.sample(vocab, R.randint(3, 7))) for _ in range(150)]

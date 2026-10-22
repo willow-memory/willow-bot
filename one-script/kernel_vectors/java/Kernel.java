@@ -14,6 +14,10 @@
  * ../cases.json, and compare.py holds it to kernel.py byte for byte, both
  * ways (a box written here verifies under kernel.py, and the reverse).
  *
+ * The kernel's four patterns are scanners here, not java.util.regex (the same
+ * scanners as ../ts/kernel.ts): Java's case folding in a backreference isn't
+ * Python's, which the vectors caught on <\u017fcript>...</SCRIPT>.
+ *
  * What Python decides that Java decides differently is not retyped here. It
  * is loaded from kernel_tables.json, which gen.py reads out of Python:
  * which code points are word characters, what each lowercases to (and the
@@ -383,8 +387,6 @@ public final class Kernel {
     static int TOP, SNIFF, MAX_FILE, MAX_CHUNK, ECHO_RUN, HOLD_NUM, HOLD_DEN;
     static Set<String> FUNCTION, MAKE, ROW_KEYS;
     static Map<String, String> NEXT;
-    static Pattern HIDDEN, TAG, CHARREF, DEFINES;
-    static String WORDCLASS; // a regex class: Python's \w (word characters and "_")
     static String VERSION;
 
     @SuppressWarnings("unchecked")
@@ -426,27 +428,28 @@ public final class Kernel {
         for (Map.Entry<String, Object> e : ((Map<String, Object>) kc.get("NEXT")).entrySet())
             NEXT.put(e.getKey(), (String) e.getValue());
 
-        // Python's \w is its word characters and "_"; its \s is str.isspace
-        StringBuilder w = new StringBuilder("[_");
-        for (int i = 0; i < WORD.lo.length; i++) w.append(cls(WORD.lo[i])).append('-').append(cls(WORD.hi[i]));
-        WORDCLASS = w.append(']').toString();
-        StringBuilder sp = new StringBuilder("[");
-        for (int i = 0; i < SPACE.lo.length; i++) sp.append(cls(SPACE.lo[i])).append('-').append(cls(SPACE.hi[i]));
-        String spaceClass = sp.append(']').toString();
-        // Python's \b between a word character and anything else
-        String boundary = "(?:(?<=" + WORDCLASS + ")(?!" + WORDCLASS + ")|(?<!" + WORDCLASS + ")(?=" + WORDCLASS + "))";
-        int flags = Pattern.DOTALL | Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE;
-        HIDDEN = Pattern.compile("<(script|style)" + boundary + ".*?</\\1" + spaceClass + "*>|<!--.*?-->", flags);
-        TAG = Pattern.compile("<[^>]*>", Pattern.DOTALL);
-        CHARREF = Pattern.compile("&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\\t\\n\\f <&#;]{1,32};?)");
-        DEFINES = Pattern.compile(boundary + "(?:def|function|sub|class|func|fn)" + spaceClass
-            + "+([A-Za-z_][A-Za-z0-9_]*)");
-        BOUNDARY = boundary;
+        TAG_FOLD = new HashMap<>();
+        for (Map.Entry<String, Object> e : ((Map<String, Object>) t.get("tag_fold")).entrySet()) {
+            Set<Integer> cs = new HashSet<>();
+            for (Object o : (List<Object>) e.getValue()) cs.add(((BigInteger) o).intValue());
+            TAG_FOLD.put(e.getKey().charAt(0), cs);
+        }
+        TAG_BACKREF = new HashMap<>();
+        for (Map.Entry<String, Object> e : ((Map<String, Object>) t.get("tag_backref")).entrySet()) {
+            Set<Long> ps = new HashSet<>();
+            for (Object o : (List<Object>) e.getValue()) {
+                List<Object> pr = (List<Object>) o;
+                ps.add(pair(((BigInteger) pr.get(0)).intValue(), ((BigInteger) pr.get(1)).intValue()));
+            }
+            TAG_BACKREF.put(e.getKey().charAt(0), ps);
+        }
     }
 
-    static String BOUNDARY;
+    static Map<Character, Set<Integer>> TAG_FOLD;
+    static Map<Character, Set<Long>> TAG_BACKREF;
 
-    private static String cls(int c) { return String.format("\\x{%x}", c); }
+    static long pair(int a, int b) { return ((long) a << 32) | (b & 0xffffffffL); }
+
 
     private static Set<String> strings(List<Object> xs) {
         Set<String> out = new HashSet<>();
@@ -554,14 +557,175 @@ public final class Kernel {
     }
 
     // ── the pile ────────────────────────────────────────────────────────────
-    /** html.unescape, as CPython has it. */
+    // ── the scanners: the kernel's regular expressions, by hand (as in ../ts/kernel.ts) ──
+    /** Python's \w: a word character or "_". */
+    static boolean isW(int c) { return c == '_' || WORD.has(c); }
+
+    private static int at(int[] a, int i) { return i < a.length ? a[i] : -1; }
+
+    /** " " and one newline for each the match held: line numbers still point home. */
+    private static String kept(int[] a, int from, int to) {
+        int n = 0;
+        for (int i = from; i < to; i++) if (a[i] == '\n') n++;
+        return " " + "\n".repeat(n);
+    }
+
+    /** `<(script|style)\b.*?</\1\s*>|<!--.*?-->` under re.S | re.I, at `i` (a "<"):
+     *  the name folds as re.I folds it (tag_fold); the closing name equals the
+     *  opening one as re.I's backreference compares (tag_backref). */
+    static int hiddenAt(int[] a, int i) {
+        for (String name : new String[] {"script", "style"}) {
+            int n = name.length();
+            boolean ok = i + 1 + n <= a.length;
+            for (int k = 0; ok && k < n; k++) ok = TAG_FOLD.get(name.charAt(k)).contains(a[i + 1 + k]);
+            if (!ok) continue;
+            int e = i + 1 + n;
+            if (e < a.length && isW(a[e])) continue; // \b
+            for (int k = e; k + 1 < a.length; k++) {
+                if (a[k] != '<' || a[k + 1] != '/') continue;
+                boolean same = k + 2 + n <= a.length;
+                for (int x = 0; same && x < n; x++)
+                    same = TAG_BACKREF.get(name.charAt(x)).contains(pair(a[i + 1 + x], a[k + 2 + x]));
+                if (!same) continue;
+                int p = k + 2 + n;
+                while (p < a.length && SPACE.has(a[p])) p++;
+                if (p < a.length && a[p] == '>') return p + 1;
+            }
+        }
+        if (at(a, i + 1) == '!' && at(a, i + 2) == '-' && at(a, i + 3) == '-')
+            for (int k = i + 4; k + 2 < a.length; k++) if (a[k] == '-' && a[k + 1] == '-' && a[k + 2] == '>') return k + 3;
+        return -1;
+    }
+
+    static String hidden(String text) {
+        int[] a = cps(text);
+        StringBuilder b = new StringBuilder();
+        int i = 0;
+        while (i < a.length) {
+            int m = a[i] == '<' ? hiddenAt(a, i) : -1;
+            if (m >= 0) {
+                b.append(kept(a, i, m));
+                i = m;
+            } else {
+                b.appendCodePoint(a[i++]);
+            }
+        }
+        return b.toString();
+    }
+
+    /** `<[^>]*>` */
+    static String tags(String text) {
+        int[] a = cps(text);
+        StringBuilder b = new StringBuilder();
+        int i = 0;
+        while (i < a.length) {
+            if (a[i] == '<') {
+                int q = -1;
+                for (int k = i + 1; k < a.length; k++) if (a[k] == '>') { q = k; break; }
+                if (q >= 0) {
+                    b.append(kept(a, i, q + 1));
+                    i = q + 1;
+                    continue;
+                }
+            }
+            b.appendCodePoint(a[i++]);
+        }
+        return b.toString();
+    }
+
+    private static boolean isDec(int c) { return c >= '0' && c <= '9'; }
+
+    private static boolean isHex(int c) { return isDec(c) || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'); }
+
+    private static final Set<Integer> NAME_STOP = Set.of((int) '\t', (int) '\n', (int) '\f', (int) ' ', (int) '<', (int) '&', (int) '#', (int) ';');
+
+    /** html.unescape: `&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)`. */
     static String unescape(String s) {
         if (s.indexOf('&') < 0) return s;
-        Matcher m = CHARREF.matcher(s);
+        int[] a = cps(s);
         StringBuilder b = new StringBuilder();
-        while (m.find()) m.appendReplacement(b, Matcher.quoteReplacement(charref(m.group(1))));
-        m.appendTail(b);
+        int i = 0;
+        while (i < a.length) {
+            if (a[i] != '&') {
+                b.appendCodePoint(a[i++]);
+                continue;
+            }
+            int j = i + 1;
+            if (at(a, j) == '#') {
+                if (isDec(at(a, j + 1))) {
+                    j += 1;
+                    while (j < a.length && isDec(a[j])) j++;
+                } else if ((at(a, j + 1) == 'x' || at(a, j + 1) == 'X') && isHex(at(a, j + 2))) {
+                    j += 2;
+                    while (j < a.length && isHex(a[j])) j++;
+                } else {
+                    b.append('&');
+                    i++;
+                    continue;
+                }
+            } else {
+                while (j < a.length && j - (i + 1) < 32 && !NAME_STOP.contains(a[j])) j++;
+                if (j == i + 1) {
+                    b.append('&');
+                    i++;
+                    continue;
+                }
+            }
+            if (at(a, j) == ';') j++;
+            b.append(charref(fromCps(a, i + 1, j)));
+            i = j;
+        }
         return b.toString();
+    }
+
+    private static final String[] KEYWORDS = {"def", "function", "sub", "class", "func", "fn"};
+
+    private static boolean identHead(int c) { return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+
+    private static boolean identTail(int c) { return identHead(c) || isDec(c); }
+
+    /** re.findall of `\b(?:def|function|sub|class|func|fn)\s+([A-Za-z_][A-Za-z0-9_]*)`. */
+    static List<String> defines(String text) {
+        int[] a = cps(text);
+        List<String> out = new ArrayList<>();
+        int p = 0;
+        outer:
+        while (p < a.length) {
+            if (p == 0 || !isW(a[p - 1])) {
+                for (String kw : KEYWORDS) {
+                    int k = 0;
+                    while (k < kw.length() && at(a, p + k) == kw.charAt(k)) k++;
+                    if (k < kw.length()) continue;
+                    int q = p + kw.length(), s0 = q;
+                    while (q < a.length && SPACE.has(a[q])) q++;
+                    if (q == s0 || !(q < a.length && identHead(a[q]))) continue;
+                    int start = q;
+                    while (q < a.length && identTail(a[q])) q++;
+                    out.add(fromCps(a, start, q));
+                    p = q;
+                    continue outer;
+                }
+            }
+            p++;
+        }
+        return out;
+    }
+
+    /** How many times `\bname\b` occurs (name is an identifier: \w all through). */
+    static int named(String text, String name) {
+        int[] a = cps(text), b = cps(name);
+        int n = 0, p = 0;
+        while (p + b.length <= a.length) {
+            int k = 0;
+            while (k < b.length && a[p + k] == b[k]) k++;
+            if (k == b.length && (p == 0 || !isW(a[p - 1])) && (p + b.length == a.length || !isW(a[p + b.length]))) {
+                n++;
+                p += b.length;
+            } else {
+                p++;
+            }
+        }
+        return n;
     }
 
     private static String charref(String s) {
@@ -585,21 +749,8 @@ public final class Kernel {
         return "&" + s;
     }
 
-    private static String linesKept(Pattern p, String text) {
-        Matcher m = p.matcher(text);
-        StringBuilder b = new StringBuilder();
-        while (m.find()) {
-            String g = m.group();
-            int n = 0;
-            for (int i = 0; i < g.length(); i++) if (g.charAt(i) == '\n') n++;
-            m.appendReplacement(b, Matcher.quoteReplacement(" " + "\n".repeat(n)));
-        }
-        m.appendTail(b);
-        return b.toString();
-    }
-
     static String htmlText(String text) {
-        return unescape(linesKept(TAG, linesKept(HIDDEN, text)));
+        return unescape(tags(hidden(text)));
     }
 
     static boolean holds(String w, Set<String> toks) {
@@ -788,17 +939,10 @@ public final class Kernel {
             out.add(hint("no file in your folder has " + String.join(", ", absent),
                 "it may be called something else there", NEXT.get("other words")));
         for (Chunk c : served) {
-            Set<String> names = new LinkedHashSet<>();
-            Matcher m = DEFINES.matcher(c.text);
-            while (m.find()) names.add(m.group(1));
-            for (String name : names) {
-                Pattern named = Pattern.compile(BOUNDARY + Pattern.quote(name) + BOUNDARY);
+            for (String name : new LinkedHashSet<>(defines(c.text))) {
                 TreeSet<String> uses = new TreeSet<>(BY_CODE_POINT);
-                for (Chunk d : pile) if (d != c && named.matcher(d.text).find()) uses.add(d.path);
-                int own = 0;
-                Matcher mm = named.matcher(c.text);
-                while (mm.find()) own++;
-                if (own > 1) uses.add(c.path);
+                for (Chunk d : pile) if (d != c && named(d.text, name) > 0) uses.add(d.path);
+                if (named(c.text, name) > 1) uses.add(c.path);
                 out.add(hint(name + " is defined at " + c.path + ":" + c.line,
                     uses.isEmpty() ? "nothing else in your folder names it" : "also named in " + String.join(", ", uses),
                     NEXT.get("unused")));
