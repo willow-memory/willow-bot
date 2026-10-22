@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [1.19.0](https://github.com/willow-memory/willow-bot/compare/v1.18.0...v1.19.0) (2026-10-22)
+
+
+### Added
+
+* **kernel:** a folder's name is the person's word too ([9f99f2f](https://github.com/willow-memory/willow-bot/commit/9f99f2f6136b6128b3dfb0776934e31f83139c70))
+* **kernel:** has this date passed, the fifth reading ([61b3f03](https://github.com/willow-memory/willow-bot/commit/61b3f03c4cafab0de15b9011031b5fa1f517c86d))
+* **kernel:** her own words list, the second of the four readings ([e0ca511](https://github.com/willow-memory/willow-bot/commit/e0ca5112b5562aa5137eaca70631b62dde403afa))
+* **kernel:** newest first, the first of the four readings ([7505a09](https://github.com/willow-memory/willow-bot/commit/7505a095487ddccfc9ce5640a73d5bf369aa8187))
+* **kernel:** numbers over time, the fourth of the four readings ([6243397](https://github.com/willow-memory/willow-bot/commit/6243397a384e08337f05bc84c7ce1039b1f81c92))
+* **kernel:** what isn't there, the third of the four readings ([0dc69ef](https://github.com/willow-memory/willow-bot/commit/0dc69effd6bf1d571000ac95c0693daab15cbaa7))
+* **one-script:** Conway's Life, as the table's verdict rows ([85f651c](https://github.com/willow-memory/willow-bot/commit/85f651ce15d1077345734542e35e3d46143fe91d))
+
+
+### Fixed
+
+* **kernel:** the van comes back, and findings stop repeating ([87191f5](https://github.com/willow-memory/willow-bot/commit/87191f5a603ac0c25986c0e7d6c4799422c8c7bb))
+
 ## [1.18.0](https://github.com/willow-memory/willow-bot/compare/v1.17.3...v1.18.0) (2026-10-22)
 
 
