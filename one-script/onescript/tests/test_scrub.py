@@ -541,3 +541,179 @@ def test_every_set_named_in_the_docstring_exists():
         "git_trace",
     ):
         assert name in scrub.SETS and name in scrub.__doc__
+
+
+# -- pii (IDEAS 119): each copy's own positives, homestead's negatives ---------
+# Every value is a test value from its copy's suite (555 numbers, example.com,
+# the card networks' test numbers); none is anyone's.
+
+PII_POSITIVES = [
+    # homestead keep/advise.py, tests/test_invariants_advise.py POSITIVES
+    ("ssn", "school form needs SSN 123-45-6789 before Friday"),
+    ("credit_card", "retainer paid on card 4111 1111 1111 1111"),
+    ("dob", "child DOB: 2018-03-04, enrolled since"),
+    ("bank", "support deposits to routing 021000021 account 123456789"),
+    ("phone", "reach the other parent at 415-555-1234 after 6"),
+    ("email", "correspondence went to jordan.rivera@example.com twice"),
+    ("ein", "the business EIN 12-3456789 is on the filing"),
+    # willow-2.0 core/pii_detect.py, tests/test_pii_detect.py
+    ("ssn", "my ssn is 123-45-6789"),
+    ("ssn", "ssn: 123456789"),
+    ("credit_card", "card: 4532015112830366"),
+    ("email", "email me at test@example.com please"),
+    ("phone", "call 555-867-5309"),
+    ("phone", "reach me at (555) 867-5309"),
+    # willow-2.0 apps/nest/pipeline/scrub.py PII_PATTERNS
+    ("bank", "account number: 4417"),
+    ("case_no", "see claim no: WC-2026-0042"),
+    ("dob", "born 03/04/2018"),
+    # corpus-lens egress_shapes.py, tests/test_egress_shapes.py
+    ("home_path", "read from /home/jordan/.claude/projects"),
+    ("home_path", "/Users/jordan/logs"),
+    ("home_path", r"C:\Users\jordan\logs"),
+    # hermes-agent agent/redact.py
+    ("phone", "signal +15558675309 tonight"),
+    ("discord_user", "ping <@!123456789012345678> about it"),
+    # the baseline kinds no copy had (documentation and test values only:
+    # RFC 5737/3849 addresses, the IBAN registry's example, test wallets)
+    ("ip", "[client 10.0.0.68] File does not exist"),
+    ("ip", "the node at 192.0.2.44 answered"),
+    ("ip", "v6 peer 2001:db8:85a3::8a2e:370:7334 joined"),
+    ("itin", "ITIN on file: 912-70-1234"),
+    ("iban", "wire to GB82 WEST 1234 5698 7654 32 today"),
+    ("passport", "passport no. X1234567 expires in May"),
+    ("driver_license", "driver's license: D1234567"),
+    ("medical_record", "MRN: 00123456 at intake"),
+    ("mac", "the printer is 00:1A:2B:3C:4D:5E on the LAN"),
+    ("wallet", "tip jar 0x52908400098527886E0F7030069857D2E4169EE7"),
+    ("location", "meet at 45.5231, -122.6765 at noon"),
+]
+
+#: homestead's NEGATIVES: what a PII pattern must not fire on.
+PII_NEGATIVES = [
+    "1420 Maple 87501",
+    "88 Ridgeline 90210",
+    "347 F.3d 1120",
+    "Hearing Aug 15, 2026 at 8:30am, Dept 3",
+    "2026-09-15 08:30 · Dept 4",
+    "Entry 14 — response filed 2026-08-01",
+    "Case FL-2026-00123, Superior Court",
+    "mailing ZIP is 87501-1234",
+    "Tue/Thu 3-7pm, alternating weekends",
+    "took that into account when scheduling 3 visits",
+    "the minor is 8 years old",
+    "Dept 4, Superior Court of California",
+    "card: 4532015112830360",  # willow-2.0: a failed Luhn check is no card
+    # the baseline kinds' own negatives
+    "listening on 127.0.0.1:8080 and 0.0.0.0",
+    "Apache/1.3.33 (Unix) PHP/4.3.10 configured",
+    "the call at 12:30:45 ran long",
+    "std::vector<int> and a::b in C++",
+    "commit 3f786850e387550fdab836ed7e6dc881de23001b landed",
+    "GB82 WEST 1234 5698 7654 33",  # an IBAN that fails mod 97
+    "ITINERARY for 912 travellers",
+]
+
+
+@pytest.mark.parametrize("kind,text", PII_POSITIVES)
+def test_the_pii_set_catches_every_copys_positives(kind, text):
+    assert kind in scrub.found_kinds(text, ("pii",))
+    out = scrub.withhold(text, 0)
+    assert f"[withheld: {kind}, L{scrub.RUNGS[kind]}]" in out
+
+
+@pytest.mark.parametrize("text", PII_NEGATIVES)
+def test_the_pii_set_leaves_homesteads_negatives_alone(text):
+    assert scrub.found_kinds(text, ("pii",)) == []
+
+
+def test_a_labelled_kind_runs_first_so_a_bank_number_is_not_also_an_ssn():
+    got = scrub.withhold("routing 021000021 account 123456789", 0)
+    assert got.count("[withheld: bank, L4]") == 2 and "ssn" not in got
+
+
+def test_the_ceiling_says_what_is_allowed_where():
+    text = "SSN 123-45-6789, DOB: 2018-03-04, mail jordan@example.com"
+    found: set = set()
+    model = scrub.withhold(text, 2, found=found)  # bound for a model
+    assert "123-45" not in model and "2018-03-04" not in model
+    assert "jordan@" not in model and found == {"ssn", "dob", "email"}
+    screen = scrub.withhold(text, 4)  # the person's own screen
+    assert "[withheld: ssn, L5]" in screen
+    assert "DOB: 2018-03-04" in screen and "jordan@example.com" in screen
+    assert scrub.withhold(text, 5) == text
+    assert set(scrub.RUNGS) - {"name"} == set(scrub.kinds_of(("pii",)))
+
+
+def test_a_served_chunk_carries_no_pii_over_the_serve_ceiling():
+    from onescript import chunk
+
+    text = "Case no: FL-2 · SSN 123-45-6789 · write to jordan@example.com"
+    got = chunk._scrub({"rows": [{"text": text}]})["rows"][0]["text"]
+    assert chunk.SERVE_CEILING == 2 and "Case no: FL-2" in got  # L2 passes
+    assert "[withheld: ssn, L5]" in got and "[withheld: email, L3]" in got
+    assert "6789" not in got and "jordan@" not in got
+
+
+# -- typed_password: a password a person wrote ---------------------------------
+
+TYPED = [
+    ('$password = "password";  // DO NOT CHANGE', "$password = [REDACTED:password];"),
+    ("(user: cwcftp pw: widgets1998)", "pw: [REDACTED:password])"),
+    ("PASSWD=hunter2 ./run", "PASSWD=[REDACTED:password] ./run"),
+    ("pwd: 'cornflower blue'", "pwd: [REDACTED:password]"),
+]
+
+
+@pytest.mark.parametrize("text,kept", TYPED)
+def test_a_typed_password_loses_its_value_and_keeps_its_label(text, kept):
+    out = scrub.apply(text, ("typed_password",))
+    assert kept in out
+    assert scrub.found_kinds(text, ("typed_password",)) == ["password"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "return ($u == $username && $p == $password);",
+        "global $username, $password;",
+        "send a password reset link",
+        "password=None",
+        "password: env:DB_PASSWORD",
+        "pass the salt: please",
+        "password = your-password-here",
+        "PGPASSWORD=$DB_PW psql",
+    ],
+)
+def test_a_password_word_with_no_value_is_left_alone(text):
+    assert scrub.apply(text, ("typed_password",)) == text
+
+
+def test_serve_takes_the_typed_password_and_the_ip():
+    from onescript import chunk
+
+    got = chunk._scrub("ftp (user: cwcftp pw: widgets1998) from 10.0.0.68")
+    assert "widgets1998" not in got and "pw: [REDACTED:password]" in got
+    assert "[withheld: ip, L3]" in got
+
+
+# -- names: a list the person gives, never a pattern ---------------------------
+#: The demos' cast (Nestor's shoebox and Big Jim, safe-app-store's acorns, the
+#: Forge's first bite, the Grove's June): made-up people, used as the fixture.
+CAST = ["Jose Aguirre", "Nieves Aguirre", "Hazel Acorn", "Rosalind Ffoulkes",
+        "June Akiyama", "Big Jim", "Nieves"]  # fmt: skip
+
+
+def test_a_given_name_is_withheld_whole_and_in_any_case():
+    text = "Nieves Aguirre met BIG  JIM; Nieves paid. Big Jimmy did not."
+    got = scrub.withhold(text, 2, names=CAST)
+    assert got.count("[withheld: name, L3]") == 3
+    assert "Big Jimmy" in got  # a longer word is not the name
+    assert "Aguirre" not in got  # the full name goes before the first name
+
+
+def test_without_names_no_name_is_found_and_the_ceiling_still_rules():
+    text = "Rosalind Ffoulkes wants a tool for her rally photos"
+    assert scrub.withhold(text, 2) == text
+    assert scrub.withhold(text, 3, names=CAST) == text  # names are L3
+    assert scrub.names_rule([" ", ""]) is None

@@ -5,6 +5,8 @@ Keyed by (repo, ref) rather than PR number: a `push` webhook event carries
 `forced` and `ref`, never a PR number. Callers that need this per-PR look up
 the PR's head ref (`pr["head"]["ref"]`) and use that as the key.
 """
+from __future__ import annotations
+
 import sqlite3
 from pathlib import Path
 

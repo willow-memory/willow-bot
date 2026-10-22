@@ -25,6 +25,7 @@ from . import (
     mai_shape,
     nestor_seal,
     opening,
+    plant_rule,
     predict,
     proposals,
     record,
@@ -33,6 +34,7 @@ from . import (
     serve,
     view,
 )
+from . import session as session_mod
 from .record import h256
 from .states import POPULATED, UNREACHABLE
 
@@ -206,10 +208,11 @@ class Run:
         max_chars: int | None = None,
         read_chunk=None,
         session=None,
+        names: tuple = (),
     ) -> dict:
         """Write the one file the model reads. Before check-in there's no serve
         key, and serve fails closed. `max_chars` is the caller's cap; `session`
-        as `serve.serve` takes it."""
+        and `names` as `serve.serve` takes them."""
         return serve.serve(
             self.rec,
             tables,
@@ -218,6 +221,7 @@ class Run:
             max_chars=max_chars,
             read_chunk=read_chunk,
             session=session,
+            names=names,
             human_key=self.keys.get(gate.HUMAN),
             keyring=self.keyring,
             nestor_db=self.nestor_db,
@@ -863,6 +867,17 @@ class Run:
         )
         if shown is not None:
             report["table"] = shown
+        # IDEAS.md 104: a checked-out session with no held seal waits on the
+        # person; check-in counts them, so NEEDS YOU lists them too
+        report["sessions_waiting"] = [
+            {"from": n, "subject": s}
+            for n, s in sorted(session_mod.subjects(rows).items())
+            if s not in held
+        ]
+        # IDEAS.md 121: a planted box asks each session's consent, and the
+        # last session's handoff letter is the first thing to read
+        report["consent_missing"] = plant_rule.allowed_repos(rows) == frozenset()
+        report["letter"] = plant_rule.latest_letter(self.rec.box)
         return report
 
     def checkout(

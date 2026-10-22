@@ -7,6 +7,8 @@ Defaults to Cerebras (fast, cloud). Override with env vars for local model:
   LOKI_MODEL=llama3.2:3b
   LOKI_API_KEY=ollama  (or omit — local models often need any non-empty value)
 """
+from __future__ import annotations
+
 import logging
 import os
 import sqlite3

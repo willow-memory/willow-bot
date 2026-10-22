@@ -2,6 +2,8 @@
 quips.py — Voice engine for willow-bot.
 b17: WBQP1  ΔΣ=42
 """
+from __future__ import annotations
+
 import json
 import os
 import random

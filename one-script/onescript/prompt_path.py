@@ -15,6 +15,7 @@ from typing import Iterable
 
 from . import chunk, opening, record
 from . import pile as pile_mod
+from . import plant_rule as plant_mod
 from . import seed as seed_mod
 from .boxstore import _lookup, _repos
 from .opening import Config
@@ -84,6 +85,12 @@ def prompt(
         nothing = doc(EMPTY, why or "the bite found nothing in this box")
         nothing["doc"]["code"] = ESCALATE  # nothing a human said answers it
         return nothing
+    allowed = plant_mod.allowed_from(run.rec)
+    if allowed is not None:  # a planted box: only what this session consented to
+        found = sorted({h["where"][0][0] for h in hits})
+        hits = [h for h in hits if h["where"][0][0] in allowed]
+        if not hits:
+            return doc(EMPTY, plant_mod.why_not(allowed, found) or "")
     index, _, _ = seed_mod.read_index(run.rec)
     if index is None:
         return doc(UNREACHABLE, "no index this check-in; seed once first")
@@ -124,7 +131,7 @@ def prompt(
         t = {"rows": [], "source": {"chunk": chunk_of(h)}}
         tables.append(chunk._chunk_entry(t, h["chunk"], run.serve_key, set(), read))
     tables.sort(key=lambda t: t["id"])
-    res = doc(POPULATED, "", tables)
+    res = doc(POPULATED, "", chunk.withhold_names(tables, cfg.names))
     if max_chars is not None and len(record.canon(res["doc"])) > max_chars:
         return doc(EMPTY, "the scope is too large for this model; narrow the stack")
     return res

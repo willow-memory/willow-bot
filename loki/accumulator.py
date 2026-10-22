@@ -2,6 +2,8 @@
 accumulator.py — Signal tracking and threshold logic for Loki's eight triggers.
 b17: LOKI3
 """
+from __future__ import annotations
+
 import json
 import logging
 import time

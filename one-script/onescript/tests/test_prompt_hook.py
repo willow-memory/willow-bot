@@ -45,6 +45,22 @@ class TestTheBite:
             "ad breaks" in t["rows"][0]["text"] for t in doc["tables"] if t["rows"]
         )
 
+    def test_a_planted_box_prompts_only_from_consented_repos(  # noqa: F811
+        self, box, tmp_path, monkeypatch
+    ):
+        from onescript import plant
+
+        canon = tmp_path / "home" / "seed" / "canon"
+        canon.mkdir(parents=True)
+        (canon / "00-the-covenant.md").write_text("# 0 · The Covenant\n")
+        monkeypatch.setenv("WILLOW_HOME", str(tmp_path / "home"))
+        repos = sorted({h["where"][0][0] for h in api.lookup(box["cfg"], BITE)["hits"]})
+        assert plant.plant(box["cfg"], [])["code"] == 0  # planted, no consent
+        doc = api.prompt(box["cfg"], BITE)["doc"]
+        assert doc["state"] == "empty" and "given no consent" in doc["why"]
+        plant.consent(box["cfg"], repos)
+        assert api.prompt(box["cfg"], BITE)["doc"]["state"] == "populated"
+
     def test_the_record_keeps_the_bites_hash_never_its_words(self, box):  # noqa: F811
         api.prompt(box["cfg"], BITE, argv=("prompt",))
         text = (box["cfg"].box / "record.jsonl").read_text()

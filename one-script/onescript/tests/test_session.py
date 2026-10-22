@@ -201,3 +201,22 @@ def test_a_tests_undo_cant_bring_the_operators_nestor_back(monkeypatch):
     monkeypatch.setattr(os, "sep", os.sep)  # anything, so undo has work to do
     monkeypatch.undo()
     assert not any(os.environ.get(n) for n in NESTOR_ENV)
+
+
+# ── IDEAS.md 104: NEEDS YOU says what check-in counts ───────────────────────
+def test_a_session_waiting_on_a_seal_is_in_needs_you(at_end):
+    subj = one_session(at_end, "alpha")["subject"]
+    assert api.checkin(at_end)["report"]["sessions"]["waiting"] == 1
+    lines = api.needs(at_end)["needs"]
+    (line,) = [x for x in lines if x.startswith("session ")]
+    assert "waiting on your seal" in line and line.endswith(subj)
+    screen = api.checkout(replace(at_end, nestor_db=None))["screen"]
+    assert f"waiting on your seal · {subj}" in screen
+
+
+@needs_ed25519
+def test_a_sealed_session_leaves_needs_you(at_end):
+    subj = one_session(at_end, "alpha")["subject"]
+    nestor_store(at_end, nestor_pair(subj))
+    assert api.checkin(at_end)["report"]["sessions"] == {"sealed": 1, "waiting": 0}
+    assert not [x for x in api.needs(at_end)["needs"] if x.startswith("session ")]

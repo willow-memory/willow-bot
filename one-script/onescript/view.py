@@ -156,6 +156,16 @@ def needs_you(
         f"re-check row {s['row']} ({s['kind']}) · {s['why']}"
         for s in report["surfaced"]
     ]
+    needs += [  # IDEAS.md 104: what check-in counts as waiting on your seal
+        f"session from row {s['from']} · waiting on your seal · {s['subject']}"
+        for s in report.get("sessions_waiting", [])
+    ]
+    if report.get("consent_missing"):  # IDEAS.md 121: a planted box asks each session
+        needs.append(
+            "consent · this session hasn't said what it may read · consent --allow REPO"
+        )
+    if report.get("letter"):
+        needs.append(f"letter · the last session's handoff · {report['letter']}")
     for a in acts or []:  # layers 6 and 7: what would leave, what wasn't asked for
         if a["verdict"] != "pass":
             card = json.dumps(a.get("card", {}), sort_keys=True)

@@ -12,6 +12,11 @@ from .states import UNREACHABLE
 
 WITHHELD = "[hash withheld]"
 
+#: The highest pii rung a served chunk may carry to the model (IDEAS 119): a
+#: case number (L2) passes; a phone, an email, a home path (L3), money and
+#: birth (L4) and an SSN (L5) are withheld and named. The operator's number.
+SERVE_CEILING = 2
+
 
 def _marker(kind):
     return WITHHELD if kind == "hash64" else f"[REDACTED:{kind}]"
@@ -21,14 +26,30 @@ def _scrub(value):
     """No full-width hash reaches the model, wherever it sits. Since flatten-2
     F12 the rule is ``scrub.py``'s: the hash first, as it always was (its
     marker is still ``WITHHELD``), then the credential shapes, which are added
-    coverage (a key in a record's text reaches the model no more than a hash)."""
+    coverage (a key in a record's text reaches the model no more than a hash),
+    and a password a person typed, by its label; then a person's data over
+    `SERVE_CEILING`, withheld with its kind named."""
     if isinstance(value, str):
-        return scrub.apply(value, ("hash64", "credentials"), marker=_marker)
+        out = scrub.apply(
+            value, ("hash64", "credentials", "typed_password"), marker=_marker
+        )
+        return scrub.withhold(out, SERVE_CEILING)
     if isinstance(value, list):
         return [_scrub(v) for v in value]
     if isinstance(value, dict):
         return {k: _scrub(v) for k, v in value.items()}
     return value
+
+
+def withhold_names(doc, names):
+    """A served document with every name the person gave withheld, wherever it
+    sits (``[withheld: name, L3]``): the last pass before the model reads it.
+    Nothing is touched when no names are given."""
+    if not names:
+        return doc
+    return scrub.walk_strings(
+        doc, lambda s: scrub.withhold(s, SERVE_CEILING, names=names)
+    )
 
 
 def chunk_name(table: dict) -> str:

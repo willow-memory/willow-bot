@@ -63,9 +63,11 @@ from typing import Iterable
 
 from . import beacon, boot, gate, mai_shape, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import retire as retire_mod
 from . import jeles_store as jeles_mod
 from . import ladder
 from . import pile as pile_mod
+from . import plant_rule as plant_mod
 from . import seed as seed_mod
 from . import serve as served
 from . import session as session_mod
@@ -677,7 +679,7 @@ def _hidden(cfg: Config, ws: list[str], out: dict) -> dict:
     row = dict(out)
     if h is None:
         row.update(words=[], hidden="no store key: the bite's words are left out")
-        for k in ("keys", "missed", "pairs"):
+        for k in ("keys", "missed", "proposal_only", "pairs"):
             row.pop(k, None)
         if "repair" in row:
             row["repair"] = {"state": row["repair"]["state"], "repairs": []}
@@ -687,6 +689,8 @@ def _hidden(cfg: Config, ws: list[str], out: dict) -> dict:
         row["keys"] = [{**k, "word": h(k["word"])} for k in row["keys"]]
     if "missed" in row:
         row["missed"] = sorted(h(w) for w in row["missed"])
+    if "proposal_only" in row:
+        row["proposal_only"] = sorted(h(w) for w in row["proposal_only"])
     if "pairs" in row:
         row["pairs"] = {
             " ".join(h(t) for t in p.split(" ")): v for p, v in row["pairs"].items()
@@ -1027,6 +1031,42 @@ def take_proposals(
     return turn(cfg, bite, proposed=list(rows), argv=argv)
 
 
+def retire(
+    cfg: Config,
+    candidates: Iterable,
+    bite: str = "retire",
+    argv: Iterable[str] = ("retire",),
+) -> dict:
+    """Propose dropping served rows the caller names, each gated on a human seal.
+
+    `candidates` is an iterable of `{cite, reason, detail}`: the served id to
+    drop, the reason a person reads, and the bytes. Code turns each into a
+    proposal through the door (`retire.propose`), citing that served id; the
+    turn is 42 while any proposal stands, 0 when none. No model, no clock,
+    nothing written — the drop itself waits on the human's seal and a later
+    apply. A candidate that is malformed, or cites a row not in the served
+    scope, is refused before the door."""
+    run, info = _open(cfg, "retire", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "retire", bite=bite)) is not None:
+        return refusal
+    who, family = DESK
+    ident = {"who": who, "family": family, "sig": gate.sign(run.keys[who], who, family)}
+    cands = list(candidates)
+    try:
+        r = retire_mod.propose(run, ident, select=lambda _doc: cands, bite=bite)
+    except ValueError as e:
+        return _refused(str(e), 1)
+    out = r["out"] if r["out"] is not None else {"proposals": r["proposals"]}
+    return {
+        "out": out,
+        "state": r["state"],
+        "why": r["why"],
+        "code": ESCALATE if r["proposals"] else 0,
+    }
+
+
 # ── scope, seal, serve ──────────────────────────────────────────────────────
 def _spec_tables(run: Run, spec: dict) -> tuple[list[dict], dict]:
     """The stack a spec names, over the record up to `upto` (so rows added since
@@ -1047,9 +1087,11 @@ def _spec_tables(run: Run, spec: dict) -> tuple[list[dict], dict]:
             or not isinstance(n, int)
             or not (0 <= n < len(rows))
             or rows[n].get("n") != n
-            or rows[n].get("kind") != "seed"
+            or rows[n].get("kind") not in served.RECEIPTS
         ):
-            raise ValueError(f"row {n} is not a seed row at or before row {upto}")
+            raise ValueError(
+                f"row {n} is not a seed or draw row at or before row {upto}"
+            )
         chunks = served.chunk_tables(rows[n], seed["top"])
         more = served.propose_chunks(chunks)
         tables = tables + chunks
@@ -1074,6 +1116,7 @@ def scope(
     argv: Iterable[str] = ("scope",),
     seed_top: int | None = None,
     max_chars: int | None = None,
+    draw: bool = False,
 ) -> dict:
     """Code proposes the stack. Returns the card for the human and the exact
     `subject` whose seal makes it a scope, plus the `spec` that names the stack:
@@ -1081,7 +1124,10 @@ def scope(
     this check-in's seed's top chunks of the repos (by=() for those alone).
     The card gives each chunk's size in characters, read at its blob (never
     its text), and the total; with `max_chars`, whether the stack fits
-    (`_sizes`)."""
+    (`_sizes`). With `draw`, the stack holds this check-in's newest draw's two
+    chunks instead (`draw.py`: by=() for those alone)."""
+    if draw and seed_top is not None:
+        return _refused("a stack takes the seed's chunks or the draw's, not both", 1)
     run, info = _open(cfg, "scope", argv)
     if run is None:
         return info
@@ -1098,6 +1144,14 @@ def scope(
         if sd is None:
             return _refused("no seed in this check-in; the first bite seeds", 1)
         spec["seed"] = {"row": sd["n"], "top": seed_top}
+    if draw:
+        dr = next(
+            (r for r in reversed(seed_mod.since_boot(rows)) if r["kind"] == "draw"),
+            None,
+        )
+        if dr is None:
+            return _refused("no draw in this check-in; `draw` picks the pair", 1)
+        spec["seed"] = {"row": dr["n"], "top": len(dr.get("rank") or [])}
     try:
         tables, card = _spec_tables(run, spec)
     except ValueError as e:
@@ -1313,6 +1367,10 @@ def serve(
         tables, card = _spec_tables(run, spec)
     except (ValueError, KeyError, TypeError) as e:
         return _refused(f"bad spec: {type(e).__name__}: {e}", 1)
+    # a planted box serves a repo's chunks only with this session's consent
+    repos = {t["source"]["chunk"].get("repo") for t in tables if served.is_chunk(t)}
+    if repos and (why := plant_mod.refusal(run.rec.rows(), repos)) is not None:
+        return _refused(why, 1)
     reader = None
     failed: list[tuple[dict, str]] = []
     if any(served.is_chunk(t) for t in tables):
@@ -1336,7 +1394,12 @@ def serve(
     if cfg.seal_at_end:
         session = session_mod.servable(run.rec.rows(), run.held()[0])
     doc = run.serve(
-        tables, card["ids"], max_chars=max_chars, read_chunk=reader, session=session
+        tables,
+        card["ids"],
+        max_chars=max_chars,
+        read_chunk=reader,
+        session=session,
+        names=cfg.names,
     )
     if failed:
         _tombstones(cfg, run, index, repos, failed)

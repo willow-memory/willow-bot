@@ -2,6 +2,8 @@
 horoscope.py — deterministic daily horoscope, keyed on login + UTC date.
 Same login, same day, same reading. Always.
 """
+from __future__ import annotations
+
 import hashlib
 from datetime import datetime, timezone
 

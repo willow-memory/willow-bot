@@ -331,11 +331,12 @@ def word_hash(w: str, key: bytes) -> str:
 
 
 def missing(cached, words: Iterable[str]) -> list[str]:
-    """The words the store holds no posting for, in any form `rank` looks for."""
+    """The words the store holds no posting for, in any form `rank` looks for,
+    outside the proposal files: a word held only as an idea is still missing
+    (IDEAS.md 103). Forms, so a word whose plural is held is not missing: the
+    seed's `missed` checks the word as written, so the two can differ."""
     return [
-        w
-        for w in words
-        if not any(cached.postings(f) for f in sorted(pile_mod.forms(w)))
+        w for w in words if not any(cached.known(f) for f in sorted(pile_mod.forms(w)))
     ]
 
 

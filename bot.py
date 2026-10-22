@@ -10,6 +10,8 @@ a checkout-local .env of record.
 
 Run: uvicorn bot:app --host 127.0.0.1 --port 9000
 """
+from __future__ import annotations
+
 import hashlib
 import hmac
 import logging

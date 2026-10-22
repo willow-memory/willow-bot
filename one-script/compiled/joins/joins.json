@@ -1,0 +1,23 @@
+[
+ {
+  "doc": "draw-1.md",
+  "chosen": [
+   "grove:tests/e2e_willow_mcp/mock_willow_mcp.py:32",
+   "jeles:corpus/seed/core_government-civics.json:207"
+  ]
+ },
+ {
+  "doc": "draw-2.md",
+  "chosen": [
+   "grove:docs/design/gerald/gerald-session-atoms-2026-10-06.md:421",
+   "willow-bot:tests/steward/test_ci_residue.py:254"
+  ]
+ },
+ {
+  "doc": "draw-3.md",
+  "chosen": [
+   "grove:docs/INDEX.md:48",
+   "willow-bot:willow_bot/steward/tick.py:365"
+  ]
+ }
+]

@@ -66,7 +66,12 @@ def test_checkin_turn_checkout_is_one_run(tmp_path, capsys):
     # the second has one, read from the record by a fresh invocation
     assert run(tmp_path, v, "checkin") == 0
     assert run(tmp_path, v, "checkout") == 0
-    assert "NEEDS YOU\n  · nothing" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    needs = out.split("NEEDS YOU\n", 1)[1].split("\nDISAGREEMENTS", 1)[0]
+    # nothing but the first session, which waits on a seal (IDEAS.md 104)
+    (line,) = needs.splitlines()
+    assert "session from row 0 · waiting on your seal · session:" in line
+    assert "coverage: no reconcile on record" not in out
 
 
 @pytest.mark.needs_grove

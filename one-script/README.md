@@ -26,7 +26,44 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `foundation/` | `prompt.py`'s tests run on a bare interpreter, without pytest |
 | `scripts/scan/` | `script_match.py` (the gate's script index) and the table scans |
 | `scripts/flow/` | The view drafts: session maps and their merge |
+| `onescript/oauth_resource.py` | `bind()`: every OAuth code and token carries the resource it was issued for, so a server can turn on `validate_token_resource` without refusing its own tokens. Not wired into Grove or willow-mcp yet |
+| `scripts/oauth/oauth_probe.py` | Deterministic OAuth: blind wagers forecast before they run, pins for answers already seen; the live flow against willows-grove and willow-mcp serve mode on loopback and Google's hosted MCP servers (read-only, no credentials), N runs each; disagreeing runs are `drift`, a pin that moves is `changed` |
 | `deep_thought.py` | The morning screen |
+| `kernel.py` | The smallest script for anyone: the whole loop on their own folder, stdlib only (IDEAS 113) |
+| `kernel_vectors/` | `kernel.py` in any language: generated tables, 3,088 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
+
+## OAuth: which server a token is for
+
+Found 2026-10-21 by `oauth_probe`, run on this box: Grove accepts an access
+token minted for another server (`g.audience.foreign_resource`: accepted).
+The MCP SDK's `validate_token_resource` would refuse it, but neither Grove's
+provider nor willow-mcp's records a token's resource, so turning the setting
+on alone refuses every token, the honest ones too (tried on a throwaway Grove
+copy: `g.mcp.with_token` went to 401).
+
+`onescript/oauth_resource.py` is the fix as an addition here, not a patch
+there. `bind(provider, resource=..., legacy_until=...)` stamps the resource on
+the code, the access and refresh tokens, and every refresh. Wired into a
+throwaway Grove copy with the check on, five runs: the foreign token is
+refused, the honest one still works, every other pin and wager holds, no
+drift. Its tests run on the real `GroveOAuthProvider`.
+
+Open, for the operator (G1 to G4 in the module):
+
+| Gap | What's left |
+|---|---|
+| G1 | Tokens minted before binding: refuse now (`legacy_until=None`) or honour for a window. No default, on purpose |
+| G2 | A foreign resource is bound and refused at the bearer check; refusing it at authorize (`invalid_target`) isn't done |
+| G3 | Grove advertises `/mcp` and serves `/`; willow-mcp advertises `/` and serves `/mcp` |
+| G4 | Neither server has a revocation endpoint (Google's does) |
+| Wiring | Two lines in each server, beside the provider: `bind(...)`, then `validate_token_resource=True` |
+
+After wiring, `oauth_probe` should show exactly one pin moving,
+`g.audience.foreign_resource` from `accepted` to `http_401`; re-pin it then.
+Compared against Google's hosted Gmail, Drive and Calendar MCP servers the
+same night: they serve `initialize` and `tools/list` with no token and
+challenge per tool; both of ours refuse at the door. Google still allows
+`plain` PKCE; ours don't.
 
 ## The law comes from willows-grove
 
@@ -354,11 +391,40 @@ hard-closes, as before.
 `--no-tests`, and a check-in nested inside the tests gate's own suite, each
 leave a `differently` row on the tests gate saying it was skipped and why.
 
+## Planting: a person's first run
+
+The seed's person-facing half (`onescript/plant.py`, IDEAS 121), in the one
+script's terms. Every seed before it (willow-seed, SEED9, the charter's
+SEED10) was the file a person runs first; the one script already had the
+mechanics, and this is what a person meets.
+
+- **`plant`**, once per box after its first check-in: the canon's six
+  movements to read, from `$WILLOW_HOME/seed/canon` or the Grove's
+  `governance/seed/canon` (the Grove's own order). The record keeps each
+  movement's hash, never its words. No canon is `unreachable`, said, and
+  nothing is planted.
+  Then the coda, SEED10's "first honest handoff" (`seed/handoff/seed.py`, from
+  `willow-config/seed` beside the bot or `$ONESCRIPT_SEED`), its hash on the
+  row. `--who` is movement 3, the person saying who they are: kept in the
+  box's `person.md` only with `--keep-who`, otherwise read once and not kept.
+- **`consent`**, once per check-in: the repos this session may read, training
+  consent off unless given, expiring at check-out. On a planted box serve and
+  the prompt hook take no chunk from a repo the session didn't consent to;
+  NEEDS YOU says when a session hasn't. An unplanted box serves as before.
+- **`letter`**, the handoff letter for the next session, written into the
+  box's `letters/` through the record; NEEDS YOU names the latest.
+
+Not brought over, on purpose: SEED9's dashboard card and Nestor's seeded demo
+store, which belong to their own surfaces.
+
 ## Running it
 
 ```bash
 cd one-script
 python3 -m onescript checkin                       # boot: record, probes, the four gates
+python3 -m onescript plant --allow REPO            # once per box: the canon to read, this session's consent
+python3 -m onescript consent --allow REPO          # each later session: what it may read
+python3 -m onescript letter --file handoff.md      # the next session's letter (no --file: read the latest)
 python3 -m onescript seed "the first bite"         # its words against the box, once per check-in (--exact: files and lines)
 python3 -m onescript forge "the first bite"        # the Forge's entry, this session's pile as its box
 python3 -m onescript decline <key> --proof <p>     # a No to an offer; --proof seals it as the human's

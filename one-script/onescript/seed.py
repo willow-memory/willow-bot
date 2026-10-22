@@ -177,6 +177,20 @@ class Texts:
         }
 
 
+#: Files whose words are ideas, not knowledge (IDEAS.md 103: "writing an idea
+#: down hides its gap"). A word held only in these is still a miss, by the
+#: store (`pile.Cached.counts`, `writeback.missing`) and by this scan alike.
+#: By basename, any case (`IDEAS.md`, and the steward's `docs/ideas.md`); a
+#: placeholder list, the operator's to name.
+PROPOSALS = ("IDEAS.md",)
+_PROPOSALS = frozenset(p.casefold() for p in PROPOSALS)
+
+
+def is_proposal(path: str) -> bool:
+    """Whether `path` is a proposal file (`PROPOSALS`): its words are ideas."""
+    return Path(path).name.casefold() in _PROPOSALS
+
+
 def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
     """The words against every file the index holds. `repos` names where each
     indexed repo is read from; a repo without one is unreachable, said."""
@@ -189,10 +203,14 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
                 hits[w].append((name, f["path"], n))
     read = texts.read
 
-    keys = []
+    keys, missed, proposal_only = [], [], []
     for w in bite_words:
         found = hits[w]
-        if found:
+        if not any(not is_proposal(p) for _, p, _ in found):
+            missed.append(w)  # held nowhere, or only as an idea (103)
+            if found:
+                proposal_only.append(w)
+        else:
             keys.append(
                 {
                     "word": w,
@@ -202,7 +220,6 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
                 }
             )
     keys.sort(key=lambda k: (k["files"], k["lines"], k["word"]))
-    missed = [w for w in bite_words if not hits[w]]
     if not read:
         state = UNREACHABLE
     elif keys:
@@ -213,6 +230,7 @@ def scan(index: dict, repos: dict[str, Path], bite_words: list[str]) -> dict:
         "state": state,
         "keys": keys,
         "missed": missed,
+        "proposal_only": proposal_only,
         "files_read": read,
         "skipped": texts.tally()["skipped"],
         REPORT_UNREACHABLE: texts.tally()[REPORT_UNREACHABLE],

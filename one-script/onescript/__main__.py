@@ -19,6 +19,10 @@
     python3 -m onescript deck-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript forecast ID --dist FILE --market FILE  # {symbol, kind, close_date[, threshold]}
     python3 -m onescript market-reveal DATE  # the closes as market rows (--prices, --drand)
+    python3 -m onescript snapshot NAME URL --license SPDX  # outside data, once (--fetch)
+    python3 -m onescript snapshot-read NAME  # the held snapshot, offline
+    python3 -m onescript draw [--randomness HEX]  # two chunks nobody chose (--drand)
+    python3 -m onescript scope --by '' --draw  # the draw's pair, as the stack
     python3 -m onescript market-outcome WAGER [--human-key FILE]  # proposed, never sealed
     python3 -m onescript seal-outcome WAGER --outcome '{"path_index": 0}' (--proof P | --pair F)
     python3 -m onescript lore proposal:HASH  # a sealed world/*.md becomes lore rows
@@ -91,12 +95,15 @@ def _load_everything() -> None:
     here: on import (the tests patch `cli.boot`, `cli.api`, `cli.beacon`...)
     and in `main` for any verb but the hook's. Idempotent."""
     global api, boot, nestor_seal, escalate_mod, beacon, deck, diverge
-    global jeles_store, market, merge_check, table, view, _last_boot, OK_STATES
+    global jeles_store, market, merge_check, snapshot, table, view, _last_boot
+    global OK_STATES, draw_mod
     if "api" in globals():
         return
     from . import api, boot, nestor_seal  # noqa: F401  (tests patch cli.boot.probes)
     from . import escalate as escalate_mod
     from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
+    from . import draw as draw_mod
+    from . import snapshot
     from .api import _last_boot  # noqa: F401  (re-exported: the tests read it)
     from .writeback import PROPOSED
 
@@ -352,6 +359,21 @@ def _add_globals(p: argparse.ArgumentParser) -> None:
         help="read market calls' closes from stooq.com's daily CSV over HTTPS. "
         "Without it no market call resolves, and its outcome is `unreachable`, said",
     )
+    p.add_argument(
+        "--fetch",
+        action="store_true",
+        help="let `snapshot` read outside data over HTTPS, once, into the box. "
+        "Without it a new snapshot is `unreachable`, said; held ones still read",
+    )
+    p.add_argument(
+        "--names",
+        type=Path,
+        default=Path(os.environ["ONESCRIPT_NAMES"])
+        if os.environ.get("ONESCRIPT_NAMES")
+        else None,
+        help="a file of names to withhold from everything served, one per line, "
+        "outside the box and 0600 (default: $ONESCRIPT_NAMES)",
+    )
 
 
 def _add_prompt_args(pr: argparse.ArgumentParser) -> None:
@@ -384,7 +406,13 @@ def _prompt_only(argv: list[str]) -> bool:
 
 def _config(args, **more) -> opening.Config:
     """The box's config from the global options; `more` adds what a verb
-    beyond the hook's needs (the drand and price readers, Jeles)."""
+    beyond the hook's needs (the drand and price readers, Jeles). A names
+    file that can't be trusted (inside the box, readable by others) refuses
+    the run rather than serving without it."""
+    names, why = opening.read_names(args.names, args.box)
+    if why is not None:
+        print(f"refused: {why}", file=sys.stderr)
+        raise SystemExit(2)
     return opening.Config(
         box=args.box,
         keys=args.keys,
@@ -404,6 +432,7 @@ def _config(args, **more) -> opening.Config:
         forge=FORGE,
         index_repos=dict(args.repos) or _siblings(ROOT.parent) or None,
         seal_at_end=True,
+        names=names,
         **more,
     )
 
@@ -561,6 +590,17 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument(
         "--proposal", type=Path, help="the model's rows: JSONL of path/data/cites/claim"
     )
+    rt = sub.add_parser(
+        "retire",
+        help="propose dropping served rows a caller names, each gated on a human seal",
+    )
+    rt.add_argument(
+        "--candidates",
+        type=Path,
+        required=True,
+        help="JSON list of {cite, reason, detail}: a served id to drop, why, and the bytes",
+    )
+    rt.add_argument("--bite", default="retire", help="the bite the turn records")
     es = sub.add_parser(
         "escalate", help="the deterministic chain on the sealed served scope"
     )
@@ -636,6 +676,66 @@ def main(argv: list[str] | None = None) -> int:
         help="the closes for the symbols called on a date, as market rows",
     )
     mr.add_argument("close_date", help="YYYY-MM-DD, the close the calls name")
+    for verb, what in (
+        ("plant", "once per box: the canon to read, and this session's consent"),
+        ("consent", "this session's consent: the repos it may read"),
+    ):
+        pl = sub.add_parser(verb, help=what)
+        pl.add_argument(
+            "--allow",
+            action="append",
+            default=[],
+            metavar="REPO",
+            help="a repo this session may read (repeat); none consents to nothing",
+        )
+        pl.add_argument(
+            "--training",
+            action="store_true",
+            help="consent to training on this session's reads (off unless given)",
+        )
+        if verb == "plant":
+            pl.add_argument("--who", help="who you are, in your words (movement 3)")
+            pl.add_argument(
+                "--keep-who",
+                action="store_true",
+                help="keep --who in the box (person.md); without it, it is not kept",
+            )
+    lt = sub.add_parser("letter", help="the handoff letter for the next session")
+    lt.add_argument(
+        "--file", type=Path, help="the letter, markdown; without it, read the latest"
+    )
+    dw = sub.add_parser(
+        "draw", help="two chunks from two repos, picked by randomness nobody chose"
+    )
+    dw.add_argument(
+        "--randomness",
+        help="hex to pick by, recorded as given; without it, the newest drand round",
+    )
+    dw.add_argument(
+        "--chosen",
+        action="append",
+        metavar="REPO:PATH:LINE",
+        help="name the two chunks instead (twice); recorded as chosen, not chance",
+    )
+    sn = sub.add_parser(
+        "snapshot", help="outside data read once into the box, kept under its hash"
+    )
+    sn.add_argument("name", help="lowercase letters, digits and -")
+    sn.add_argument("url", help="https:// only")
+    sn.add_argument("--license", required=True, help="an SPDX id: CC0-1.0, ...")
+    sn.add_argument(
+        "--refresh",
+        action="store_true",
+        help="fetch again, as a new row beside the old",
+    )
+    sr = sub.add_parser(
+        "snapshot-read",
+        aliases=["snapshot_read"],
+        help="read-only: the newest held snapshot of a name, re-hashed",
+    )
+    sr.add_argument("name")
+    sr.add_argument("--sha256", help="the held snapshot with this content hash")
+    sr.add_argument("--out", type=Path, help="write its bytes here")
     mo = sub.add_parser(
         "market-outcome",
         aliases=["market_outcome"],
@@ -755,6 +855,12 @@ def main(argv: list[str] | None = None) -> int:
             type=int,
             help="the cap on served text; over it, empty (scope: says if it fits)",
         )
+        if name == "scope":
+            s.add_argument(
+                "--draw",
+                action="store_true",
+                help="stack this check-in's draw's two chunks (--by '' for those alone)",
+            )
         if name == "serve":
             s.add_argument("--seed-row", type=int, help="the seed row scope named")
     sl = sub.add_parser("seal")
@@ -826,6 +932,7 @@ def main(argv: list[str] | None = None) -> int:
         args,
         beacon=beacon.drand_reader if args.drand else None,
         market=market.stooq_reader if args.prices else None,
+        fetch=snapshot.https_reader if args.fetch else None,
         jeles=jeles_store.default_store(),
     )
 
@@ -886,6 +993,22 @@ def main(argv: list[str] | None = None) -> int:
         said = {k: v for k, v in res.items() if k != "rows"}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
         return 0 if res.get("state") in OK_STATES else 1
+    elif args.cmd in ("snapshot", "snapshot-read"):
+        if args.cmd == "snapshot":
+            res = snapshot.take(
+                cfg, args.name, args.url, license=args.license,
+                refresh=args.refresh, argv=raw,
+            )  # fmt: skip
+        else:
+            res = snapshot.read(cfg, args.name, sha256_of=args.sha256, argv=raw)
+            if res.get("data") is not None and args.out:
+                args.out.write_bytes(res["data"])
+        if "refused" in res:
+            print(f"refused: {res['refused']}")
+            return res["code"]
+        said = {k: v for k, v in res.items() if k not in ("data", "code")}
+        print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
+        return res["code"]
     elif args.cmd in ("deck-reveal", "deck-outcome"):
         if args.cmd == "deck-reveal":
             res = deck.reveal(cfg, args.round, argv=raw)
@@ -1028,6 +1151,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "turn":
         rows = api.read_proposals(args.proposal) if args.proposal else None
         res = api.turn(cfg, args.bite, proposed=rows, argv=raw)
+    elif args.cmd == "retire":
+        try:
+            cands = json.loads(args.candidates.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"refused: {type(e).__name__}: {e}")
+            return 2
+        if not isinstance(cands, list):
+            print("refused: --candidates must be a JSON list of {cite, reason, detail}")
+            return 2
+        res = api.retire(cfg, cands, bite=args.bite, argv=raw)
     elif args.cmd == "escalate":
         res = api.escalate(
             cfg,
@@ -1047,7 +1180,46 @@ def main(argv: list[str] | None = None) -> int:
             argv=raw,
             seed_top=args.seed_top,
             max_chars=args.max_chars,
+            draw=args.draw,
         )
+    elif args.cmd == "draw":
+        chosen = None
+        if args.chosen:
+            try:
+                chosen = [
+                    {"repo": r, "path": p, "line": int(n)}
+                    for r, p, n in (c.rsplit(":", 2) for c in args.chosen)
+                ]
+            except ValueError:
+                print("refused: --chosen is REPO:PATH:LINE")
+                return 1
+        res = draw_mod.draw(cfg, args.randomness, chosen=chosen, argv=raw)
+    elif args.cmd in ("plant", "consent"):
+        from . import plant as plant_mod
+
+        if args.cmd == "plant":
+            res = plant_mod.plant(
+                cfg, args.allow, training=args.training, who=args.who,
+                keep_who=args.keep_who, argv=raw,
+            )  # fmt: skip
+        else:
+            res = plant_mod.consent(cfg, args.allow, training=args.training, argv=raw)
+    elif args.cmd == "letter":
+        from . import plant as plant_mod
+
+        if args.file is None:
+            latest = plant_mod.latest_letter(cfg.box)
+            if latest is None:
+                print("no letter yet")
+                return 42
+            print(f"{latest}\n\n{(cfg.box / latest).read_text(encoding='utf-8')}")
+            return 0
+        try:
+            text = args.file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"refused: the letter could not be read: {type(e).__name__}")
+            return 1
+        res = plant_mod.letter(cfg, text, argv=raw)
     elif args.cmd == "decline":
         res = api.decline_offer(cfg, args.key, argv=raw, proof=args.proof)
     elif args.cmd == "serve":
@@ -1098,6 +1270,8 @@ def main(argv: list[str] | None = None) -> int:
                 for p in out["proposals"]
             ]
         print(json.dumps(out, indent=1, default=str))
+    elif args.cmd == "retire":
+        _print_json({k: v for k, v in res.items() if k != "code"})
     else:
         _print_json({k: v for k, v in res.items() if k != "code"})
     return res["code"]

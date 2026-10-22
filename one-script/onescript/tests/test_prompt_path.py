@@ -40,6 +40,7 @@ ALLOWED = {
     "words",
     "xref",
     "mai_shape",  # xref's write-shape check, a leaf
+    "plant_rule",  # the consent rule (IDEAS 121), a leaf
 }
 NEVER = {
     "api",

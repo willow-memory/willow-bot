@@ -7,6 +7,8 @@ nothing more. A green leg ends the streak only when it is on a different
 head from the last red one; a green lint leg beside a red test leg on the
 same commit is not a recovery.
 """
+from __future__ import annotations
+
 import sqlite3
 from pathlib import Path
 
