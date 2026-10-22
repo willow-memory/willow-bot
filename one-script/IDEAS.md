@@ -209,6 +209,7 @@ here reads, writes or caches vault material.
 121. [The seed line: what the small script was before it was small](#121-the-seed-line-what-the-small-script-was-before-it-was-small)
 122. [The private chunks, scanned first, and SEED10 found](#122-the-private-chunks-scanned-first-and-seed10-found)
 123. [The kernel in three more languages, and the vectors that make them](#123-the-kernel-in-three-more-languages-and-the-vectors-that-make-them)
+124. [Life, and the other deterministic engines the box didn't have](#124-life-and-the-other-deterministic-engines-the-box-didnt-have)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2685,6 +2686,44 @@ UTF-8 locale for Java, Node dropping a BOM, three different file locks) are
 in the handoff and the ports. For the pull-out to come: the kernel now has
 three sibling implementations and a vector set beside it; whatever happens
 to `kernel.py` happens to `kernel_vectors/` too.
+
+### 124. Life, and the other deterministic engines the box didn't have
+
+2026-10-22. The operator: *"It's very silly, but you know what deterministic
+game is not in the box?"* Life: no file in willow-bot or the Grove names
+it, or any cellular automaton. Then: *"build it into the one script, but
+those others are good deterministic engines as well."*
+
+**Built: `onescript/life.py`** (`life`, `life-check`). A game is the table's
+verdict rows, so none can be a seal: an `open` row (rule, first board as
+RLE, and for a soup its seed on the one stream), a `step` row per
+generation (population, where it sits, the board's SHA-256), and a
+`result` (`dies`, `still`, `oscillator`, `spaceship` with its shift, or
+`running`). `life-check` plays the session again from its open row and
+fails at the first row the rule doesn't make. Its tests are the patterns
+whose fates are known: the diehard dies at 130, the glider moves (1, 1)
+every 4, and the R-pentomino has 116 cells at generation 1103. Breaking the
+neighbour count fails nine tests, and each tampered field fails only its
+own.
+
+It is the kernel's promise with nothing else in the way: the same first
+board gives the same bytes, on any machine, every time.
+
+**The others, none in the box either:**
+
+| Engine | What its record would hold | Its known answer, the test |
+|---|---|---|
+| tic-tac-toe | every move; the solver's value of each position | perfect play draws |
+| Connect Four | the same, on 7 x 6 | the first player wins (solved, 1988) |
+| Nim | the heaps and each take | a position is lost exactly when the heaps' XOR is 0 |
+| Towers of Hanoi | each move | n discs take 2^n - 1 moves |
+| Mastermind | the secret's hash at the open, each guess and score | Knuth's strategy never needs more than five guesses |
+| Sokoban | the level and the moves | a solution is checked by replaying it |
+| Reversi | every move; flips are forced | each move's flips follow from the board |
+
+Each is Life's shape again: a start, steps a rule fully decides, and a check
+that replays them. The ones with a second player add what Life doesn't
+need, a move that came from outside the rule, recorded as given.
 
 ## What the one script said about this list
 

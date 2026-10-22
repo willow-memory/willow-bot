@@ -17,6 +17,8 @@
     python3 -m onescript forecast ID --dist FILE --deck FILE  # {question, beacon_round}
     python3 -m onescript deck-reveal ROUND  # the beacon's answers as deck rows (--drand)
     python3 -m onescript deck-outcome WAGER [--human-key FILE]  # proposed, never sealed
+    python3 -m onescript life SESSION --board F.rle | --soup SEED  # Conway's Life as verdict rows
+    python3 -m onescript life-check SESSION  # played again from its open row
     python3 -m onescript forecast ID --dist FILE --market FILE  # {symbol, kind, close_date[, threshold]}
     python3 -m onescript market-reveal DATE  # the closes as market rows (--prices, --drand)
     python3 -m onescript snapshot NAME URL --license SPDX  # outside data, once (--fetch)
@@ -96,13 +98,14 @@ def _load_everything() -> None:
     and in `main` for any verb but the hook's. Idempotent."""
     global api, boot, nestor_seal, escalate_mod, beacon, deck, diverge
     global jeles_store, market, merge_check, snapshot, table, view, _last_boot
-    global OK_STATES, draw_mod
+    global OK_STATES, draw_mod, life
     if "api" in globals():
         return
     from . import api, boot, nestor_seal  # noqa: F401  (tests patch cli.boot.probes)
     from . import escalate as escalate_mod
     from . import beacon, deck, diverge, jeles_store, market, merge_check, table, view
     from . import draw as draw_mod
+    from . import life
     from . import snapshot
     from .api import _last_boot  # noqa: F401  (re-exported: the tests read it)
     from .writeback import PROPOSED
@@ -745,6 +748,18 @@ def main(argv: list[str] | None = None) -> int:
     mo.add_argument(
         "--human-key", type=Path, help="the human's key, hex, outside the box"
     )
+    # Conway's Life: the first board fixes the rest, so every row can be checked
+    lp = sub.add_parser("life", help="play Life into the record as verdict rows")
+    lp.add_argument("session", help="the game's name, unique on this box")
+    start = lp.add_mutually_exclusive_group(required=True)
+    start.add_argument("--board", type=Path, help="the first board, an RLE file")
+    start.add_argument("--soup", help="a seed: the first board drawn on the one stream")
+    lp.add_argument("--size", default="16x16", help="a soup's WxH (default 16x16)")
+    lp.add_argument("--density", type=int, default=35, help="a soup's percent alive")
+    lp.add_argument("--generations", type=int, default=100)
+    lp.add_argument("--rule", default="B3/S23")
+    lc = sub.add_parser("life-check", help="read-only: play a Life session again")
+    lc.add_argument("session")
     # the predictions deck as a reader (flatten F6)
     dr = sub.add_parser(
         "deck-reveal",
@@ -1008,6 +1023,33 @@ def main(argv: list[str] | None = None) -> int:
             return res["code"]
         said = {k: v for k, v in res.items() if k not in ("data", "code")}
         print(json.dumps(said, sort_keys=True, ensure_ascii=True, default=str))
+        return res["code"]
+    elif args.cmd in ("life", "life-check"):
+        if args.cmd == "life":
+            sp = None
+            if args.soup is not None:
+                w, _, h = args.size.partition("x")
+                if not (w.isdigit() and h.isdigit()):
+                    print(f"refused: --size is WxH, not {args.size!r}")
+                    return 2
+                sp = {"seed": args.soup, "w": int(w), "h": int(h),
+                      "density": args.density}  # fmt: skip
+            bd = args.board.read_text(encoding="utf-8") if args.board else None
+            res = life.play(
+                cfg, args.session, board=bd, soup=sp,
+                generations=args.generations, rule=args.rule, argv=raw,
+            )  # fmt: skip
+            if "refused" in res:
+                print(f"refused: {res['refused']}")
+                return res["code"]
+            first, last = res["rows"][0], res["rows"][-2]
+            print(first["board"])
+            print(f"gen 0: {first['population']} alive; gen {last.get('gen', 0)}:"
+                  f" {last.get('population', first['population'])} alive")  # fmt: skip
+            print(json.dumps(res["fate"], sort_keys=True))
+            return 0
+        res = life.check(cfg, args.session, argv=raw)
+        print(json.dumps(res, sort_keys=True, ensure_ascii=True, default=str))
         return res["code"]
     elif args.cmd in ("deck-reveal", "deck-outcome"):
         if args.cmd == "deck-reveal":

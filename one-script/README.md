@@ -435,6 +435,8 @@ python3 -m onescript turn "the bite" --proposal f.jsonl
 python3 -m onescript seal proposal:<hash>              # found in Nestor's store (--keyring/--nestor-db before the command)
 python3 -m onescript escalate "the task"           # D0, then small pieces to the local rung
 python3 -m onescript checkout                      # reverse, then the morning screen
+python3 -m onescript life g1 --soup odile          # Conway's Life as verdict rows (--board F.rle)
+python3 -m onescript life-check g1                 # played again from its open row
 
 python3 -m pytest -q onescript/tests            # its tests (willows-grove beside this repo)
 python3 foundation/run_prompt_tests.py          # prompt.py's tests on any Python
