@@ -61,20 +61,47 @@ _LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 
 # -- the canon ------------------------------------------------------------------
-def canon_dirs(grove: Path | None) -> list[Path]:
-    """Where the canon is looked for, in the Grove's order."""
+def seed_dirs(grove: Path | None, root: Path | None = None) -> list[Path]:
+    """Where a seed is looked for, in order: a per-node override
+    (``$WILLOW_HOME/seed``), an explicit one (``$ONESCRIPT_SEED``), the Grove's
+    copy (``governance/seed``, canon only) and the charter seed beside the bot
+    (``willow-config/seed``, the canon, SEED10 and its handoff letter)."""
     out = []
     if os.environ.get("WILLOW_HOME"):
-        out.append(Path(os.environ["WILLOW_HOME"]) / "seed" / "canon")
+        out.append(Path(os.environ["WILLOW_HOME"]) / "seed")
+    if os.environ.get("ONESCRIPT_SEED"):
+        out.append(Path(os.environ["ONESCRIPT_SEED"]))
     if grove is not None:
-        out.append(Path(grove) / "governance" / "seed" / "canon")
+        out.append(Path(grove) / "governance" / "seed")
+    if root is not None:
+        out.append(Path(root).parent / "willow-config" / "seed")
     return out
 
 
-def movements(grove: Path | None) -> tuple[list[dict] | None, str]:
+def canon_dirs(grove: Path | None, root: Path | None = None) -> list[Path]:
+    """Where the canon is looked for: each seed dir's ``canon/``."""
+    return [d / "canon" for d in seed_dirs(grove, root)]
+
+
+def coda(grove: Path | None, root: Path | None = None) -> dict | None:
+    """The seed's own first handoff letter (SEED10's coda, "the first honest
+    handoff, read at first boot"), {path, sha256, text}, from the first seed
+    dir that holds one; None when none does (the Grove's copy holds none)."""
+    for d in seed_dirs(grove, root):
+        for name in ("seed.py", "seed.md"):
+            p = d / "handoff" / name
+            if p.is_file() and (text := p.read_text(encoding="utf-8")).strip():
+                sha = hashlib.sha256(text.encode()).hexdigest()
+                return {"path": str(p), "sha256": sha, "text": text}
+    return None
+
+
+def movements(
+    grove: Path | None, root: Path | None = None
+) -> tuple[list[dict] | None, str]:
     """The canon's movements in order, each {n, title, path, sha256, text}, from
     the first canon dir that holds any; (None, why) when none does."""
-    for d in canon_dirs(grove):
+    for d in canon_dirs(grove, root):
         files = sorted(p for p in d.glob("*.md") if _MOVEMENT.match(p.name))
         if not files:
             continue
@@ -90,7 +117,7 @@ def movements(grove: Path | None) -> tuple[list[dict] | None, str]:
                 {"n": i, "title": title, "path": str(p), "sha256": sha, "text": text}
             )
         return out, str(d)
-    looked = ", ".join(str(d) for d in canon_dirs(grove)) or "nowhere (no Grove set)"
+    looked = ", ".join(str(d) for d in canon_dirs(grove, root)) or "nowhere"
     return None, f"no canon found; looked in {looked}"
 
 
@@ -119,10 +146,22 @@ def _consent_row(run, cfg, allow, training: bool) -> tuple[dict | None, str | No
     return row, None
 
 
-def plant(cfg, allow: Iterable[str] = (), *, training=False, argv=("plant",)) -> dict:
-    """Plant the box: the canon to read, its hashes on a ``plant`` row, and this
-    session's consent. Once per box; a second asks for `consent` instead."""
-    from . import api  # the verbs load the whole one script; the rules don't
+def plant(
+    cfg,
+    allow: Iterable[str] = (),
+    *,
+    training=False,
+    who: str | None = None,
+    keep_who: bool = False,
+    argv=("plant",),
+) -> dict:
+    """Plant the box: the canon to read, its hashes on a ``plant`` row, the
+    seed's first letter (the coda) when one is found, and this session's
+    consent. ``who`` is movement 3, the person saying who they are: kept, in
+    the box's ``person.md`` through the record, only with ``keep_who``;
+    otherwise read once and not kept, and the row says so. Once per box; a
+    second asks for `consent` instead."""
+    from . import api, mai_shape  # the verbs load the one script; the rules don't
 
     run, info = api._open(cfg, PLANT, argv)
     if run is None:
@@ -136,24 +175,34 @@ def plant(cfg, allow: Iterable[str] = (), *, training=False, argv=("plant",)) ->
             "`consent` instead",
             1,
         )
-    moves, where = movements(cfg.grove)
+    moves, where = movements(cfg.grove, cfg.root)
     if moves is None:
         return {"state": UNREACHABLE, "why": where, "code": 1}
+    letter_ = coda(cfg.grove, cfg.root)
+    person = None
+    if isinstance(who, str) and who.strip():
+        person = "kept" if keep_who else "offered, not kept"
+        if keep_who:  # the person's words, in the box and never on a row
+            run.rec.write_file(
+                run.sys, "person.md", (who.strip() + "\n").encode(),
+                provenance="authored", check=mai_shape.check,
+            )  # fmt: skip
     row = run.rec.append(
         PLANT,
         run.sys,
         where=where,
         canon=[{"n": m["n"], "sha256": m["sha256"]} for m in moves],
+        coda=letter_["sha256"] if letter_ else None,
+        person=person,
     )
+    out = {"state": POPULATED, "row": row["n"], "movements": moves,
+           "coda": letter_, "person": person}  # fmt: skip
     given, why = _consent_row(run, cfg, allow, training)
     if why is not None:
-        return {"state": POPULATED, "row": row["n"], "consent": why, "code": 1,
-                "movements": moves}  # fmt: skip
+        return {**out, "consent": why, "code": 1}
     return {
-        "state": POPULATED,
-        "row": row["n"],
+        **out,
         "consent": {"row": given["n"], "streams": given["streams"]},
-        "movements": moves,
         "code": 0,
     }
 

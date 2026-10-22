@@ -2643,6 +2643,17 @@ movement 3 (the person says who they are, held only with consent) are not;
 movement 4 (Gerald) stays the vault's, and movement 5's features and the
 install chain are not the one script's job.
 
+**Then both brought in** (the operator: *"keep going with what we were
+on"*). Planting now shows the coda, the seed's own first letter, read from
+the first seed dir that holds one (`$WILLOW_HOME/seed`, `$ONESCRIPT_SEED`, the
+Grove's copy, then `willow-config/seed` beside the bot), its hash on the
+`plant` row; live, that is willow-config's `seed/handoff/seed.py`, while the
+canon still comes from the Grove. And `--who` is movement 3: the person's
+words kept in the box's `person.md` only with `--keep-who`, otherwise read
+once and not kept, the row saying which, never the words. Gerald showed up
+in the box along the way, in the Grove's design notes and the store's
+gerald-bot; his story stays in the vault.
+
 ## What the one script said about this list
 
 2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366

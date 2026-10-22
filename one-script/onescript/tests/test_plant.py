@@ -101,3 +101,44 @@ def test_the_letter_is_written_through_the_record_and_named_next(box):
     )  # fmt: skip
     assert any(ln.startswith("consent · ") for ln in lines)
     assert f"letter · the last session's handoff · {second['path']}" in lines
+
+
+LETTER_TEXT = '"""\nseed.py — the first honest handoff.\nA letter to a stranger.\n"""\n'
+
+
+def test_planting_shows_the_seeds_first_letter_and_keeps_its_hash(
+    box, tmp_path, monkeypatch
+):
+    canon(tmp_path, monkeypatch)
+    handoff = tmp_path / "willow-home" / "seed" / "handoff"
+    handoff.mkdir()
+    (handoff / "seed.py").write_text(LETTER_TEXT)
+    got = plant.plant(box["cfg"], ["docs"])
+    assert got["coda"]["text"] == LETTER_TEXT
+    (row,) = [r for r in rows(box["cfg"]) if r["kind"] == plant.PLANT]
+    assert row["coda"] == got["coda"]["sha256"] and "stranger" not in str(row)
+
+
+def test_no_seed_holds_a_letter_and_planting_goes_on(tmp_path, monkeypatch):
+    for v in ("WILLOW_HOME", "ONESCRIPT_SEED"):
+        monkeypatch.delenv(v, raising=False)
+    grove = tmp_path / "grove"
+    (grove / "governance" / "seed" / "canon").mkdir(parents=True)  # canon, no letter
+    assert plant.coda(grove, tmp_path / "bot" / "one-script") is None
+
+
+def test_who_you_are_is_kept_only_when_you_say_so(box, tmp_path, monkeypatch):
+    canon(tmp_path, monkeypatch)
+    c = box["cfg"]
+    got = plant.plant(c, ["docs"], who="I keep bees and break things.")
+    assert got["person"] == "offered, not kept" and not (c.box / "person.md").exists()
+    assert "bees" not in (c.box / "record.jsonl").read_text()
+
+
+def test_who_you_are_kept_lands_in_the_box_never_on_a_row(box, tmp_path, monkeypatch):
+    canon(tmp_path, monkeypatch)
+    c = box["cfg"]
+    got = plant.plant(c, ["docs"], who="I keep bees.", keep_who=True)
+    assert got["person"] == "kept"
+    assert (c.box / "person.md").read_text() == "I keep bees.\n"
+    assert "bees" not in (c.box / "record.jsonl").read_text()

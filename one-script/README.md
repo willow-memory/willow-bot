@@ -401,6 +401,10 @@ mechanics, and this is what a person meets.
   `governance/seed/canon` (the Grove's own order). The record keeps each
   movement's hash, never its words. No canon is `unreachable`, said, and
   nothing is planted.
+  Then the coda, SEED10's "first honest handoff" (`seed/handoff/seed.py`, from
+  `willow-config/seed` beside the bot or `$ONESCRIPT_SEED`), its hash on the
+  row. `--who` is movement 3, the person saying who they are: kept in the
+  box's `person.md` only with `--keep-who`, otherwise read once and not kept.
 - **`consent`**, once per check-in: the repos this session may read, training
   consent off unless given, expiring at check-out. On a planted box serve and
   the prompt hook take no chunk from a repo the session didn't consent to;

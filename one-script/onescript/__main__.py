@@ -693,6 +693,13 @@ def main(argv: list[str] | None = None) -> int:
             action="store_true",
             help="consent to training on this session's reads (off unless given)",
         )
+        if verb == "plant":
+            pl.add_argument("--who", help="who you are, in your words (movement 3)")
+            pl.add_argument(
+                "--keep-who",
+                action="store_true",
+                help="keep --who in the box (person.md); without it, it is not kept",
+            )
     lt = sub.add_parser("letter", help="the handoff letter for the next session")
     lt.add_argument(
         "--file", type=Path, help="the letter, markdown; without it, read the latest"
@@ -1190,8 +1197,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd in ("plant", "consent"):
         from . import plant as plant_mod
 
-        verb = plant_mod.plant if args.cmd == "plant" else plant_mod.consent
-        res = verb(cfg, args.allow, training=args.training, argv=raw)
+        if args.cmd == "plant":
+            res = plant_mod.plant(
+                cfg, args.allow, training=args.training, who=args.who,
+                keep_who=args.keep_who, argv=raw,
+            )  # fmt: skip
+        else:
+            res = plant_mod.consent(cfg, args.allow, training=args.training, argv=raw)
     elif args.cmd == "letter":
         from . import plant as plant_mod
 
