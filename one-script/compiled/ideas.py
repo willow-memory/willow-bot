@@ -53,11 +53,6 @@ BLOCKED = {
     "of them, and adding one is the operator's call (SPEC-documented §9)",
     87: "compiles, but only with the `dice` package installed (the `table` "
     "extra): dice5e imports it, which snippet_cover can't see",
-    87: "compiles, but only with the `dice` package installed (the `table` "
-    "extra): dice5e imports it, which snippet_cover can't see",
-    7: "the pick compiles; serving it doesn't: serve only takes chunks a seed "
-    "ranked (`serve.chunk_tables`), so two random chunks need a new table "
-    "source, which is the operator's call",
     102: "a market call can only say what the market does (`up` or `above`); "
     "the bot's half of 'a release before SPY closes up' has no field, so this "
     "compiles as the SPY call alone",
