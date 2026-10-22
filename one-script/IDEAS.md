@@ -192,7 +192,7 @@ here reads, writes or caches vault material.
 
 108. [A helper that passed its tests found 10 of 68](#108-a-helper-that-passed-its-tests-found-10-of-68)
 109. [The cover goes stale once the ideas are built](#109-the-cover-goes-stale-once-the-ideas-are-built)
-110. [Five purposes have two homes](#110-five-purposes-have-two-homes)
+110. [Six purposes have two homes](#110-six-purposes-have-two-homes)
 111. [Every commit asks old boxes to re-check their writes](#111-every-commit-asks-old-boxes-to-re-check-their-writes)
 112. ["What's blocked" doesn't find the blocked list](#112-whats-blocked-doesnt-find-the-blocked-list)
 
@@ -204,6 +204,7 @@ here reads, writes or caches vault material.
 116. [One repo at a time](#116-one-repo-at-a-time)
 117. [The kernel on the-box: what plopped out](#117-the-kernel-on-the-box-what-plopped-out)
 118. [Asymmetric offsets: a puzzle from the Discord group](#118-asymmetric-offsets-a-puzzle-from-the-discord-group)
+119. [Nothing checks for personal data before serving](#119-nothing-checks-for-personal-data-before-serving)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -1969,7 +1970,7 @@ the names that were missing. It measures the list, not the code. A shape
 for it: read `compiled/ideas.py`'s `COMPILED` table and mark those ideas
 `built`, or point each sketch at the function that now exists.
 
-### 110. Five purposes have two homes
+### 110. Six purposes have two homes
 
 Pointed at the real repos (`ONESCRIPT_ROOT`), Deep Thought's DISAGREEMENTS
 go from 0 to 14:
@@ -1980,8 +1981,22 @@ go from 0 to 14:
   `__main__`, no script entry), which D2 asks for.
 - willows-grove's `incoming/haiku-2026-10-02/PROPOSALS-SUMMARY.md:167` still
   says D1 is open; D1 was sealed (`02050acf`).
+- **Chain dialects** (found 2026-10-22 crossing willow-data-vault, 116).
+  The hash chain has three homes in the fleet, and no verifier can check
+  another's chain:
 
-All three are the operator's calls.
+  | | First `prev` | What is hashed |
+  |---|---|---|
+  | Nestor's `nestor/ledger.py` | the string `genesis` | the previous line's raw bytes, carried as the next row's `prev`; a row has no hash of its own |
+  | willow-data-vault's receipts ("pattern-ported" from Nestor) | the string `genesis` | each row's own `hash`, over `json.dumps` with default separators (`", "`, `": "`) and a fixed key order |
+  | the one script's `record.py`; `kernel.py` | 64 zeros | each row's own `hash`, over sorted, compact JSON (`canon` family A) |
+
+  The vault's port kept Nestor's sentinel and changed what is hashed, so even
+  the two that look alike don't agree. Either one dialect, or each verifier
+  names the others and says it can't check them, so "this chain doesn't
+  verify" never reads as tampering.
+
+All four are the operator's calls.
 
 ### 111. Every commit asks old boxes to re-check their writes
 
@@ -2222,11 +2237,12 @@ refuses a broken chain and tells "never chained" (exit 2) from "tampered"
 (exit 1), absence as a recorded value; and its covenant is the one script's
 own: "a clean chain says the rows were not altered after being written, not
 that anything in them was approved". What it adds is a fact about the
-fleet: there are two chain dialects. The vault's receipts and Nestor's
-ledger start from the string `genesis` and hash `json.dumps` with default
-separators in a fixed key order; the one script and the kernel start from
-64 zeros and hash sorted, compact JSON (family A). Neither verifier can
-check the other's chain, and nothing says so yet.
+fleet: there are chain dialects. The vault's receipts start from the
+string `genesis` and hash `json.dumps` with default separators in a fixed
+key order; Nestor's ledger, which they were ported from, keeps `genesis` but
+hashes the previous line's raw bytes; the one script and the kernel start
+from 64 zeros and hash sorted, compact JSON (family A). No verifier can
+check another's chain, and nothing says so yet (now on 110's list).
 
 ### 117. The kernel on the-box: what plopped out
 
@@ -2317,6 +2333,45 @@ noise. It is new, so it was built: `compiled/offsets.py`, stdlib.
 - Across all offsets 1 to 10 (b <= 1000, value below 10^40), 14 pairs have
   exactly one solution, 7 have none (`(6, 1)` to `(10, 1)`, `(6, 7)`, `(10, 3)`), and some have
   infinite families from shared powers (`(1, 2)`: `2^(2j+1) = 2 * 4^j`).
+
+### 119. Nothing checks for personal data before serving
+
+2026-10-22. The operator: *"see if the system pre scans for allowed pii
+before serving ... there is a pile of pii checks out there"*.
+
+**What the one script does now.** Every served chunk passes `chunk._scrub`,
+which applies `scrub.py`'s `hash64` and `credentials` sets: a full-width
+hash and the credential shapes (the union of eleven copies, F12). That is
+secrets, not people. No set looks for an SSN, a card, a birth date, a phone,
+an email or a home path; nothing in `onescript/` knows a sensitivity rung
+or a consent; and `kernel.py` serves a newcomer's folder with no scrub at
+all (fair while it is their folder read by them; not once a model reads it).
+
+**What the fleet already has** (read in the crossed box):
+
+| Where | What it checks | Its rule worth keeping |
+|---|---|---|
+| homestead `keep/advise.py` | SSN (L5); card, bank number, birth date (L4); phone, email, EIN (L3), each mapped to a rung | A date counts as a birth date only next to `DOB:` and a number as a bank number only next to `routing`/`account`: flag every date and the signal drowns |
+| homestead `keep/patterns.py` (and homestead-law's copy) | Extraction patterns | I-18: any pattern that could match PII is anchored and shipped with the PII it must not match (`1420 Maple 87501`, the address that got through) |
+| homestead `keep` serve/export | A rung per field; L5 never crosses; unclassified reads as L5 | "Allowed" is a ceiling per surface, not a yes/no: fail closed |
+| terpsi-music `records/classify.py` | A field's rung from a table of decided cases | It refuses to guess: a field the table doesn't decide needs a human |
+| corpus-lens `egress_shapes.py` | A home path (the owner's username), an email, a calendar date, a weekday | A structural scan for values never on a literal list: "a value that was never quarantined cannot be in the literal list" |
+| willow-2.0 `core/pii_detect.py`, `scripts/pii_check.py`, nest `pipeline/scrub.py` | SSN, card, email, phone (phase 1); phases 2-3 planned | "This module detects; callers act"; nest's scrub flags and never edits the file |
+| willow-mcp `model_egress.py`, nest | The "local PII zone": no document body leaves for an off-box model without consent | Consent is checked where the bytes would leave, not where they are read |
+| hermes-agent `agent/redact.py` | Secrets, plus phone numbers and Discord mentions in logs | |
+| subject-consent (UTETY, corpus-lens, safe-app-store) | Consent per subject | |
+
+**A shape, for the operator's call.** A `pii` named set in `scrub.py`, the
+union of these the way `credentials` is the union of eleven secret
+scanners, under the same rule (it may never catch less than any copy did,
+each copy's positives kept as fixtures), plus homestead's two that make it
+usable: each kind carries its rung, and the context-only kinds (birth date,
+bank number) match only beside their label. "Allowed" is then a ceiling
+passed by the caller: a chunk served to the person's own screen may show up
+to L4, one bound for a model up to L2, and anything over the ceiling is
+withheld with its kind named (`[withheld: ssn, L5]`), never silently. The
+kernel takes the same set when its `look` and `served` text go anywhere but
+its owner's terminal.
 
 ## What the one script said about this list
 
