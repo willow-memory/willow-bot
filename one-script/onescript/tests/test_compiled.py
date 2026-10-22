@@ -238,7 +238,7 @@ def test_7_serendipity_picks_one_chunk_from_each_of_two_repos(two_repos):
         index, repos, RANDOMNESS
     )
     assert {p["where"].split(":")[0] for p in got["pair"]} == {"docs", "code"}
-    assert 7 in ideas.BLOCKED  # serving the pair is the operator's call
+    assert 7 not in ideas.BLOCKED  # the loop is built: onescript/draw.py
 
 
 def test_11_sessions_end_sealed_or_waiting():

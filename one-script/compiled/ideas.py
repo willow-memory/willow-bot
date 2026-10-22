@@ -53,6 +53,8 @@ BLOCKED = {
     "of them, and adding one is the operator's call (SPEC-documented §9)",
     87: "compiles, but only with the `dice` package installed (the `table` "
     "extra): dice5e imports it, which snippet_cover can't see",
+    87: "compiles, but only with the `dice` package installed (the `table` "
+    "extra): dice5e imports it, which snippet_cover can't see",
     7: "the pick compiles; serving it doesn't: serve only takes chunks a seed "
     "ranked (`serve.chunk_tables`), so two random chunks need a new table "
     "source, which is the operator's call",
@@ -375,7 +377,8 @@ def said_in_box(cfg) -> dict:
     return {"state": POPULATED if rows else EMPTY, "said": rows}
 
 
-# 7. serendipity: the pick (the pile pointed at api.scope; serving: BLOCKED)
+# 7. serendipity: the quick pick. The loop itself is `onescript/draw.py`:
+#    draw, scope --draw, serve, the join as a proposal, the seal, lore.
 def serendipity(index: dict, repos: dict, randomness: str) -> dict:
     """One chunk from each of two repos, both picked by a drand round's
     randomness: where they sit and their SHA-256, the same for the same round."""
