@@ -63,6 +63,7 @@ from typing import Iterable
 
 from . import beacon, boot, gate, mai_shape, nestor_seal, record, reverse, view
 from . import escalate as esc
+from . import retire as retire_mod
 from . import jeles_store as jeles_mod
 from . import ladder
 from . import pile as pile_mod
@@ -1025,6 +1026,42 @@ def take_proposals(
     and judged; nothing is written. A cite not served is `link_fail`; a row that
     doesn't fit the contract is `refused`."""
     return turn(cfg, bite, proposed=list(rows), argv=argv)
+
+
+def retire(
+    cfg: Config,
+    candidates: Iterable,
+    bite: str = "retire",
+    argv: Iterable[str] = ("retire",),
+) -> dict:
+    """Propose dropping served rows the caller names, each gated on a human seal.
+
+    `candidates` is an iterable of `{cite, reason, detail}`: the served id to
+    drop, the reason a person reads, and the bytes. Code turns each into a
+    proposal through the door (`retire.propose`), citing that served id; the
+    turn is 42 while any proposal stands, 0 when none. No model, no clock,
+    nothing written — the drop itself waits on the human's seal and a later
+    apply. A candidate that is malformed, or cites a row not in the served
+    scope, is refused before the door."""
+    run, info = _open(cfg, "retire", argv)
+    if run is None:
+        return info
+    if (refusal := _need_open(run, "retire", bite=bite)) is not None:
+        return refusal
+    who, family = DESK
+    ident = {"who": who, "family": family, "sig": gate.sign(run.keys[who], who, family)}
+    cands = list(candidates)
+    try:
+        r = retire_mod.propose(run, ident, select=lambda _doc: cands, bite=bite)
+    except ValueError as e:
+        return _refused(str(e), 1)
+    out = r["out"] if r["out"] is not None else {"proposals": r["proposals"]}
+    return {
+        "out": out,
+        "state": r["state"],
+        "why": r["why"],
+        "code": ESCALATE if r["proposals"] else 0,
+    }
 
 
 # ── scope, seal, serve ──────────────────────────────────────────────────────

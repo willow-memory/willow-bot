@@ -12,7 +12,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from onescript import proposals, retire  # noqa: E402
+from onescript import api, proposals, retire  # noqa: E402
+from onescript.tests.test_api import cfg, proof, served  # noqa: E402,F401
 
 A = "a" * 64
 B = "b" * 64
@@ -111,3 +112,39 @@ def test_proposal_row_fits_the_contract():
     checked, why = proposals.check(row)
     assert checked is not None, why
     assert set(row) == set(proposals.KEYS)
+
+
+# ── end to end, over a real check-in / scope / seal / serve (reusing test_api) ──
+
+
+def test_retire_proposes_a_drop_at_42_and_a_seal_writes_it(cfg):  # noqa: F811
+    _, ids = served(cfg)
+    res = api.retire(
+        cfg,
+        [{"cite": ids[0], "reason": "superseded by a later row", "detail": "drop it"}],
+    )
+    assert res["code"] == retire_escalate()  # 42: a proposal stands, unsealed
+    (p,) = res["out"]["proposals"]
+    assert p["verdict"] == "pass"
+    assert p["path"] == f"retire/{ids[0]}" and p["cites"] == [ids[0]]
+    assert p["subject"].startswith("proposal:")
+    # only the human's seal acts on it
+    sealed = api.seal_proposal(cfg, p["subject"], proof=proof(p["subject"]))
+    assert sealed["sealed"]
+
+
+def test_retire_with_no_candidate_is_zero(cfg):  # noqa: F811
+    served(cfg)
+    res = api.retire(cfg, [])
+    assert res["code"] == 0 and res["out"]["proposals"] == []
+
+
+def test_retire_a_cite_not_served_is_refused(cfg):  # noqa: F811
+    served(cfg)
+    res = api.retire(cfg, [{"cite": "f" * 64, "reason": "stale", "detail": "drop"}])
+    assert "refused" in res and res["code"] == 1
+
+
+def retire_escalate() -> int:
+    """The one script's exit 42, read from api so the test never hard-codes it."""
+    return api.ESCALATE
