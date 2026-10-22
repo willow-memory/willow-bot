@@ -106,6 +106,9 @@ def test_a_held_file_that_changed_is_unreachable_and_is_fetched_again(box):
         ("Quakes", URL, "CC0-1.0"),  # not lowercase
         ("quakes", "http://example.org/x", "CC0-1.0"),  # not https
         ("quakes", URL, "public domain"),  # not an SPDX id
+        ("quakes", URL, "public-domain"),  # id-shaped, still not an SPDX id
+        ("quakes", URL, "Open"),
+        ("quakes", URL, "non-commercial"),
     ],
 )
 def test_a_bad_take_is_refused_before_the_box_opens(box, name, url, lic):
@@ -131,3 +134,12 @@ def test_the_url_in_argv_reaches_the_record_as_its_hash(box):
     text = (box.box / "record.jsonl").read_text()
     assert "example.org" not in text
     assert f"url-sha256:{hashlib.sha256(URL.encode()).hexdigest()}" in text
+
+
+@pytest.mark.parametrize(
+    "lic",
+    ["CC0-1.0", "CC-BY-NC-SA-3.0-IGO", "GPL-3.0-only", "MIT", "BSD-3-Clause",
+     "LicenseRef-public-domain"],
+)  # fmt: skip
+def test_an_spdx_id_or_a_license_ref_stands(lic):
+    assert snapshot.check("quakes", URL, lic) is None

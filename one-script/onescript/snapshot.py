@@ -49,7 +49,16 @@ MAX_BYTES = 64 * 1024 * 1024  # placeholder; the operator's number
 TIMEOUT = 30
 AGENT = "willow-bot one-script snapshot reader (+https://github.com/willow-memory/willow-bot)"
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-_SPDX = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]{0,63}")
+# An SPDX id carries its version (CC0-1.0, CC-BY-NC-SA-3.0-IGO, GPL-3.0-only),
+# or is one of the few that don't; anything else is SPDX's own custom form,
+# LicenseRef-<words> (a US agency's public domain: LicenseRef-public-domain).
+# The almanacs showed the old shape test let "public-domain", "Open" and
+# "non-commercial" through as if they were ids.
+_SPDX = re.compile(
+    r"[A-Za-z][A-Za-z0-9.+-]*-\d+(\.\d+)*(-[A-Za-z][A-Za-z0-9]*)*"
+    r"|LicenseRef-[A-Za-z0-9.-]{1,52}"
+    r"|MIT|ISC|0BSD|Unlicense|CC-PDDC|BSD-[234]-Clause"
+)
 
 
 def sha256(data: bytes) -> str:
@@ -63,7 +72,10 @@ def check(name: object, url: object, license: object) -> str | None:
     if not isinstance(url, str) or not url.startswith("https://"):
         return "a snapshot is read over https:// only"
     if not isinstance(license, str) or not _SPDX.fullmatch(license):
-        return "a snapshot names its license as an SPDX id (CC0-1.0, CC-BY-4.0, ...)"
+        return (
+            "a snapshot names its license as an SPDX id (CC0-1.0, CC-BY-4.0, ...)"
+            " or LicenseRef-<words>"
+        )
     return None
 
 
