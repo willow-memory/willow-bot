@@ -157,3 +157,20 @@ def test_it_never_dials_out():
         "import json\ndef f(u):\n    from urllib import request\n    return eval(u)\n"
     )
     assert reaches(planted) == {"urllib", "eval"}
+
+
+def test_a_file_name_with_a_line_separator_doesnt_brick_the_box(tmp_path):
+    """A served `where` is a file name, kept raw (canon is ensure_ascii=False):
+    U+2028, U+2029 and U+0085 in it must not cut the row when it's read back,
+    the way onescript/record.py reads it ("\\n" only)."""
+    pile, box, key = tmp_path / "pile", tmp_path / "box", tmp_path / "keys" / "me.key"
+    pile.mkdir()
+    for sep in (" ", " ", "\u0085"):
+        (pile / f"tomato{sep}notes.md").write_text("Tomatoes want six hours of sun.\n")
+    b = ["--box", str(box), "--now", "2026-10-22T00:00:00Z"]
+    assert cli("init", *b, "--pile", str(pile), "--key", str(key)).returncode == 0
+    assert cli("bite", *b, "how much sun do tomatoes want").returncode == 0
+    assert cli("verify", *b).returncode == 0
+    rec = record.Record(box, lambda: "", "", object())  # the one script reads it too
+    assert rec.verify_chain() == [] and [r["kind"] for r in rec.rows()][-1] == "bite"
+    assert cli("bite", *b, "how much sun do tomatoes want").returncode == 0

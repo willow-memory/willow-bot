@@ -115,7 +115,11 @@ def read(path: Path) -> tuple[list[dict], list[str]]:
     if data and not data.endswith("\n"):
         return [], ["torn tail: the last line is unterminated; a human looks first"]
     rows, breaks, prev = [], [], GENESIS
-    for i, line in enumerate(data.splitlines()):
+    # "\n" only, as onescript/record.py reads it: canon keeps a raw U+2028,
+    # U+2029 or U+0085 in a string (a file name in a served `where`), and
+    # str.splitlines() would cut the row there and brick the box
+    lines = data.split("\n")[:-1] if data else []
+    for i, line in enumerate(lines):
         try:
             row = json.loads(line)
         except ValueError:
