@@ -31,7 +31,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `deep_thought.py` | The morning screen |
 | `kernel.py` | The smallest script for anyone: the whole loop on their own folder, stdlib only (IDEAS 113) |
 | `kernel_vectors/` | `kernel.py` in any language: generated tables, 3,989 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
-| `adapters/` | built on top of `kernel.py`, never inside it: the kernel runs the same without this folder. `readings/` adds three hints beside a bite (what isn't there, numbers over time, a date gone by) |
+| `adapters/` | built on top of `kernel.py`, never inside it: the kernel runs the same without this folder. `readings/` adds two hints beside a bite (numbers over time, a date gone by) |
 
 ## OAuth: which server a token is for
 

@@ -155,3 +155,12 @@ because it decides what is served. The three readings that only speak beside
 an answer (what isn't there, numbers over time, a date gone by) are an adapter
 built on top: `adapters/readings/`. The kernel runs the same without it; run
 through it, her box answers as above.
+
+## What isn't there, taken out
+
+After the two blind characters (`demo/hollis/`, `demo/teodora/`) it produced
+only noise on folders it wasn't built from: 88 of 98 hint lines for Hollis,
+dd/mm/yyyy dates read as ids for Teodora. It is out of the adapter. The cost is
+here: "purchase order" no longer says which orders her books don't name, so
+N4 goes from found (with the trap) to served, the purchase orders themselves.
+"Who's due" and "Dad's weight" keep their readings.

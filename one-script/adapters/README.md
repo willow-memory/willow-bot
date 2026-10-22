@@ -22,4 +22,4 @@ runs.
 
 | Adapter | What it adds |
 |---|---|
-| [readings/](readings/) | three hints beside a bite: what isn't there, numbers over time, a date gone by |
+| [readings/](readings/) | two hints beside a bite: numbers over time, a date gone by |

@@ -22,36 +22,6 @@ spec.loader.exec_module(r)
 k = r.kernel
 
 
-def test_what_isnt_there_is_said_beside_what_was_served(tmp_path):
-    """Odile's books name 21 of her 24 purchase orders (demo/odile/STRIP.md).
-    Served an order, the kernel says which ones the books don't name. Things
-    that only share a shape (a Kawai's K-300, a van's E-150) never are."""
-    pos = [f"2025-{n:03d}" for n in range(10, 22)]
-    (tmp_path / "books.csv").write_text(
-        "".join(f"DEP PO {p}\n" for p in pos if p not in ("2025-013", "2025-019"))
-    )
-    (tmp_path / "calendar.txt").write_text(" ".join(f"PO {p}" for p in pos) + "\n")
-    (tmp_path / "po.txt").write_text("PURCHASE ORDER PO 2025-010\n")
-    (tmp_path / "piano.txt").write_text("Kawai K-300 order\n")
-    (tmp_path / "van.txt").write_text("Econoline E-150 rider\n")
-    pile = k.chunks(tmp_path)
-    served = [c for c in pile if c["path"] in ("po.txt", "piano.txt")]
-    assert r.missing(pile, served) == [
-        {
-            "why": "2025-013, 2025-019: not in books.csv",
-            "where": "books.csv names 10 of the 12 like them",
-        }
-    ]
-    books = [c for c in pile if c["path"] == "books.csv"]
-    assert r.missing(pile, books) == []  # the file being read isn't checked
-    assert r.ids("PO 2025-063 (575) 555-0161 2026-10-16 -x- 1/300") == [
-        "2025-063",
-        "555-0161",
-        "1/300",
-    ]
-    assert r.shape("WR-2026-0117") == "AA-9999-9999"
-
-
 def test_numbers_over_time_say_what_moved_and_never_judge(tmp_path):
     """Laszlo's care log (demo/odile): the latest week can sit under the
     cardiologist's 2 kg line while an earlier week crossed it, so both are
@@ -137,9 +107,11 @@ def test_the_arrow_points_one_way(tmp_path):
     assert not any("weight_kg" in h["why"] for h in a.get("look", []))
 
 
-def test_hints_gathers_all_three_readings(tmp_path):
-    """What isn't there, numbers over time and a date gone by, each from what
-    was served, all through `hints`, the one entry the bite uses."""
+def test_hints_gathers_both_readings_and_never_what_isnt_there(tmp_path):
+    """Numbers over time and a date gone by, each from what was served, all
+    through `hints`, the one entry the bite uses. What isn't there was taken
+    out after the blind runs, and stays out: an order the books don't name is
+    never said."""
     (tmp_path / "log").mkdir()
     (tmp_path / "log" / "2026.txt").write_text("2026-01-02  Ann\n  next: May 2026\n")
     (tmp_path / "books.csv").write_text("".join(f"PO 2025-0{n}\n" for n in (10, 11)))
@@ -152,6 +124,6 @@ def test_hints_gathers_all_three_readings(tmp_path):
     served = [c for c in pile if c["path"] in ("po.txt", "log/2026.txt", "w.csv")]
     got = r.hints(pile, served, "next order kg", {}, "20261022")
     whys = " | ".join(h["why"] for h in got)
-    assert "2025-012: not in books.csv" in whys
+    assert "not in" not in whys
     assert "gone by, nothing written since: Ann (May 2026)" in whys
     assert "kg: 72 on 2026-10-15" in whys
