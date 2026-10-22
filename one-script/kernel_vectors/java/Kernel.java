@@ -1013,10 +1013,8 @@ public final class Kernel {
         for (Set<String> f : byFile.values()) every.addAll(f);
         List<String> paths = new ArrayList<>();
         for (Chunk c : served) if (!paths.contains(c.path)) paths.add(c.path);
-        Set<String> shapes = new LinkedHashSet<>();
-        for (String p : paths)
-            for (Chunk c : pile)
-                if (c.path.equals(p)) for (String id : ids(c.text)) shapes.add(shape(id));
+        Set<String> shapes = new LinkedHashSet<>(); // what she was shown names it
+        for (Chunk c : served) for (String id : ids(c.text)) shapes.add(shape(id));
         List<Map<String, Object>> out = new ArrayList<>();
         for (String sh : shapes) {
             Set<String> group = new HashSet<>();
@@ -1262,7 +1260,8 @@ public final class Kernel {
     }
 
     /** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
-    static List<Map<String, Object>> goneBy(List<Chunk> pile, List<Chunk> served, String today) {
+    static List<Map<String, Object>> goneBy(List<Chunk> pile, List<Chunk> served, String today,
+            List<String> want, Map<String, List<String>> alias) {
         List<Map<String, Object>> out = new ArrayList<>();
         List<String> folders = new ArrayList<>();
         for (Chunk c : served) {
@@ -1284,7 +1283,10 @@ public final class Kernel {
                         cur = new Object[] {d, strip(s.substring(10)), new ArrayList<String[]>()};
                         entries.add(cur);
                     }
-                    if (cur != null)
+                    boolean asked = false; // a line that holds one of the bite's words
+                    Set<String> lineWords = new HashSet<>(words(s));
+                    for (String w : want) if (heldBy(w, lineWords, alias)) { asked = true; break; }
+                    if (cur != null && asked)
                         for (String[] w : written(s)) if (w[0].compareTo((String) cur[0]) > 0) ((List<String[]>) cur[2]).add(w);
                 }
             }
@@ -1402,8 +1404,13 @@ public final class Kernel {
             for (String w : h) s = s.plus(new Q(BigInteger.ONE, BigInteger.valueOf(df.get(w))));
             scored.add(new Object[] {s, heldC.get(i), heldD.get(i)});
         }
+        Map<String, Integer> copies = new HashMap<>();
+        for (Chunk c : pile) copies.merge(c.id, 1, Integer::sum);
         scored.sort((x, y) -> {
             int c = ((Q) y[0]).compareTo((Q) x[0]);
+            if (c != 0) return c;
+            // what was said once before what is said every week
+            c = Integer.compare(copies.get(((Chunk) x[1]).id), copies.get(((Chunk) y[1]).id));
             if (c != 0) return c;
             int dx = (Integer) x[2], dy = (Integer) y[2];
             if (dx != dy) return Integer.compare(dy, dx);
@@ -1414,7 +1421,12 @@ public final class Kernel {
             return dx != 0 ? Integer.compare(b.line, a.line) : Integer.compare(a.line, b.line);
         });
         List<Chunk> out = new ArrayList<>();
-        for (int i = 0; i < Math.min(TOP, scored.size()); i++) out.add((Chunk) scored.get(i)[1]);
+        Set<String> shown = new HashSet<>(); // one id, one place
+        for (Object[] s : scored) {
+            if (out.size() == TOP) break;
+            Chunk c = (Chunk) s[1];
+            if (shown.add(c.id)) out.add(c);
+        }
         return out;
     }
 
@@ -1453,7 +1465,7 @@ public final class Kernel {
             }
         }
         out.addAll(missing(pile, served));
-        if (!today.isEmpty()) out.addAll(goneBy(pile, served, today));
+        if (!today.isEmpty()) out.addAll(goneBy(pile, served, today, want, alias));
         List<String> seen = new ArrayList<>();
         for (Chunk c : served) {
             if (seen.contains(c.path)) continue;

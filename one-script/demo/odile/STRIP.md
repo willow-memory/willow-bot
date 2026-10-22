@@ -113,3 +113,36 @@ year, so the served file's whole folder is one log.
 seven. Three are clients who moved away in 2023; her log never says so, so the
 reading can't. One, Benedikt Ybarra, is already booked for Oct 28 in her
 calendar: the reading reads her tuning folder, not her calendar.
+
+## The van, and the findings that repeated
+
+- **One text, one place; said once before said every week.** "What do I need
+  to do" served her jar-order memo twice (she dictates it monthly), and on a
+  tie the 2021 van memo always lost to newer ones. Now a served place is never
+  the same text twice, and on equal scores what she said once comes before
+  what she says every week, then the newest. It serves the county notice, the
+  van memo ("Need to call Mesa Mutual and take it off the policy. Later."),
+  and the jar order: **N6 is back**, beside N3.
+- **What isn't there speaks when what she was shown names it.** It read the
+  served chunk's whole file, so any answer out of her tuning log or calendar
+  carried the three orders. Now it reads the served chunks: the orders come up
+  on "purchase order" and "invoice not paid", 2 of 18 questions, not 6.
+- **A date gone by counts where its line holds her words.** The due list rode
+  every answer from her tuning log, "I'm tired" among them. Now a passed date
+  counts only on a line holding one of the bite's words (or one her list reads
+  it as): it comes up on "who's due" and "who's next", nowhere else.
+
+## Where her seven needs stand
+
+| Need | By | |
+|---|---|---|
+| N1 who's due | "who's due" | found, asked: seven names, four truly due (three moved away, one already booked) |
+| N2 Dad's weight | "Dad's weight" | found, asked: the 2 kg line, the log, up 2.5 in a week |
+| N3 county deadline | "what do I need to do" | found, unasked |
+| N4 unpaid orders | "purchase order", "invoice not paid" | found, with the cash order only her memo explains |
+| N5 hive 4 | "how are the bees" | evidence served: the last inspections, H4 with no eggs, no brood |
+| N6 the van | "what do I need to do" | found, unasked |
+| N7 worn out | "is Dad okay" | an accident: her latest "Okay." memo. "How am I doing" is empty. |
+
+Six of seven by plain questions, two of them asked for by name. N7 is the one
+nobody asks, and her folder doesn't answer it either: the memos only shrink.

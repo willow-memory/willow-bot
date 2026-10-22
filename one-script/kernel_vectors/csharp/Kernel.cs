@@ -877,11 +877,9 @@ public static class Kernel
         var every = new HashSet<string>(byFile.Values.SelectMany(f => f), StringComparer.Ordinal);
         var paths = served.Select(c => c.Path).Distinct().ToList();
         var shapes = new List<string>();
-        foreach (var p in paths)
-            foreach (var c in pile)
-                if (c.Path == p)
-                    foreach (var id in Ids(c.Text))
-                        if (!shapes.Contains(Shape(id))) shapes.Add(Shape(id));
+        foreach (var c in served) // what she was shown names it
+            foreach (var id in Ids(c.Text))
+                if (!shapes.Contains(Shape(id))) shapes.Add(Shape(id));
         var o = new List<object?>();
         var files = byFile.Keys.ToList();
         files.Sort(CodePointOrder.It);
@@ -1088,7 +1086,7 @@ public static class Kernel
     static string FolderOf(string p) => p.Contains('/') ? p.Substring(0, p.LastIndexOf('/')) : "";
 
     /** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
-    static List<object?> GoneBy(List<Chunk> pile, List<Chunk> served, string today)
+    static List<object?> GoneBy(List<Chunk> pile, List<Chunk> served, string today, List<string> want, Dictionary<string, List<string>> alias)
     {
         var o = new List<object?>();
         foreach (var folder in served.Select(c => FolderOf(c.Path)).Distinct().ToList())
@@ -1109,7 +1107,8 @@ public static class Kernel
                         entries.Add((d, Strip(s.Substring(10)), new List<(string, string)>()));
                         cur = entries.Count - 1;
                     }
-                    if (cur >= 0) foreach (var w in Written(s)) if (string.CompareOrdinal(w.d, entries[cur].d) > 0) entries[cur].later.Add(w);
+                    var lineWords = new HashSet<string>(Words(s), StringComparer.Ordinal); // a line that holds one of the bite's words
+                    if (cur >= 0 && want.Any(w => HeldBy(w, lineWords, alias))) foreach (var w in Written(s)) if (string.CompareOrdinal(w.d, entries[cur].d) > 0) entries[cur].later.Add(w);
                 }
             }
             var latest = new Dictionary<string, (string d, string head, List<(string d, string as_)> later)>(StringComparer.Ordinal);
@@ -1222,9 +1221,13 @@ public static class Kernel
             foreach (var w in h) s = s.Plus(new Q(1, df[w]));
             scored.Add((s, c, d));
         }
+        var copies = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var c in pile) copies[c.Id] = copies.TryGetValue(c.Id, out var n) ? n + 1 : 1;
         scored.Sort((x, y) =>
         {
             int c = y.s.CompareTo(x.s);
+            if (c != 0) return c;
+            c = copies[x.c.Id].CompareTo(copies[y.c.Id]); // said once before said every week
             if (c != 0) return c;
             if (x.d != y.d) return y.d.CompareTo(x.d);
             c = CodePointOrder.It.Compare(x.c.Path, y.c.Path);
@@ -1232,7 +1235,13 @@ public static class Kernel
             // a log grows downward: on one date, the later line is the newer one
             return x.d != 0 ? y.c.Line.CompareTo(x.c.Line) : x.c.Line.CompareTo(y.c.Line);
         });
-        return scored.Take(TOP).Select(x => x.c).ToList();
+        var o = new List<Chunk>(); // one id, one place
+        foreach (var x in scored)
+        {
+            if (o.Count == TOP) break;
+            if (!o.Any(y => y.Id == x.c.Id)) o.Add(x.c);
+        }
+        return o;
     }
 
     static JObj Hint(string why, string? where, string? next)
@@ -1275,7 +1284,7 @@ public static class Kernel
             }
         }
         o.AddRange(Missing(pile, served));
-        if (today.Length > 0) o.AddRange(GoneBy(pile, served, today));
+        if (today.Length > 0) o.AddRange(GoneBy(pile, served, today, want, alias));
         foreach (var p in served.Select(c => c.Path).Distinct().ToList())
             o.AddRange(Series(p, string.Join("\n", pile.Where(x => x.Path == p).Select(x => x.Text))));
         if (ws.Count > 0 && MAKE.Contains(ws[0])) o.Add(Hint("this asks for something made", null, NEXT["made"]));

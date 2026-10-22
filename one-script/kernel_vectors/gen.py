@@ -661,7 +661,20 @@ def pile_cases() -> list[dict]:
     piles.append(ledger_pile())
     piles.append(series_pile())
     piles.append(log_pile())
+    piles.append(memo_pile())
     return piles
+
+
+def memo_pile() -> list:
+    """Said once before said every week: a routine memo four times (one text,
+    one id, one place), a one-off from 2021 that still matters, a letter."""
+    jar = b"Market Saturday, need forty jars.\n"
+    return [
+        *[(["memos", f"2026-0{m}-01_1000.txt"], jar) for m in (3, 5, 7, 9)],
+        (["memos", "2021-05-14_1502.txt"], b"Need to call the insurer. Later.\n"),
+        (["mail", "2026-03-20.txt"], b"You would need a separate permit.\n"),
+        (["mail", "2026-04-01.txt"], b"Need a permit renewal, also need a form.\n"),
+    ]
 
 
 TODAY = "20261022"  # what the look cases take as today
@@ -741,6 +754,8 @@ def ledger_pile() -> list:
         # a pair named together, and a file with one of them: half is enough
         (["both.txt"], b"auction: lot AB-11 and lot AB-12\n"),
         (["one.txt"], b"sold lot AB-11\n"),
+        # served alone, the first chunk names no order: nothing is said
+        (["mail", "notes.txt"], b"memo notes, see below\n\nPO 2025-010\n"),
     ]
 
 
@@ -1064,7 +1079,8 @@ FLOAT_TIES = float_tie_piles()
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
     (8), random handfuls of the dense-ties pile's vocabulary (9), the dated
-    pile's (10), the ledger's (11), the care log's (12) and the log's (13)."""
+    pile's (10), the ledger's (11), the care log's (12), the log's (13) and
+    the memos' (14)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -1076,6 +1092,8 @@ def extra_bites(i: int) -> list[str]:
         ]
     if i == 10:
         return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
+    if i == 14:
+        return ["need", "need jars", "need permit", "market", "later"]
     if i == 13:
         return ["next", "upright", "grand", "console", "spinet", "studio", "due",
                 "notes"]  # fmt: skip
@@ -1085,7 +1103,7 @@ def extra_bites(i: int) -> list[str]:
                 "dad weight", "dad's weight", "care log", "books csv"]  # fmt: skip
     if i == 11:
         return ["purchase order", "order", "reply", "case", "rider", "Kawai", "call",
-                "DEP", "lot", "auction"]  # fmt: skip
+                "DEP", "lot", "auction", "memo below"]  # fmt: skip
     if i != 9:
         return []
     vocab = [f"w{n}" for n in range(7)]

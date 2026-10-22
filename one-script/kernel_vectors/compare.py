@@ -231,7 +231,7 @@ def _key(path: Path) -> None:
 
 GARDEN = {
     # a log whose date has passed by the session's --now: today is the bite's
-    "visits.md": "2026-01-02  raised bed\n  next: Feb 2026\n",
+    "visits.md": "2026-01-02  raised bed\n  next bed check: Feb 2026\n",
     "garden.md": "Tomatoes want six hours of sun.\n\nWater at the root.\n",
     "lot.html": "<html><script>var lot = 1;</script>\n<p>The blue Civic, VIN 1HGEJ6672841, one owner.</p></html>\n",
     "faq.md": "Has the shed been painted this year?\n",

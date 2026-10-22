@@ -433,8 +433,25 @@ def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
         if h
     ]
     # a log grows downward: on one date, the later line is the newer one
-    order = sorted(scored, key=lambda s: (-s[0], -s[1], s[2], -s[3] if s[1] else s[3]))
-    return [c for *_, c in order[:TOP]]
+    # among equal scores, what was said once before what is said every week
+    # (the same text, one id, many places), then the newest
+    copies: dict[str, int] = {}
+    for c in pile:
+        copies[c["id"]] = copies.get(c["id"], 0) + 1
+    order = sorted(
+        scored,
+        key=lambda s: (-s[0], copies[s[4]["id"]], -s[1], s[2], -s[3] if s[1] else s[3]),
+    )
+    # a place is for something not yet shown: a memo she dictates every month
+    # is one text, one id, and served once (Odile's jar order, twice, pushed
+    # out the van memo she still has to act on)
+    out: list[dict] = []
+    for *_, c in order:
+        if len(out) == TOP:
+            break
+        if all(c["id"] != x["id"] for x in out):
+            out.append(c)
+    return out
 
 
 def dates(pile: list[dict]) -> list[int]:
@@ -495,7 +512,7 @@ def shape(i: str) -> str:
 
 
 def missing(pile: list[dict], served: list[dict]) -> list[dict]:
-    """What isn't there: for each shape of id in a served chunk's file, every
+    """What isn't there: for each shape of id in a served chunk, every
     other file (not one the answer came from: that one is being read) that
     names at least half the folder's ids of that shape but not all, and the
     ones it doesn't that another file names beside ones it does. Odile's books name 21 of her 24 purchase orders; the
@@ -505,11 +522,10 @@ def missing(pile: list[dict], served: list[dict]) -> list[dict]:
         by_file.setdefault(c["path"], set()).update(ids(c["text"]))
     every = set().union(*by_file.values()) if by_file else set()
     out = []
-    # the served chunks' whole files: a letter's case number is on its own line
+    # what she was shown names it, not just a file it came from: an order
+    # somewhere in her tuning log is no reason to say it under "I'm tired"
     paths = list(dict.fromkeys(c["path"] for c in served))
-    shapes = dict.fromkeys(
-        shape(i) for p in paths for c in pile if c["path"] == p for i in ids(c["text"])
-    )
+    shapes = dict.fromkeys(shape(i) for c in served for i in ids(c["text"]))
     for sh in shapes:
         group = {i for i in every if shape(i) == sh}
         for path in sorted(set(by_file) - set(paths)):
@@ -747,12 +763,15 @@ def written(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def gone_by(pile: list[dict], served: list[dict], today: str) -> list[dict]:
+def gone_by(
+    pile: list[dict], served: list[dict], today: str, want: set, alias: dict
+) -> list[dict]:
     """Has this date passed: in a log (lines that start with an ISO date, and
     the lines under each), the latest entry under each heading (its first
     line, less the date) that names a later date, now gone by, with nothing
-    written under that heading since. A log kept a file a year is one log: the
-    served file's whole folder is read. Odile's "next: May 2026" under
+    written under that heading since, on a line that holds one of the bite's
+    words. A log kept a file a year is one log: the served file's whole
+    folder is read. Odile's "next: May 2026" under
     Harriet's last visit, and no visit since, is a tuning due."""
     out = []
     for folder in dict.fromkeys(c["path"].rpartition("/")[0] for c in served):
@@ -768,7 +787,11 @@ def gone_by(pile: list[dict], served: list[dict], today: str) -> list[dict]:
                 if d and s[:10] == iso(d) and not _digit(s[10:11]):
                     cur = (d, s[10:].strip(), [])
                     entries.append(cur)
-                if cur is not None:
+                # a date counts where its line holds one of the bite's words
+                # (or one their list reads it as): "who's due" reaches next:
+                if cur is not None and any(
+                    held_by(w, set(words(s)), alias) for w in want
+                ):
                     cur[2].extend(w for w in written(s) if w[0] > cur[0])
         latest: dict[str, tuple] = {}
         for e in entries:  # a later entry, or a later line on the same day, wins
@@ -844,7 +867,7 @@ def look(
             )
     out += missing(pile, served)
     if today:
-        out += gone_by(pile, served, today)
+        out += gone_by(pile, served, today, set(want), alias)
     for path in dict.fromkeys(c["path"] for c in served):  # the whole table
         out += series(path, "\n".join(c["text"] for c in pile if c["path"] == path))
     if ws and ws[0] in MAKE:

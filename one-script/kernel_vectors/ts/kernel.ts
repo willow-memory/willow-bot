@@ -806,7 +806,7 @@ function missing(pile: Chunk[], served: Chunk[]): J[] {
   for (const f of byFile.values()) for (const id of f) every.add(id);
   const paths = [...new Set(served.map((c) => c.path))];
   const shapes = new Set<string>();
-  for (const p of paths) for (const c of pile) if (c.path === p) for (const id of ids(c.text)) shapes.add(shape(id));
+  for (const c of served) for (const id of ids(c.text)) shapes.add(shape(id)); // what she was shown names it
   const out: J[] = [];
   const files = [...byFile.keys()].sort(byCodePoint);
   for (const sh of shapes) {
@@ -1007,7 +1007,7 @@ function written(text: string): [string, string][] {
 const folderOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 
 /** kernel.py's gone_by: has this date passed, in a log, with nothing since. */
-function goneBy(pile: Chunk[], served: Chunk[], today: string): J[] {
+function goneBy(pile: Chunk[], served: Chunk[], today: string, want: string[], alias: Alias): J[] {
   const out: J[] = [];
   for (const folder of new Set(served.map((c) => folderOf(c.path)))) {
     const entries: [string, string, [string, string][]][] = [];
@@ -1026,7 +1026,9 @@ function goneBy(pile: Chunk[], served: Chunk[], today: string): J[] {
           cur = [d, strip(s.slice(10)), []];
           entries.push(cur);
         }
-        if (cur !== null) for (const w of written(s)) if (w[0] > cur[0]) cur[2].push(w);
+        const lineWords = new Set(words(s)); // a line that holds one of the bite's words
+        if (cur !== null && want.some((w) => heldBy(w, lineWords, alias)))
+          for (const w of written(s)) if (w[0] > cur[0]) cur[2].push(w);
       }
     }
     const latest = new Map<string, [string, string, [string, string][]]>();
@@ -1126,14 +1128,22 @@ function rank(pile: Chunk[], bite: string, alias: Alias): Chunk[] {
     scored.push([s, c, d]);
   }
   // a log grows downward: on one date, the later line is the newer one
+  const copies = new Map<string, number>();
+  for (const c of pile) copies.set(c.id, (copies.get(c.id) ?? 0) + 1);
   scored.sort(
     (x, y) =>
       qCmp(y[0], x[0]) ||
+      copies.get(x[1].id)! - copies.get(y[1].id)! || // said once before said every week
       y[2] - x[2] ||
       byCodePoint(x[1].path, y[1].path) ||
       (x[2] ? y[1].line - x[1].line : x[1].line - y[1].line),
   );
-  return scored.slice(0, T.TOP).map(([, c]) => c);
+  const out: Chunk[] = []; // one id, one place
+  for (const [, c] of scored) {
+    if (out.length === T.TOP) break;
+    if (!out.some((x) => x.id === c.id)) out.push(c);
+  }
+  return out;
 }
 
 function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias, today: string): J[] {
@@ -1174,7 +1184,7 @@ function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias, today:
     }
   }
   out.push(...missing(pile, served));
-  if (today) out.push(...goneBy(pile, served, today));
+  if (today) out.push(...goneBy(pile, served, today, want, alias));
   for (const p of new Set(served.map((c) => c.path)))
     out.push(...series(p, pile.filter((x) => x.path === p).map((x) => x.text).join("\n")));
   if (ws.length && T.MAKE.has(ws[0])) out.push(hint("this asks for something made", null, T.NEXT.get("made")!));

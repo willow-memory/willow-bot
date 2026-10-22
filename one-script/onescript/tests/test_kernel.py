@@ -364,14 +364,34 @@ def test_a_date_gone_by_with_nothing_since_is_said(tmp_path):
     )
     pile = k.chunks(tmp_path)
     served = [c for c in pile if c["path"] == "tuning/2026.txt"]
-    assert k.gone_by(pile, served, "20261022") == [
+    assert k.gone_by(pile, served, "20261022", {"next"}, {}) == [
         {
             "why": "gone by, nothing written since: Ann - upright (May 2026)",
             "where": "tuning/: 1 of 3 headings, as of 2026-10-22",
         }
     ]
-    assert k.gone_by(pile, served, "20260430") == []
+    assert k.gone_by(pile, served, "20260430", {"next"}, {}) == []
+    # said only where a date's own line holds the bite's words (or her list's)
+    assert k.gone_by(pile, served, "20261022", {"tired"}, {}) == []
+    assert k.gone_by(pile, served, "20261022", {"due"}, {"due": ["next"]})
     assert k.written("next: Oct 2027; March 20, 2026; Octo 2026") == [
         ("20271001", "Oct 2027"),
         ("20260320", "March 20, 2026"),
+    ]
+
+
+def test_said_once_before_said_every_week_and_never_twice(tmp_path):
+    """Odile's jar order, dictated every month, pushed out the van memo she
+    still has to act on (demo/odile/STRIP.md): one text is one place, and on
+    equal scores what was said once comes before what is routine."""
+    (tmp_path / "memos").mkdir()
+    for m in (3, 5, 7, 9):
+        (tmp_path / "memos" / f"2026-0{m}-01.txt").write_text("need forty jars\n")
+    (tmp_path / "memos" / "2021-05-14.txt").write_text("need to call the insurer\n")
+    (tmp_path / "memos" / "2026-03-20.txt").write_text("you would need a permit\n")
+    got = [c["path"] for c in k.rank(k.chunks(tmp_path), "what do I need to do")]
+    assert got == [
+        "memos/2026-03-20.txt",
+        "memos/2021-05-14.txt",
+        "memos/2026-09-01.txt",
     ]
