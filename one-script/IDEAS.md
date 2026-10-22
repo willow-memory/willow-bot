@@ -2229,6 +2229,18 @@ retrieval answers "populated"; whether the code is used needs a code tool
 (`script_match`, a call graph). A newcomer asking "is this used?" should be
 told where to look, not shown the definition as if it settled it.
 
+**Then the kernel was taught where to look** (the operator: *"teach the
+kernel's 42 where to look"*). A bite's output gains `look`, printed for the
+person and never written to the record: the bite's words no file in their
+folder has ("no file in your folder has database: it may be called something
+else there"); each function a served chunk defines and whether anything else
+in the folder names it ("check_login is defined at login.php:12; nothing else
+in your folder names it", which is egg 5's verdict, found by counting); a
+bite of common words only ("name the thing you mean"); and a request to
+make something. Facts about their folder come first; only then, under
+`next`, the kind of tool that does the rest, with the fleet's name for it
+(115's hand-off table), so a newcomer can ignore it.
+
 ## What the one script said about this list
 
 2026-10-21. One check-in over willow-bot, Jeles and willows-grove (1,366

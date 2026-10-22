@@ -81,6 +81,24 @@ def test_a_strangers_files_are_read_by_what_they_hold_not_their_names(tmp_path):
     assert got == {"TODO", "deploy.bat", "TEST_PROCEDURE.doc"}  # a NUL is binary
 
 
+def test_a_42_says_where_to_look():
+    pile = [
+        {"path": "login.php", "line": 3, "text": "function check_login($u) { }"},
+        {"path": "app.py", "line": 1, "text": "def serve():\n    return 1"},
+        {"path": "main.py", "line": 9, "text": "serve()"},
+    ]
+    why = [h["why"] for h in k.look(pile, "where is the database", [])]
+    assert why == ["no file in your folder has database"]
+    defs = {h["why"]: h["where"] for h in k.look(pile, "login serve", pile[:2])}
+    assert defs == {
+        "check_login is defined at login.php:3": "nothing else in your folder names it",
+        "serve is defined at app.py:1": "also named in main.py",
+    }
+    assert k.look(pile, "what does this do", [])[0]["why"].startswith("every word")
+    made = k.look(pile, "make a login page", [])
+    assert made[-1]["why"] == "this asks for something made"
+
+
 def test_a_key_inside_the_box_and_a_box_not_theirs_are_refused(tmp_path):
     pile = tmp_path / "pile"
     pile.mkdir()

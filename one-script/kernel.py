@@ -322,6 +322,61 @@ def rank(pile: list[dict], bite: str) -> list[dict]:
     return [c for *_, c in sorted(scored, key=lambda s: (-s[0], s[1], s[2]))[:TOP]]
 
 
+# ── where to look: what a 42 (or a served definition) can still say ─────────
+# Facts about their folder first; then, at most, which kind of tool does the
+# rest. A newcomer is told where the answer could be, never handed a guess.
+DEFINES = re.compile(r"\b(?:def|function|sub|class|func|fn)\s+([A-Za-z_][A-Za-z0-9_]*)")
+MAKE = {"make", "build", "write", "create", "generate"}
+NEXT = {
+    "other words": "a meaning match (the fleet's: Nestor's semantic_matcher)",
+    "unused": "a call graph or a code search (the fleet's: script_match)",
+    "made": "a builder (the fleet's: the Forge, forge_bite)",
+}
+
+
+def look(pile: list[dict], bite: str, served: list[dict]) -> list[dict]:
+    """Where to look, from what the folder holds: the bite's words no file
+    has; each function a served chunk defines, and whether anything else in
+    the folder names it (text can show a definition, not that nothing calls
+    it); a bite of common words only; a request to make something."""
+    out = []
+    ws = words(bite)
+    want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
+    if not want:
+        out.append({"why": "every word is a common one: name the thing you mean"})
+    every = set()
+    for c in pile:
+        every |= set(words(c["text"]))
+    absent = [w for w in want if not holds(w, every)]
+    if absent:
+        out.append(
+            {
+                "why": "no file in your folder has " + ", ".join(absent),
+                "where": "it may be called something else there",
+                "next": NEXT["other words"],
+            }
+        )
+    for c in served:
+        for name in dict.fromkeys(DEFINES.findall(c["text"])):
+            named = re.compile(rf"\b{re.escape(name)}\b")
+            uses = sorted(
+                {d["path"] for d in pile if d is not c and named.search(d["text"])}
+                | ({c["path"]} if len(named.findall(c["text"])) > 1 else set())
+            )
+            out.append(
+                {
+                    "why": f"{name} is defined at {c['path']}:{c['line']}",
+                    "where": "also named in " + ", ".join(uses)
+                    if uses
+                    else "nothing else in your folder names it",
+                    "next": NEXT["unused"],
+                }
+            )
+    if ws and ws[0] in MAKE:
+        out.append({"why": "this asks for something made", "next": NEXT["made"]})
+    return out
+
+
 # ── the loop ────────────────────────────────────────────────────────────────
 def sealed(box: Path, rows: list[dict]) -> dict[str, dict]:
     """Each proposal a seal row holds, by subject, only while its proof holds
@@ -353,7 +408,8 @@ def bite(box: Path, text: str, ts: str) -> int:
             append(box, ts, "bite", bite_key=k, answered_by=subj, served=[])
             print(json.dumps({"state": "sealed", "answer": prop["data"], "by": subj}))
             return ALIVE
-    served = rank(chunks(Path(config(box)["pile"])), text)
+    pile = chunks(Path(config(box)["pile"]))
+    served = rank(pile, text)
     refs = [
         {
             "id": c["id"],
@@ -367,6 +423,8 @@ def bite(box: Path, text: str, ts: str) -> int:
     state = "populated" if answers else "echo" if refs else "empty"
     doc = {"state": state, "bite_key": k}
     doc["served"] = [{**r, "text": c["text"]} for r, c in zip(refs, served)]
+    if hints := look(pile, text, served if answers else []):
+        doc["look"] = hints  # printed for them; the record keeps no words
     print(json.dumps(doc, ensure_ascii=False))
     return ALIVE if answers else ESCALATE
 
