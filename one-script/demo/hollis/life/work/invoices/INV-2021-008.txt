@@ -1,0 +1,17 @@
+VARGA PIANO SERVICE
+18 Cobble Lane, Larkfield
+555-0142  hollis.varga@example.com
+
+INVOICE INV-2021-008
+Date: 2021-08-24
+Service date: 2021-08-23
+
+Bill to:
+  Harmon Ridge School District, Accounts Payable
+
+  Tuning and service: Yamaha U1 x2 (music rm, gym) + Kawai GE-30 (auditorium)                  $  390.00
+
+  TOTAL DUE                                                                                    $  390.00
+
+Terms: Net 30. Checks payable to Hollis Varga.
+Thank you!

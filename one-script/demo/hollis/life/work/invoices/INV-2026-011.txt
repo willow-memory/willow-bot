@@ -1,0 +1,20 @@
+VARGA PIANO SERVICE
+18 Cobble Lane, Larkfield
+555-0142  hollis.varga@example.com
+
+INVOICE INV-2026-011
+Date: 2026-05-30
+Service date: 2026-05-28
+
+Bill to:
+  Larkfield Community Theatre, attn: Gil Marchetti, Treasurer
+
+  Pitch raise, Wurlitzer studio upright (pit)                                                  $  140.00
+  Partial regulation after water damage (Wurlitzer): let-off, repetition, 14 swollen keys eased $  260.00
+  Tuning, Yamaha C3 (rehearsal room)                                                           $  150.00
+  Replace 2 bass strings (Wurlitzer, A1, Bb1), incl. strings                                   $   90.00
+
+  TOTAL DUE                                                                                    $  640.00
+
+Terms: Net 30. Checks payable to Hollis Varga.
+Thank you!

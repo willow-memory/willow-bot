@@ -1,0 +1,17 @@
+VARGA PIANO SERVICE
+18 Cobble Lane, Larkfield
+555-0142  hollis.varga@example.com
+
+INVOICE INV-2023-013
+Date: 2023-09-12
+Service date: 2023-09-11
+
+Bill to:
+  Larkfield Music Academy, attn: Bettina Saar
+
+  Tuning and service: Studios 1-8 (Yamaha U1/U3, Boston UP-118)                                $ 1020.00
+
+  TOTAL DUE                                                                                    $ 1020.00
+
+Terms: Net 30. Checks payable to Hollis Varga.
+Thank you!

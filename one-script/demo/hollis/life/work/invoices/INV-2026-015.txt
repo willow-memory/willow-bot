@@ -1,0 +1,17 @@
+VARGA PIANO SERVICE
+18 Cobble Lane, Larkfield
+555-0142  hollis.varga@example.com
+
+INVOICE INV-2026-015
+Date: 2026-09-19
+Service date: 2026-09-17
+
+Bill to:
+  St. Brendan's Church, Parish Office, attn: Fr. Colm Ardagh
+
+  Tuning and service: Baldwin SD-10 (sanctuary) + Kimball console (parish hall)                $  300.00
+
+  TOTAL DUE                                                                                    $  300.00
+
+Terms: Net 30. Checks payable to Hollis Varga.
+Thank you!

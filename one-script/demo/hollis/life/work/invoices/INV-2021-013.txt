@@ -1,0 +1,17 @@
+VARGA PIANO SERVICE
+18 Cobble Lane, Larkfield
+555-0142  hollis.varga@example.com
+
+INVOICE INV-2021-013
+Date: 2021-11-07
+Service date: 2021-11-05
+
+Bill to:
+  The Blue Kettle, attn: Rory Feeney
+
+  Tuning and service: Kawai K-300 upright (bar)                                                $  150.00
+
+  TOTAL DUE                                                                                    $  150.00
+
+Terms: Net 30. Checks payable to Hollis Varga.
+Thank you!

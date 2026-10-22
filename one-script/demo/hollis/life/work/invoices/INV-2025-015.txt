@@ -1,0 +1,17 @@
+VARGA PIANO SERVICE
+18 Cobble Lane, Larkfield
+555-0142  hollis.varga@example.com
+
+INVOICE INV-2025-015
+Date: 2025-10-05
+Service date: 2025-10-03
+
+Bill to:
+  Larkfield Civic Hall, Events Office, attn: Marta Quill
+
+  Tuning and service: Steinway D (stage)                                                       $  245.00
+
+  TOTAL DUE                                                                                    $  245.00
+
+Terms: Net 30. Checks payable to Hollis Varga.
+Thank you!

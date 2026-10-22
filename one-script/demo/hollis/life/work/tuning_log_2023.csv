@@ -1,0 +1,196 @@
+date,client,town,instrument,pitch_found_cents,work,minutes,fee,paid,callback,notes
+2023-01-02,Harmon Ridge School,Harmon Ridge,"Yamaha U1 x2 (music rm, gym) + Kawai GE-30 (auditorium)",-14,service visit,219,415.00,INV-2023-001,,
+2023-01-02,Delphine Corrigan,Ashby Mills,Steinway M grand,-12,tuning,93,135.00,cash,,aural
+2023-01-03,Delphine Kettering,Coldbrook,Kawai K-300 upright,2,tuning,92,135.00,cash,,tea and shortbread
+2023-01-09,Larkfield Civic Hall,Larkfield,Steinway D (stage),1,service visit,139,235.00,INV-2023-002,,
+2023-01-09,Delphine Elsworth,Harmon Ridge,Baldwin Acrosonic spinet,-18,pitch raise + tuning,73,215.00,cash,,damper buzz on C2 fixed
+2023-01-09,Lorcan Upham,Harmon Ridge,Kimball console,-10,tuning,73,135.00,p2p,,
+2023-01-09,Niall Strand,Ashby Mills,Baldwin Acrosonic spinet,-14,tuning,73,135.00,check,,
+2023-01-10,Hester Nethercott,Wrenhaven,Story & Clark console,-6,tuning,67,170.00,cash,,damper buzz on D5 fixed
+2023-01-12,Golda Quarles,Harmon Ridge,Boston UP-118,-5,tuning,85,135.00,check,,"room humidity high, suggested a dehumidifier"
+2023-01-14,Tobin Merriweather,Larkfield,Yamaha U1 upright,-8,tuning,84,135.00,check,Y,pitch held well since last time
+2023-01-16,Ezra Calloway,Wrenhaven,Yamaha U3 upright,-18,pitch raise + tuning,85,195.00,cash,,"kids practicing a lot, says mom"
+2023-01-16,Hamish Pendry,Wrenhaven,Yamaha GB1 grand,-4,tuning,66,135.00,cash,,tea and shortbread
+2023-01-17,Kesia Nethercott,Harmon Ridge,Kohler & Campbell spinet,-8,tuning,71,135.00,cash,,
+2023-01-18,Thea Feeney,Ashby Mills,Steinway M grand,-10,tuning,80,135.00,cash,,"mouse nest in bottom board, cleaned out"
+2023-01-18,Ulric Jessop,Harmon Ridge,Young Chang G-157 grand,-18,pitch raise + tuning,93,195.00,p2p,,"kids practicing a lot, says mom"
+2023-01-19,Larkfield Music Academy,Larkfield,"Studios 1-8 (Yamaha U1/U3, Boston UP-118)",-8,service visit,420,1020.00,INV-2023-003,,
+2023-01-19,Tobin Merriweather,Larkfield,Yamaha U1 upright,,return visit,46,0.00,n/c,,"string slipped after pitch raise, retouched"
+2023-01-20,Greer Vane,Larkfield,Baldwin Acrosonic spinet,1,tuning,86,135.00,cash,,tea and shortbread
+2023-01-23,Mabel Inchley,Coldbrook,Kimball console,-14,tuning,92,135.00,check,,"new client, one-off"
+2023-01-23,Niall Dabney,Larkfield,Baldwin Acrosonic spinet,-3,tuning,68,135.00,cash,,"loose hinge pin on fallboard, tightened"
+2023-01-26,Ezra Jessop,Larkfield,Boston UP-118,-6,tuning,73,135.00,cash,,
+2023-01-26,Yvette Ashgrove,Saltmarsh,Wurlitzer console,-8,tuning,95,155.00,p2p,,damper buzz on D5 fixed
+2023-02-06,Juniper Grizzard,Wrenhaven,Steinway M grand,1,tuning,65,135.00,cash,,"new owner, inherited it from an aunt"
+2023-02-06,Niall Feeney,Harmon Ridge,Yamaha U3 upright,-2,tuning,89,135.00,check,,"piano against outside wall, moved 6in"
+2023-02-07,Hamish Jessop,Larkfield,Young Chang G-157 grand,-12,tuning,80,135.00,cash,,"mouse nest in bottom board, cleaned out"
+2023-02-08,Ivo Merriweather,Coldbrook,Story & Clark console,-35,pitch raise + tuning,83,195.00,check,,"new client, one-off"
+2023-02-10,Fitz Hollowell,Wrenhaven,Estonia 168 grand,1,tuning,88,170.00,cash,,replaced broken string B5
+2023-02-13,St. Brendan's Church,Larkfield,Baldwin SD-10 (sanctuary) + Kimball console (parish hall),-12,service visit,146,275.00,INV-2023-004,,
+2023-02-14,Anouk Pendry,Larkfield,Baldwin Acrosonic spinet,-5,tuning,85,170.00,check,,damper buzz on C2 fixed
+2023-02-18,Edda Dunmore,Ashby Mills,Mason & Hamlin A grand,-3,tuning,83,135.00,check,,pins firm
+2023-02-20,Barnaby Grizzard,Harmon Ridge,Chickering upright (1910s),2,tuning,68,135.00,check,,
+2023-02-20,Hamish Loveridge,Pine Hatch,Yamaha U3 upright,-6,tuning,92,135.00,p2p,,
+2023-02-20,Mabel Calloway,Harmon Ridge,Baldwin Acrosonic spinet,-25,pitch raise + tuning,72,195.00,p2p,,aural
+2023-02-20,Percival Merriweather,Larkfield,Chickering upright (1910s),2,tuning,84,135.00,cash,,pins firm
+2023-02-20,Ulric Feeney,Wrenhaven,Chickering upright (1910s),-4,tuning,70,135.00,p2p,,
+2023-02-27,Kesia Jessop,Larkfield,Mason & Hamlin A grand,2,tuning,83,135.00,check,,
+2023-03-02,Dorian Halloran,Coldbrook,Yamaha GB1 grand,-35,pitch raise + tuning,88,195.00,cash,,pins firm
+2023-03-03,Hamish Brecken,Larkfield,Baldwin Hamilton studio,-10,tuning,67,135.00,p2p,,
+2023-03-04,Jory Jessop,Ashby Mills,Yamaha U1 upright,-8,tuning,69,155.00,cash,,freed sticky key B5
+2023-03-08,Fitz Thistlewood,Harmon Ridge,Kohler & Campbell spinet,-3,tuning,86,135.00,cash,,"loose hinge pin on fallboard, tightened"
+2023-03-14,Larkfield Civic Hall,Larkfield,Steinway D (stage),-14,service visit,134,235.00,INV-2023-005,,
+2023-03-15,Dorian Ashgrove,Harmon Ridge,Yamaha U1 upright,-10,tuning,74,135.00,cash,,wants a quote for regulation
+2023-03-20,Hamish Yarrow,Pine Hatch,Hamilton upright (1920s),-10,tuning,69,135.00,check,,cat sat on the lid the whole time
+2023-03-20,Ivo Bellweather,Larkfield,Yamaha U1 upright,-4,tuning,86,155.00,p2p,,replaced broken string A0
+2023-03-23,Ezra Loveridge,Larkfield,Samick SU-118,-5,tuning,77,135.00,check,,
+2023-03-23,Hamish Gorst,Wrenhaven,Baldwin Acrosonic spinet,2,tuning,95,135.00,check,,
+2023-03-24,Larkfield Community Theatre,Larkfield,Wurlitzer studio upright (pit) + Yamaha C3 (rehearsal),-4,service visit,169,295.00,INV-2023-006,,
+2023-03-24,Ines Fairbairn,Coldbrook,Mason & Hamlin A grand,-8,tuning,90,135.00,check,,"new owner, inherited it from an aunt"
+2023-03-27,Lorcan Dabney,Wrenhaven,Baldwin Acrosonic spinet,-25,pitch raise + tuning,65,195.00,check,,
+2023-04-03,Hester Feeney,Coldbrook,Steinway M grand,-25,pitch raise + tuning,81,195.00,cash,Y,"new client, one-off"
+2023-04-03,Odalys Gorst,Coldbrook,Young Chang G-157 grand,2,tuning,73,135.00,check,,pins firm
+2023-04-04,Larkfield Civic Hall,Larkfield,Steinway D (stage),-5,service visit,130,235.00,INV-2023-007,,
+2023-04-04,Wilhelmina Bellweather,Pine Hatch,Young Chang G-157 grand,-8,tuning,65,135.00,p2p,,
+2023-04-10,Aldous Pell,Ashby Mills,Steinway M grand (1962),2,tuning,65,135.00,p2p,,"bright, as he likes it"
+2023-04-10,Cormac Yarrow,Harmon Ridge,Young Chang G-157 grand,-8,tuning,94,135.00,p2p,,
+2023-04-10,Yvette Feeney,Larkfield,Kawai K-300 upright,-8,tuning,82,135.00,check,,
+2023-04-10,Hester Feeney,Coldbrook,Steinway M grand,,return visit,50,0.00,n/c,,"string slipped after pitch raise, retouched"
+2023-04-11,Wilhelmina Halloran,Saltmarsh,Baldwin Hamilton studio,-6,tuning,83,135.00,check,,
+2023-04-12,The Blue Kettle,Coldbrook,Kawai K-300 upright (bar),-35,service visit,89,160.00,INV-2023-008,,
+2023-04-15,Edda Hollowell,Harmon Ridge,Chickering upright (1910s),-10,tuning,83,135.00,check,,"room humidity high, suggested a dehumidifier"
+2023-04-17,Silas Dabney,Coldbrook,Wurlitzer console,-2,tuning,73,135.00,check,,"piano against outside wall, moved 6in"
+2023-04-19,Fenella Brecken,Larkfield,Everett studio,-8,tuning,93,135.00,check,,
+2023-04-25,Silas Calloway,Ashby Mills,Yamaha U1 upright,-5,tuning,67,135.00,check,,"new owner, inherited it from an aunt"
+2023-04-26,Hester Inchley,Pine Hatch,Baldwin Hamilton studio,-35,pitch raise + tuning,77,195.00,check,,
+2023-05-01,Ulric Nethercott,Harmon Ridge,Hamilton upright (1920s),-25,pitch raise + tuning,94,195.00,check,,aural
+2023-05-02,Jory Yarrow,Harmon Ridge,Kohler & Campbell spinet,-5,tuning,90,135.00,check,,"loose hinge pin on fallboard, tightened"
+2023-05-03,Lorcan Fairbairn,Ashby Mills,Yamaha U1 upright,-2,tuning,89,160.00,cash,,replaced broken string Bb2
+2023-05-04,Yvette Fairbairn,Harmon Ridge,Baldwin Acrosonic spinet,-3,tuning,74,135.00,cash,,pitch held well since last time
+2023-05-06,Anouk Upham,Pine Hatch,Mason & Hamlin A grand,-8,tuning,88,135.00,check,,"new owner, inherited it from an aunt"
+2023-05-08,Fitz Pendry,Harmon Ridge,Steinway M grand,-8,tuning,86,135.00,cash,,aural
+2023-05-09,Odalys Ottley,Pine Hatch,Yamaha U1 upright,-8,tuning,78,135.00,check,,
+2023-05-10,Fitz Corrigan,Ashby Mills,Kawai K-300 upright,-6,tuning,71,135.00,check,,
+2023-05-14,Larkfield Civic Hall,Larkfield,Steinway D (stage),-8,service visit,133,235.00,INV-2023-009,,
+2023-05-15,Rosalind Elsworth,Saltmarsh,Yamaha GB1 grand,-6,tuning,73,170.00,check,,freed sticky key C4
+2023-05-17,Ines Yarrow,Larkfield,Young Chang G-157 grand,-5,tuning,87,135.00,check,,"loose hinge pin on fallboard, tightened"
+2023-05-22,St. Brendan's Church,Larkfield,Baldwin SD-10 (sanctuary) + Kimball console (parish hall),-10,service visit,156,275.00,INV-2023-010,,
+2023-05-22,Jory Vane,Coldbrook,Young Chang G-157 grand,1,tuning,88,135.00,check,,"new owner, inherited it from an aunt"
+2023-05-22,Tobin Inchley,Larkfield,Kawai K-300 upright,-3,tuning,83,135.00,check,,wants a quote for regulation
+2023-05-23,Bram Brecken,Larkfield,Everett studio,-2,tuning,90,135.00,cash,,wants a quote for regulation
+2023-05-25,Ulric Yarrow,Pine Hatch,Kimball console,-2,tuning,76,135.00,cash,,cat sat on the lid the whole time
+2023-05-26,Yvette Fairbairn,Larkfield,Mason & Hamlin A grand,-18,pitch raise + tuning,74,195.00,p2p,,"new client, one-off"
+2023-06-01,Wilhelmina Merriweather,Harmon Ridge,Steinway M grand,2,tuning,94,135.00,check,,aural
+2023-06-02,Barnaby Dabney,Harmon Ridge,Yamaha U1 upright,-14,tuning,75,170.00,check,,damper buzz on E6 fixed
+2023-06-05,Barnaby Kettering,Harmon Ridge,Baldwin Hamilton studio,-4,tuning,65,135.00,check,,
+2023-06-05,Fenella Ottley,Ashby Mills,Kohler & Campbell spinet,-18,pitch raise + tuning,79,195.00,cash,,aural
+2023-06-05,Silas Wexley,Larkfield,Yamaha GB1 grand,-3,tuning,86,135.00,cash,,wants a quote for regulation
+2023-06-06,Anouk Calloway,Saltmarsh,Chickering upright (1910s),2,tuning,68,135.00,check,,"room humidity high, suggested a dehumidifier"
+2023-06-10,Tobin Calloway,Larkfield,Kawai K-300 upright,1,tuning,88,135.00,p2p,,"mouse nest in bottom board, cleaned out"
+2023-06-12,Gideon Inchley,Wrenhaven,Story & Clark console,-8,tuning,91,135.00,check,,pins firm
+2023-06-15,Hamish Feeney,Pine Hatch,Yamaha U3 upright,1,tuning,80,135.00,check,,
+2023-06-15,Mabel Fairbairn,Larkfield,Baldwin Hamilton studio,-2,tuning,74,135.00,cash,,"mouse nest in bottom board, cleaned out"
+2023-06-19,Ivo Brecken,Larkfield,Yamaha U1 upright,-3,tuning,68,135.00,cash,,"piano against outside wall, moved 6in"
+2023-06-19,Marisol Brecken,Larkfield,Steinway M grand,-35,pitch raise + tuning,77,195.00,cash,,"room humidity high, suggested a dehumidifier"
+2023-06-23,Larkfield Music Academy,Larkfield,"Studios 1-8 (Yamaha U1/U3, Boston UP-118)",-35,service visit,423,1020.00,INV-2023-011,,
+2023-07-05,Juniper Elsworth,Larkfield,Yamaha GB1 grand,-25,pitch raise + tuning,68,195.00,check,,wants a quote for regulation
+2023-07-05,Silas Jessop,Ashby Mills,Everett studio,-35,pitch raise + tuning,75,195.00,check,,
+2023-07-06,Ivo Jessop,Larkfield,Steinway M grand,-12,tuning,90,135.00,cash,,
+2023-07-07,Hamish Dabney,Coldbrook,Steinway M grand,-14,tuning,77,135.00,check,,"room humidity high, suggested a dehumidifier"
+2023-07-07,Jory Upham,Larkfield,Yamaha U3 upright,-10,tuning,93,155.00,cash,,damper buzz on D5 fixed
+2023-07-07,Tobin Merriweather,Larkfield,Yamaha U1 upright,-35,pitch raise + tuning,85,195.00,check,,wants a quote for regulation
+2023-07-10,Delphine Kettering,Coldbrook,Kawai K-300 upright,-12,tuning,91,135.00,cash,,tea and shortbread
+2023-07-10,Edda Halloran,Pine Hatch,Steinway M grand,-4,tuning,83,135.00,check,,"new owner, inherited it from an aunt"
+2023-07-10,Ines Inchley,Larkfield,Steinway M grand,-8,tuning,94,170.00,cash,,damper buzz on E6 fixed
+2023-07-13,Kesia Brecken,Wrenhaven,Boston UP-118,-5,tuning,93,135.00,check,,
+2023-07-14,Kesia Nethercott,Harmon Ridge,Kohler & Campbell spinet,-12,tuning,76,135.00,cash,,pins firm
+2023-07-17,Ezra Jessop,Larkfield,Boston UP-118,-10,tuning,91,135.00,cash,,
+2023-07-17,Lorcan Vane,Larkfield,Baldwin Acrosonic spinet,-14,tuning,86,135.00,cash,,
+2023-07-21,Clemency Dunmore,Larkfield,Kawai K-300 upright,-5,tuning,90,160.00,check,,replaced broken string G#3
+2023-07-24,Agnes Merriweather,Harmon Ridge,Hamilton upright (1920s),-12,tuning,82,135.00,check,,wants a quote for regulation
+2023-07-26,Greer Vane,Larkfield,Baldwin Acrosonic spinet,2,tuning,84,135.00,cash,,pitch held well since last time
+2023-07-26,Niall Strand,Ashby Mills,Baldwin Acrosonic spinet,-14,tuning,88,155.00,check,,damper buzz on C2 fixed
+2023-07-26,Yvette Ashgrove,Saltmarsh,Wurlitzer console,-4,tuning,92,135.00,check,,aural
+2023-08-01,Anouk Hollowell,Harmon Ridge,Wurlitzer console,-10,tuning,80,135.00,check,,
+2023-08-01,Juniper Grizzard,Wrenhaven,Steinway M grand,-12,tuning,78,135.00,cash,,"room humidity high, suggested a dehumidifier"
+2023-08-03,Yvette Halloran,Pine Hatch,Mason & Hamlin A grand,-14,tuning,87,135.00,p2p,,wants a quote for regulation
+2023-08-09,Mabel Calloway,Harmon Ridge,Baldwin Acrosonic spinet,-6,tuning,67,135.00,cash,,wants a quote for regulation
+2023-08-09,Ulric Quarles,Harmon Ridge,Yamaha U3 upright,-14,tuning,87,135.00,check,,cat sat on the lid the whole time
+2023-08-14,Harmon Ridge School,Harmon Ridge,"Yamaha U1 x2 (music rm, gym) + Kawai GE-30 (auditorium)",-2,service visit,219,415.00,INV-2023-012,,
+2023-08-14,Edda Corrigan,Harmon Ridge,Everett studio,2,tuning,85,135.00,check,,pins firm
+2023-08-14,Ines Vane,Larkfield,Yamaha U3 upright,-14,tuning,75,135.00,check,,"new owner, inherited it from an aunt"
+2023-08-14,Niall Yarrow,Pine Hatch,Estonia 168 grand,-12,tuning,68,135.00,check,,
+2023-08-15,Anouk Pendry,Larkfield,Baldwin Acrosonic spinet,-10,tuning,79,160.00,check,,replaced broken string D5
+2023-08-15,Hamish Jessop,Larkfield,Young Chang G-157 grand,-14,tuning,89,170.00,check,,damper buzz on D5 fixed
+2023-08-16,Yvette Feeney,Larkfield,Samick SU-118,-3,tuning,84,135.00,p2p,,"new client, one-off"
+2023-08-17,Cormac Quarles,Larkfield,Wurlitzer console,-25,pitch raise + tuning,73,195.00,check,,"new client, one-off"
+2023-08-18,Dorian Rookwood,Larkfield,Baldwin Acrosonic spinet,-14,tuning,95,135.00,check,,"piano against outside wall, moved 6in"
+2023-08-21,Odalys Bellweather,Ashby Mills,Yamaha U1 upright,-14,tuning,65,135.00,cash,,tea and shortbread
+2023-08-21,Yvette Wexley,Larkfield,Yamaha GB1 grand,-12,tuning,92,135.00,cash,,pins firm
+2023-08-22,Percival Wexley,Harmon Ridge,Yamaha U1 upright,-5,tuning,67,160.00,check,,replaced broken string A0
+2023-08-23,Ivo Halloran,Coldbrook,Estonia 168 grand,-3,tuning,94,135.00,check,,
+2023-09-04,Hamish Gorst,Wrenhaven,Baldwin Acrosonic spinet,-35,pitch raise + tuning,93,220.00,cash,,damper buzz on F4 fixed
+2023-09-04,Jory Quarles,Harmon Ridge,Story & Clark console,1,tuning,91,135.00,check,,
+2023-09-04,Mabel Feeney,Coldbrook,Yamaha U3 upright,-8,tuning,66,135.00,p2p,,
+2023-09-05,Dorian Halloran,Coldbrook,Yamaha GB1 grand,-18,pitch raise + tuning,75,195.00,cash,,aural
+2023-09-07,Juniper Dabney,Ashby Mills,Boston UP-118,-14,tuning,90,170.00,cash,,damper buzz on Bb2 fixed
+2023-09-08,Ivo Bellweather,Larkfield,Yamaha U1 upright,-5,tuning,83,135.00,p2p,,
+2023-09-08,Silas Loveridge,Larkfield,Estonia 168 grand,1,tuning,86,155.00,check,,replaced broken string G5
+2023-09-11,Larkfield Music Academy,Larkfield,"Studios 1-8 (Yamaha U1/U3, Boston UP-118)",-6,service visit,425,1020.00,INV-2023-013,,
+2023-09-11,Jory Jessop,Ashby Mills,Yamaha U1 upright,-2,tuning,88,135.00,check,,aural
+2023-09-11,Lorcan Dabney,Wrenhaven,Baldwin Acrosonic spinet,-6,tuning,91,135.00,p2p,,tea and shortbread
+2023-09-12,Hamish Yarrow,Pine Hatch,Hamilton upright (1920s),-6,tuning,85,135.00,check,,
+2023-09-15,Zebulon Kettering,Pine Hatch,Estonia 168 grand,-25,pitch raise + tuning,83,195.00,cash,,wants a quote for regulation
+2023-09-18,Fitz Thistlewood,Harmon Ridge,Kohler & Campbell spinet,2,tuning,92,135.00,cash,,
+2023-09-19,Mabel Corrigan,Coldbrook,Everett studio,-2,tuning,79,135.00,check,,"room humidity high, suggested a dehumidifier"
+2023-09-21,Edda Merriweather,Ashby Mills,Story & Clark console,-35,pitch raise + tuning,88,195.00,check,,"new owner, inherited it from an aunt"
+2023-09-25,St. Brendan's Church,Larkfield,Baldwin SD-10 (sanctuary) + Kimball console (parish hall),-14,service visit,168,275.00,INV-2023-014,,
+2023-09-25,Dorian Ashgrove,Harmon Ridge,Yamaha U1 upright,-4,tuning,91,135.00,cash,,"room humidity high, suggested a dehumidifier"
+2023-09-25,Hamish Brecken,Larkfield,Baldwin Hamilton studio,-4,tuning,94,135.00,check,,
+2023-09-25,Silas Dunmore,Ashby Mills,Yamaha GB1 grand,-8,tuning,72,135.00,cash,,
+2023-09-26,Barnaby Calloway,Coldbrook,Samick SU-118,-2,tuning,83,135.00,check,,pitch held well since last time
+2023-09-26,Odalys Kettering,Coldbrook,Wurlitzer console,-35,pitch raise + tuning,69,195.00,p2p,,
+2023-10-02,Wilhelmina Bellweather,Pine Hatch,Young Chang G-157 grand,-35,pitch raise + tuning,71,215.00,cash,,freed sticky key D5
+2023-10-03,Aldous Pell,Ashby Mills,Steinway M grand (1962),-2,tuning,93,135.00,p2p,,"bright, as he likes it"
+2023-10-03,Ines Grizzard,Larkfield,Young Chang G-157 grand,2,tuning,92,135.00,p2p,,"loose hinge pin on fallboard, tightened"
+2023-10-06,Larkfield Community Theatre,Larkfield,Wurlitzer studio upright (pit) + Yamaha C3 (rehearsal),-3,service visit,152,295.00,INV-2023-015,,
+2023-10-12,Larkfield Civic Hall,Larkfield,Steinway D (stage),-2,service visit,117,235.00,INV-2023-016,,
+2023-10-16,Silas Dabney,Coldbrook,Wurlitzer console,1,tuning,87,135.00,check,,
+2023-10-16,Zebulon Wexley,Coldbrook,Kohler & Campbell spinet,-8,tuning,66,160.00,check,,freed sticky key E3
+2023-10-17,Ulric Hollowell,Ashby Mills,Hamilton upright (1920s),-6,tuning,95,135.00,p2p,,
+2023-10-18,Mabel Loveridge,Larkfield,Chickering upright (1910s),-14,tuning,83,135.00,check,,"new client, one-off"
+2023-10-23,Wilhelmina Halloran,Saltmarsh,Baldwin Hamilton studio,-35,pitch raise + tuning,95,195.00,p2p,,pitch held well since last time
+2023-10-25,Fenella Brecken,Larkfield,Everett studio,-3,tuning,66,135.00,cash,,pins firm
+2023-10-25,Odalys Gorst,Coldbrook,Young Chang G-157 grand,-35,pitch raise + tuning,84,195.00,check,,"room humidity high, suggested a dehumidifier"
+2023-10-26,Edda Hollowell,Harmon Ridge,Chickering upright (1910s),-18,pitch raise + tuning,74,195.00,check,,aural
+2023-10-31,Fitz Elsworth,Larkfield,Yamaha GB1 grand,-3,tuning,68,135.00,p2p,,"new client, one-off"
+2023-11-04,Juniper Dunmore,Ashby Mills,Kohler & Campbell spinet,1,tuning,82,135.00,check,,pitch held well since last time
+2023-11-06,Bram Wexley,Larkfield,Yamaha U3 upright,1,tuning,81,135.00,cash,,pins firm
+2023-11-06,Rosalind Elsworth,Saltmarsh,Yamaha GB1 grand,-5,tuning,75,135.00,check,,pins firm
+2023-11-06,Thea Strand,Saltmarsh,Wurlitzer console,-3,tuning,88,135.00,p2p,,
+2023-11-07,Yvette Fairbairn,Harmon Ridge,Baldwin Acrosonic spinet,-18,pitch raise + tuning,70,195.00,cash,,tea and shortbread
+2023-11-11,Fitz Corrigan,Ashby Mills,Kawai K-300 upright,2,tuning,66,135.00,check,,tea and shortbread
+2023-11-13,Fitz Pendry,Harmon Ridge,Steinway M grand,-35,pitch raise + tuning,81,195.00,check,,pins firm
+2023-11-13,Zebulon Bellweather,Ashby Mills,Kawai K-300 upright,-12,tuning,68,135.00,check,,
+2023-11-14,Ines Yarrow,Larkfield,Young Chang G-157 grand,-5,tuning,86,135.00,check,,"loose hinge pin on fallboard, tightened"
+2023-11-17,Jory Vane,Coldbrook,Young Chang G-157 grand,-12,tuning,74,135.00,check,,
+2023-11-18,Fitz Grizzard,Harmon Ridge,Boston UP-118,-14,tuning,78,135.00,check,,cat sat on the lid the whole time
+2023-11-20,The Blue Kettle,Coldbrook,Kawai K-300 upright (bar),-12,service visit,93,160.00,INV-2023-017,,
+2023-11-21,Larkfield Civic Hall,Larkfield,Steinway D (stage),-12,service visit,136,235.00,INV-2023-018,,
+2023-11-22,Anouk Upham,Pine Hatch,Mason & Hamlin A grand,-4,tuning,83,155.00,p2p,,freed sticky key E3
+2023-11-23,Jory Yarrow,Harmon Ridge,Kohler & Campbell spinet,-4,tuning,84,135.00,cash,,
+2023-12-01,Wilhelmina Merriweather,Harmon Ridge,Steinway M grand,-10,tuning,92,135.00,check,,"new owner, inherited it from an aunt"
+2023-12-04,Greer Gorst,Ashby Mills,Hamilton upright (1920s),-35,pitch raise + tuning,67,195.00,p2p,,"piano against outside wall, moved 6in"
+2023-12-05,Tobin Calloway,Larkfield,Kawai K-300 upright,-35,pitch raise + tuning,81,195.00,check,,"piano against outside wall, moved 6in"
+2023-12-06,Mabel Fairbairn,Larkfield,Baldwin Hamilton studio,-35,pitch raise + tuning,79,195.00,p2p,,pins firm
+2023-12-11,Ivo Brecken,Larkfield,Yamaha U1 upright,2,tuning,92,135.00,check,,"piano against outside wall, moved 6in"
+2023-12-11,Thea Rookwood,Ashby Mills,Yamaha U3 upright,-10,tuning,92,135.00,check,,aural
+2023-12-12,Larkfield Civic Hall,Larkfield,Steinway D (stage),-5,service visit,137,235.00,INV-2023-019,,
+2023-12-13,Silas Wexley,Larkfield,Yamaha GB1 grand,1,tuning,86,135.00,check,,tea and shortbread
+2023-12-14,Ezra Brecken,Larkfield,Everett studio,-6,tuning,68,135.00,check,,"new client, one-off"
+2023-12-21,St. Brendan's Church,Larkfield,Baldwin SD-10 (sanctuary) + Kimball console (parish hall),1,service visit,162,275.00,INV-2023-020,,
+2023-12-21,Anouk Calloway,Saltmarsh,Chickering upright (1910s),-12,tuning,69,135.00,cash,,aural
+2023-12-21,Tobin Brecken,Larkfield,Kimball console,2,tuning,92,135.00,cash,,cat sat on the lid the whole time
+2023-12-25,Hester Feeney,Larkfield,Mason & Hamlin A grand,-5,tuning,74,135.00,cash,,tea and shortbread
+2023-12-25,Lorcan Corrigan,Larkfield,Chickering upright (1910s),-2,tuning,76,135.00,check,,
+2023-12-29,Barnaby Yarrow,Larkfield,Estonia 168 grand,-6,tuning,79,135.00,check,,"new client, one-off"
