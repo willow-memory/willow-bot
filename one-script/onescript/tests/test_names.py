@@ -14,16 +14,18 @@ from onescript.tests.test_seed import box, cfg  # noqa: F401
 
 
 def test_a_given_name_never_reaches_the_served_file(box):
+    # Served tables come in served-id order, keyed fresh each check-in, so the
+    # two serves are compared as a whole, never table by table.
     draw.draw(box["cfg"], R)
     _, plain = served_pair(box["cfg"])
-    text = plain[0]["rows"][0]["text"]
-    word = max(re.findall(r"[A-Za-z]{4,}", text), key=len)  # a word served now
+    text = "\n".join(t["rows"][0]["text"] for t in plain)
+    word = max(sorted(re.findall(r"[A-Za-z]{4,}", text)), key=len)  # served now
 
     c = dataclasses.replace(box["cfg"], names=(word,))
     record = c.box / "record.jsonl"
     draw.draw(c, R)
     _, tables = served_pair(c)
-    served = tables[0]["rows"][0]["text"]
+    served = "\n".join(t["rows"][0]["text"] for t in tables)
     assert "[withheld: name, L3]" in served
     assert not re.search(rf"(?i)(?<!\w){word}(?!\w)", served)
     on_disk = (c.box / "served.json").read_text(encoding="utf-8")
