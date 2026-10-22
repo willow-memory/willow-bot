@@ -603,8 +603,30 @@ function named(text: string, name: string): number {
 }
 
 // ── the pile ───────────────────────────────────────────────────────────────
+/** kernel.py's stem: an English word's plain form; only words of ASCII letters. */
+function stem(w: string): string {
+  if (w.length < 3 || !/^[A-Za-z]+$/.test(w)) return w;
+  let s = w;
+  let n = s.length;
+  if (n > 4 && (s.endsWith("ies") || s.endsWith("ied"))) s = s.slice(0, n - 3) + "y";
+  else if (n > 4 && s.endsWith("ing")) s = s.slice(0, n - 3);
+  else if (n > 3 && s.endsWith("ed")) s = s.slice(0, n - 2);
+  else if (n > 3 && s.endsWith("s") && !s.endsWith("ss")) s = s.slice(0, n - 1);
+  n = s.length;
+  if (n > 3 && s[n - 1] === s[n - 2] && !"aeiouls".includes(s[n - 1])) s = s.slice(0, --n);
+  if (n > 2 && s.endsWith("e")) s = s.slice(0, n - 1);
+  return s;
+}
+
+/** kernel.py's forms: words, and each one's plain form. */
+function forms(ws: string[]): Set<string> {
+  const out = new Set(ws);
+  for (const w of ws) out.add(stem(w));
+  return out;
+}
+
 function holds(w: string, toks: Set<string>): boolean {
-  if (toks.has(w)) return true;
+  if (toks.has(w) || toks.has(stem(w))) return true;
   if (len(w) < 4 || !cps(w).some((c) => T.digit.has(c))) return false;
   for (const t of toks) if (t.endsWith(w) || t.startsWith(w)) return true;
   return false;
@@ -781,6 +803,16 @@ function date(y: string, m: string, d: string): string {
   return ok ? y + m + d : "";
 }
 
+/** kernel.py's _day_month: a/b/y read only when it can't be misread. */
+function dayMonth(a: string, b: string, y: string): string {
+  const x = Number(a);
+  const z = Number(b);
+  const two = (v: number) => String(v).padStart(2, "0");
+  if (x === z || (x > 12 && z <= 12)) return date(y, two(z), two(x));
+  if (z > 12 && x <= 12) return date(y, two(x), two(z));
+  return "";
+}
+
 /** kernel.py's newest: the latest ISO or compact date written in t, or "". */
 function newest(t: string): string {
   let best = "";
@@ -797,6 +829,14 @@ function newest(t: string): string {
     } else if (n === 4 && t[i + 4] === "-" && digits(t, i + 5) === 2 && t[i + 7] === "-" && digits(t, i + 8) === 2) {
       got = date(t.slice(i, i + 4), t.slice(i + 5, i + 7), t.slice(i + 8, i + 10));
       if (got) n = 10;
+    } else if (n <= 2 && (t[i + n] === "/" || t[i + n] === ".")) {
+      const sep = t[i + n];
+      const m = digits(t, i + n + 1);
+      const j = i + n + 1 + m;
+      if (m >= 1 && m <= 2 && t[j] === sep && digits(t, j + 1) === 4) {
+        got = dayMonth(t.slice(i, i + n), t.slice(i + n + 1, j), t.slice(j + 1, j + 5));
+        if (got) n = j + 5 - i;
+      }
     }
     if (got > best) best = got;
     i += n;
@@ -827,7 +867,7 @@ function rank(pile: Chunk[], bite: string, alias: Alias): Chunk[] {
   const when = dates(pile);
   const held: [Chunk, Set<string>, number][] = [];
   pile.forEach((c, k) => {
-    const toks = new Set([...words(c.text), ...words(c.path)]); // a folder's name is the person's word too
+    const toks = forms([...words(c.text), ...words(c.path)]); // a folder's name is the person's word too
     const h = new Set([...want].filter((w) => heldBy(w, toks, alias)));
     if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h, when[k]]);
   });
@@ -871,7 +911,7 @@ function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias): J[] {
   };
   if (!want.length) out.push(hint("every word is a common one: name the thing you mean", null, null));
   const every = new Set<string>();
-  for (const c of pile) for (const w of [...words(c.text), ...words(c.path)]) every.add(w);
+  for (const c of pile) for (const w of forms([...words(c.text), ...words(c.path)])) every.add(w);
   const absent = want.filter((w) => !heldBy(w, every, alias));
   for (const w of want) {
     // said, so a match their list made is never taken for theirs
@@ -1333,6 +1373,7 @@ function vectors(casesFile: string, resultsFile: string): number {
     new Map([...((o.get("alias") as JMap | undefined) ?? new Map())].map(([w, ts]) => [w, ts as string[]]));
   res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string, aliasOf(o)).map((x) => x.id)])));
   res.set("newest", list("newest").map((o) => obj(["newest", newest(o.get("text") as string)])));
+  res.set("stem", list("stem").map((o) => obj(["stem", stem(o.get("w") as string)])));
   res.set(
     "wordlist",
     list("wordlist").map((o) => {

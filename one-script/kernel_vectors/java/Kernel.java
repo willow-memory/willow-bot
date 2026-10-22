@@ -754,8 +754,34 @@ public final class Kernel {
         return unescape(tags(hidden(text)));
     }
 
+    /** kernel.py's stem: an English word's plain form; only words of ASCII letters. */
+    static String stem(String w) {
+        if (w.length() < 3) return w;
+        for (int i = 0; i < w.length(); i++) {
+            char c = w.charAt(i);
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return w;
+        }
+        String s = w;
+        int n = s.length();
+        if (n > 4 && (s.endsWith("ies") || s.endsWith("ied"))) s = s.substring(0, n - 3) + "y";
+        else if (n > 4 && s.endsWith("ing")) s = s.substring(0, n - 3);
+        else if (n > 3 && s.endsWith("ed")) s = s.substring(0, n - 2);
+        else if (n > 3 && s.endsWith("s") && !s.endsWith("ss")) s = s.substring(0, n - 1);
+        n = s.length();
+        if (n > 3 && s.charAt(n - 1) == s.charAt(n - 2) && "aeiouls".indexOf(s.charAt(n - 1)) < 0) s = s.substring(0, --n);
+        if (n > 2 && s.endsWith("e")) s = s.substring(0, n - 1);
+        return s;
+    }
+
+    /** kernel.py's forms: words, and each one's plain form. */
+    static Set<String> forms(List<String> ws) {
+        Set<String> out = new HashSet<>(ws);
+        for (String w : ws) out.add(stem(w));
+        return out;
+    }
+
     static boolean holds(String w, Set<String> toks) {
-        if (toks.contains(w)) return true;
+        if (toks.contains(w) || toks.contains(stem(w))) return true;
         if (len(w) < 4 || !w.codePoints().anyMatch(DIGIT::has)) return false;
         for (String t : toks) if (t.endsWith(w) || t.startsWith(w)) return true;
         return false;
@@ -983,6 +1009,14 @@ public final class Kernel {
     }
 
     /** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+    /** kernel.py's _day_month: a/b/y read only when it can't be misread. */
+    static String dayMonth(String a, String b, String y) {
+        int x = Integer.parseInt(a), z = Integer.parseInt(b);
+        if (x == z || (x > 12 && z <= 12)) return date(y, String.format(java.util.Locale.ROOT, "%02d", z), String.format(java.util.Locale.ROOT, "%02d", x));
+        if (z > 12 && x <= 12) return date(y, String.format(java.util.Locale.ROOT, "%02d", x), String.format(java.util.Locale.ROOT, "%02d", z));
+        return "";
+    }
+
     static String newest(String t) {
         String best = "";
         int i = 0, n;
@@ -996,6 +1030,13 @@ public final class Kernel {
                     && i + 7 < t.length() && t.charAt(i + 7) == '-' && digits(t, i + 8) == 2) {
                 got = date(t.substring(i, i + 4), t.substring(i + 5, i + 7), t.substring(i + 8, i + 10));
                 if (!got.isEmpty()) n = 10;
+            } else if (n <= 2 && i + n < t.length() && (t.charAt(i + n) == '/' || t.charAt(i + n) == '.')) {
+                char sep = t.charAt(i + n);
+                int m = digits(t, i + n + 1), j = i + n + 1 + m;
+                if (m >= 1 && m <= 2 && j < t.length() && t.charAt(j) == sep && digits(t, j + 1) == 4) {
+                    got = dayMonth(t.substring(i, i + n), t.substring(i + n + 1, j), t.substring(j + 1, j + 5));
+                    if (!got.isEmpty()) n = j + 5 - i;
+                }
             }
             if (got.compareTo(best) > 0) best = got;
             i += n;
@@ -1027,8 +1068,9 @@ public final class Kernel {
         int[] when = dates(pile);
         for (int k = 0; k < pile.size(); k++) {
             Chunk c = pile.get(k);
-            Set<String> toks = new HashSet<>(words(c.text));
-            toks.addAll(words(c.path)); // a folder's name is the person's word too
+            List<String> both = new ArrayList<>(words(c.text));
+            both.addAll(words(c.path)); // a folder's name is the person's word too
+            Set<String> toks = forms(both);
             Set<String> h = new HashSet<>();
             for (String w : want) if (heldBy(w, toks, alias)) h.add(w);
             if ((long) h.size() * HOLD_DEN >= (long) HOLD_NUM * want.size()) {
@@ -1086,8 +1128,8 @@ public final class Kernel {
         if (want.isEmpty()) out.add(hint("every word is a common one: name the thing you mean", null, null));
         Set<String> every = new HashSet<>();
         for (Chunk c : pile) {
-            every.addAll(words(c.text));
-            every.addAll(words(c.path));
+            every.addAll(forms(words(c.text)));
+            every.addAll(forms(words(c.path)));
         }
         List<String> absent = new ArrayList<>();
         for (String w : want) if (!heldBy(w, every, alias)) absent.add(w);
@@ -1687,6 +1729,11 @@ public final class Kernel {
             wordlistOut.add(fields("alias", got[0], "why", got[1] == null ? NULL : got[1]));
         }
         out.put("wordlist", wordlistOut);
+
+        List<Object> stemOut = new ArrayList<>();
+        for (Object o : (List<Object>) c.get("stem"))
+            stemOut.add(fields("stem", stem((String) ((Map<String, Object>) o).get("w"))));
+        out.put("stem", stemOut);
 
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {

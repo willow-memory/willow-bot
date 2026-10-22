@@ -438,6 +438,9 @@ def holds_cases() -> list[dict]:
         "order",
         "x1",
         "1234",
+        "ow",
+        "pay",
+        "tun",
     ]
     for w in [
         "672841",
@@ -452,6 +455,9 @@ def holds_cases() -> list[dict]:
         "orders",
         "1234",
         "x1x1",
+        "owes",
+        "paying",
+        "tuning",
     ]:
         for _ in range(4):
             toks = R.sample(toks_pool, R.randint(0, 5))
@@ -661,7 +667,47 @@ def pile_cases() -> list[dict]:
     piles.append(series_pile())
     piles.append(log_pile())
     piles.append(memo_pile())
+    piles.append(forms_pile())
     return piles
+
+
+def forms_pile() -> list:
+    """Word forms and her dates: a chat dated dd/mm/yyyy (two lines read as
+    either, so skipped), and a loan written owed, owes, paying, paid."""
+    chat = (
+        "[11/03/2023, 20:00:00] Dev: pub quiz thursday?\n"
+        "[04/12/2024, 18:00:00] Dev: sent the 600 for the boiler, pay back whenever\n"
+        "\n[15/10/2026, 19:30:00] Dev: pram prices are wild\n"
+        "[03/02/2025, 09:00:00] Me: first 100 back, owing you 500\n"
+    )
+    return [
+        (["chats", "dev.txt"], chat.encode()),
+        (["notes", "loan.md"], b"Dev: owed 600, paying it back. Owes nothing to me.\n"),
+        (
+            ["notes", "tuning.md"],
+            b"Tuned the Steinway; tunes hold. Stretches for wrists.\n",
+        ),
+        (["notes", "uk.md"], b"MOT expiry 09/11/2026. Boiler fitted 06/12/2024.\n"),
+    ]
+
+
+def stem_cases() -> list[dict]:
+    words = [
+        "owe", "owes", "owed", "owing", "pay", "paying", "pays", "paid", "tune",
+        "tuned", "tuning", "tunes", "bees", "bee", "running", "planned", "passes",
+        "pass", "boss", "exams", "stretches", "notes", "is", "caf\u00e9", "x1-2",
+        "dad", "dads", "replies", "tried", "hives", "ties", "lies", "dies", "eyes",
+        "ss", "sss", "less", "bus", "gas", "seed", "need", "fee", "free", "tree",
+        "OWES", "Paying", "ing", "sing", "being", "ed", "bed", "red", "fled",
+        "ruled", "filled", "added", "egged", "a", "ab", "abc", "\u0131ng",
+        "na\u00efve", "\u0661\u0662",
+    ]  # fmt: skip
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    words += [
+        "".join(RN.choice(letters + "eeiinnggssdd") for _ in range(RN.randint(1, 9)))
+        for _ in range(300)
+    ]
+    return [{"w": w, "stem": k.stem(w)} for w in words]
 
 
 def memo_pile() -> list:
@@ -855,6 +901,37 @@ def wordlist_cases() -> list[dict]:
 
 def newest_cases() -> list[dict]:
     texts = [
+        # a day and a month either way round, read only when one is over 12
+        "[11/03/2023, 20:00:00]",
+        "[15/10/2026, 19:30:00]",
+        "Expiry: 09/11/2026",
+        "21.10.2026",
+        "10/21/2026",
+        "1/13/2026",
+        "13/1/2026",
+        "31/02/2026",
+        "12/13/2025",
+        "5/5/2026",
+        "13/13/2026",
+        "1/300",
+        "3/4/26",
+        "14/10/2026x",
+        "x14/10/2026",
+        "14/10/20261",
+        "14/10.2026",
+        "2026-10-14 and 21/10/2026",
+        "0/13/2026",
+        "13/0/2026",
+        "123/10/2026",
+        "13//2026",
+        "13/10/1899",
+        "13/10/2100",
+        "1.13.2026.",
+        "v1.2.2026",
+        "30/12/2025 and 2/1/2026",
+        "13/10/２０２６",
+        "\u0661\u0663/10/2026",
+        "13/10/2026/1",
         "",
         "2026-10-14",
         "20261014",
@@ -940,8 +1017,8 @@ FLOAT_TIES = float_tie_piles()
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
     (8), random handfuls of the dense-ties pile's vocabulary (9), the dated
-    pile's (10), the ledger's (11), the care log's (12), the log's (13) and
-    the memos' (14)."""
+    pile's (10), the ledger's (11), the care log's (12), the log's (13), the
+    memos' (14) and word forms' (15)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -953,6 +1030,9 @@ def extra_bites(i: int) -> list[str]:
         ]
     if i == 10:
         return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
+    if i == 15:
+        return ["how much do I still owe dev", "owing", "paid back", "tuning",
+                "stretch", "the boiler", "dev", "mot expiry", "pram"]  # fmt: skip
     if i == 14:
         return ["need", "need jars", "need permit", "market", "later"]
     if i == 13:
@@ -1135,6 +1215,7 @@ def main(argv: list[str]) -> int:
         **pile_based_cases(),
         "newest": newest_cases(),
         "wordlist": wordlist_cases(),
+        "stem": stem_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

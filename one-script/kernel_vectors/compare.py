@@ -174,6 +174,7 @@ PARTS = {
     "rank": ["ids"],
     "newest": ["newest"],
     "wordlist": ["alias", "why"],
+    "stem": ["stem"],
     "look": ["look"],
     "door": ["why"],
     "subject": ["subject"],

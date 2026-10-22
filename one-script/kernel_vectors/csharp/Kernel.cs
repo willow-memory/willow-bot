@@ -672,9 +672,33 @@ public static class Kernel
     }
 
     // ── the pile ───────────────────────────────────────────────────────────
+    /** kernel.py's stem: an English word's plain form; only words of ASCII letters. */
+    static string Stem(string w)
+    {
+        if (w.Length < 3 || !w.All(c => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) return w;
+        var s = w;
+        int n = s.Length;
+        if (n > 4 && (s.EndsWith("ies", StringComparison.Ordinal) || s.EndsWith("ied", StringComparison.Ordinal))) s = s.Substring(0, n - 3) + "y";
+        else if (n > 4 && s.EndsWith("ing", StringComparison.Ordinal)) s = s.Substring(0, n - 3);
+        else if (n > 3 && s.EndsWith("ed", StringComparison.Ordinal)) s = s.Substring(0, n - 2);
+        else if (n > 3 && s.EndsWith("s", StringComparison.Ordinal) && !s.EndsWith("ss", StringComparison.Ordinal)) s = s.Substring(0, n - 1);
+        n = s.Length;
+        if (n > 3 && s[n - 1] == s[n - 2] && !"aeiouls".Contains(s[n - 1])) s = s.Substring(0, --n);
+        if (n > 2 && s.EndsWith("e", StringComparison.Ordinal)) s = s.Substring(0, n - 1);
+        return s;
+    }
+
+    /** kernel.py's forms: words, and each one's plain form. */
+    static HashSet<string> Forms(IEnumerable<string> ws)
+    {
+        var o = new HashSet<string>(ws, StringComparer.Ordinal);
+        o.UnionWith(o.Select(Stem).ToList());
+        return o;
+    }
+
     static bool Holds(string w, ISet<string> toks)
     {
-        if (toks.Contains(w)) return true;
+        if (toks.Contains(w) || toks.Contains(Stem(w))) return true;
         if (Len(w) < 4 || !Cps(w).Any(DIGIT.Has)) return false;
         foreach (var t in toks) if (t.EndsWith(w, StringComparison.Ordinal) || t.StartsWith(w, StringComparison.Ordinal)) return true;
         return false;
@@ -854,6 +878,16 @@ public static class Kernel
     }
 
     /** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+    /** kernel.py's _day_month: a/b/y read only when it can't be misread. */
+    static string DayMonth(string a, string b, string y)
+    {
+        int x = int.Parse(a, CultureInfo.InvariantCulture), z = int.Parse(b, CultureInfo.InvariantCulture);
+        string Two(int v) => v.ToString("00", CultureInfo.InvariantCulture);
+        if (x == z || (x > 12 && z <= 12)) return Date(y, Two(z), Two(x));
+        if (z > 12 && x <= 12) return Date(y, Two(x), Two(z));
+        return "";
+    }
+
     static string Newest(string t)
     {
         string best = "";
@@ -870,6 +904,16 @@ public static class Kernel
             {
                 got = Date(t.Substring(i, 4), t.Substring(i + 5, 2), t.Substring(i + 8, 2));
                 if (got.Length > 0) n = 10;
+            }
+            else if (n <= 2 && i + n < t.Length && (t[i + n] == '/' || t[i + n] == '.'))
+            {
+                char sep = t[i + n];
+                int m = Digits(t, i + n + 1), j = i + n + 1 + m;
+                if (m >= 1 && m <= 2 && j < t.Length && t[j] == sep && Digits(t, j + 1) == 4)
+                {
+                    got = DayMonth(t.Substring(i, n), t.Substring(i + n + 1, m), t.Substring(j + 1, 4));
+                    if (got.Length > 0) n = j + 5 - i;
+                }
             }
             if (string.CompareOrdinal(got, best) > 0) best = got;
             i += n;
@@ -906,6 +950,7 @@ public static class Kernel
             var c = pile[k];
             var toks = new HashSet<string>(Words(c.Text), StringComparer.Ordinal);
             toks.UnionWith(Words(c.Path)); // a folder's name is the person's word too
+            toks = Forms(toks);
             var h = want.Where(w => HeldBy(w, toks, alias)).ToHashSet(StringComparer.Ordinal);
             if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h, when[k]));
         }
@@ -957,7 +1002,7 @@ public static class Kernel
         foreach (var w in ws) if (!FUNCTION.Contains(w) && !want.Contains(w)) want.Add(w);
         if (want.Count == 0) o.Add(Hint("every word is a common one: name the thing you mean", null, null));
         var every = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var c in pile) { every.UnionWith(Words(c.Text)); every.UnionWith(Words(c.Path)); }
+        foreach (var c in pile) { every.UnionWith(Forms(Words(c.Text))); every.UnionWith(Forms(Words(c.Path))); }
         var absent = want.Where(w => !HeldBy(w, every, alias)).ToList();
         foreach (var w in want) // said, so a match their list made is never taken for theirs
         {
@@ -1471,6 +1516,7 @@ public static class Kernel
         }
         res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!, AliasOf(o)).Select(x => (object?)x.Id).ToList())).ToList();
         res["newest"] = Part("newest").Select(o => (object?)Obj("newest", Newest((string)o["text"]!))).ToList();
+        res["stem"] = Part("stem").Select(o => (object?)Obj("stem", Stem((string)o["w"]!))).ToList();
         res["wordlist"] = Part("wordlist").Select(o =>
         {
             var (alias, why) = ParseWords((string)o["text"]!);

@@ -310,3 +310,31 @@ def test_said_once_before_said_every_week_and_never_twice(tmp_path):
         "memos/2021-05-14.txt",
         "memos/2026-09-01.txt",
     ]
+
+
+def test_word_forms_are_one_word(tmp_path):
+    """Hollis's "who still owes me money", Teodora's "how much do I still owe
+    dev" (demo/hollis, demo/teodora): owe, owes, owed and owing are one word.
+    Only plain ASCII words are touched; irregulars are her list's job."""
+    for a, b in (
+        ("owe", "owing"),
+        ("owes", "owed"),
+        ("tune", "tuning"),
+        ("pay", "pays"),
+    ):
+        assert k.stem(a) == k.stem(b), (a, b)
+    assert k.stem("paid") != k.stem("pay")
+    assert k.stem("café") == "café" and k.stem("x1-2") == "x1-2"
+    (tmp_path / "loan.md").write_text("Dev: owed 600, paying it back.\n")
+    assert k.rank(k.chunks(tmp_path), "how much do I still owe dev")
+
+
+def test_a_day_and_month_either_way_round_only_when_it_cant_be_misread():
+    """Teodora's chats are dd/mm/yyyy; 11/03/2023 could be either, and the
+    kernel never guesses."""
+    assert k.newest("[15/10/2026, 19:30:00]") == "20261015"
+    assert k.newest("10/21/2026") == "20261021"
+    assert k.newest("21.10.2026") == "20261021"
+    assert k.newest("5/5/2026") == "20260505"
+    assert k.newest("[11/03/2023, 20:00:00]") == ""
+    assert k.newest("1/300") == "" and k.newest("14/10/20261") == ""

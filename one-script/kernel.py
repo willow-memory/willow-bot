@@ -290,11 +290,42 @@ def html_text(text: str) -> str:
     return html.unescape(_TAG.sub(_lines_kept, _HIDDEN.sub(_lines_kept, text)))
 
 
+def stem(w: str) -> str:
+    """An English word's plain form, by a few suffix rules, so owe, owes, owed
+    and owing are one word (Hollis's "who still owes me money", Teodora's "how
+    much do I still owe dev"). Only words of ASCII letters: another language,
+    or a serial, is left as written. Irregular forms (paid) are her words
+    list's job."""
+    if len(w) < 3 or not (w.isascii() and w.isalpha()):
+        return w
+    s = w
+    if len(s) > 4 and s[-3:] in ("ies", "ied"):
+        s = s[:-3] + "y"
+    elif len(s) > 4 and s.endswith("ing"):
+        s = s[:-3]
+    elif len(s) > 3 and s.endswith("ed"):
+        s = s[:-2]
+    elif len(s) > 3 and s.endswith("s") and not s.endswith("ss"):
+        s = s[:-1]
+    if len(s) > 3 and s[-1] == s[-2] and s[-1] not in "aeiouls":
+        s = s[:-1]  # running, planned
+    if len(s) > 2 and s.endswith("e"):
+        s = s[:-1]
+    return s
+
+
+def forms(ws) -> set[str]:
+    """Words, and each one's plain form (`stem`)."""
+    out = set(ws)
+    return out | {stem(w) for w in out}
+
+
 def holds(w: str, toks: set[str]) -> bool:
-    """A word holds where it is a token; one with a digit in it (a VIN, a
-    serial, a case number) also holds where a token starts or ends with it:
-    "that one ending 672841" finds 1HGEJ6672841 (Big Jim's lot)."""
-    if w in toks:
+    """A word holds where it is a token, or its plain form is (`toks` built
+    by `forms`); one with a digit in it (a VIN, a serial, a case number) also
+    holds where a token starts or ends with it: "that one ending 672841"
+    finds 1HGEJ6672841 (Big Jim's lot)."""
+    if w in toks or stem(w) in toks:
         return True
     return (
         len(w) >= 4
@@ -369,11 +400,25 @@ def _date(y: str, m: str, d: str) -> str:
     return y + m + d if ok else ""
 
 
+def _day_month(a: str, b: str, y: str) -> str:
+    """A date written a/b/y or a.b.y, as YYYYMMDD, only when it can't be
+    misread: one of a and b over 12 says which is the day, or they're equal.
+    11/03/2023 could be either, and the kernel never guesses."""
+    x, z = int(a), int(b)
+    if x == z or x > 12 >= z:  # 5/5 reads the same either way
+        return _date(y, f"{z:02d}", f"{x:02d}")
+    if z > 12 >= x:
+        return _date(y, f"{x:02d}", f"{z:02d}")
+    return ""
+
+
 def newest(text: str) -> str:
     """The latest date written in `text`, as YYYYMMDD, or "" for none: an ISO
-    date (2026-10-14) or a compact one (20261014, a calendar's), each a whole
-    run of ASCII digits, never part of a longer number. Read by hand, not by
-    a regex, so a port reads the same dates."""
+    date (2026-10-14), a compact one (20261014, a calendar's), or a day and a
+    month either way round with a four-digit year (21/10/2026, 10.21.2026),
+    read only when one part is over 12. Each a whole run of ASCII digits, never
+    part of a longer number. Read by hand, not by a regex, so a port reads the
+    same dates."""
     best, i = "", 0
     while i < len(text):
         n = _digits(text, i)
@@ -388,6 +433,15 @@ def newest(text: str) -> str:
                 got = _date(text[i : i + 4], text[i + 5 : i + 7], text[i + 8 : i + 10])
                 if got:
                     n = 10
+        elif n <= 2 and (sep := text[i + n : i + n + 1]) in ("/", "."):
+            m = _digits(text, i + n + 1)
+            j = i + n + 1 + m
+            if 1 <= m <= 2 and text[j : j + 1] == sep and _digits(text, j + 1) == 4:
+                got = _day_month(
+                    text[i : i + n], text[i + n + 1 : j], text[j + 1 : j + 5]
+                )
+                if got:
+                    n = j + 5 - i
         best = max(best, got)
         i += n
     return best
@@ -396,7 +450,7 @@ def newest(text: str) -> str:
 def toks(c: dict) -> set[str]:
     """A chunk's words: its text's and its path's. A folder's name is the
     person's word too: Laszlo's care log never says "Dad", its folder does."""
-    return set(words(c["text"])) | set(words(c["path"]))
+    return forms(words(c["text"]) + words(c["path"]))
 
 
 def held_by(w: str, toks: set[str], alias: dict) -> bool:
