@@ -1,11 +1,12 @@
-"""kernel.py's vectors are current, and the Java port answers them.
+"""kernel.py's vectors are current, and the ports answer them.
 
 `kernel_vectors/gen.py` reads its cases out of kernel.py. If kernel.py
 changes and cases.json isn't regenerated, every port is being held to the old
 kernel, so the first test fails, naming the command that fixes it. The second
-runs `compare.py` (vectors, a whole session both ways, each box verified by
-the other) when a JDK is here; without one it says so and skips, since a JDK
-is the machine's, not the code's.
+runs `compare.py` (vectors, a whole session, each box verified by every
+implementation) for every port whose toolchain is here: Java, TypeScript, C#.
+With none it skips and says so, since a toolchain is the machine's, not the
+code's.
 """
 
 from __future__ import annotations
@@ -42,10 +43,11 @@ def test_the_vectors_are_kernel_pys_as_it_is_now(tmp_path):
 
 
 @pytest.mark.skipif(
-    not (shutil.which("javac") and shutil.which("java")),
-    reason="no JDK on this machine: the Java port isn't checked here",
+    not any(shutil.which(t) for t in ("javac", "node", "dotnet")),
+    reason="no JDK, Node or .NET on this machine: no port is checked here",
 )
-def test_the_java_port_answers_every_vector_and_each_box_both_ways():
+def test_every_port_here_answers_every_vector_and_each_box_every_way():
+    """compare.py skips a port whose toolchain isn't here, and says so."""
     got = subprocess.run(
         [sys.executable, str(VEC / "compare.py")],
         capture_output=True,

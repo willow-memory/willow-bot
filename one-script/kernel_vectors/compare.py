@@ -1,9 +1,9 @@
-"""Hold a port to kernel.py: every vector, whole sessions, and each other's boxes.
+"""Hold the ports to kernel.py: every vector, whole sessions, and each other's boxes.
 
-    python3 compare.py [--port java] [--keep DIR]
+    python3 compare.py [--port all|java|ts|csharp] [--keep DIR]
 
-Three checks, each said as a count; "unexplained" is the number to read, as
-in `foundation/compare.py`:
+Three checks for each port, each said as a count; "unexplained" is the
+number to read, as in `foundation/compare.py`:
 
 1. **vectors.** The port answers `cases.json` (`<port> vectors cases.json
    results.json`); every answer is lined up against kernel.py's.
@@ -11,15 +11,19 @@ in `foundation/compare.py`:
    out, verify, a forged seal, an edit) run through kernel.py's command line
    and the port's, on the same paths with the same key, so each box is
    directly comparable: exit codes, what the person was shown, kernel.json,
-   proposal files, and every record row but `version`, `hash` and `prev`
-   (`version` is each implementation's own hash, so the chain hashes differ
-   by design).
-3. **both ways.** Each box is verified by the other implementation: a box
-   the port wrote verifies under kernel.py, and kernel.py's under the port.
+   proposal files, and every record row but `version`, `hash`, `prev` and
+   `tip` (`version` is each implementation's own hash, so every field made
+   from a row hash differs by design).
+3. **every way.** Each implementation's box is verified by every other
+   implementation, and by the one script's `Record`.
 
-Exit 0 when nothing is unexplained, 1 otherwise. Needs a JDK (`javac`,
-`java`) for the Java port, and a UTF-8 locale: the JVM can't name a
-non-ASCII file without one (it runs here with LC_ALL=C.UTF-8).
+A port whose toolchain isn't on the machine is skipped and said so. Exit 0
+when nothing is unexplained, 1 otherwise.
+
+Toolchains: Java needs a JDK and a UTF-8 locale (the JVM can't name a
+non-ASCII file without one; it runs here with LC_ALL=C.UTF-8). TypeScript
+needs Node 18+ and npm (it installs `ts/`'s two dev dependencies once).
+C# needs the .NET 8 SDK.
 """
 
 from __future__ import annotations
@@ -43,28 +47,97 @@ _spec.loader.exec_module(k)
 
 TS = "2026-10-22T00:00:00Z"
 KEY_HEX = "4b" * 32  # a throwaway, the same for both sides so their seals match
-ENV = {**os.environ, "LC_ALL": "C.UTF-8", "LANG": "C.UTF-8"}
+ENV = {
+    **os.environ,
+    "LC_ALL": "C.UTF-8",
+    "LANG": "C.UTF-8",
+    "KERNEL_TABLES": str(Path(__file__).resolve().parent / "kernel_tables.json"),
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+    "DOTNET_NOLOGO": "1",
+}
 
 
 # ── the ports ────────────────────────────────────────────────────────────────
+TABLES = HERE / "kernel_tables.json"
+
+
+def _build(cmd: list[str], cwd: Path | None = None) -> None:
+    got = subprocess.run(cmd, capture_output=True, text=True, env=ENV, cwd=cwd)
+    if got.returncode != 0:
+        raise SystemExit(
+            f"{' '.join(cmd)} failed:\n{got.stdout[-2000:]}{got.stderr[-2000:]}"
+        )
+
+
 class Java:
     name = "java"
+    tools = ("javac", "java")
 
     def __init__(self, work: Path):
         self.out = work / "java-out"
-        src = HERE / "java" / "Kernel.java"
-        got = subprocess.run(
-            ["javac", "-nowarn", "-d", str(self.out), str(src)],
-            capture_output=True,
-            text=True,
-            env=ENV,
+        _build(
+            [
+                "javac",
+                "-nowarn",
+                "-d",
+                str(self.out),
+                str(HERE / "java" / "Kernel.java"),
+            ]
         )
-        if got.returncode != 0:
-            raise SystemExit(f"javac failed:\n{got.stderr}")
 
     def argv(self, *args: str) -> list[str]:
-        tables = f"-Dkernel.tables={HERE / 'kernel_tables.json'}"
-        return ["java", tables, "-cp", str(self.out), "Kernel", *args]
+        return [
+            "java",
+            f"-Dkernel.tables={TABLES}",
+            "-cp",
+            str(self.out),
+            "Kernel",
+            *args,
+        ]
+
+
+class TypeScript:
+    name = "ts"
+    tools = ("node", "npm", "npx")
+
+    def __init__(self, work: Path):
+        src = HERE / "ts"
+        if not (src / "node_modules" / "typescript").exists():
+            _build(["npm", "install", "--no-audit", "--no-fund"], cwd=src)
+        self.out = work / "ts-dist"
+        _build(
+            ["npx", "tsc", "-p", str(src / "tsconfig.json"), "--outDir", str(self.out)],
+            cwd=src,
+        )
+
+    def argv(self, *args: str) -> list[str]:
+        return ["node", str(self.out / "kernel.js"), *args]
+
+
+class CSharp:
+    name = "csharp"
+    tools = ("dotnet",)
+
+    def __init__(self, work: Path):
+        self.out = work / "cs-out"
+        _build(
+            [
+                "dotnet",
+                "build",
+                str(HERE / "csharp" / "Kernel.csproj"),
+                "-c",
+                "Release",
+                "-o",
+                str(self.out),
+                "-nologo",
+            ]
+        )
+
+    def argv(self, *args: str) -> list[str]:
+        return ["dotnet", str(self.out / "Kernel.dll"), *args]
+
+
+PORTS = {"java": Java, "ts": TypeScript, "csharp": CSharp}
 
 
 class Python:
@@ -263,10 +336,14 @@ def files_of(box: Path) -> dict[str, bytes]:
     }
 
 
-def sessions(port, work: Path) -> int:
-    root = work / "session"  # one path for both, so kernel.json and pile_sha256 agree
+def sessions(ports: list, work: Path) -> int:
+    """The same session through kernel.py and every port, one at a time on one
+    path (so kernel.json and pile_sha256 agree). Each box, while it stands, is
+    verified by every implementation and by the one script's Record."""
+    root = work / "session"
+    every = [Python(), *ports]
     sides = {}
-    for impl in (Python(), port):
+    for impl in every:
         if root.exists():
             shutil.rmtree(root)
         got = session(impl, root)
@@ -274,65 +351,95 @@ def sessions(port, work: Path) -> int:
             "shown": got["shown"],
             "rows": rows_without_self(got["box"]),
             "files": files_of(got["box"]),
-            "other_verify": run(
-                port if impl.name == "kernel.py" else Python(),
-                "verify",
-                "--box",
-                str(got["box"]),
-            ),
-            "own_verify": run(impl, "verify", "--box", str(got["box"])),
+            "verified_by": {
+                v.name: run(v, "verify", "--box", str(got["box"]))[0] for v in every
+            },
             "record": one_script_check(got["box"]),
             "attacks": forge_and_edit(impl, got["box"]),
         }
-    py, jv = sides["kernel.py"], sides[port.name]
+    py = sides["kernel.py"]
     bad = 0
 
-    def check(what: str, a, b) -> None:
+    def check(what: str, a, b, who: str) -> None:
         nonlocal bad
         same = a == b
         bad += not same
-        print(f"  {what:<44} {'ok' if same else 'UNEXPLAINED'}")
         if not same:
-            print(f"      kernel.py: {str(a)[:300]}\n      {port.name}: {str(b)[:300]}")
+            print(f"  {who:<7} {what:<46} UNEXPLAINED")
+            print(f"      want: {str(a)[:300]}\n      got:  {str(b)[:300]}")
 
-    for i, (a, b2) in enumerate(zip(py["shown"], jv["shown"])):
-        check(f"step {i:>2} {a[0][0]}: exit and what was shown", a[1:], b2[1:])
-    check("every record row (version, hash, prev, tip aside)", py["rows"], jv["rows"])
-    check("kernel.json, proposals and written files", py["files"], jv["files"])
-    check("the forged seal, the edit, the bite after", py["attacks"], jv["attacks"])
-    print("  both ways:")
-    check(
-        f"  {port.name}'s box, verified by kernel.py",
-        jv["own_verify"][0],
-        jv["other_verify"][0],
-    )
-    check(
-        f"  kernel.py's box, verified by {port.name}",
-        py["own_verify"][0],
-        py["other_verify"][0],
-    )
-    check(
-        "  ...and both said the chain holds",
-        (py["own_verify"][0], jv["own_verify"][0]),
-        (0, 0),
-    )
-    check(f"  {port.name}'s box, checked by the one script's Record", jv["record"], [])
+    for port in ports:
+        side = sides[port.name]
+        before = bad
+        for i, (a, b2) in enumerate(zip(py["shown"], side["shown"])):
+            check(
+                f"step {i:>2} {a[0][0]}: exit and what was shown",
+                a[1:],
+                b2[1:],
+                port.name,
+            )
+        check(
+            "every record row (version, hash, prev, tip aside)",
+            py["rows"],
+            side["rows"],
+            port.name,
+        )
+        check(
+            "kernel.json, proposals and written files",
+            py["files"],
+            side["files"],
+            port.name,
+        )
+        check(
+            "the forged seal, the edit, the bite after",
+            py["attacks"],
+            side["attacks"],
+            port.name,
+        )
+        check(
+            "its box, checked by the one script's Record", [], side["record"], port.name
+        )
+        steps = len(py["shown"]) + 4
+        print(f"  {port.name:<7} {steps - (bad - before)}/{steps} session checks ok")
+    names = [i.name for i in every]
+    print("  every box, verified by every implementation (0 = the chain holds):")
+    print("  " + " " * 18 + "".join(f"{n:>11}" for n in names))
+    for box_of in names:
+        row = sides[box_of]["verified_by"]
+        print(f"  {box_of + ' wrote':<18}" + "".join(f"{row[n]:>11}" for n in names))
+        for n in names:
+            if row[n] != 0:
+                bad += 1
+                print(f"      UNEXPLAINED: {n} won't verify {box_of}'s box")
     return bad
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--port", default="java", choices=["java"])
+    ap.add_argument("--port", default="all", choices=["all", *PORTS])
     ap.add_argument("--keep", type=Path, help="keep the work folder here")
     a = ap.parse_args(argv)
     work = a.keep or Path(tempfile.mkdtemp(prefix="kernel-compare-"))
     work.mkdir(parents=True, exist_ok=True)
+    wanted = list(PORTS) if a.port == "all" else [a.port]
+    bad = 0
     try:
-        port = Java(work)
-        print(f"vectors ({port.name} against kernel.py):")
-        bad = vectors(port, work)
-        print("sessions (the same session, both command lines, the same paths):")
-        bad += sessions(port, work)
+        ports = []
+        for name in wanted:
+            cls = PORTS[name]
+            missing = [t for t in cls.tools if not shutil.which(t)]
+            if missing:
+                print(f"{name}: skipped, no {', '.join(missing)} on this machine")
+                continue
+            ports.append(cls(work))
+        for port in ports:
+            print(f"vectors ({port.name} against kernel.py):")
+            bad += vectors(port, work)
+        if ports:
+            print(
+                "sessions (the same session through every command line, the same paths):"
+            )
+            bad += sessions(ports, work)
     finally:
         if not a.keep:
             shutil.rmtree(work, ignore_errors=True)
