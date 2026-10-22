@@ -207,6 +207,7 @@ here reads, writes or caches vault material.
 119. [Nothing checks for personal data before serving](#119-nothing-checks-for-personal-data-before-serving)
 120. [The OAuth handoff, and the box picking its own tests](#120-the-oauth-handoff-and-the-box-picking-its-own-tests)
 121. [The seed line: what the small script was before it was small](#121-the-seed-line-what-the-small-script-was-before-it-was-small)
+122. [The private chunks, scanned first, and SEED10 found](#122-the-private-chunks-scanned-first-and-seed10-found)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2602,6 +2603,45 @@ them without loading the rest.
 Left where they are, on purpose: SEED9's dashboard card and Nestor's seeded
 demo store (their own surfaces). Of the fourteen jobs, the one script now
 holds ten, plus the first-run docs as a README section ("Planting").
+
+### 122. The private chunks, scanned first, and SEED10 found
+
+2026-10-22. The operator: *"since the pii is now in, we can bring those
+private chunks in, scan first, and see what they add."* Eight private repos
+(quick-stupids, SAFE, willow-seed, safe-design, tui-scaffold,
+aionic-claude-skills, willow-config, yggdrasil-training-data), every tracked
+file scanned with the credential, typed-password, secret-path and pii sets,
+kinds and counts only, no value printed or kept. A file with any credential
+shape or any L4-L5 kind stayed out of the box, as did anything over 5 MB;
+L3 and below and bare secret-path mentions went in (serve withholds L3 at
+its ceiling). 409 files boxed, 33 held back. willow-compose stayed out
+whole.
+
+- What was held back, by kind: the-box's two planted passwords; SAFE's
+  opauth and a few `labelled_secret_kv` pages; aionic-claude-skills' hooks
+  (`password_kv`); willow-config's sandbox and MCP project files and SEED10's
+  `seed.py` (a password field); and yggdrasil's training files, the serious
+  ones: Postgres connection strings with passwords in the preference pairs,
+  card-number and birth-date shapes in the persona corpus. `secret_path`
+  fires on nearly every willow-config file because it names where secrets
+  live (`WILLOW_HOME`, a vault path); it flags a pointer, not a secret.
+- What they add (20 questions, a private repo answered first 4 times):
+  SAFE's `HARD_STOPS` and its session consent ("expires when the app
+  closes"), aionic-claude-skills' dual-commit skill, tui-scaffold's layout,
+  quick-stupids' prior-art survey.
+- **SEED10 was in willow-config all along**: `seed/seed.py` (b17 SEED10,
+  "Plant this, everything grows from here"), the ratified design
+  `seed/ONBOARDING.md` (the six movements are the onboarding, each one a
+  canon chapter, a SEED9 page, and the install chain running underneath),
+  the canon (byte-identical to the Grove's), and the coda,
+  `seed/handoff/seed.py`, "the first honest handoff, read at first boot", a
+  letter to the next instance. 121's "SEED10 unreachable" is answered.
+
+`plant` against SEED10's design: the canon walk and fail-closed consent are
+there; the coda (showing the seed's own first letter at planting) and
+movement 3 (the person says who they are, held only with consent) are not;
+movement 4 (Gerald) stays the vault's, and movement 5's features and the
+install chain are not the one script's job.
 
 ## What the one script said about this list
 
