@@ -30,9 +30,13 @@ sets it wants, in the order it wants, and the marker it prints:
   secret_path          a string that names where secrets live (whole value)
   git_trace            a git/curl trace: the Authorization header, ``gh?_`` tokens
   pii                  a person's data, each kind with its rung (``RUNGS``):
-                       SSN, card, birth date, bank and case numbers, phone,
-                       email, EIN, a home path, a Discord mention; ``withhold``
-                       keeps what a ceiling allows and names what it holds back
+                       SSN, ITIN, card, birth date, bank and case numbers,
+                       IBAN, passport, driver's licence, medical record,
+                       phone, email, EIN, IP, MAC, a wallet, a location, a
+                       home path, a Discord mention; ``withhold`` keeps what a
+                       ceiling allows and names what it holds back
+  typed_password       a password a person wrote, by its label (``pw:``,
+                       ``$password =``): the label stays, the value goes
 
 and ``redact_url`` for a URL. Observability's sensitive *key* test is
 ``sensitive_key``.
@@ -246,6 +250,32 @@ _PLACEHOLDER = re.compile(
     r"(?i)(your|example|xxxx+|placeholder|none|null|true|false|changeme|redacted)"
 )
 
+# -- typed_password: a password a person wrote, labelled -----------------------
+#
+# The credential shapes are machine-made keys; a password a person typed has
+# no shape, only a label. quick-stupids' the-box (IDEAS 119) carried two past
+# serve: `$password = "password";` and `user: cwcftp pw: widgets1998`. The
+# label stays and the value goes. A comparison (`$p == $password`), a label
+# with no value, and a value that names a source or nothing (`env:`, `None`,
+# a placeholder) are left alone; `pass` alone is too common a word to be a label.
+
+_TYPED_PASSWORD = re.compile(
+    r"(?i)(?<![\w$])(\$?(?:password|passwd|passphrase|pwd|pw)\b['\"]?\s*"
+    r"(?<![=!<>])[:=](?!=)\s*)"
+    r"(?!" + _SKIP_VALUE + r"|\$)"
+    r"(\"[^\"\n]+\"|'[^'\n]+'|[^\s\"',;)}\]]+)"
+)
+
+
+def _p_typed_password(text: str, ctx: Ctx) -> str:
+    def one(m: re.Match) -> str:
+        if _PLACEHOLDER.search(m.group(2)):
+            return m.group(0)
+        return m.group(1) + ctx.mark("password")
+
+    return _TYPED_PASSWORD.sub(one, text)
+
+
 # -- secret_path / git_trace --------------------------------------------------
 
 _SECRET_PATH = re.compile(
@@ -429,6 +459,69 @@ _EMAIL = re.compile(r"[^\s@\"'<>()\[\],;:]+@[^\s@\"'<>()\[\],;:]+\.[A-Za-z]{2,}\
 _HOME_PATH = re.compile(r"(?:/home/|/Users/|[A-Za-z]:\\Users\\)[^/\\\s\"']+")
 _DISCORD_USER = re.compile(r"<@!?\d{17,20}>")
 
+# The baseline kinds no copy had (the detector catalogues' common set: IP,
+# IBAN, ITIN, passport, driver's licence, medical record, MAC, a crypto
+# wallet, a location). A labelled kind needs its label; a shape that random
+# text can wear (an IBAN) needs its checksum. Loopback and unspecified
+# addresses name no one and are left.
+_ITIN = re.compile(r"\b9\d{2}[-\s](?:5\d|6[0-5]|7\d|8[0-8]|9[0-24-9])[-\s]\d{4}\b")
+_PASSPORT = re.compile(
+    r"\bpassport(?:\s*(?:no\.?|number|#))?[\s#:.]*[A-Z0-9]{6,9}\b", re.I
+)
+_DRIVER_LICENSE = re.compile(
+    r"\b(?:driver'?s?\s+licen[cs]e|DL\s*(?:no\.?|number|#))"
+    r"(?:\s*(?:no\.?|number|#))?[\s#:.]*[A-Z0-9-]{5,15}\b",
+    re.I,
+)
+_MRN = re.compile(
+    r"\b(?:MRN|medical record(?:\s*(?:no\.?|number|#))?)[\s#:.]*[A-Z0-9-]{5,12}\b",
+    re.I,
+)
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_IPV4 = re.compile(rf"(?<![\d.]){_OCTET}(?:\.{_OCTET}){{3}}(?![\d.])")
+_IPV6 = re.compile(
+    r"(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}(?![\w:])"
+    r"|(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){1,6}:(?:[0-9A-Fa-f]{1,4}:){0,5}"
+    r"[0-9A-Fa-f]{1,4}(?![\w:])"
+)
+_NOT_A_HOST = re.compile(r"^(?:127\.|0\.0\.0\.0$|255\.255\.255\.255$)")
+_MAC = re.compile(r"(?<![\w:-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![\w:-])")
+_IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b")
+_WALLET = re.compile(r"\b(?:bc1[a-z0-9]{25,59}|0x[0-9a-fA-F]{40})\b")
+_LATLON = re.compile(r"(?<![\d.])-?\d{1,2}\.\d{4,},\s*-?\d{1,3}\.\d{4,}(?![\d.])")
+
+
+def _host(value: str) -> bool:
+    """An address that names a machine: not loopback or unspecified, and an
+    IPv6 one with at least three groups (``a::b`` is C++, not a host)."""
+    if _NOT_A_HOST.match(value):
+        return False
+    return ":" not in value or len([g for g in value.split(":") if g]) >= 3
+
+
+def _p_ip(text: str, ctx: Ctx) -> str:
+    """An IPv4 or IPv6 address that names a machine (`_host`)."""
+    for rx in (_IPV4, _IPV6):
+        text = rx.sub(
+            lambda m: ctx.mark("ip") if _host(m.group(0)) else m.group(0), text
+        )
+    return text
+
+
+def _iban_ok(value: str) -> bool:
+    s = value.replace(" ", "")
+    if not 15 <= len(s) <= 34:
+        return False
+    digits = "".join(str(int(c, 36)) for c in s[4:] + s[:4])
+    return int(digits) % 97 == 1
+
+
+def _p_iban(text: str, ctx: Ctx) -> str:
+    """An IBAN only when its mod-97 check holds."""
+    return _IBAN.sub(
+        lambda m: ctx.mark("iban") if _iban_ok(m.group(0)) else m.group(0), text
+    )
+
 
 def _luhn(digits: str) -> bool:
     total = 0
@@ -448,7 +541,12 @@ _PII = (
     Rule("ssn", _SSN_LABELLED),
     Rule("dob", _DOB),
     Rule("bank", _BANK),
+    Rule("passport", _PASSPORT),
+    Rule("driver_license", _DRIVER_LICENSE),
+    Rule("medical_record", _MRN),
     Rule("case_no", _CASE_NO),
+    Rule("iban", fn=_p_iban),
+    Rule("itin", _ITIN),
     Rule("ssn", _SSN),
     Rule("credit_card", _CARD_GROUPS),
     Rule("credit_card", fn=_p_card_bare),
@@ -458,20 +556,33 @@ _PII = (
     Rule("email", _EMAIL),
     Rule("home_path", _HOME_PATH),
     Rule("discord_user", _DISCORD_USER),
+    Rule("wallet", _WALLET),
+    Rule("mac", _MAC),
+    Rule("ip", fn=_p_ip),
+    Rule("location", _LATLON),
 )
 
 #: Each pii kind's rung: 5 never crosses; 4 is money and birth; 3 resolves to a
 #: person; 2 names a matter.
 RUNGS: dict[str, int] = {
     "ssn": 5,
+    "itin": 5,
     "credit_card": 4,
     "dob": 4,
     "bank": 4,
+    "iban": 4,
+    "passport": 4,
+    "driver_license": 4,
+    "medical_record": 4,
+    "wallet": 4,
     "phone": 3,
     "email": 3,
     "ein": 3,
     "home_path": 3,
     "discord_user": 3,
+    "ip": 3,
+    "mac": 3,
+    "location": 3,
     "case_no": 2,
 }
 
@@ -509,6 +620,7 @@ SETS: dict[str, tuple] = {
     "secret_path": (Rule("secret_path", _SECRET_PATH, whole=True),),
     "git_trace": _GIT_TRACE,
     "pii": _PII,
+    "typed_password": (Rule("password", fn=_p_typed_password),),
 }
 
 

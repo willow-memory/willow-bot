@@ -2410,6 +2410,30 @@ knows and shows what it doesn't:
   times in `error_log`. A scrubber that cries wolf on every path gets
   turned off.
 
+**Then the gaps, closed** (the operator: *"add the password rule and IPs,
+and any other PII set that isn't already covered at least at baseline"*):
+
+- `typed_password`, a new set serve runs: a label (`password`, `passwd`,
+  `passphrase`, `pwd`, `pw`, `$password`) then `:` or `=` then a value; the
+  label stays and the value goes. It leaves a comparison (`$p == $password`),
+  a label with no value, a source (`env:`, `None`) and a placeholder alone;
+  `pass` alone is too common to be a label.
+- `pii` gains the baseline kinds of the usual detector catalogues that no
+  copy had: IP (v4 and v6, never loopback or unspecified, and a v6 address
+  needs three groups so `a::b` stays C++), MAC, ITIN (L5, before the SSN
+  shape), IBAN (only when mod 97 holds), passport, driver's licence and
+  medical record number (each only beside its label), a crypto wallet
+  (bech32 or `0x` and 40 hex, never a bare git hash) and a latitude and
+  longitude pair. Each with its rung; each with positives and negatives.
+- the-box again: both planted passwords go (`pw: [REDACTED:password]`,
+  `$password = [REDACTED:password];`), every client address in `error_log`
+  is withheld at serve's ceiling, and nothing else in the folder is touched.
+
+Still not covered, because no pattern can do it: a person's name and a
+street address. Both need a model or a list of the person's own names,
+which is willow-2.0's planned phase 3, and the pii set's limit is said here
+rather than implied.
+
 Found while building: willow-2.0's `scripts/pii_check.py` (a public,
 archived repo) is written as one person's literal details rather than
 shapes. It is left out of the set, and is the operator's to look at.

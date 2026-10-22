@@ -574,6 +574,19 @@ PII_POSITIVES = [
     # hermes-agent agent/redact.py
     ("phone", "signal +15558675309 tonight"),
     ("discord_user", "ping <@!123456789012345678> about it"),
+    # the baseline kinds no copy had (documentation and test values only:
+    # RFC 5737/3849 addresses, the IBAN registry's example, test wallets)
+    ("ip", "[client 10.0.0.68] File does not exist"),
+    ("ip", "the node at 192.0.2.44 answered"),
+    ("ip", "v6 peer 2001:db8:85a3::8a2e:370:7334 joined"),
+    ("itin", "ITIN on file: 912-70-1234"),
+    ("iban", "wire to GB82 WEST 1234 5698 7654 32 today"),
+    ("passport", "passport no. X1234567 expires in May"),
+    ("driver_license", "driver's license: D1234567"),
+    ("medical_record", "MRN: 00123456 at intake"),
+    ("mac", "the printer is 00:1A:2B:3C:4D:5E on the LAN"),
+    ("wallet", "tip jar 0x52908400098527886E0F7030069857D2E4169EE7"),
+    ("location", "meet at 45.5231, -122.6765 at noon"),
 ]
 
 #: homestead's NEGATIVES: what a PII pattern must not fire on.
@@ -591,6 +604,14 @@ PII_NEGATIVES = [
     "the minor is 8 years old",
     "Dept 4, Superior Court of California",
     "card: 4532015112830360",  # willow-2.0: a failed Luhn check is no card
+    # the baseline kinds' own negatives
+    "listening on 127.0.0.1:8080 and 0.0.0.0",
+    "Apache/1.3.33 (Unix) PHP/4.3.10 configured",
+    "the call at 12:30:45 ran long",
+    "std::vector<int> and a::b in C++",
+    "commit 3f786850e387550fdab836ed7e6dc881de23001b landed",
+    "GB82 WEST 1234 5698 7654 33",  # an IBAN that fails mod 97
+    "ITINERARY for 912 travellers",
 ]
 
 
@@ -632,3 +653,45 @@ def test_a_served_chunk_carries_no_pii_over_the_serve_ceiling():
     assert chunk.SERVE_CEILING == 2 and "Case no: FL-2" in got  # L2 passes
     assert "[withheld: ssn, L5]" in got and "[withheld: email, L3]" in got
     assert "6789" not in got and "jordan@" not in got
+
+
+# -- typed_password: a password a person wrote ---------------------------------
+
+TYPED = [
+    ('$password = "password";  // DO NOT CHANGE', "$password = [REDACTED:password];"),
+    ("(user: cwcftp pw: widgets1998)", "pw: [REDACTED:password])"),
+    ("PASSWD=hunter2 ./run", "PASSWD=[REDACTED:password] ./run"),
+    ("pwd: 'cornflower blue'", "pwd: [REDACTED:password]"),
+]
+
+
+@pytest.mark.parametrize("text,kept", TYPED)
+def test_a_typed_password_loses_its_value_and_keeps_its_label(text, kept):
+    out = scrub.apply(text, ("typed_password",))
+    assert kept in out
+    assert scrub.found_kinds(text, ("typed_password",)) == ["password"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "return ($u == $username && $p == $password);",
+        "global $username, $password;",
+        "send a password reset link",
+        "password=None",
+        "password: env:DB_PASSWORD",
+        "pass the salt: please",
+        "password = your-password-here",
+        "PGPASSWORD=$DB_PW psql",
+    ],
+)
+def test_a_password_word_with_no_value_is_left_alone(text):
+    assert scrub.apply(text, ("typed_password",)) == text
+
+
+def test_serve_takes_the_typed_password_and_the_ip():
+    from onescript import chunk
+
+    got = chunk._scrub("ftp (user: cwcftp pw: widgets1998) from 10.0.0.68")
+    assert "widgets1998" not in got and "pw: [REDACTED:password]" in got
+    assert "[withheld: ip, L3]" in got

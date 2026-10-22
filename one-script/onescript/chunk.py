@@ -26,10 +26,13 @@ def _scrub(value):
     """No full-width hash reaches the model, wherever it sits. Since flatten-2
     F12 the rule is ``scrub.py``'s: the hash first, as it always was (its
     marker is still ``WITHHELD``), then the credential shapes, which are added
-    coverage (a key in a record's text reaches the model no more than a hash);
-    then a person's data over `SERVE_CEILING`, withheld with its kind named."""
+    coverage (a key in a record's text reaches the model no more than a hash),
+    and a password a person typed, by its label; then a person's data over
+    `SERVE_CEILING`, withheld with its kind named."""
     if isinstance(value, str):
-        out = scrub.apply(value, ("hash64", "credentials"), marker=_marker)
+        out = scrub.apply(
+            value, ("hash64", "credentials", "typed_password"), marker=_marker
+        )
         return scrub.withhold(out, SERVE_CEILING)
     if isinstance(value, list):
         return [_scrub(v) for v in value]
