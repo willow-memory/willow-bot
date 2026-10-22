@@ -212,8 +212,12 @@ have drifted apart.
 SAID = re.compile(r'[Tt]he operator,? (\d{4}-\d{2}-\d{2})?:?\s*\*?"([^"]+)"')
 for repo, path, text in pile_files(cfg):
     for date, quote in SAID.findall(text):
-        yield {"kind": "said", "date": date, "where": f"{repo}:{path}",
-               "quote_hash": sha256(quote)}  # the record keeps the hash
+        yield {
+            "kind": "said",
+            "date": date,
+            "where": f"{repo}:{path}",
+            "quote_hash": sha256(quote),
+        }  # the record keeps the hash
 ```
 
 ### 2. Jeles as a full pile repo
@@ -240,7 +244,7 @@ rows = [json.loads(l) for l in open(box / "record.jsonl")]
 seen = defaultdict(set)
 for r in rows:
     if r["kind"] == "miss":
-        for k in r["missing"]:       # BLAKE2b-128, never a word
+        for k in r["missing"]:  # BLAKE2b-128, never a word
             seen[k].add(r["checkin"])
 for k, sessions in sorted(seen.items(), key=lambda kv: -len(kv[1]))[:10]:
     print(len(sessions), k[:12])
@@ -255,9 +259,12 @@ returns real numbers instead of prose.
 ```python
 import sigh
 from onescript import table
+
 for repo, pr in open_prs:
-    table.verdict(cfg, {"what": "ci_red_streak", "repo": repo,
-                        "pr": pr, "value": sigh.get(repo, pr)})
+    table.verdict(
+        cfg,
+        {"what": "ci_red_streak", "repo": repo, "pr": pr, "value": sigh.get(repo, pr)},
+    )
 ```
 
 ## New scripts to add
@@ -269,10 +276,15 @@ your PRs instead of SPY, then score the forecasts with `calibration.py`. Who
 forecasts better, you or the model?
 
 ```python
-api.forecast(cfg, "pr-160-green-first-push",
-             [{"path": "yes", "p": 0.7}, {"path": "no", "p": 0.3}], by="human")
+api.forecast(
+    cfg,
+    "pr-160-green-first-push",
+    [{"path": "yes", "p": 0.7}, {"path": "no", "p": 0.3}],
+    by="human",
+)
 # later, once CI answers:
 from onescript.calibration import brier, bins
+
 print(sum(brier(p, hit) for p, hit in pairs) / len(pairs), bins(pairs))
 ```
 
@@ -285,10 +297,11 @@ after the fact and impossible to pick in advance.
 ```python
 from onescript import beacon
 from onescript.stream import StreamRandom
+
 rnd = beacon.round_for(day)
 r = beacon.drand_reader(rnd)["randomness"]
 rng = StreamRandom.from_seed(bytes.fromhex(r), label=login.encode())
-print(rng.seed_id, rng.choice(TEMPLATES))   # StreamRandom has choice, not randrange
+print(rng.seed_id, rng.choice(TEMPLATES))  # StreamRandom has choice, not randrange
 ```
 
 ### 7. Serendipity mode
@@ -313,6 +326,7 @@ held by parity tests versus quietly drifting.
 
 ```python
 from onescript import graph
+
 run = graph.cbm_runner()
 for repo in cfg.repos:
     # every read is {state, why, stamp, rows, total}: never a bare []
@@ -353,6 +367,7 @@ abandoned), how long they run, and the outliers.
 
 ```python
 from onescript import pools
+
 print(pools.measure([bundle_as_round(s) for s in sessions], seats=1))
 ```
 
@@ -394,6 +409,7 @@ from its `session:<sha256>` subject.
 
 ```python
 import runes
+
 print(runes.cast(subject.removeprefix("session:")))
 ```
 
@@ -439,9 +455,14 @@ beside the words rank, fused by the same RRF as the embedder. It would have
 helped the checkout bite in 16, since BM25 weights rare words higher.
 
 ```python
-db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, chunk_id UNINDEXED)")
-hits = db.execute("SELECT chunk_id, bm25(fts) FROM fts WHERE fts MATCH ? "
-                  "ORDER BY bm25(fts) LIMIT 100", (query,)).fetchall()
+db.execute(
+    "CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, chunk_id UNINDEXED)"
+)
+hits = db.execute(
+    "SELECT chunk_id, bm25(fts) FROM fts WHERE fts MATCH ? "
+    "ORDER BY bm25(fts) LIMIT 100",
+    (query,),
+).fetchall()
 ```
 
 Watch: the store already holds hashed postings; an FTS table holds the words,
@@ -455,7 +476,8 @@ the top chunk is worth a look.
 
 ```python
 from model2vec import StaticModel
-m = StaticModel.from_pretrained("/models/potion-base-8M")   # a local dir
+
+m = StaticModel.from_pretrained("/models/potion-base-8M")  # a local dir
 vecs = m.encode([bite] + chunk_texts)
 ```
 
@@ -474,6 +496,7 @@ instead of `pile.py:212`.
 ```python
 import tree_sitter_python as tsp
 from tree_sitter import Language, Parser
+
 tree = Parser(Language(tsp.language())).parse(src)
 for node in tree.root_node.children:
     if node.type in ("function_definition", "class_definition"):
@@ -498,8 +521,10 @@ edits without blowing up.
 
 ```python
 from rapidfuzz import process, distance
-process.extract(word, vocab, scorer=distance.Levenshtein.distance,
-                score_cutoff=2, limit=5)
+
+process.extract(
+    word, vocab, scorer=distance.Levenshtein.distance, score_cutoff=2, limit=5
+)
 ```
 
 Watch: it runs while the store is open, so the words still never leave the
@@ -557,6 +582,7 @@ serendipity mode (7) too.
 ```python
 from libzim.reader import Archive
 from libzim.search import Query, Searcher
+
 zim = Archive("wikipedia_en_simple_all.zim")
 hits = Searcher(zim).search(Query().set_query(bite)).getResults(0, 5)
 ```
@@ -575,6 +601,7 @@ the smallest one.
 ```python
 from hypothesis import given, strategies as st
 from onescript.stream import StreamRandom
+
 
 @given(st.binary(), st.integers(1, 2**32))
 def test_below_stays_in_range(seed, n):
@@ -673,10 +700,20 @@ log Open-Meteo's own forecast as a second wager. Settle both from its
 historical archive and compare Brier scores: you against a weather model.
 
 ```python
-q = urllib.parse.urlencode({"latitude": lat, "longitude": lon,
-                            "daily": "precipitation_sum", "timezone": "auto"})
-f = snapshot.get(cfg, f"rain-{day}", f"https://api.open-meteo.com/v1/forecast?{q}",
-                 license="CC-BY-4.0")
+q = urllib.parse.urlencode(
+    {
+        "latitude": lat,
+        "longitude": lon,
+        "daily": "precipitation_sum",
+        "timezone": "auto",
+    }
+)
+f = snapshot.get(
+    cfg,
+    f"rain-{day}",
+    f"https://api.open-meteo.com/v1/forecast?{q}",
+    license="CC-BY-4.0",
+)
 api.forecast(cfg, f"rain-{day}", [{"path": "yes", "p": 0.3}, {"path": "no", "p": 0.7}])
 # settle: archive-api.open-meteo.com/v1/archive?...&start_date=day&end_date=day
 ```
@@ -689,9 +726,12 @@ base rate or just repeat it.
 
 ```python
 q = urllib.parse.urlencode({"starttime": monday, "endtime": sunday, "minmagnitude": 6})
-n = snapshot.get(cfg, f"quakes-m6-{monday}",
-                 f"https://earthquake.usgs.gov/fdsnws/event/1/count?{q}",
-                 license="LicenseRef-us-public-domain")
+n = snapshot.get(
+    cfg,
+    f"quakes-m6-{monday}",
+    f"https://earthquake.usgs.gov/fdsnws/event/1/count?{q}",
+    license="LicenseRef-us-public-domain",
+)
 ```
 
 #### 35. Wikipedia pageviews: Which article wins tomorrow
@@ -701,8 +741,10 @@ tomorrow. Twelve of them make a `deck.py` round. A good way to find out how
 little you know about what the world reads.
 
 ```python
-url = ("https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
-       f"en.wikipedia/all-access/user/{title}/daily/{day}/{day}")
+url = (
+    "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/"
+    f"en.wikipedia/all-access/user/{title}/daily/{day}/{day}"
+)
 ```
 
 Watch: Wikimedia asks for a User-Agent that names you and how to reach you.
@@ -714,8 +756,14 @@ probability, write the crowd's probability beside it, and when it resolves,
 score both. Over a season you learn where you beat the crowd.
 
 ```python
-m = snapshot.as_json(snapshot.get(cfg, f"manifold-{market_id}",
-    f"https://api.manifold.markets/v0/market/{market_id}", license="LicenseRef-unverified"))
+m = snapshot.as_json(
+    snapshot.get(
+        cfg,
+        f"manifold-{market_id}",
+        f"https://api.manifold.markets/v0/market/{market_id}",
+        license="LicenseRef-unverified",
+    )
+)
 api.forecast(cfg, f"manifold-{market_id}", mine, by="human")
 api.forecast(cfg, f"manifold-{market_id}-crowd", crowd(m["probability"]), by="crowd")
 ```
@@ -726,9 +774,12 @@ For a handful of new posts, wager on which make the front page. Algolia's
 HN search API settles it.
 
 ```python
-front = snapshot.get(cfg, f"hn-front-{day}",
-                     "https://hn.algolia.com/api/v1/search?tags=front_page",
-                     license="LicenseRef-unverified")
+front = snapshot.get(
+    cfg,
+    f"hn-front-{day}",
+    "https://hn.algolia.com/api/v1/search?tags=front_page",
+    license="LicenseRef-unverified",
+)
 ```
 
 #### 38. NOAA tides: The tide is a sure thing
@@ -738,12 +789,25 @@ that are nearly always right. If your Brier score on tides isn't close to
 zero, the plumbing is broken, not your judgement.
 
 ```python
-q = urllib.parse.urlencode({"product": "predictions", "station": station,
-    "begin_date": day, "range": 24, "datum": "MLLW", "interval": "hilo",
-    "units": "metric", "time_zone": "lst_ldt", "format": "json"})
-snapshot.get(cfg, f"tides-{station}-{day}",
-             f"https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?{q}",
-             license="LicenseRef-us-public-domain")
+q = urllib.parse.urlencode(
+    {
+        "product": "predictions",
+        "station": station,
+        "begin_date": day,
+        "range": 24,
+        "datum": "MLLW",
+        "interval": "hilo",
+        "units": "metric",
+        "time_zone": "lst_ldt",
+        "format": "json",
+    }
+)
+snapshot.get(
+    cfg,
+    f"tides-{station}-{day}",
+    f"https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?{q}",
+    license="LicenseRef-us-public-domain",
+)
 ```
 
 ### Things to read
@@ -757,7 +821,8 @@ cheap fix before any embedder. CC BY 4.0, offline once downloaded.
 
 ```python
 import wn
-wn.download("oewn:2024")               # once, off the box
+
+wn.download("oewn:2024")  # once, off the box
 [s.definition() for s in wn.synsets("seal")]
 ```
 
@@ -771,6 +836,7 @@ strong signal.
 
 ```python
 from wordfreq import zipf_frequency
+
 mine = store_count(w) / store_total
 print(w, zipf_frequency(w, "en"), mine)
 ```
@@ -794,8 +860,14 @@ Serendipity mode (7) gets stranger when one side is a paragraph from a
 public-domain book: your gate code beside Moby-Dick.
 
 ```python
-book = snapshot.text(snapshot.get(cfg, f"gutenberg-{n}",
-    f"https://www.gutenberg.org/cache/epub/{n}/pg{n}.txt", license="LicenseRef-gutenberg"))
+book = snapshot.text(
+    snapshot.get(
+        cfg,
+        f"gutenberg-{n}",
+        f"https://www.gutenberg.org/cache/epub/{n}/pg{n}.txt",
+        license="LicenseRef-gutenberg",
+    )
+)
 ```
 
 Watch: Gutenberg asks that bulk downloads come from a mirror, not the site.
@@ -810,8 +882,11 @@ the ecliptic, and the drand round picks the reading for the sign.
 
 ```python
 from skyfield.api import load
-ts, eph = load.timescale(), load("de421.bsp")   # the file, fetched once
-lat, lon, _ = eph["earth"].at(ts.now()).observe(eph["mars"]).apparent().ecliptic_latlon()
+
+ts, eph = load.timescale(), load("de421.bsp")  # the file, fetched once
+lat, lon, _ = (
+    eph["earth"].at(ts.now()).observe(eph["mars"]).apparent().ecliptic_latlon()
+)
 sign = SIGNS[int(lon.degrees // 30)]
 ```
 
@@ -822,7 +897,7 @@ picks one, and it becomes the day's place: where the oracle "is", where the
 weather bet (33) is made, where the-table's next scene is set.
 
 ```python
-place = rng.choice(places)    # rng = StreamRandom.from_seed(randomness)
+place = rng.choice(places)  # rng = StreamRandom.from_seed(randomness)
 ```
 
 #### 45. The Met Open Access: Art of the day
@@ -832,7 +907,9 @@ draw picks one for each sealed session, beside its rune (15).
 
 ```python
 MET = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
-ids = snapshot.as_json(snapshot.get(cfg, "met-ids", MET, license="CC0-1.0"))["objectIDs"]
+ids = snapshot.as_json(snapshot.get(cfg, "met-ids", MET, license="CC0-1.0"))[
+    "objectIDs"
+]
 pick = rng.choice(ids)
 art = snapshot.get(cfg, f"met-{pick}", f"{MET}/{pick}", license="CC0-1.0")
 ```
@@ -859,8 +936,14 @@ CSV. If far fewer than 9 in 10 of your ranges hold the answer, you're
 overconfident. `calibration.bins` then shows exactly where.
 
 ```python
-rows = snapshot.text(snapshot.get(cfg, f"owid-{slug}",
-    f"https://ourworldindata.org/grapher/{slug}.csv", license="CC-BY-4.0"))
+rows = snapshot.text(
+    snapshot.get(
+        cfg,
+        f"owid-{slug}",
+        f"https://ourworldindata.org/grapher/{slug}.csv",
+        license="CC-BY-4.0",
+    )
+)
 hit = low <= answer(rows, country, year) <= high
 ```
 
@@ -891,6 +974,7 @@ rung without touching the store's schema.
 
 ```python
 import bm25s
+
 retriever = bm25s.BM25()
 retriever.index(bm25s.tokenize(chunk_texts, stopwords="en"))
 docs, scores = retriever.retrieve(bm25s.tokenize(bite), k=10)
@@ -948,7 +1032,8 @@ against a root certificate you keep, no Bitcoin node needed.
 
 ```python
 from rfc3161_client import TimestampRequestBuilder
-req = TimestampRequestBuilder().data(bundle_bytes).build()   # sent to a TSA
+
+req = TimestampRequestBuilder().data(bundle_bytes).build()  # sent to a TSA
 ```
 
 Watch: stamping is a network call to the authority; only the hash goes.
@@ -1000,7 +1085,7 @@ the operator's call; one shape it could take:
 ```python
 # pile.py, rung 2 (sketch): don't trade a rare word for a flood
 if fix_chunks > REPAIR_FLOOD * max(1, median_chunks(bite_words)):
-    continue   # leave it a miss; a miss reaches the map, a flood doesn't
+    continue  # leave it a miss; a miss reaches the map, a flood doesn't
 ```
 
 ### 60. The miss row lost two words
@@ -1074,7 +1159,9 @@ A chunk's `sha256` wrapped in four bytes is a CIDv1 `raw` ID, the address
 IPFS, IPLD and the AT Protocol use. Stdlib only, no network.
 
 ```python
-cid = "b" + base32(bytes([1, 0x55, 0x12, 0x20]) + bytes.fromhex(chunk_sha256)).lower().rstrip("=")
+cid = "b" + base32(
+    bytes([1, 0x55, 0x12, 0x20]) + bytes.fromhex(chunk_sha256)
+).lower().rstrip("=")
 # sha256("hello world\n") -> bafkreifjjcie6lypi6ny7amxnfftagclbuxndqonfipmb64f2km2devei4
 ```
 
@@ -1290,7 +1377,7 @@ says "not before this" in the world's own terms. With OpenTimestamps (25)
 for "not after", every row is pinned on both sides.
 
 ```python
-t = genesis_time + period * (round - 1)   # from /{chain_hash}/info
+t = genesis_time + period * (round - 1)  # from /{chain_hash}/info
 ```
 
 ### 83. Dates that admit doubt: EDTF and the tz database
@@ -1311,7 +1398,8 @@ is a few lines of stdlib; H3 (Apache-2.0) would be an optional extra.
 
 ```python
 import h3
-h3.latlng_to_cell(lat, lng, 5)   # a cell ID, a 15-digit hex string
+
+h3.latlng_to_cell(lat, lng, 5)  # a cell ID, a 15-digit hex string
 ```
 
 Watch: avoid what3words; its terms make the words its property.
@@ -1371,12 +1459,26 @@ differ here". It never computes that itself.
 ```python
 # serve.py (sketch): pairs of served chunks, related by code
 for a, b in itertools.combinations(top, 2):
-    rel = ("same" if a.sha256 == b.sha256 else
-           "near" if jaccard(shingles(a), shingles(b)) >= NEAR else    # difflib / MinHash
-           "close" if cosine(embed(a), embed(b)) >= CLOSE else None)    # rung 3, when on
+    rel = (
+        "same"
+        if a.sha256 == b.sha256
+        else "near"
+        if jaccard(shingles(a), shingles(b)) >= NEAR
+        # difflib / MinHash
+        else "close"
+        if cosine(embed(a), embed(b)) >= CLOSE
+        else None
+    )  # rung 3, when on
     if rel:
-        rows.append({"what": "compare", "a": name(a), "b": name(b),
-                     "rel": rel, "diff": diff_hunks(a, b) if rel == "near" else None})
+        rows.append(
+            {
+                "what": "compare",
+                "a": name(a),
+                "b": name(b),
+                "rel": rel,
+                "diff": diff_hunks(a, b) if rel == "near" else None,
+            }
+        )
 ```
 
 - Stdlib gets the first two relations: `difflib` for the diff, word
@@ -1411,8 +1513,10 @@ A nat 1 is advisory. Mostly.
 ```python
 rng = StreamRandom.from_seed(bytes.fromhex(randomness), label=f"pr-{n}".encode())
 total, nat = dice5e.d20(rng, mod=green_runs - sigh.get(repo, n))
-table.verdict(cfg, {"what": "roll", "session": f"merge roll {repo} {n}",
-                    "total": total, "nat": nat})   # `what` is one of table.WHATS
+table.verdict(
+    cfg,
+    {"what": "roll", "session": f"merge roll {repo} {n}", "total": total, "nat": nat},
+)  # `what` is one of table.WHATS
 ```
 
 ### 88. Grade the horoscope
@@ -1426,8 +1530,12 @@ psychic the bot is. (Probably as good as a coin. Possibly worse, which is
 funnier.)
 
 ```python
-api.forecast(cfg, f"horoscope-{day}", [{"path": "tests-red", "p": 0.5},
-                                       {"path": "tests-green", "p": 0.5}], by="oracle")
+api.forecast(
+    cfg,
+    f"horoscope-{day}",
+    [{"path": "tests-red", "p": 0.5}, {"path": "tests-green", "p": 0.5}],
+    by="oracle",
+)
 # a forecast is by a role (human, desk, oracle, coin), never "stars"
 ```
 
@@ -1480,7 +1588,7 @@ grade next to drand's. A lesson in why the beacon exists.
 
 ```python
 digits = [int(str(q["mag"]).replace(".", "")[-1]) for q in quakes]
-print(pools.hist(digits))   # spoiler: not flat
+print(pools.hist(digits))  # spoiler: not flat
 ```
 
 ### 93. Lunatic mode
@@ -1507,7 +1615,7 @@ work:** weather isn't a property of your code. **Why it does:**
 dutifully tell the human which piles share a drizzle before they seal.
 
 ```python
-serve.propose(stack, weather="rain")   # the card lists the joins: all wet
+serve.propose(stack, weather="rain")  # the card lists the joins: all wet
 ```
 
 ### 95. The spurious-correlation machine
@@ -1521,8 +1629,11 @@ the calibration curve shows how many links a big enough pile invents. A
 very honest machine for being wrong.
 
 ```python
-api.forecast(cfg, "ci-red-when-it-rains-nov", [{"path": "holds", "p": 0.5},
-                                               {"path": "noise", "p": 0.5}])
+api.forecast(
+    cfg,
+    "ci-red-when-it-rains-nov",
+    [{"path": "holds", "p": 0.5}, {"path": "noise", "p": 0.5}],
+)
 ```
 
 ### 96. Your decisions as a Gource movie
@@ -1535,7 +1646,7 @@ just `timestamp|user|A|path`, and every row has a time, a who and a kind.
 
 ```python
 for r in rows:
-    print(f"{epoch(r['ts'])}|{r.get('who','run')}|A|{r['kind']}/{r['n']}")
+    print(f"{epoch(r['ts'])}|{r.get('who', 'run')}|A|{r['kind']}/{r['n']}")
 ```
 
 ### 97. The pile writes poetry
@@ -1601,7 +1712,7 @@ does:** the moon keeps better time than a laptop that slept through a
 DST change. An absurdly expensive NTP.
 
 ```python
-assert abs(recorded_high - noaa_high) < timedelta(minutes=10)   # else: whose clock?
+assert abs(recorded_high - noaa_high) < timedelta(minutes=10)  # else: whose clock?
 ```
 
 ### 102. The market bets on the bot
@@ -1614,9 +1725,12 @@ exists. **Why it does:** a wager is a wager. The ledger only needs two
 settled facts and a date, and it will never let you drop the losers.
 
 ```python
-api.forecast(cfg, "release-before-spy-up-1023",
-             [{"path": "yes", "p": 0.2}, {"path": "no", "p": 0.8}],
-             market={"symbol": "SPY", "kind": "up", "close_date": "2026-10-23"})
+api.forecast(
+    cfg,
+    "release-before-spy-up-1023",
+    [{"path": "yes", "p": 0.2}, {"path": "no", "p": 0.8}],
+    market={"symbol": "SPY", "kind": "up", "close_date": "2026-10-23"},
+)
 ```
 
 ## How much is already here
@@ -1761,8 +1875,9 @@ in the index, and count a word as known only when it lands somewhere else
 too.
 
 ```python
-known = [k for k in seed["keys"]
-         if any(not a[1].endswith("IDEAS.md") for a in k["anchors"])]
+known = [
+    k for k in seed["keys"] if any(not a[1].endswith("IDEAS.md") for a in k["anchors"])
+]
 ```
 
 ### 104. NEEDS YOU doesn't list a session waiting on your seal
@@ -1775,8 +1890,10 @@ store), so two sessions sit unsealed and nothing on the screen says so.
 
 ```python
 # view.needs (sketch)
-needs += [f"session {s['subject']} · waiting on your seal{s.get('why', '')}"
-          for s in report.get("sessions_waiting", [])]
+needs += [
+    f"session {s['subject']} · waiting on your seal{s.get('why', '')}"
+    for s in report.get("sessions_waiting", [])
+]
 ```
 
 ### 105. Deep Thought measures the world before D2
