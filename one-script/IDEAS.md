@@ -206,6 +206,7 @@ here reads, writes or caches vault material.
 118. [Asymmetric offsets: a puzzle from the Discord group](#118-asymmetric-offsets-a-puzzle-from-the-discord-group)
 119. [Nothing checks for personal data before serving](#119-nothing-checks-for-personal-data-before-serving)
 120. [The OAuth handoff, and the box picking its own tests](#120-the-oauth-handoff-and-the-box-picking-its-own-tests)
+121. [The seed line: what the small script was before it was small](#121-the-seed-line-what-the-small-script-was-before-it-was-small)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2509,6 +2510,33 @@ willow-mcp as well. Only the live probe reaches the wiring.
 A shape: a `tests-for` verb, a diff in, the box's test files out, ranked,
 so a change runs its own tests first and the full suite after, and a change
 whose identifiers no test names says so.
+
+### 121. The seed line: what the small script was before it was small
+
+2026-10-22. The operator, on pulling the small script out: *"the seed.py
+and other related metaphor. It's willow, it's baked in."* Every repo the
+box can reach, read for the planting sense of seed (the first run that
+everything grows from), not the data sense (`seed_kb`, `seed_policy`,
+`seed_demo`, which load starter rows into a store):
+
+| Generation | Where | What it does |
+|---|---|---|
+| the first seed | willow-seed `seed.py` | "Plant this. Everything grows from here." Checks Python, finds or clones Willow, hands off. Its README's session consent ("May I access your journal today?") |
+| the replant | willow-seed `REPLANT.md` | Marked historical: superseded 2026-07-22 by the charter's seed |
+| SEED9 | willow-2.0 `seed.py` (and `seed-windows.py`, `willow-launcher.py`) | "One file to rule them all": first run installs, holds the onboarding conversation, makes the card, opens the dashboard; a return run is splash, auth, dashboard |
+| SEED10 | the charter, `Willow/seed/` (`seed.py`, the handoff letter, the canon, ONBOARDING.md) | Not reachable from this session (rudi193-cmd/Willow can't be attached beside willow-memory/willow) |
+| the canon | willows-grove `governance/seed/canon/` (six movements) | Moved here 2026-08-29, byte-identical to the charter's; `grove/seed_reader.py` walks them at first boot (D16: "the six-part canon *is* the human onboarding") |
+| the onboarding | willows-grove `docs/TESTER_ONBOARDING.md` | Clone, venv, Postgres: a setup page, not a seed |
+| the reference | willow-bot `claude/genesis`: `genesis.py` | "The smallest one script": run checks, append a row, verify. Unmerged |
+| the kernel | willow-bot `one-script/kernel.py` (PR #160) | The newcomer's loop on their own folder |
+| the bite | willow-bot `onescript/seed.py` | Not a planting: "2 predict, the seed": the first bite's words scanned against the box, once per check-in |
+
+What the line shows: the small script is the seed again. Each generation
+was "the one file a person runs first", and the canon moved to the Grove
+while `seed.py` itself did not; SEED10 sits only in the charter. genesis
+and the kernel rebuilt the seed's job under new names, and `onescript/seed.py`
+reuses the word for a different job (the first bite). Three names for one
+role, one word for two roles.
 
 ## What the one script said about this list
 
