@@ -205,6 +205,7 @@ here reads, writes or caches vault material.
 117. [The kernel on the-box: what plopped out](#117-the-kernel-on-the-box-what-plopped-out)
 118. [Asymmetric offsets: a puzzle from the Discord group](#118-asymmetric-offsets-a-puzzle-from-the-discord-group)
 119. [Nothing checks for personal data before serving](#119-nothing-checks-for-personal-data-before-serving)
+120. [The OAuth handoff, and the box picking its own tests](#120-the-oauth-handoff-and-the-box-picking-its-own-tests)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2469,6 +2470,45 @@ rather than implied.
 Found while building: willow-2.0's `scripts/pii_check.py` (a public,
 archived repo) is written as one person's literal details rather than
 shapes. It is left out of the set, and is the operator's to look at.
+
+### 120. The OAuth handoff, and the box picking its own tests
+
+2026-10-22. The operator brought a packaged handoff from another cloud
+session: `oauth_probe` (deterministic OAuth as forecast wagers and pins) and
+`oauth_resource` (every code and token stamped with the server it was
+issued for), plus wiring diffs for willows-grove and willow-mcp. The hole it
+closes: Grove accepted an access token minted for another server.
+
+- **Landed here:** the three willow-bot commits, applied as they were
+  (`git am`), onto this branch; lint clean; with the `mcp` SDK installed the
+  binding and probe tests are 30 of 30, as the handoff said. Without it the
+  18 binding tests skip, and the one-script CI job doesn't install it, so in
+  CI they skip: a test that doesn't run in CI is not a test yet.
+- **Not landed:** the Grove and willow-mcp wiring. Both diffs still apply to
+  today's heads, but Grove commits need a persona and the operator's
+  ratifying words, and both wait on G1 (refuse pre-binding tokens now, or
+  honour them for a window).
+- **Verified live anyway**, in throwaway clones on throwaway homes: both
+  servers wired, the probe run five times. 7 wagers and 19 of 20 pins hold;
+  the one that moves is `g.audience.foreign_resource`, `accepted` to
+  `http_401`, the fix and nothing else.
+
+**The box picks the tests** (the operator: *"the one script could do a
+similar job as the tests are doing, as long as the piles of tests are in
+the box"*). Asked with the identifiers the diffs touch
+(`GroveOAuthProvider`, `validate_token_resource`, `exchange_refresh_token`,
+`_build_serve_provider`, ...), the crossed box names the OAuth tests in both
+servers: seven Grove files (74 tests, about a second) and four willow-mcp
+files (56 tests, about two), against full suites of minutes. It also showed
+what no suite can: none of those tests runs the wired lines, because both
+servers decide serve mode at import and their tests keep it off. The box
+found the right tests and, by their silence, the gap the handoff names
+("a Grove-side test that serve mode's provider is bound"), true of
+willow-mcp as well. Only the live probe reaches the wiring.
+
+A shape: a `tests-for` verb, a diff in, the box's test files out, ranked,
+so a change runs its own tests first and the full suite after, and a change
+whose identifiers no test names says so.
 
 ## What the one script said about this list
 
