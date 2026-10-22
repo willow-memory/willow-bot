@@ -56,3 +56,10 @@ papers, recipe, happening.
   as it is.
 - Vocabulary is the biggest gap for a person with no list yet.
 - A second blind character from a different trade would test this properly.
+
+## After word forms and dd/mm/yyyy (kernel d942564)
+
+The same twenty questions on a fresh copy. Three empty answers, against four.
+No need moved: "who still owes me money" stays empty because his files never
+use the word in any form (they say invoice and outstanding), so it's a
+vocabulary gap, not a word-form one. Odile's thirteen questions are unchanged.

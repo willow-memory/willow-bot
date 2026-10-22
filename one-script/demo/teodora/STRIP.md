@@ -42,3 +42,20 @@ missed.**
 - **Inflections.** "Owe" against owed and owes; "paying" against paid; "gave",
   "behind", "along", "forget". Six of twenty questions came back empty on one
   missing form or one everyday word. Hollis lost the same way on "owes".
+
+## After word forms and dd/mm/yyyy (kernel d942564)
+
+The same twenty questions on a fresh copy. Five empty answers, against six.
+
+- **N4, her wrist, is now better served.** "Those wrist stretches the physio
+  gave me" serves `notes/physio_exercises.md` first (stretches matches
+  stretch).
+- **"Owe" was not a word-form gap.** No file of hers uses owe, owes, owed or
+  owing: Dev "lent", she'll "pay back whenever". "How much do I still owe dev"
+  is still empty. Only a words list, or a meaning match, closes that.
+- **"Which clients are behind on paying"** is no longer empty, but it serves
+  the wrong chats.
+- Her chat lines like `[11/03/2023, …]` stay undated, since 11 and 03 could be
+  either way round; lines like `[15/10/2026, …]` now date.
+
+Needs: still one found as asked, now four with evidence served, two missed.
