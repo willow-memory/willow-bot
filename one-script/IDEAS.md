@@ -2183,6 +2183,36 @@ they possibly bring in something new."* README and tree only, nothing built:
 | willow-config, yggdrasil-training-data | Not opened: config with token files, and training data; the operator's call |
 | glapagos (castroquiles) | Not the operator's; for the contributed-to pass |
 
+**The forks and the contributed-to** (the operator: *"a lot is going to be
+duplicate, because i gave and took a lot from a lot of them"*). Exact
+duplicates, measured as paragraphs hashed the kernel's way: almost none
+beyond licence text and codes of conduct, because giving and taking moved
+ideas, not text. The real traffic:
+
+| Repo | Gave, took, or new |
+|---|---|
+| community (Emerging-Rule) | **Gave**: 949 paragraphs shared with DispatchesFromReality, the AI-literacy and calibration lessons; nine of the operator's commits, merged by the maintainer who also owns glapagos |
+| redential-cli | **Gave**: the MCP taxonomy slug, a detection fix, RFC #13 drafts (5 of the last 50 commits) |
+| hermes-agent | **Gave**: a security audit and a fix. Its 2,000 files of skills crowd every lookup they touch: 62's per-repo cap, wanted in the one script's own lookup |
+| codebase-memory-mcp | **Took**, and the answer to 117's egg 5: "dead code detection: functions with zero callers". The tool the kernel's `unused` pointer means. Left out of the box (1.3 GB) |
+| mex, basic-memory | Took: persistent memory for coding agents, the same idea from outside |
+| sigmap | Took: "deterministic, verifiable grounding", byte-stable output, no model |
+| DigUp | Took: search your files by what's in them, the kernel's own first bite |
+| socratic, AHS-cortex, gov-transparency-mcp | A self-questioning skill; agent orchestration; US government data, the almanacs' ground |
+| CSL, Multi-News, NaturalConv, sentence-similarity | Datasets; nothing shared. sentence-similarity is 86's oldest root |
+| cpython | History only; none of the last 50 commits the operator's |
+
+**willow-2.0 (archived, public).** terpsi-music's §14 claims about it hold:
+the bitemporal migration, `TRUST.md`, `SECURITY_AUDIT.md` and
+`core/inference_router.py` are where it says. And it closes two old gaps:
+handoff G and the O-6 stamp are `willow/fylgja/boot_digest.py` ("latest
+handoff + claim verification ... every action-driving line carries a
+verification stamp; nothing is copied forward without one"), and
+willow-seed's session consent is built in `willow/fylgja/safety/session.py`
+(streams authorized per session, `"expires": "session"`, the consent record
+written and the authorizations dropped at close). rudi193-cmd/Willow could
+not be attached here: a session can't hold two repos named `willow`.
+
 ### 117. The kernel on the-box: what plopped out
 
 2026-10-22. The operator: *"run the kernel on the-box, and see what golden
