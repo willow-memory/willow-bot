@@ -1,5 +1,8 @@
 /*
- * kernel.ts: kernel.py in TypeScript. Node 18+, its standard library only.
+ * kernel.ts: kernel.py in TypeScript. Node 14 or later, its standard library
+ * only (checked on Node 14.15.0 and 15.0.0, built by TypeScript 4.0.5, all
+ * from 2020, and on Node 22 built by TypeScript 5.9; for a TypeScript before
+ * 4.5, build with --target ES2020).
  *
  *   npm install && npx tsc            (builds dist/kernel.js)
  *   node dist/kernel.js init    --box DIR --pile FOLDER --key FILE
@@ -37,6 +40,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { TextDecoder } from "util"; // global since Node 11, but typed in util until much later
 
 const ALIVE = 0;
 const ESCALATE = 42;

@@ -10,9 +10,9 @@ Three ports so far, every one passing everything:
 
 | Port | File | Runtime | Made from |
 |---|---|---|---|
-| Java | `java/Kernel.java` | JDK 17+, standard library | `kernel.py` |
-| TypeScript | `ts/kernel.ts` | Node 18+, standard library (TypeScript to build) | `kernel.py` and Java |
-| C# | `csharp/Kernel.cs` | .NET 8, base class library | Java's shape, TypeScript's scanners |
+| Java | `java/Kernel.java` | JDK 11+, standard library | `kernel.py` |
+| TypeScript | `ts/kernel.ts` | Node 14+, standard library (TypeScript 4.0+ to build) | `kernel.py` and Java |
+| C# | `csharp/Kernel.cs` | .NET 5+, base class library | Java's shape, TypeScript's scanners |
 
 Made 2026-10-21, after asking the one script's pile what the fleet already
 had. The pieces were already there; this puts them together for ports:
@@ -60,6 +60,32 @@ dotnet build csharp/Kernel.csproj -o csharp/out && dotnet csharp/out/Kernel.dll 
 **Java needs a UTF-8 locale.** Without one the JVM can't even name a file with
 a non-ASCII name (`InvalidPathException`), where Python carries it through.
 Run it with `LC_ALL=C.UTF-8` (compare.py does).
+
+## On the runtimes of 2020
+
+`kernel.py` says Python 3.9+, so everything was also run on what was current
+when 3.9.0 came out (2026-10-21, at the operator's ask):
+
+| Runtime | Version | Where it came from | Result |
+|---|---|---|---|
+| Python | 3.9.0 (2020-10-05), Unicode 13.0 | built from tag `v3.9.0`, commit `9cf67522`, the one `foundation/` verified | the eight beats, the kernel's 17 tests, and `compare.py` with 3.9.0 as `kernel.py`: all pass; `gen.py` makes the same 3,088 cases as on 3.13 (only the Unicode tables differ) |
+| Java | JDK 11.0.9 (2020-10-20), JDK 15 (2020-09-15) | AdoptOpenJDK builds, checksums verified | everything passes, unchanged |
+| Node, TypeScript | Node 14.15.0 LTS and 15.0.0 (2020-10), TypeScript 4.0.5 | the npm registry | everything passes, after one change: `TextDecoder` imported from `util` (a global in Node 14, but typed only in `util` then) |
+| .NET | 5.0.0 runtime (2020-11-10), C# 9 | NuGet's runtime packs, self-contained | everything passes, after the port stopped using .NET 6 and 7 conveniences (see below) |
+
+.NET 5 does its hashing through OpenSSL 1.1, which a 2024 system doesn't
+carry; it ran with Ubuntu 20.04's OpenSSL 1.1.1f (checked against focal's
+package index) on its library path. What C# changed to reach .NET 5, with no
+change on .NET 8: `record struct` and `>>>` (C# 10, 11) became a plain struct
+and `/ 2`; `HMACSHA256.HashData`, `RandomNumberGenerator.GetBytes(n)`,
+`ReadExactly`, `CreateTempSubdirectory` and `char.IsAsciiDigit` became their
+long-standing equivalents; a path is resolved with libc's `realpath` (closer to
+Python's `resolve()` than walking links); and the file mode (read, and 0600 at
+creation) is the library's on .NET 7+ and libc's before it, the only `#if`.
+
+`compare.py` takes a build made elsewhere: `KERNEL_TS_DIST` (a `dist/`
+folder) and `KERNEL_CS_EXE` (a self-contained `Kernel`), with the old Node or
+JDK first on `PATH`.
 
 ## Scanners, not regular expressions
 

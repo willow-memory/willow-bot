@@ -1,5 +1,6 @@
 /*
- * Kernel.cs: kernel.py in C#. .NET 8, the base class library only.
+ * Kernel.cs: kernel.py in C#. .NET 5 or later, the base class library only
+ * (built and checked on .NET 8 and on the .NET 5.0.0 runtime, C# 9).
  *
  *   dotnet build Kernel.csproj -c Release -o out
  *   dotnet out/Kernel.dll init    --box DIR --pile FOLDER --key FILE
@@ -68,6 +69,8 @@ public static class Kernel
         return o;
     }
 
+    static bool IsAsciiDigit(char c) => c >= '0' && c <= '9';
+
     sealed class JsonError : Exception { public JsonError(string m) : base(m) { } }
 
     sealed class Parser
@@ -113,19 +116,19 @@ public static class Kernel
             int st = i;
             if (i < s.Length && s[i] == '-') i++;
             if (i < s.Length && s[i] == '0') i++;
-            else if (i < s.Length && s[i] >= '1' && s[i] <= '9') while (i < s.Length && char.IsAsciiDigit(s[i])) i++;
+            else if (i < s.Length && s[i] >= '1' && s[i] <= '9') while (i < s.Length && IsAsciiDigit(s[i])) i++;
             else throw new JsonError("expecting value");
             int intEnd = i;
             bool frac = false, exp = false;
-            if (i + 1 < s.Length && s[i] == '.' && char.IsAsciiDigit(s[i + 1])) { frac = true; i++; while (i < s.Length && char.IsAsciiDigit(s[i])) i++; }
+            if (i + 1 < s.Length && s[i] == '.' && IsAsciiDigit(s[i + 1])) { frac = true; i++; while (i < s.Length && IsAsciiDigit(s[i])) i++; }
             if (i < s.Length && (s[i] == 'e' || s[i] == 'E'))
             {
                 int j = i + 1;
                 if (j < s.Length && (s[j] == '+' || s[j] == '-')) j++;
-                if (j < s.Length && char.IsAsciiDigit(s[j])) { exp = true; i = j; while (i < s.Length && char.IsAsciiDigit(s[i])) i++; }
+                if (j < s.Length && IsAsciiDigit(s[j])) { exp = true; i = j; while (i < s.Length && IsAsciiDigit(s[i])) i++; }
             }
-            if (!frac && !exp) return BigInteger.Parse(s.AsSpan(st, intEnd - st), CultureInfo.InvariantCulture);
-            return double.Parse(s.AsSpan(st, i - st), CultureInfo.InvariantCulture);
+            if (!frac && !exp) return BigInteger.Parse(s.Substring(st, intEnd - st), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            return double.Parse(s.Substring(st, i - st), NumberStyles.Float, CultureInfo.InvariantCulture);
         }
 
         JObj Object()
@@ -192,7 +195,7 @@ public static class Kernel
                     case 'r': b.Append('\r'); break;
                     case 't': b.Append('\t'); break;
                     case 'u':
-                        if (i + 4 > s.Length || !int.TryParse(s.AsSpan(i, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int u))
+                        if (i + 4 > s.Length || !int.TryParse(s.Substring(i, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out int u))
                             throw new JsonError("bad \\u escape");
                         b.Append((char)u);
                         i += 4;
@@ -296,7 +299,7 @@ public static class Kernel
     static string Hex(byte[] d) => Convert.ToHexString(d).ToLowerInvariant();
     static string Sha256(byte[] d) => Hex(SHA256.HashData(d));
     static string H256(string text) => Sha256(Utf8.GetBytes(text));
-    static string Hmac(byte[] key, byte[] msg) => Hex(HMACSHA256.HashData(key, msg));
+    static string Hmac(byte[] key, byte[] msg) { using var h = new HMACSHA256(key); return Hex(h.ComputeHash(msg)); }
     /** onescript/sign.py hmac_parts(key, "seal", subject). */
     static string Proof(byte[] key, string subject) => Hmac(key, Utf8.GetBytes("seal\u001f" + subject));
 
@@ -321,7 +324,7 @@ public static class Kernel
             int a = 0, z = lo.Length - 1;
             while (a <= z)
             {
-                int m = (a + z) >>> 1;
+                int m = (a + z) / 2;
                 if (c < lo[m]) z = m - 1;
                 else if (c > hi[m]) a = m + 1;
                 else return true;
@@ -704,8 +707,7 @@ public static class Kernel
         {
             var mine = new List<string>(parts) { System.IO.Path.GetFileName(p) };
             o.Add(mine);
-            var info = new DirectoryInfo(p);
-            if (info.Exists && info.LinkTarget == null) Walk(p, mine, o);
+            if (Directory.Exists(p) && (File.GetAttributes(p) & FileAttributes.ReparsePoint) == 0) Walk(p, mine, o);
         }
     }
 
@@ -768,8 +770,10 @@ public static class Kernel
     }
 
     /** An exact rational, for the rank's scores. */
-    readonly record struct Q(BigInteger N, BigInteger D)
+    readonly struct Q
     {
+        public readonly BigInteger N, D;
+        public Q(BigInteger n, BigInteger d) { N = n; D = d; }
         public Q Plus(Q o)
         {
             var n = N * o.D + o.N * D;
@@ -863,6 +867,89 @@ public static class Kernel
         return null;
     }
 
+    static void ReadAll(Stream f, byte[] buf)
+    {
+        int got = 0;
+        while (got < buf.Length)
+        {
+            int n = f.Read(buf, got, buf.Length - got);
+            if (n == 0) throw new EndOfStreamException();
+            got += n;
+        }
+    }
+
+    /** What the base class library only gained in .NET 7 (a file's Unix mode,
+     *  a file made 0600 from the start), and realpath, which it never had.
+     *  On .NET 7+ the library's own calls; before it, libc's, so the port runs
+     *  back to .NET 5 (checked on 5.0.0). */
+    static class Libc
+    {
+        [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "realpath")]
+        static extern IntPtr realpath(string path, IntPtr resolved);
+
+        [System.Runtime.InteropServices.DllImport("libc")]
+        static extern void free(IntPtr p);
+
+        public static string? RealPath(string path)
+        {
+            var r = realpath(path, IntPtr.Zero);
+            if (r == IntPtr.Zero) return null;
+            try { return System.Runtime.InteropServices.Marshal.PtrToStringUTF8(r); } finally { free(r); }
+        }
+
+#if NET7_0_OR_GREATER
+        public static int Mode(string path) => OperatingSystem.IsWindows() ? 0 : (int)File.GetUnixFileMode(path);
+
+        public static FileStream CreateOwnerOnly(string path)
+        {
+            var opts = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+            if (!OperatingSystem.IsWindows()) opts.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            return new FileStream(path, opts);
+        }
+#else
+        [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "open")]
+        static extern int open(string path, int flags, int mode);
+
+        [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "stat")]
+        static extern int stat(string path, byte[] buf);
+
+        [System.Runtime.InteropServices.DllImport("libc", SetLastError = true, EntryPoint = "__xstat")]
+        static extern int xstat(int ver, string path, byte[] buf);
+
+        static bool Mac => System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX);
+        static bool Arm64 => System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
+
+        /** st_mode from libc's struct stat: at byte 24 on Linux x86-64, 16 on
+         *  Linux arm64, 4 (16-bit) on macOS. glibc before 2.33 has no `stat`
+         *  symbol, only `__xstat`. */
+        public static int Mode(string path)
+        {
+            if (OperatingSystem.IsWindows()) return 0;
+            var buf = new byte[256];
+            int rc;
+            try { rc = stat(path, buf); }
+            catch (EntryPointNotFoundException) { rc = xstat(Arm64 ? 0 : 1, path, buf); }
+            if (rc != 0)
+            {
+                int errno = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                if (errno == 2) throw new FileNotFoundException(path);
+                if (errno == 13) throw new UnauthorizedAccessException(path);
+                throw new IOException(path);
+            }
+            return Mac ? BitConverter.ToUInt16(buf, 4) : BitConverter.ToInt32(buf, Arm64 ? 16 : 24);
+        }
+
+        public static FileStream CreateOwnerOnly(string path)
+        {
+            if (OperatingSystem.IsWindows()) return new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+            int flags = Mac ? (0x1 | 0x200 | 0x800) : (0x1 | 0x40 | 0x80); // O_WRONLY | O_CREAT | O_EXCL
+            int fd = open(path, flags, 0x180); // 0o600
+            if (fd < 0) throw new IOException($"{path} could not be created");
+            return new FileStream(new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)fd, true), FileAccess.Write);
+        }
+#endif
+    }
+
     // ── the record: genesis's, in the one script's format ──────────────────
     sealed class Read
     {
@@ -921,7 +1008,7 @@ public static class Kernel
         if (!File.Exists(path)) return new Read();
         using var f = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var bytes = new byte[f.Length];
-        f.ReadExactly(bytes);
+        ReadAll(f, bytes);
         return ReadBytes(bytes);
     }
 
@@ -951,7 +1038,7 @@ public static class Kernel
         using (var f = Locked(path))
         {
             var existing = new byte[f.Length];
-            f.ReadExactly(existing);
+            ReadAll(f, existing);
             var r = ReadBytes(existing); // the true tail, read under the lock
             if (r.Breaks.Count > 0) throw new IOException(string.Join("; ", r.Breaks));
             bool sealedRow = kind == "seal" && who == "human";
@@ -975,24 +1062,23 @@ public static class Kernel
     // ── the box: theirs ────────────────────────────────────────────────────
     static JObj Config(string box) => (JObj)Parser.Loads(File.ReadAllText(System.IO.Path.Combine(box, "kernel.json"), Utf8))!;
 
-    /** Path.resolve(): absolute, every link resolved as far as the path exists. */
+    /** Path.resolve(): absolute, every link resolved as far as the path exists
+     *  (libc's realpath on the deepest part that exists, the rest as written). */
     static string Resolved(string p)
     {
         var full = System.IO.Path.GetFullPath(p);
-        var parts = full.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var cur = "/";
-        for (int i = 0; i < parts.Length; i++)
+        if (OperatingSystem.IsWindows()) return full;
+        var tail = new List<string>();
+        var probe = full;
+        while (!File.Exists(probe) && !Directory.Exists(probe))
         {
-            var next = System.IO.Path.Combine(cur, parts[i]);
-            FileSystemInfo info = Directory.Exists(next) ? new DirectoryInfo(next) : new FileInfo(next);
-            if (info.Exists && info.LinkTarget != null)
-            {
-                var target = info.ResolveLinkTarget(true);
-                next = target != null ? Resolved(target.FullName) : next;
-            }
-            cur = next;
+            var parent = System.IO.Path.GetDirectoryName(probe);
+            if (parent == null) break;
+            tail.Insert(0, System.IO.Path.GetFileName(probe));
+            probe = parent;
         }
-        return cur;
+        var real = Libc.RealPath(probe) ?? probe;
+        return tail.Count == 0 ? real : System.IO.Path.Combine(new[] { real }.Concat(tail).ToArray());
     }
 
     static bool Inside(string p, string box)
@@ -1007,13 +1093,8 @@ public static class Kernel
         if (Inside(file, box)) return (null, "the key can't live inside the box");
         try
         {
-            if (!OperatingSystem.IsWindows())
-            {
-                var mode = File.GetUnixFileMode(file);
-                var others = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
-                    | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
-                if ((mode & others) != 0) return (null, $"{file} is readable beyond its owner; chmod 600 it");
-            }
+            if (!OperatingSystem.IsWindows() && (Libc.Mode(file) & 0x3F) != 0) // 0o077
+                return (null, $"{file} is readable beyond its owner; chmod 600 it");
             var hex = Strip(File.ReadAllText(file, Utf8));
             try { return (Convert.FromHexString(hex), null); } catch (FormatException) { return (null, "the key could not be read: ValueError"); }
         }
@@ -1030,10 +1111,10 @@ public static class Kernel
         if (!File.Exists(key))
         {
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(key))!);
-            var opts = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
-            if (!OperatingSystem.IsWindows()) opts.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            using var f = new FileStream(key, opts);
-            f.Write(Encoding.ASCII.GetBytes(Hex(RandomNumberGenerator.GetBytes(32)) + "\n"));
+            var secret = new byte[32];
+            RandomNumberGenerator.Fill(secret);
+            using var f = Libc.CreateOwnerOnly(key);
+            f.Write(Encoding.ASCII.GetBytes(Hex(secret) + "\n"));
         }
         Directory.CreateDirectory(box);
         var cfg = Obj("pile", Resolved(pile), "key", Resolved(key));
@@ -1214,7 +1295,8 @@ public static class Kernel
         res["holds"] = Part("holds").Select(o => (object?)Obj("out", Holds((string)o["w"]!, L(o["toks"]).Select(x => (string)x!).ToHashSet(StringComparer.Ordinal)))).ToList();
         res["echo"] = Part("echo").Select(o => (object?)Obj("out", Echo((string)o["bite"]!, (string)o["text"]!))).ToList();
         var piles = new List<List<Chunk>>();
-        var tmp = Directory.CreateTempSubdirectory("kernel-vectors-").FullName;
+        var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "kernel-vectors-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
         try
         {
             int n = 0;

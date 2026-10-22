@@ -102,6 +102,9 @@ class TypeScript:
 
     def __init__(self, work: Path):
         src = HERE / "ts"
+        if os.environ.get("KERNEL_TS_DIST"):  # a build made elsewhere (another tsc)
+            self.out = Path(os.environ["KERNEL_TS_DIST"])
+            return
         if not (src / "node_modules" / "typescript").exists():
             _build(["npm", "install", "--no-audit", "--no-fund"], cwd=src)
         self.out = work / "ts-dist"
@@ -119,6 +122,11 @@ class CSharp:
     tools = ("dotnet",)
 
     def __init__(self, work: Path):
+        self.exe = os.environ.get(
+            "KERNEL_CS_EXE"
+        )  # a build made elsewhere (another .NET)
+        if self.exe:
+            return
         self.out = work / "cs-out"
         _build(
             [
@@ -134,6 +142,8 @@ class CSharp:
         )
 
     def argv(self, *args: str) -> list[str]:
+        if self.exe:
+            return [self.exe, *args]
         return ["dotnet", str(self.out / "Kernel.dll"), *args]
 
 

@@ -1,5 +1,6 @@
 /*
- * Kernel.java: kernel.py in Java. JDK 17+, the standard library only.
+ * Kernel.java: kernel.py in Java. JDK 11 or later, the standard library only
+ * (checked on JDK 11.0.9 and JDK 15 from 2020, and on JDK 21).
  *
  *   javac -d out Kernel.java
  *   java -cp out Kernel init    --box DIR --pile FOLDER --key FILE
