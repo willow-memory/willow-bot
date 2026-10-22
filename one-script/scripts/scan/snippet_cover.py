@@ -36,8 +36,11 @@ from __future__ import annotations
 
 import ast
 import builtins
+import io
 import json
+import random
 import re
+import sqlite3
 import subprocess
 import sys
 from collections import defaultdict
@@ -71,6 +74,16 @@ STDLIB_BARE = {
     "reduce",
 }
 NEAR_FLOOR = 0.3  # placeholder; the operator's number
+# The methods the standard library's value types carry. `db.execute`,
+# `rng.choice`, `report.get` are calls on a value even where some repo holds a
+# `db.py`, `rng.py` or `report.py` the snippet never imported.
+VALUE_METHODS = frozenset().union(
+    *(
+        dir(t)
+        for t in (str, bytes, dict, list, set, tuple, int, float, Path)
+        + (sqlite3.Connection, sqlite3.Cursor, random.Random, io.StringIO)
+    )
+)
 
 
 def snippets(text: str) -> list[dict]:
@@ -237,7 +250,11 @@ def classify(call: str, snip: dict, here: dict) -> str:
             return "stdlib"
         return "loose" if head in defined else "missing"
     if head in mods:
-        return "here" if rest[0] in mods[head] else "missing"
+        if rest[0] in mods[head]:
+            return "here"
+        if head not in snip["imports"] and rest[0] in VALUE_METHODS:
+            return "value"  # a variable that shares a module's name
+        return "missing"
     if f"{head}.{rest[0]}" in defined:
         return "here"
     if head in STDLIB:

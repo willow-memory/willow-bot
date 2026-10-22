@@ -41,6 +41,7 @@ def test_each_call_is_sorted_by_where_it_lives(tmp_path):
                     "pkg/__init__.py": "",
                     "pkg/dice.py": "def d20(rng):\n    return 1\n",
                     "net.py": "def get(url):\n    return url\n",
+                    "db.py": "def connect():\n    pass\n",
                 },
             )
         }
@@ -54,6 +55,7 @@ def test_each_call_is_sorted_by_where_it_lives(tmp_path):
             (5, "dice.d21(rng)"),  # module here, name not
             (6, "c = Counter(xs)\nrows.append(c)"),  # stdlib and a value
             (8, "P = re.compile('x')\nP.findall(s)"),  # a value the snippet made
+            (9, "rows = db.execute(q)"),  # a value sharing a module's name
         ),
         here,
     )
@@ -65,6 +67,7 @@ def test_each_call_is_sorted_by_where_it_lives(tmp_path):
     assert by[5]["missing"] == ["dice.d21"]
     assert by[6]["verdict"] == "stdlib only"
     assert by[8]["verdict"] == "stdlib only" and by[8]["missing"] == []
+    assert by[9]["missing"] == [] and by[5]["missing"] == ["dice.d21"]
 
 
 def test_only_committed_files_count(tmp_path):

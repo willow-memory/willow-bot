@@ -200,6 +200,7 @@ here reads, writes or caches vault material.
 
 113. [Every demo is one loop, and the kernel is it](#113-every-demo-is-one-loop-and-the-kernel-is-it)
 114. [What the demos' characters needed](#114-what-the-demos-characters-needed)
+115. [Crossing the streams: what already lives in the box](#115-crossing-the-streams-what-already-lives-in-the-box)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2061,6 +2062,75 @@ files* should be 0 at all. F-43 makes the operator's pile a yes because it
 is things already said yes to; a newcomer's folder isn't that yet. The
 echo rule keeps the worst case (a question served as its own answer) at
 42; the rest is a ruling.
+
+### 115. Crossing the streams: what already lives in the box
+
+2026-10-22. The operator: *"lets cross the streams. lets see how much of
+what else they need already lives in the box"*, then *"record it and keep
+crossing"*. One box over both worlds: the one script's pile (willow-bot,
+willows-grove, Jeles) and the fleet the demos came from (Nestor, Forge,
+willow-mcp, ratatosk, safe-app-store's code, corpus-lens and seven more; 17
+repos, the store built in 30 s; no vault repo). Each open need asked in
+plain words; idea files left out of the answers (103).
+
+**The egg's other half: Rosalind is real.** The Forge's first-bite demo
+character wants "a tool for my scooter rally photographs". safe-app-store's
+`nasa-archive` is the North America Scootering Archive: scoot.net's rally
+galleries from 1997 to 2013, kept before they disappear, with an EXIF reader
+and a downloader. The demo's fiction asks for what the fleet already built.
+
+**What the characters need (114), crossed:**
+
+| Who | Need | Lives in the box |
+|---|---|---|
+| Rosalind | something built | `nasa-archive`; and `api.forge_bite` hands a bite to the Forge |
+| Rosalind | photographs | `nasa-archive/downloader`: `extract_exif`, the rally date, the photographer |
+| Law Gazelle | deadlines from today | `law-gazelle/case_store.urgent_queue()` |
+| Law Gazelle | reading SQLite | corpus-lens `ingest/sqlite.py` |
+| Nieves | a ruling across two languages | Nestor itself: translation-memory pairs, `source_lang`/`target_lang`, one seal per pair |
+| Attercliffe | CH-4471 and CH4471 as one | Nestor's matcher `normalize` (`source_norm`) |
+| Attercliffe | the near miss, refused for good | Nestor's `suppressed_by_rejection` |
+| everyone | a seal served past louder drafts | Nestor's prefilter: "a seal ranked past the top five is still served" |
+| everyone | a second desk | Nestor `demo/desks.py`, `test_two_desks.py` |
+| everyone | a keyring per verifier | Nestor's verifiers keyring (the one script's `nestor_seal` reads it) |
+| everyone | word order not changing a bite | Nestor `bench/token_matchers.py` (sorted token set): a benchmark, not production |
+| June | the farm's own data | not found: only pages |
+| the newcomer | their folder isn't a yes yet | the Forge's design ("first run is onboarding: scripted questions"); not built |
+
+10 of 13 live. The kernel is Nestor's loop at its smallest, and Nestor is
+the kernel grown: what a newcomer outgrows in the kernel is mostly already
+in Nestor.
+
+**What the one script itself needs, crossed:**
+
+| Gap | Lives in the box |
+|---|---|
+| 86 "close": same meaning, other words | Nestor `semantic_matcher.py`: cosine on embeddings, an optional extra |
+| handoff C: an over-cap prompt | ratatosk `onescript.py`: `served_budget`, "too large to serve; narrow the stack" |
+| O-6: how 42 is stamped on documents | design: willows-grove `incoming/haiku-2026-10-02/proposal-packet-stamp-chain.md` |
+| the anchor: a cut can't be seen | design: willows-grove box-build `SPEC-rival.md` |
+| handoff E: record compaction | not found (Nestor's locked `ledger_append` keeps the chain, doesn't compact it) |
+| 59 flood guard, 62 per-repo cap, handoff G | not found |
+
+**Name-matching doesn't cross; meaning does.** `snippet_cover` with all
+17 repos as "here" changed no verdict: the sketches are written in the one
+script's own words. Running it found a bug: a variable named like some
+repo's module (`db.execute`, `rng.choice`, `report.get` beside a `db.py`,
+`rng.py`, `report.py`) read as a missing function. Fixed: such a call on a
+standard value type's method is a value (`VALUE_METHODS`).
+
+**A shape for the kernel's hand-offs.** The kernel stays small; when a
+newcomer outgrows a beat, its 42 says which part of the fleet does it, the
+way `forge_bite` hands a build to the Forge:
+
+| A 42 because | Names |
+|---|---|
+| they want something made | the Forge (`forge_bite`) |
+| two words should be one thing, or a near miss must stay refused | Nestor (`normalize`, `suppressed_by_rejection`) |
+| the words differ but the meaning is the same | Nestor's `semantic_matcher` |
+| a second person should review | Nestor's desks |
+| the answer is data, not text | the app that holds it (corpus-lens's SQLite reader, law-gazelle's queue) |
+| their prompt is over the cap | Rat |
 
 ## What the one script said about this list
 
