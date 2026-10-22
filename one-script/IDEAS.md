@@ -2028,9 +2028,12 @@ bite key are the one script's byte for byte (`test_kernel.py` holds it), so
 beats. Run on Nestor's demos as a stranger's pile, a first bite about the
 shoebox found the shoebox story first.
 
-Open: `HOLD` (the share of a bite's words a chunk must hold, 0.5) is a
-placeholder; common words still lift a chunk over it, so weighting rare
-words in the hold rule is the next step.
+Run on the whole merged demo box as a newcomer's pile: "how do I bake
+sourdough bread" was served Nestor tables, held on *how*, *do* and *I*.
+Fixed: `FUNCTION` words never count toward holding a bite, so bread is 42,
+"what does this do" is 42 (say more), and "who is big jim" goes straight to
+`big_jim.py`. Open: `HOLD` (0.5) and `FUNCTION` (English) are placeholders,
+the operator's to set.
 
 ## What the one script said about this list
 

@@ -74,6 +74,17 @@ VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 WORD = re.compile(r"[^\W_]+")  # onescript/words.py, the key rule (v1)
 TOP = 3  # chunks served for a bite
 HOLD = 0.5  # the share of a bite's words a chunk must hold; the operator's number
+#: Words that never count toward holding a bite: "how do I bake sourdough
+#: bread" is not held by a chunk that says "how" and "do". English, and a
+#: placeholder list, the operator's to name; a bite in another language keeps
+#: every word.
+FUNCTION = frozenset(
+    "a an the and or but if of to in on at by for from with about as into than"
+    " then so is are was were be been being am do does did done have has had i"
+    " me my we our you your he she it its they them their this that these those"
+    " what which who whom whose when where why how much many can could would"
+    " should will shall may might must not no yes there here s t".split()
+)
 TEXT = {
     ".md",
     ".txt",
@@ -257,10 +268,12 @@ def chunks(pile: Path) -> list[dict]:
 
 
 def rank(pile: list[dict], bite: str) -> list[dict]:
-    """The chunks holding at least `HOLD` of the bite's words, rarest words
-    weighing most. A chunk sharing only "the" doesn't hold "when does the
-    frost come": an answer it doesn't have is never improvised (beat 1)."""
-    want = set(words(bite))
+    """The chunks holding at least `HOLD` of the bite's content words (not
+    `FUNCTION`), rarest words weighing most. A chunk sharing only "the" or
+    "how" and "do" doesn't hold "when does the frost come" or "how do I bake
+    sourdough bread": an answer it doesn't have is never improvised (beat 1).
+    A bite of function words alone is held by nothing: say more."""
+    want = set(words(bite)) - FUNCTION
     if not want:
         return []
     held = [(c, want & set(words(c["text"]))) for c in pile]
@@ -454,6 +467,8 @@ def test() -> None:
         # 1. asked what nobody here has said: it says so, it doesn't improvise,
         #    and a long file with no blank line doesn't answer everything
         assert quiet(bite, box, "when does the frost come", ts)[0] == ESCALATE
+        assert quiet(bite, box, "how do I bake sourdough bread", ts)[0] == ESCALATE
+        assert quiet(bite, box, "what does this do", ts)[0] == ESCALATE  # say more
         assert all(len(c["text"]) <= MAX_CHUNK for c in chunks(pile))
         # their own pile answers what it holds (things they already said yes to)
         code, said = quiet(bite, box, "how much sun do tomatoes want", ts)
