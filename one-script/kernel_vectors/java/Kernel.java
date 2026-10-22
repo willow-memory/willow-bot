@@ -67,6 +67,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -968,6 +969,80 @@ public final class Kernel {
         return false;
     }
 
+    static boolean idChar(char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '/';
+    }
+
+    /** kernel.py's ids: the numbers that name one thing, in order, each once; never a date. */
+    static List<String> ids(String text) {
+        List<String> out = new ArrayList<>();
+        int i = 0;
+        while (i < text.length()) {
+            int j = i;
+            while (j < text.length() && idChar(text.charAt(j))) j++;
+            int a = i, b = j;
+            while (a < b && (text.charAt(a) == '-' || text.charAt(a) == '/')) a++;
+            while (b > a && (text.charAt(b - 1) == '-' || text.charAt(b - 1) == '/')) b--;
+            String run = text.substring(a, b);
+            boolean digit = false, mark = false;
+            for (char c : run.toCharArray()) {
+                if (c >= '0' && c <= '9') digit = true;
+                if (c == '-' || c == '/') mark = true;
+            }
+            if (digit && mark && newest(run).isEmpty() && !out.contains(run)) out.add(run);
+            i = j == i ? j + 1 : j;
+        }
+        return out;
+    }
+
+    /** kernel.py's shape: digits as 9, letters as A, marks kept. */
+    static String shape(String id) {
+        StringBuilder b = new StringBuilder();
+        for (char c : id.toCharArray()) b.append(c >= '0' && c <= '9' ? '9' : (c == '-' || c == '/') ? c : 'A');
+        return b.toString();
+    }
+
+    /** kernel.py's missing: what isn't there, beside the served chunks' files. */
+    static List<Map<String, Object>> missing(List<Chunk> pile, List<Chunk> served) {
+        Map<String, Set<String>> byFile = new TreeMap<>(BY_CODE_POINT);
+        for (Chunk c : pile) byFile.computeIfAbsent(c.path, x -> new HashSet<>()).addAll(ids(c.text));
+        Set<String> every = new HashSet<>();
+        for (Set<String> f : byFile.values()) every.addAll(f);
+        List<String> paths = new ArrayList<>();
+        for (Chunk c : served) if (!paths.contains(c.path)) paths.add(c.path);
+        Set<String> shapes = new LinkedHashSet<>();
+        for (String p : paths)
+            for (Chunk c : pile)
+                if (c.path.equals(p)) for (String id : ids(c.text)) shapes.add(shape(id));
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (String sh : shapes) {
+            Set<String> group = new HashSet<>();
+            for (String id : every) if (shape(id).equals(sh)) group.add(id);
+            for (Map.Entry<String, Set<String>> e : byFile.entrySet()) {
+                if (paths.contains(e.getKey())) continue;
+                Set<String> have = new HashSet<>(group);
+                have.retainAll(e.getValue());
+                int k = have.size();
+                if (!(2 * k >= group.size() && k < group.size())) continue;
+                List<String> gone = new ArrayList<>();
+                for (String id : group) {
+                    if (e.getValue().contains(id)) continue;
+                    for (Set<String> f : byFile.values()) {
+                        if (!f.contains(id)) continue;
+                        boolean beside = false;
+                        for (String h : have) if (f.contains(h)) { beside = true; break; }
+                        if (beside) { gone.add(id); break; }
+                    }
+                }
+                if (gone.isEmpty()) continue;
+                gone.sort(BY_CODE_POINT);
+                out.add(hint(String.join(", ", gone) + ": not in " + e.getKey(),
+                    e.getKey() + " names " + k + " of the " + group.size() + " like them", null));
+            }
+        }
+        return out;
+    }
+
     /** How many ASCII digits run from {@code i}. */
     static int digits(String t, int i) {
         int j = i;
@@ -1097,6 +1172,7 @@ public final class Kernel {
                     NEXT.get("unused")));
             }
         }
+        out.addAll(missing(pile, served));
         if (!ws.isEmpty() && MAKE.contains(ws.get(0))) out.add(hint("this asks for something made", null, NEXT.get("made")));
         return out;
     }
@@ -1673,6 +1749,15 @@ public final class Kernel {
             wordlistOut.add(fields("alias", got[0], "why", got[1] == null ? NULL : got[1]));
         }
         out.put("wordlist", wordlistOut);
+
+        List<Object> idsOut = new ArrayList<>();
+        for (Object o : (List<Object>) c.get("ids")) {
+            List<String> got = ids((String) ((Map<String, Object>) o).get("text"));
+            List<Object> shapes = new ArrayList<>();
+            for (String id : got) shapes.add(shape(id));
+            idsOut.add(fields("ids", new ArrayList<Object>(got), "shapes", shapes));
+        }
+        out.put("ids", idsOut);
 
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {

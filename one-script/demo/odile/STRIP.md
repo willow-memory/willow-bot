@@ -39,3 +39,16 @@ keep. Everything else in a bigger tool is what to take away.
   unscrubbed. The one script withholds them. Her folder, shown to her, may
   be fine; the two still differ.
 - "I'm tired" matched "Steinway M": a one-letter word scored.
+
+## The readings, built into the kernel (and its three ports)
+
+| Reading | What changed on her box |
+|---|---|
+| Newest first | "how are the bees" serves 2026's last inspection, not 2021's first; "is Dad okay" her latest night memos |
+| Her word | with `due = next` in her own list, "who's due" serves her latest `next:` lines, and says her list did it |
+| What isn't there | "purchase order": `2023-040, 2025-063, 2026-095: not in money/teo-books.csv` (N4's two, and T3's cash order, which only her memo can tell apart) |
+| Numbers over time | not built yet |
+
+What isn't there misses N3: the 2026 case number has no reply, but nothing names
+it beside the 2024 one, so by the rule it has no group. Her plain "what do I
+need to do" still finds the notice.

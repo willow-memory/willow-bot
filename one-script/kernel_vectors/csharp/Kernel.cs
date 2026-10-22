@@ -837,6 +837,70 @@ public static class Kernel
     static bool HeldBy(string w, HashSet<string> toks, Dictionary<string, List<string>> alias) =>
         Holds(w, toks) || (alias.TryGetValue(w, out var xs) && xs.Any(x => Holds(x, toks)));
 
+    static bool IdChar(char c) => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-' || c == '/';
+    static bool IsMark(char c) => c == '-' || c == '/';
+
+    /** kernel.py's ids: the numbers that name one thing, in order, each once; never a date. */
+    static List<string> Ids(string text)
+    {
+        var o = new List<string>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            int j = i;
+            while (j < text.Length && IdChar(text[j])) j++;
+            int a = i, b = j;
+            while (a < b && IsMark(text[a])) a++;
+            while (b > a && IsMark(text[b - 1])) b--;
+            var run = text.Substring(a, b - a);
+            if (run.Any(c => c >= '0' && c <= '9') && run.Any(IsMark) && Newest(run).Length == 0 && !o.Contains(run)) o.Add(run);
+            i = j == i ? j + 1 : j;
+        }
+        return o;
+    }
+
+    /** kernel.py's shape: digits as 9, letters as A, marks kept. */
+    static string Shape(string id) => new string(id.Select(c => c >= '0' && c <= '9' ? '9' : IsMark(c) ? c : 'A').ToArray());
+
+    /** kernel.py's missing: what isn't there, beside the served chunks' files. */
+    static List<object?> Missing(List<Chunk> pile, List<Chunk> served)
+    {
+        var byFile = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var c in pile)
+        {
+            if (!byFile.ContainsKey(c.Path)) byFile[c.Path] = new HashSet<string>(StringComparer.Ordinal);
+            byFile[c.Path].UnionWith(Ids(c.Text));
+        }
+        var every = new HashSet<string>(byFile.Values.SelectMany(f => f), StringComparer.Ordinal);
+        var paths = served.Select(c => c.Path).Distinct().ToList();
+        var shapes = new List<string>();
+        foreach (var p in paths)
+            foreach (var c in pile)
+                if (c.Path == p)
+                    foreach (var id in Ids(c.Text))
+                        if (!shapes.Contains(Shape(id))) shapes.Add(Shape(id));
+        var o = new List<object?>();
+        var files = byFile.Keys.ToList();
+        files.Sort(CodePointOrder.It);
+        foreach (var sh in shapes)
+        {
+            var group = every.Where(id => Shape(id) == sh).ToList();
+            foreach (var path in files)
+            {
+                if (paths.Contains(path)) continue;
+                var mine = byFile[path];
+                var have = group.Where(mine.Contains).ToList();
+                int k = have.Count;
+                if (!(2 * k >= group.Count && k < group.Count)) continue;
+                var gone = group.Where(id => !mine.Contains(id) && byFile.Values.Any(f => f.Contains(id) && have.Any(f.Contains))).ToList();
+                if (gone.Count == 0) continue;
+                gone.Sort(CodePointOrder.It);
+                o.Add(Hint($"{string.Join(", ", gone)}: not in {path}", $"{path} names {k} of the {group.Count} like them", null));
+            }
+        }
+        return o;
+    }
+
     /** How many ASCII digits run from i. */
     static int Digits(string t, int i)
     {
@@ -969,6 +1033,7 @@ public static class Kernel
                     uses.Count > 0 ? "also named in " + string.Join(", ", uses) : "nothing else in your folder names it", NEXT["unused"]));
             }
         }
+        o.AddRange(Missing(pile, served));
         if (ws.Count > 0 && MAKE.Contains(ws[0])) o.Add(Hint("this asks for something made", null, NEXT["made"]));
         return o;
     }
@@ -1460,6 +1525,11 @@ public static class Kernel
         }
         res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!, AliasOf(o)).Select(x => (object?)x.Id).ToList())).ToList();
         res["newest"] = Part("newest").Select(o => (object?)Obj("newest", Newest((string)o["text"]!))).ToList();
+        res["ids"] = Part("ids").Select(o =>
+        {
+            var got = Ids((string)o["text"]!);
+            return (object?)Obj("ids", got.Select(x => (object?)x).ToList(), "shapes", got.Select(x => (object?)Shape(x)).ToList());
+        }).ToList();
         res["wordlist"] = Part("wordlist").Select(o =>
         {
             var (alias, why) = ParseWords((string)o["text"]!);

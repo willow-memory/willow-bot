@@ -455,13 +455,87 @@ NEXT = {
 }
 
 
+def _id_char(ch: str) -> bool:
+    return ch.isascii() and (ch.isalnum() or ch in "-/")
+
+
+def ids(text: str) -> list[str]:
+    """The numbers in `text` that name one thing: a run of ASCII letters,
+    digits, `-` and `/`, trimmed of its end marks, holding a digit and a mark
+    inside (a purchase order's 2025-063, a case's WR-2026-0117, a phone's
+    555-0161). A date isn't one (`newest` reads it): dates are the newest
+    reading's. In order, each once."""
+    out, i = [], 0
+    while i < len(text):
+        j = i
+        while j < len(text) and _id_char(text[j]):
+            j += 1
+        run = text[i:j].strip("-/")
+        if (
+            any(c.isdigit() for c in run)
+            and any(c in "-/" for c in run)
+            and not newest(run)
+            and run not in out
+        ):
+            out.append(run)
+        i = j + 1 if j == i else j
+    return out
+
+
+def shape(i: str) -> str:
+    """What an id looks like: digits as 9, letters as A, marks kept."""
+    return "".join("9" if c.isdigit() else "A" if c.isalpha() else c for c in i)
+
+
+def missing(pile: list[dict], served: list[dict]) -> list[dict]:
+    """What isn't there: for each shape of id in a served chunk's file, every
+    other file (not one the answer came from: that one is being read) that
+    names at least half the folder's ids of that shape but not all, and the
+    ones it doesn't that another file names beside ones it does. Odile's books name 21 of her 24 purchase orders; the
+    three they don't are the question."""
+    by_file: dict[str, set[str]] = {}
+    for c in pile:
+        by_file.setdefault(c["path"], set()).update(ids(c["text"]))
+    every = set().union(*by_file.values()) if by_file else set()
+    out = []
+    # the served chunks' whole files: a letter's case number is on its own line
+    paths = list(dict.fromkeys(c["path"] for c in served))
+    shapes = dict.fromkeys(
+        shape(i) for p in paths for c in pile if c["path"] == p for i in ids(c["text"])
+    )
+    for sh in shapes:
+        group = {i for i in every if shape(i) == sh}
+        for path in sorted(set(by_file) - set(paths)):
+            k = len(group & by_file[path])
+            if 2 * k >= len(group) and k < len(group):
+                have = group & by_file[path]
+                # missing only where another file names it beside ones this
+                # file has: a Kawai's K-300 and a van's E-150 share a shape,
+                # never a page, so neither is missing from the other's file
+                gone = sorted(
+                    i
+                    for i in group - by_file[path]
+                    if any(i in f and f & have for f in by_file.values())
+                )
+                if not gone:
+                    continue
+                out.append(
+                    {
+                        "why": f"{', '.join(gone)}: not in {path}",
+                        "where": f"{path} names {k} of the {len(group)} like them",
+                    }
+                )
+    return out
+
+
 def look(
     pile: list[dict], bite: str, served: list[dict], alias: dict | None = None
 ) -> list[dict]:
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
-    it); a bite of common words only; a request to make something."""
+    it); what isn't there (`missing`); a bite of common words only; a request
+    to make something."""
     out = []
     ws = words(bite)
     want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
@@ -501,6 +575,7 @@ def look(
                     "next": NEXT["unused"],
                 }
             )
+    out += missing(pile, served)
     if ws and ws[0] in MAKE:
         out.append({"why": "this asks for something made", "next": NEXT["made"]})
     return out

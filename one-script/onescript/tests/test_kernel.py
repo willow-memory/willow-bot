@@ -282,3 +282,33 @@ def test_a_words_list_line_is_one_word_then_words():
         assert k.parse_words(bad)[1] == (
             "words list line 1: one word = one or more words, a comma between"
         ), bad
+
+
+def test_what_isnt_there_is_said_beside_what_was_served(tmp_path):
+    """Odile's books name 21 of her 24 purchase orders (demo/odile/STRIP.md).
+    Served an order, the kernel says which ones the books don't name. Things
+    that only share a shape (a Kawai's K-300, a van's E-150) never are."""
+    pos = [f"2025-{n:03d}" for n in range(10, 22)]
+    (tmp_path / "books.csv").write_text(
+        "".join(f"DEP PO {p}\n" for p in pos if p not in ("2025-013", "2025-019"))
+    )
+    (tmp_path / "calendar.txt").write_text(" ".join(f"PO {p}" for p in pos) + "\n")
+    (tmp_path / "po.txt").write_text("PURCHASE ORDER PO 2025-010\n")
+    (tmp_path / "piano.txt").write_text("Kawai K-300 order\n")
+    (tmp_path / "van.txt").write_text("Econoline E-150 rider\n")
+    pile = k.chunks(tmp_path)
+    served = [c for c in pile if c["path"] in ("po.txt", "piano.txt")]
+    assert k.missing(pile, served) == [
+        {
+            "why": "2025-013, 2025-019: not in books.csv",
+            "where": "books.csv names 10 of the 12 like them",
+        }
+    ]
+    books = [c for c in pile if c["path"] == "books.csv"]
+    assert k.missing(pile, books) == []  # the file being read isn't checked
+    assert k.ids("PO 2025-063 (575) 555-0161 2026-10-16 -x- 1/300") == [
+        "2025-063",
+        "555-0161",
+        "1/300",
+    ]
+    assert k.shape("WR-2026-0117") == "AA-9999-9999"

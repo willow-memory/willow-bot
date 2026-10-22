@@ -657,7 +657,35 @@ def pile_cases() -> list[dict]:
         ]
     )
     piles.append(dated_pile())
+    piles.append(ledger_pile())
     return piles
+
+
+def ledger_pile() -> list:
+    """What isn't there: orders the books name all but two of (and a calendar
+    names together), a case number named once beside nothing, a piano model
+    and a van that share a shape and never a page, phones the texts don't
+    have, and a bare `-/-` run."""
+    pos = [f"2025-{n:03d}" for n in range(10, 22)]
+    paid = [p for p in pos if p not in ("2025-013", "2025-019")]
+    return [
+        (["books.csv"], ("".join(f"DEP PO {p}\n" for p in paid)).encode()),
+        (["calendar.txt"], (" ".join(f"PO {p}" for p in pos) + "\n").encode()),
+        *[
+            (["mail", f"po-{p}.txt"], f"PURCHASE ORDER PO {p}\n".encode())
+            for p in pos[:4]
+        ],
+        (["letter.txt"], b"RE: Case No. WR-2026-0117\n\nreply within 180 days\n"),
+        (["reply.txt"], b"my reply, Case No. WR-2024-0390\n"),
+        (["piano.txt"], b"Kawai K-300, purchase order pending\n"),
+        (["van.txt"], b"Econoline E-150 rider\n"),
+        (["texts.txt"], b"555-0120 555-0121 555-0122 order\n"),
+        (["pharmacy.txt"], b"call 555-0190 about the order\n"),
+        (["marks.txt"], b"-/- --2025-013-- a/b 1/300 2026-10-14 x-1-\n"),
+        # a pair named together, and a file with one of them: half is enough
+        (["both.txt"], b"auction: lot AB-11 and lot AB-12\n"),
+        (["one.txt"], b"sold lot AB-11\n"),
+    ]
 
 
 #: newest's own draw, apart from R, so adding it moved no earlier case
@@ -705,6 +733,50 @@ ALIASED = {
         ("bees calm", {"calm": ["okay", "fine"]}),
     ],
 }
+
+
+def ids_cases() -> list[dict]:
+    texts = [
+        "",
+        "DCSD PO 2025-063 (575) 555-0161 2026-10-16 WR-2026-0117",
+        "mites 1/300 -x- a-b 4-5 -2025-063- K-52 caf\u00e9-9",
+        "--",
+        "-/-",
+        "a/b/c",
+        "2026-10-14",
+        "2026-10-14-5",
+        "2026-1014",
+        "x2026-10-14",
+        "20261014-1",
+        "\u0662-\u0663",
+        "1-\u0662",
+        "２-3",
+        "A-1 A-1 a-1",
+        "PO#2025-063.",
+        "x_1-2",
+    ]
+    bits = [
+        "2025",
+        "-",
+        "/",
+        "063",
+        "WR",
+        "a",
+        "1",
+        " ",
+        ".",
+        "_",
+        "\u00e9",
+        "10",
+        "14",
+    ]
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 12))) for _ in range(250)
+    ]
+    return [
+        {"text": t, "ids": k.ids(t), "shapes": [k.shape(i) for i in k.ids(t)]}
+        for t in texts
+    ]
 
 
 def wordlist_cases() -> list[dict]:
@@ -844,8 +916,8 @@ FLOAT_TIES = float_tie_piles()
 
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
-    (8), random handfuls of the dense-ties pile's vocabulary (9), and the
-    dated pile's (10)."""
+    (8), random handfuls of the dense-ties pile's vocabulary (9), the dated
+    pile's (10) and the ledger's (11)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -857,6 +929,9 @@ def extra_bites(i: int) -> list[str]:
         ]
     if i == 10:
         return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
+    if i == 11:
+        return ["purchase order", "order", "reply", "case", "rider", "Kawai", "call",
+                "DEP", "lot", "auction"]  # fmt: skip
     if i != 9:
         return []
     vocab = [f"w{n}" for n in range(7)]
@@ -1027,6 +1102,7 @@ def main(argv: list[str]) -> int:
         **pile_based_cases(),
         "newest": newest_cases(),
         "wordlist": wordlist_cases(),
+        "ids": ids_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

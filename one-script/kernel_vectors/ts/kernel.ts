@@ -769,6 +769,62 @@ function heldBy(w: string, toks: Set<string>, alias: Alias): boolean {
   return holds(w, toks) || (alias.get(w) ?? []).some((x) => holds(x, toks));
 }
 
+const idChar = (c: string) => (c >= "0" && c <= "9") || (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c === "-" || c === "/";
+const isMark = (c: string) => c === "-" || c === "/";
+
+/** kernel.py's ids: the numbers that name one thing, in order, each once; never a date. */
+function ids(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    let j = i;
+    while (j < text.length && idChar(text[j])) j++;
+    let a = i;
+    let b = j;
+    while (a < b && isMark(text[a])) a++;
+    while (b > a && isMark(text[b - 1])) b--;
+    const run = text.slice(a, b);
+    if (/[0-9]/.test(run) && /[-/]/.test(run) && !newest(run) && !out.includes(run)) out.push(run);
+    i = j === i ? j + 1 : j;
+  }
+  return out;
+}
+
+/** kernel.py's shape: digits as 9, letters as A, marks kept. */
+const shape = (id: string) => [...id].map((c) => (c >= "0" && c <= "9" ? "9" : isMark(c) ? c : "A")).join("");
+
+/** kernel.py's missing: what isn't there, beside the served chunks' files. */
+function missing(pile: Chunk[], served: Chunk[]): J[] {
+  const byFile = new Map<string, Set<string>>();
+  for (const c of pile) {
+    if (!byFile.has(c.path)) byFile.set(c.path, new Set());
+    for (const id of ids(c.text)) byFile.get(c.path)!.add(id);
+  }
+  const every = new Set<string>();
+  for (const f of byFile.values()) for (const id of f) every.add(id);
+  const paths = [...new Set(served.map((c) => c.path))];
+  const shapes = new Set<string>();
+  for (const p of paths) for (const c of pile) if (c.path === p) for (const id of ids(c.text)) shapes.add(shape(id));
+  const out: J[] = [];
+  const files = [...byFile.keys()].sort(byCodePoint);
+  for (const sh of shapes) {
+    const group = [...every].filter((id) => shape(id) === sh);
+    for (const path of files) {
+      if (paths.includes(path)) continue;
+      const mine = byFile.get(path)!;
+      const have = group.filter((id) => mine.has(id));
+      const k = have.length;
+      if (!(2 * k >= group.length && k < group.length)) continue;
+      const gone = group
+        .filter((id) => !mine.has(id) && [...byFile.values()].some((f) => f.has(id) && have.some((h) => f.has(h))))
+        .sort(byCodePoint);
+      if (!gone.length) continue;
+      out.push(obj(["why", `${gone.join(", ")}: not in ${path}`], ["where", `${path} names ${k} of the ${group.length} like them`]));
+    }
+  }
+  return out;
+}
+
 /** How many ASCII digits run from i. */
 function digits(t: string, i: number): number {
   let j = i;
@@ -888,6 +944,7 @@ function look(pile: Chunk[], bite: string, served: Chunk[], alias: Alias): J[] {
       );
     }
   }
+  out.push(...missing(pile, served));
   if (ws.length && T.MAKE.has(ws[0])) out.push(hint("this asks for something made", null, T.NEXT.get("made")!));
   return out;
 }
@@ -1325,6 +1382,13 @@ function vectors(casesFile: string, resultsFile: string): number {
     new Map([...((o.get("alias") as JMap | undefined) ?? new Map())].map(([w, ts]) => [w, ts as string[]]));
   res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string, aliasOf(o)).map((x) => x.id)])));
   res.set("newest", list("newest").map((o) => obj(["newest", newest(o.get("text") as string)])));
+  res.set(
+    "ids",
+    list("ids").map((o) => {
+      const got = ids(o.get("text") as string);
+      return obj(["ids", got], ["shapes", got.map(shape)]);
+    }),
+  );
   res.set(
     "wordlist",
     list("wordlist").map((o) => {
