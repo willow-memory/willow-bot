@@ -4,6 +4,7 @@ script can check a kernel box and a kernel box can grow into a one-script box.""
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import subprocess
@@ -77,3 +78,51 @@ def test_a_key_inside_the_box_and_a_box_not_theirs_are_refused(tmp_path):
     assert inside.returncode == 2 and not (box / "record.jsonl").exists()
     assert cli("bite", "--box", str(tmp_path / "nobox"), "hello").returncode == 2
     assert cli("bite").returncode == 2  # a bad command line, never run
+
+
+# The kernel holds a newcomer's own folder and never dials out. The scan is
+# homestead-ledger's (I-17: "a money ledger must never dial out"), itself
+# ported from marching-arts: no network module, and no eval/exec/compile/
+# __import__ that could smuggle one past the import scan.
+NET = {
+    "socket",
+    "ssl",
+    "urllib",
+    "http",
+    "requests",
+    "httpx",
+    "aiohttp",
+    "websockets",
+    "urllib3",
+    "socketserver",
+    "ftplib",
+    "telnetlib",
+    "smtplib",
+    "xmlrpc",
+    "poplib",
+    "imaplib",
+    "nntplib",
+    "asyncio",
+}
+DYNAMIC = {"eval", "exec", "compile", "__import__"}
+
+
+def reaches(source: str) -> set[str]:
+    """The network modules a source imports, and the dynamic calls it makes."""
+    out = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            out |= {a.name.split(".")[0] for a in node.names} & NET
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            out |= {node.module.split(".")[0]} & NET
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            out |= {node.func.id} & DYNAMIC
+    return out
+
+
+def test_it_never_dials_out():
+    assert reaches(HERE.read_text(encoding="utf-8")) == set()
+    planted = (
+        "import json\ndef f(u):\n    from urllib import request\n    return eval(u)\n"
+    )
+    assert reaches(planted) == {"urllib", "eval"}

@@ -201,6 +201,7 @@ here reads, writes or caches vault material.
 113. [Every demo is one loop, and the kernel is it](#113-every-demo-is-one-loop-and-the-kernel-is-it)
 114. [What the demos' characters needed](#114-what-the-demos-characters-needed)
 115. [Crossing the streams: what already lives in the box](#115-crossing-the-streams-what-already-lives-in-the-box)
+116. [One repo at a time](#116-one-repo-at-a-time)
 
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
@@ -2139,6 +2140,18 @@ way `forge_bite` hands a build to the Forge:
 | a second person should review | Nestor's desks |
 | the answer is data, not text | the app that holds it (corpus-lens's SQLite reader, law-gazelle's queue) |
 | their prompt is over the cap | Rat |
+
+### 116. One repo at a time
+
+2026-10-22. The operator: *"Start bringing in other repos that have not been
+included. One at a time."* Each one joins the crossed box (115), the same open
+needs are asked again, and the row says what the new repo answered that the
+box couldn't before. Vault repos stay out.
+
+| Repo | Size | What it answered | What it brings to the one script |
+|---|---|---|---|
+| agriculture-almanac | 34 files; 24 the template's, unchanged | none of the open needs; "is the source still there", "a catalog of public datasets" | Each catalog entry names the canonical URL and an SPDX license (FAOSTAT: CC-BY-4.0), which is exactly what `snapshot take` asks for; and an `observed` block (checked, reachable, status) that is the three states for a URL. June's farm data isn't here, but the road to it is: catalog says where, snapshot keeps it. |
+| homestead-ledger | 102 files | none of the open needs asked in the box's words; its own words answer older ones | The same split as the one script: the household's books are canonical and read-only, the overlay is where the app writes (the pile and the box). "What's due" and cadence roll-forward are Law Gazelle's deadlines from today, built for money. Its no-egress guard (I-17, an AST scan for network imports and `eval`) now guards `kernel.py` too: the kernel promised a newcomer's folder never leaves the machine, and nothing checked it. |
 
 ## What the one script said about this list
 
