@@ -336,14 +336,19 @@ def bot_vs_market(cfg, close_date: str, p_up: float) -> dict:
 
 # 1. your own quotes as a corpus (the pile pointed at seed.Texts)
 SAID = re.compile(
-    r"[Tt]he operator,? \(?(\d{4}-\d{2}-\d{2})\)?:?\s*\*?[\"“]([^\"”\n]{3,})[\"”]"
+    # the shapes the pile holds: `The operator: "…"`, `**The operator:** "…"`,
+    # `The operator, 2026-10-19: *"…"*`, `(the operator, 2026-10-21: "…")`,
+    # `the operator's word: "…"`; the date is optional
+    r"[Tt]he operator(?:'s word)?(?:,?\s*\(?(\d{4}-\d{2}-\d{2})\)?)?"
+    r"\s*\**:?\**\s*\(?\*?[\"“]([^\"”\n]{3,})[\"”]"
 )
 
 
 def said(index: dict, repos: dict) -> list[dict]:
-    """Every "the operator, <date>: "<quote>"" in the indexed files, read at
-    their blobs through `seed.Texts`: the date, where, and the quote's hash,
-    never its words. Oldest first, then by place."""
+    """Every operator quote in the indexed files (`SAID`), read at their
+    blobs through `seed.Texts`: the date when the line gives one (else None),
+    where, and the quote's hash, never its words. Dated first, oldest first,
+    then by place."""
     out = []
     for name, f, text in seed.Texts(index, repos):
         for m in SAID.finditer(text):
@@ -355,7 +360,7 @@ def said(index: dict, repos: dict) -> list[dict]:
                     "quote_sha256": hashlib.sha256(m.group(2).encode()).hexdigest(),
                 }
             )
-    return sorted(out, key=lambda r: (r["date"], r["where"]))
+    return sorted(out, key=lambda r: (r["date"] is None, r["date"] or "", r["where"]))
 
 
 def said_in_box(cfg) -> dict:

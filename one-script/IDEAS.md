@@ -188,6 +188,14 @@ here reads, writes or caches vault material.
 106. [A box with its own keys can't be looked into](#106-a-box-with-its-own-keys-cant-be-looked-into)
 107. [This branch merges clean](#107-this-branch-merges-clean)
 
+**What fell out of the third run**
+
+108. [A helper that passed its tests found 10 of 68](#108-a-helper-that-passed-its-tests-found-10-of-68)
+109. [The cover goes stale once the ideas are built](#109-the-cover-goes-stale-once-the-ideas-are-built)
+110. [Five purposes have two homes](#110-five-purposes-have-two-homes)
+111. [Every commit asks old boxes to re-check their writes](#111-every-commit-asks-old-boxes-to-re-check-their-writes)
+112. ["What's blocked" doesn't find the blocked list](#112-whats-blocked-doesnt-find-the-blocked-list)
+
 [What the one script said about this list](#what-the-one-script-said-about-this-list)
 
 ## New data to feed it
@@ -1798,6 +1806,71 @@ relying on cross-box lookups.
 
 `diverge origin/main HEAD`: 9 files and 203 units changed on this branch
 only, none on `main`, 0 divergence points. Nothing to reconcile.
+
+## What fell out of the third run
+
+2026-10-22, after 103, 104 and the loose chunks. A fresh box at `a9c9b76`,
+a seed, `needs` on a box with two checked-out sessions, the new helpers run
+on the real pile (not fixtures), `snippet_cover`, `deep_thought.py` pointed
+at the real repos, and `diverge` against `main`.
+
+Working, live:
+- **104:** both unsealed sessions are in NEEDS YOU now.
+- **11:** those two sessions as rounds: both end `waiting`, 6 and 9 steps.
+- **7:** a real pair from a drand-style draw: a Jeles climate answer beside
+  a willow-bot steward test. *What joins these?*
+- **40:** the pile's own shares: *the* sits in 55% of chunks, *box* 7.7%,
+  *seal* 4.2%, *bite* 1.1%. The world's half needs `wordfreq`.
+- **96:** a box's record as 27 Gource lines.
+- **The branch** still merges clean: 18 files and 279 units on this side,
+  nothing on `main`, 0 divergence points.
+
+### 108. A helper that passed its tests found 10 of 68
+
+`said` (1) passed its fixture and found 10 operator quotes on the real
+pile. The fixture was shaped like the sketch: a dated quote. The pile holds
+at least six shapes, and most carry no date (`The operator: "…"` alone 79
+times, `**The operator:** "…"`, `the operator's word: "…"`, `*"…"*`).
+Widened the same day: 68 quotes, 13 dated, one said in 13 places. The
+lesson for every compiled helper: run it on the pile, not only on a
+fixture.
+
+### 109. The cover goes stale once the ideas are built
+
+`snippet_cover` still says 12 ideas need building, though every one is in
+`compiled/ideas.py` now: it reads the sketches here, and they still call
+the names that were missing. It measures the list, not the code. A shape
+for it: read `compiled/ideas.py`'s `COMPILED` table and mark those ideas
+`built`, or point each sketch at the function that now exists.
+
+### 110. Five purposes have two homes
+
+Pointed at the real repos (`ONESCRIPT_ROOT`), Deep Thought's DISAGREEMENTS
+go from 0 to 14:
+- boot, record, gate, resolve and run each live in both
+  `willow_bot/deterministic/` and `one-script/onescript/`. D2 says one
+  home: which survives?
+- Seven `willow_bot/deterministic/` files can't be called on their own (no
+  `__main__`, no script entry), which D2 asks for.
+- willows-grove's `incoming/haiku-2026-10-02/PROPOSALS-SUMMARY.md:167` still
+  says D1 is open; D1 was sealed (`02050acf`).
+
+All three are the operator's calls.
+
+### 111. Every commit asks old boxes to re-check their writes
+
+A box checked in before today's commits lists four `re-check row N (write)
+· made by run version …, now …` lines. Reverse does what it should: the
+code that made those rows changed. Worth knowing: every commit puts a line
+on every open box's screen until it's re-checked.
+
+### 112. "What's blocked" doesn't find the blocked list
+
+A bite about what is blocked or waiting on the operator's call ranks old
+governance and design docs first; `compiled/ideas.py`'s `BLOCKED` (4, 7,
+102) isn't in the top 8. The list of calls waiting on the operator lives in
+a Python dict, where NEEDS YOU can't see it. A shape: each `BLOCKED` entry
+becomes a NEEDS YOU line, since that's what it is.
 
 ## What the one script said about this list
 

@@ -205,7 +205,10 @@ def two_repos(tmp_path):
         "docs",
         {
             "notes.md": (
-                '# Notes\n\nThe operator, 2026-10-19: "build it, leaning towards the bot"\n\n'
+                '# Notes\n\nThe operator, 2026-10-19: "build it, leaning towards the bot"\n'
+                '**The operator:** "one seal per session"\n'
+                'the operator\'s word: *"merge only what must be identical"*\n'
+                'is the operator box? "not a quote"\n\n'
                 + "\n\n".join(
                     f"Paragraph {i} about the pile and its boxes." for i in range(6)
                 )
@@ -220,9 +223,12 @@ def two_repos(tmp_path):
 
 def test_1_quotes_are_harvested_as_hashes(two_repos):
     index, repos = two_repos
-    (q,) = ideas.said(index, repos)
-    assert q["date"] == "2026-10-19" and q["where"] == "docs:notes.md:3"
-    assert len(q["quote_sha256"]) == 64 and "bot" not in json.dumps(q)
+    dated, *undated = ideas.said(index, repos)
+    assert dated["date"] == "2026-10-19" and dated["where"] == "docs:notes.md:3"
+    assert [q["where"] for q in undated] == ["docs:notes.md:4", "docs:notes.md:5"]
+    assert all(q["date"] is None for q in undated)
+    got = json.dumps([dated, *undated])
+    assert "bot" not in got and "seal" not in got  # hashes, never words
 
 
 def test_7_serendipity_picks_one_chunk_from_each_of_two_repos(two_repos):
