@@ -717,25 +717,85 @@ const qCmp = (x: Q, y: Q) => {
   return l < r ? -1 : l > r ? 1 : 0;
 };
 
+/** How many ASCII digits run from i. */
+function digits(t: string, i: number): number {
+  let j = i;
+  while (j < t.length && t[j] >= "0" && t[j] <= "9") j++;
+  return Math.max(0, j - i);
+}
+
+function date(y: string, m: string, d: string): string {
+  const ok = (y.startsWith("19") || y.startsWith("20")) && m >= "01" && m <= "12" && d >= "01" && d <= "31";
+  return ok ? y + m + d : "";
+}
+
+/** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+function newest(t: string): string {
+  let best = "";
+  let i = 0;
+  while (i < t.length) {
+    let n = digits(t, i);
+    if (n === 0) {
+      i++;
+      continue;
+    }
+    let got = "";
+    if (n === 8) {
+      got = date(t.slice(i, i + 4), t.slice(i + 4, i + 6), t.slice(i + 6, i + 8));
+    } else if (n === 4 && t[i + 4] === "-" && digits(t, i + 5) === 2 && t[i + 7] === "-" && digits(t, i + 8) === 2) {
+      got = date(t.slice(i, i + 4), t.slice(i + 5, i + 7), t.slice(i + 8, i + 10));
+      if (got) n = 10;
+    }
+    if (got > best) best = got;
+    i += n;
+  }
+  return best;
+}
+
+/** kernel.py's dates: each chunk's date, carried down its file; 0 for none. */
+function dates(pile: Chunk[]): number[] {
+  const out: number[] = [];
+  let path: string | null = null;
+  let cur = "";
+  for (const c of pile) {
+    if (c.path !== path) {
+      path = c.path;
+      cur = newest(c.path);
+    }
+    const t = newest(c.text);
+    if (t > cur) cur = t;
+    out.push(cur ? Number(cur) : 0);
+  }
+  return out;
+}
+
 function rank(pile: Chunk[], bite: string): Chunk[] {
   const want = new Set(words(bite).filter((w) => !T.FUNCTION.has(w)));
   if (!want.size) return [];
-  const held: [Chunk, Set<string>][] = [];
-  for (const c of pile) {
+  const when = dates(pile);
+  const held: [Chunk, Set<string>, number][] = [];
+  pile.forEach((c, k) => {
     const toks = new Set(words(c.text));
     const h = new Set([...want].filter((w) => holds(w, toks)));
-    if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h]);
-  }
+    if (BigInt(h.size) * T.HOLD[1] >= T.HOLD[0] * BigInt(want.size)) held.push([c, h, when[k]]);
+  });
   const df = new Map<string, bigint>();
   for (const w of want) df.set(w, BigInt(held.filter(([, h]) => h.has(w)).length));
-  const scored: [Q, Chunk][] = [];
-  for (const [c, h] of held) {
+  const scored: [Q, Chunk, number][] = [];
+  for (const [c, h, d] of held) {
     if (!h.size) continue;
     let s: Q = [0n, 1n];
     for (const w of h) s = qAdd(s, [1n, df.get(w)!]);
-    scored.push([s, c]);
+    scored.push([s, c, d]);
   }
-  scored.sort((x, y) => qCmp(y[0], x[0]) || byCodePoint(x[1].path, y[1].path) || x[1].line - y[1].line);
+  // a log grows downward: on one date, the later line is the newer one
+  scored.sort(
+    (x, y) =>
+      qCmp(y[0], x[0]) ||
+      y[2] - x[2] ||
+      byCodePoint(x[1].path, y[1].path) ||
+      (x[2] ? y[1].line - x[1].line : x[1].line - y[1].line),
+  );
   return scored.slice(0, T.TOP).map(([, c]) => c);
 }
 
@@ -1183,6 +1243,7 @@ function vectors(casesFile: string, resultsFile: string): number {
   }
   res.set("chunks", piles.map((ch) => obj(["chunks", ch.map(chunkJson)])));
   res.set("rank", list("rank").map((o) => obj(["ids", rank(piles[Number(o.get("pile") as bigint)], o.get("bite") as string).map((x) => x.id)])));
+  res.set("newest", list("newest").map((o) => obj(["newest", newest(o.get("text") as string)])));
   res.set(
     "look",
     list("look").map((o) => {

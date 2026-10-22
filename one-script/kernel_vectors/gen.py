@@ -656,7 +656,74 @@ def pile_cases() -> list[dict]:
             for i in range(30)
         ]
     )
+    piles.append(dated_pile())
     return piles
+
+
+#: newest's own draw, apart from R, so adding it moved no earlier case
+RN = random.Random(20261022)
+
+
+def dated_pile() -> list:
+    """A log whose date headings fall in one chunk and cover the next, memos
+    dated only by name, a calendar's compact dates, and undated files: equal
+    scores fall to the newest, then the path, then a dated chunk's later line."""
+    log = []
+    for y in (2021, 2026):
+        for m, d in ((3, 12), (9, 27), (10, 12)):
+            log.append(f"== {y}-{m:02d}-{d:02d}")
+            log += [
+                f"  H{h}: bees frames {RN.randint(2, 9)}, eggs yes" for h in range(1, 9)
+            ]
+    memos = [
+        (["memos", f"2026-{m:02d}-{d:02d}_2310.txt"], b"Okay. bees fine\n")
+        for m, d in ((4, 16), (10, 9), (9, 19))
+    ]
+    return [
+        (["hives.txt"], ("\n".join(log) + "\n").encode()),
+        *memos,
+        (["cal.ics"], b"DTSTART;VALUE=DATE:20250828\nSUMMARY:bees inspection\n"),
+        (["undated.md"], b"bees okay, no date here\n\nbees okay again\n"),
+        (["phone.txt"], b"bees 2026-10-149 and 12026-10-14 and 20261332\n"),
+    ]
+
+
+def newest_cases() -> list[dict]:
+    texts = [
+        "",
+        "2026-10-14",
+        "20261014",
+        "2026-10-14 and 2021-03-12",
+        "DTSTART;VALUE=DATE:20250828",
+        "memos/2026-05-10_2310.txt",
+        "12026-10-14",
+        "2026-10-149",
+        "2026-13-01",
+        "2026-00-10",
+        "2026-01-00",
+        "2026-01-32",
+        "1899-12-31",
+        "2100-01-01",
+        "1900-01-01",
+        "2099-12-31",
+        "2026-1-01",
+        "2026-10-1",
+        "000123456789",
+        "20261322",
+        "2026-10-14-5",
+        "x2099-12-31y",
+        "\u0662\u0660\u0662\u0666-10-14",
+        "２０２６-10-14",
+        "2026\u201110\u201114",
+        "2026-10-14\U0001f600 2027-01-01",
+        "202610140",
+    ]
+    bits = ["2026", "1999", "-", "10", "13", "00", "31", "32", "20261014", "1", "x",
+            " ", "\U0001F600", "\u0663", "19000101", "0"]  # fmt: skip
+    texts += [
+        "".join(RN.choice(bits) for _ in range(RN.randint(1, 12))) for _ in range(300)
+    ]
+    return [{"text": t, "newest": k.newest(t)} for t in texts]
 
 
 def _fold(xs) -> float:
@@ -707,7 +774,8 @@ FLOAT_TIES = float_tie_piles()
 
 def extra_bites(i: int) -> list[str]:
     """More bites: the float-tie piles' own bite (piles 5-7), the code pile's
-    (8), and random handfuls of the dense-ties pile's vocabulary (9)."""
+    (8), random handfuls of the dense-ties pile's vocabulary (9), and the
+    dated pile's (10)."""
     if 5 <= i <= 7:
         return [FLOAT_TIES[i - 5][1]]
     if i == 8:
@@ -717,6 +785,8 @@ def extra_bites(i: int) -> list[str]:
             "foo bar baz qux quux",
             "def x y functional thing",
         ]
+    if i == 10:
+        return ["bees", "okay", "bees okay", "eggs yes", "frames", "inspection"]
     if i != 9:
         return []
     vocab = [f"w{n}" for n in range(7)]
@@ -882,6 +952,7 @@ def main(argv: list[str]) -> int:
         "holds": holds_cases(),
         "echo": echo_cases(),
         **pile_based_cases(),
+        "newest": newest_cases(),
         "door": door_cases(),
         "subject": subject_cases(),
     }

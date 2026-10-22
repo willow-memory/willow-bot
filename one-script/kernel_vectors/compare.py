@@ -172,6 +172,7 @@ PARTS = {
     "echo": ["out"],
     "chunks": ["chunks"],
     "rank": ["ids"],
+    "newest": ["newest"],
     "look": ["look"],
     "door": ["why"],
     "subject": ["subject"],

@@ -225,3 +225,20 @@ def test_the_rank_is_the_same_under_every_hash_seed():
         for py in pys
     }
     assert got == {"11,5,9"}
+
+
+def test_among_equal_answers_the_newest_comes_first(tmp_path):
+    """Odile's bees (demo/odile/STRIP.md): every inspection says "bees", and
+    the one she means is the last. A log's date heading covers the lines
+    under it, even across a chunk cut, and on one date the later line wins."""
+    days = [f"== 2021-0{m}-10\n" + "H1: bees calm\n" * 30 for m in (3, 4)]
+    days += [f"== 2026-0{m}-10\n" + "H1: bees calm\n" * 30 for m in (3, 4)]
+    (tmp_path / "hives.txt").write_text("".join(days))
+    (tmp_path / "notes.md").write_text("bees, no date\n")
+    pile = k.chunks(tmp_path)
+    got = k.rank(pile, "how are the bees")
+    last = max(c["line"] for c in pile if c["path"] == "hives.txt")
+    assert (got[0]["path"], got[0]["line"]) == ("hives.txt", last)
+    assert "==" not in got[0]["text"]  # dated only by the heading above it
+    assert k.dates(pile)[[c["line"] for c in pile].index(last)] == 20260410
+    assert k.newest("2026-10-14 20261015 12026-10-16 2026-13-01") == "20261015"

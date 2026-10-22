@@ -784,33 +784,95 @@ public static class Kernel
         public int CompareTo(Q o) => (N * o.D).CompareTo(o.N * D);
     }
 
+    /** How many ASCII digits run from i. */
+    static int Digits(string t, int i)
+    {
+        int j = i;
+        while (j < t.Length && t[j] >= '0' && t[j] <= '9') j++;
+        return Math.Max(0, j - i);
+    }
+
+    static string Date(string y, string m, string d)
+    {
+        bool ok = (y.StartsWith("19", StringComparison.Ordinal) || y.StartsWith("20", StringComparison.Ordinal))
+            && string.CompareOrdinal(m, "01") >= 0 && string.CompareOrdinal(m, "12") <= 0
+            && string.CompareOrdinal(d, "01") >= 0 && string.CompareOrdinal(d, "31") <= 0;
+        return ok ? y + m + d : "";
+    }
+
+    /** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+    static string Newest(string t)
+    {
+        string best = "";
+        int i = 0;
+        while (i < t.Length)
+        {
+            int n = Digits(t, i);
+            if (n == 0) { i++; continue; }
+            string got = "";
+            if (n == 8)
+                got = Date(t.Substring(i, 4), t.Substring(i + 4, 2), t.Substring(i + 6, 2));
+            else if (n == 4 && i + 4 < t.Length && t[i + 4] == '-' && Digits(t, i + 5) == 2
+                     && i + 7 < t.Length && t[i + 7] == '-' && Digits(t, i + 8) == 2)
+            {
+                got = Date(t.Substring(i, 4), t.Substring(i + 5, 2), t.Substring(i + 8, 2));
+                if (got.Length > 0) n = 10;
+            }
+            if (string.CompareOrdinal(got, best) > 0) best = got;
+            i += n;
+        }
+        return best;
+    }
+
+    /** kernel.py's dates: each chunk's date, carried down its file; 0 for none. */
+    static int[] Dates(List<Chunk> pile)
+    {
+        var o = new int[pile.Count];
+        string? path = null;
+        string cur = "";
+        for (int i = 0; i < pile.Count; i++)
+        {
+            var c = pile[i];
+            if (c.Path != path) { path = c.Path; cur = Newest(c.Path); }
+            var t = Newest(c.Text);
+            if (string.CompareOrdinal(t, cur) > 0) cur = t;
+            o[i] = cur.Length == 0 ? 0 : int.Parse(cur, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        return o;
+    }
+
     static List<Chunk> Rank(List<Chunk> pile, string bite)
     {
         var want = new List<string>();
         foreach (var w in Words(bite)) if (!FUNCTION.Contains(w) && !want.Contains(w)) want.Add(w);
         if (want.Count == 0) return new List<Chunk>();
-        var held = new List<(Chunk c, HashSet<string> h)>();
-        foreach (var c in pile)
+        var when = Dates(pile);
+        var held = new List<(Chunk c, HashSet<string> h, int d)>();
+        for (int k = 0; k < pile.Count; k++)
         {
+            var c = pile[k];
             var toks = new HashSet<string>(Words(c.Text), StringComparer.Ordinal);
             var h = want.Where(w => Holds(w, toks)).ToHashSet(StringComparer.Ordinal);
-            if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h));
+            if (new BigInteger(h.Count) * HOLD_DEN >= HOLD_NUM * want.Count) held.Add((c, h, when[k]));
         }
         var df = want.ToDictionary(w => w, w => held.Count(x => x.h.Contains(w)), StringComparer.Ordinal);
-        var scored = new List<(Q s, Chunk c)>();
-        foreach (var (c, h) in held)
+        var scored = new List<(Q s, Chunk c, int d)>();
+        foreach (var (c, h, d) in held)
         {
             if (h.Count == 0) continue;
             var s = new Q(0, 1);
             foreach (var w in h) s = s.Plus(new Q(1, df[w]));
-            scored.Add((s, c));
+            scored.Add((s, c, d));
         }
         scored.Sort((x, y) =>
         {
             int c = y.s.CompareTo(x.s);
             if (c != 0) return c;
+            if (x.d != y.d) return y.d.CompareTo(x.d);
             c = CodePointOrder.It.Compare(x.c.Path, y.c.Path);
-            return c != 0 ? c : x.c.Line.CompareTo(y.c.Line);
+            if (c != 0) return c;
+            // a log grows downward: on one date, the later line is the newer one
+            return x.d != 0 ? y.c.Line.CompareTo(x.c.Line) : x.c.Line.CompareTo(y.c.Line);
         });
         return scored.Take(TOP).Select(x => x.c).ToList();
     }
@@ -1317,6 +1379,7 @@ public static class Kernel
         finally { Directory.Delete(tmp, true); }
         res["chunks"] = piles.Select(ch => (object?)Obj("chunks", ch.Select(x => (object?)x.Json()).ToList())).ToList();
         res["rank"] = Part("rank").Select(o => (object?)Obj("ids", Rank(piles[I(o["pile"])], (string)o["bite"]!).Select(x => (object?)x.Id).ToList())).ToList();
+        res["newest"] = Part("newest").Select(o => (object?)Obj("newest", Newest((string)o["text"]!))).ToList();
         res["look"] = Part("look").Select(o =>
         {
             var pile = piles[I(o["pile"])];

@@ -885,19 +885,72 @@ public final class Kernel {
         @Override public int compareTo(Q o) { return n.multiply(o.d).compareTo(o.n.multiply(d)); }
     }
 
+    /** How many ASCII digits run from {@code i}. */
+    static int digits(String t, int i) {
+        int j = i;
+        while (j < t.length() && t.charAt(j) >= '0' && t.charAt(j) <= '9') j++;
+        return Math.max(0, j - i);
+    }
+
+    static String date(String y, String m, String d) {
+        boolean ok = (y.startsWith("19") || y.startsWith("20"))
+                && m.compareTo("01") >= 0 && m.compareTo("12") <= 0
+                && d.compareTo("01") >= 0 && d.compareTo("31") <= 0;
+        return ok ? y + m + d : "";
+    }
+
+    /** kernel.py's newest: the latest ISO or compact date written in t, or "". */
+    static String newest(String t) {
+        String best = "";
+        int i = 0, n;
+        while (i < t.length()) {
+            n = digits(t, i);
+            if (n == 0) { i++; continue; }
+            String got = "";
+            if (n == 8) {
+                got = date(t.substring(i, i + 4), t.substring(i + 4, i + 6), t.substring(i + 6, i + 8));
+            } else if (n == 4 && i + 4 < t.length() && t.charAt(i + 4) == '-' && digits(t, i + 5) == 2
+                    && i + 7 < t.length() && t.charAt(i + 7) == '-' && digits(t, i + 8) == 2) {
+                got = date(t.substring(i, i + 4), t.substring(i + 5, i + 7), t.substring(i + 8, i + 10));
+                if (!got.isEmpty()) n = 10;
+            }
+            if (got.compareTo(best) > 0) best = got;
+            i += n;
+        }
+        return best;
+    }
+
+    /** kernel.py's dates: each chunk's date, carried down its file; 0 for none. */
+    static int[] dates(List<Chunk> pile) {
+        int[] out = new int[pile.size()];
+        String path = null, cur = "";
+        for (int i = 0; i < pile.size(); i++) {
+            Chunk c = pile.get(i);
+            if (!c.path.equals(path)) { path = c.path; cur = newest(c.path); }
+            String t = newest(c.text);
+            if (t.compareTo(cur) > 0) cur = t;
+            out[i] = cur.isEmpty() ? 0 : Integer.parseInt(cur);
+        }
+        return out;
+    }
+
     static List<Chunk> rank(List<Chunk> pile, String bite) {
         Set<String> want = new LinkedHashSet<>(words(bite));
         want.removeAll(FUNCTION);
         if (want.isEmpty()) return new ArrayList<>();
         List<Chunk> heldC = new ArrayList<>();
         List<Set<String>> heldH = new ArrayList<>();
-        for (Chunk c : pile) {
+        List<Integer> heldD = new ArrayList<>();
+        int[] when = dates(pile);
+        for (int k = 0; k < pile.size(); k++) {
+            Chunk c = pile.get(k);
             Set<String> toks = new HashSet<>(words(c.text));
             Set<String> h = new HashSet<>();
             for (String w : want) if (holds(w, toks)) h.add(w);
             if ((long) h.size() * HOLD_DEN >= (long) HOLD_NUM * want.size()) {
                 heldC.add(c);
                 heldH.add(h);
+                heldD.add(when[k]);
             }
         }
         Map<String, Integer> df = new HashMap<>();
@@ -912,14 +965,18 @@ public final class Kernel {
             if (h.isEmpty()) continue;
             Q s = new Q(BigInteger.ZERO, BigInteger.ONE);
             for (String w : h) s = s.plus(new Q(BigInteger.ONE, BigInteger.valueOf(df.get(w))));
-            scored.add(new Object[] {s, heldC.get(i)});
+            scored.add(new Object[] {s, heldC.get(i), heldD.get(i)});
         }
         scored.sort((x, y) -> {
             int c = ((Q) y[0]).compareTo((Q) x[0]);
             if (c != 0) return c;
+            int dx = (Integer) x[2], dy = (Integer) y[2];
+            if (dx != dy) return Integer.compare(dy, dx);
             Chunk a = (Chunk) x[1], b = (Chunk) y[1];
             c = BY_CODE_POINT.compare(a.path, b.path);
-            return c != 0 ? c : Integer.compare(a.line, b.line);
+            if (c != 0) return c;
+            // a log grows downward: on one date, the later line is the newer one
+            return dx != 0 ? Integer.compare(b.line, a.line) : Integer.compare(a.line, b.line);
         });
         List<Chunk> out = new ArrayList<>();
         for (int i = 0; i < Math.min(TOP, scored.size()); i++) out.add((Chunk) scored.get(i)[1]);
@@ -1491,6 +1548,11 @@ public final class Kernel {
             rankOut.add(fields("ids", ids));
         }
         out.put("rank", rankOut);
+
+        List<Object> newestOut = new ArrayList<>();
+        for (Object o : (List<Object>) c.get("newest"))
+            newestOut.add(fields("newest", newest((String) ((Map<String, Object>) o).get("text"))));
+        out.put("newest", newestOut);
 
         List<Object> lookOut = new ArrayList<>();
         for (Object o : (List<Object>) c.get("look")) {

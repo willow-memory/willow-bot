@@ -309,28 +309,86 @@ def chunks(pile: Path) -> list[dict]:
     return out
 
 
+def _digits(text: str, i: int) -> int:
+    """How many ASCII digits run from `i`."""
+    j = i
+    while j < len(text) and "0" <= text[j] <= "9":
+        j += 1
+    return j - i
+
+
+def _date(y: str, m: str, d: str) -> str:
+    """YYYYMMDD when it reads as a date (years 1900-2099), else ""."""
+    ok = y[:2] in ("19", "20") and "01" <= m <= "12" and "01" <= d <= "31"
+    return y + m + d if ok else ""
+
+
+def newest(text: str) -> str:
+    """The latest date written in `text`, as YYYYMMDD, or "" for none: an ISO
+    date (2026-10-14) or a compact one (20261014, a calendar's), each a whole
+    run of ASCII digits, never part of a longer number. Read by hand, not by
+    a regex, so a port reads the same dates."""
+    best, i = "", 0
+    while i < len(text):
+        n = _digits(text, i)
+        if n == 0:
+            i += 1
+            continue
+        got = ""
+        if n == 8:
+            got = _date(text[i : i + 4], text[i + 4 : i + 6], text[i + 6 : i + 8])
+        elif n == 4 and text[i + 4 : i + 5] == "-" and _digits(text, i + 5) == 2:
+            if text[i + 7 : i + 8] == "-" and _digits(text, i + 8) == 2:
+                got = _date(text[i : i + 4], text[i + 5 : i + 7], text[i + 8 : i + 10])
+                if got:
+                    n = 10
+        best = max(best, got)
+        i += n
+    return best
+
+
 def rank(pile: list[dict], bite: str) -> list[dict]:
     """The chunks holding at least `HOLD` of the bite's content words (not
-    `FUNCTION`), rarest words weighing most. A chunk sharing only "the" or
+    `FUNCTION`), rarest words weighing most; among equal scores, the newest
+    first (`dates`), then by path, and in one file a dated chunk's later line
+    first (a log grows downward). A chunk sharing only "the" or
     "how" and "do" doesn't hold "when does the frost come" or "how do I bake
     sourdough bread": an answer it doesn't have is never improvised (beat 1).
     A bite of function words alone is held by nothing: say more."""
     want = set(words(bite)) - FUNCTION
     if not want:
         return []
-    held = [(c, {w for w in want if holds(w, set(words(c["text"])))}) for c in pile]
-    held = [(c, h) for c, h in held if len(h) >= HOLD * len(want)]
-    df = {w: sum(w in h for _, h in held) for w in want}
+    held = [
+        (c, d, {w for w in want if holds(w, set(words(c["text"])))})
+        for c, d in zip(pile, dates(pile))
+    ]
+    held = [(c, d, h) for c, d, h in held if len(h) >= HOLD * len(want)]
+    df = {w: sum(w in h for *_, h in held) for w in want}
     # exact, not float: a float sum's last bit depends on the order the set is
     # walked in, which is the process's hash seed, so on Python 3.9-3.11 the
     # same folder and bite ranked differently from run to run (13 runs in 400
     # on one pile); 3.12's compensated sum hides it, and a port can't copy that
     scored = [
-        (sum(Fraction(1, df[w]) for w in h), c["path"], c["line"], c)
-        for c, h in held
+        (sum(Fraction(1, df[w]) for w in h), d, c["path"], c["line"], c)
+        for c, d, h in held
         if h
     ]
-    return [c for *_, c in sorted(scored, key=lambda s: (-s[0], s[1], s[2]))[:TOP]]
+    # a log grows downward: on one date, the later line is the newer one
+    order = sorted(scored, key=lambda s: (-s[0], -s[1], s[2], -s[3] if s[1] else s[3]))
+    return [c for *_, c in order[:TOP]]
+
+
+def dates(pile: list[dict]) -> list[int]:
+    """Each chunk's date as a number to sort by (0 for none): the latest date
+    in its path or text, or above it in its file, since a log's date heading
+    covers the lines under it. `pile` is in `chunks` order."""
+    out, path, cur = [], None, ""
+    for c in pile:
+        if c["path"] != path:
+            path, cur = c["path"], newest(c["path"])
+        cur = max(cur, newest(c["text"]))
+        out.append(int(cur or 0))
+    return out
 
 
 # ── where to look: what a 42 (or a served definition) can still say ─────────
