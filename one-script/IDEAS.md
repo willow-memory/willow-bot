@@ -2110,7 +2110,15 @@ in Nestor.
 | O-6: how 42 is stamped on documents | design: willows-grove `incoming/haiku-2026-10-02/proposal-packet-stamp-chain.md` |
 | the anchor: a cut can't be seen | design: willows-grove box-build `SPEC-rival.md` |
 | handoff E: record compaction | not found (Nestor's locked `ledger_append` keeps the chain, doesn't compact it) |
-| 59 flood guard, 62 per-repo cap, handoff G | not found |
+| 62 per-repo cap | Nestor `corpus.py`: two rows per repository on an unscoped search, lifted when scoped to one; decision 0220 makes it "a guarantee, not an ordering" and documents `limit` as a ceiling |
+| 59 flood guard, handoff G | not found (Nestor's triage thresholds keep a report from flooding with false positives; not a repair guard) |
+
+Second pass, the misses in other words: 62 was there all along, under
+"one repo does not crowd the rest". Nestor wrote the rule `cap_per_repo`
+sketches, and the reason to keep it: a short result is the guarantee
+working, so say so where the caller reads, don't fill it. Compaction, the
+flood guard and June's farm records stayed missing (a food-systems seed in
+Jeles is text, not a farm's own rows).
 
 **Name-matching doesn't cross; meaning does.** `snippet_cover` with all
 17 repos as "here" changed no verdict: the sketches are written in the one
