@@ -1,0 +1,268 @@
+TUNING LOG 2024 (typed from the notebook)
+
+2024-01-01  Margit Petrak - Steinway K-52 (1981), 1552 Juniper St
+  pitch before -6c at A4, after +0c
+  pedal squeak, lubed the trapwork
+  next: Jan 2025
+
+2024-01-10  Dario Pruitt - Samick console (1999), 1836 Ridge St
+  pitch before -19c at A4, after +0c
+  cat hair everywhere
+  next: Jan 2025
+
+2024-01-12  Ansel Duffy - Baldwin Hamilton studio (1996), 1149 Arroyo St
+  pitch before -21c at A4, after +0c
+  regulated the una corda
+  next: Jan 2025
+
+2024-01-22  Bea Holloway - Kawai K-300 (2015), 1210 Mesa St
+  pitch before -24c at A4, after +0c
+  glued a loose key top; pedal squeak, lubed the trapwork
+  next: Jan 2025
+
+2024-01-30  Hollis Arvizu - Baldwin Hamilton studio (1996), 2229 Alder St
+  pitch before -4c at A4, after +0c
+  glued a loose key top
+  next: Jul 2024
+
+2024-02-02  Silas Maestas - Yamaha C3 (2003), 1552 Ridge St
+  pitch before -6c at A4, after +0c
+  humidity 18%, recommended a Dampp-Chaser
+  next: Feb 2025
+
+2024-02-08  Nell Gallegos - Baldwin Acrosonic spinet (1962), 1699 Cholla St
+  pitch before -12c at A4, after +0c
+  glued a loose key top
+  next: Aug 2024
+
+2024-02-09  Teodora Bramley - Kawai K-300 (2015), 316 Railroad St
+  pitch before -34c at A4, after -3c
+  replaced a broken bass string (A1); pins tight
+  next: Feb 2025
+
+2024-02-10  Calloway Unified, CUSD PO 2024-074 (9)
+  CHS choir room Yamaha U1: -3c -> 0
+  CHS auditorium Kawai RX-2 grand: -7c -> 0
+  CHS band room Baldwin studio: -5c -> 0
+  CMS music room Kimball console: -17c -> 0
+  CMS cafeteria Wurlitzer spinet: -4c -> 0
+  Alder Elem. Yamaha P22: -12c -> 0
+  Alder Elem. Baldwin Hamilton: -16c -> 0
+  Juniper Elem. Everett studio: -17c -> 0
+  Juniper Elem. Samick console: -5c -> 0
+  invoice sent
+
+2024-02-11  Dry Creek SD, DCSD PO 2024-046 (6)
+  DCHS choir Yamaha U3: -21c -> 0
+  DCHS stage Young Chang grand: -22c -> 0
+  DCMS music Baldwin Hamilton: -22c -> 0
+  Dry Creek Elem. Kimball studio: -5c -> 0
+  Mesa Elem. Yamaha P22: -13c -> 0
+  Mesa Elem. Story & Clark console: -9c -> 0
+  invoice sent
+
+2024-02-16  Vesna Weatherby - Everett studio (1974), 1091 Yucca St
+  pitch before -15c at A4, after +0c
+  cat hair everywhere
+  next: Feb 2025
+
+2024-02-18  Pilar Caldwell - Everett studio (1974), 1423 Juniper St
+  pitch before -28c at A4, after -3c
+  regulated the una corda
+  next: Feb 2025
+
+2024-02-18  Lyle Lucero - Steinway M (1926), 2264 Sunset St
+  pitch before -12c at A4, after +0c
+  replaced a broken bass string (A1)
+  next: Feb 2025
+
+2024-02-18  Paz Halvorsen - Baldwin Acrosonic spinet (1962), 1163 Yucca St
+  pitch before -38c at A4, after -3c
+  regulated the una corda
+  next: Feb 2025
+
+2024-02-23  Loretta Tremaine - Mason & Hamlin A (1919), 2140 Cholla St
+  pitch before -12c at A4, after +0c
+  hammers grooved, quoted a reshape; mouse nest under the keybed, cleaned
+  next: Aug 2024
+
+2024-02-24  Cordelia Pettibone - Chickering upright (1908), Queen Anne cabinet, 634 Yucca St
+  pitch before -7c at A4, after +0c
+  pins tight; pedal squeak, lubed the trapwork
+  next: Feb 2025
+
+2024-03-02  Imogen Sandoval - Everett studio (1974), 725 Cholla St
+  pitch before -6c at A4, after +0c
+  regulated the una corda
+  next: Sep 2024
+
+2024-03-07  Ramona Romero-Hale - Chickering upright (1908), 1347 Mesa St
+  pitch before -6c at A4, after +0c
+  voiced down the top octave, bright; hammers grooved, quoted a reshape
+  next: Mar 2025
+
+2024-03-10  Lupe Strand - Mason & Hamlin A (1919), 732 Mesa St
+  pitch before -23c at A4, after +0c
+  cracked soundboard, old, not getting worse
+  next: Mar 2025
+
+2024-03-19  Esme Kowalczyk - Mason & Hamlin A (1919), 2201 Yucca St
+  pitch before -35c at A4, after -3c
+  eased two sticking keys; replaced a broken bass string (A1)
+  next: Mar 2025
+
+2024-03-23  Marisol Quintana - Baldwin Acrosonic spinet (1962), 1285 Juniper St
+  pitch before -28c at A4, after -3c
+  hammers grooved, quoted a reshape
+  next: Mar 2025
+
+2024-03-29  Cyrus Salcido - Samick console (1999), 218 Alder St
+  pitch before -6c at A4, after +0c
+  pins tight
+  next: Sep 2024
+
+2024-05-23  Sterling Vance - Kimball studio upright (1979), 372 Alder St
+  pitch before -8c at A4, after +0c
+  pins a little loose in the tenor, held; regulated the una corda
+  next: Nov 2024
+
+2024-05-29  Harriet Weight - Steinway M (1926), 2219 Alder St
+  pitch before -4c at A4, after +0c
+  voiced down the top octave, bright
+  next: Nov 2024
+
+2024-05-30  Greer Beckwith - Kawai K-300 (2015), 219 Juniper St
+  pitch before -27c at A4, after -3c
+  cat hair everywhere
+  next: May 2025
+
+2024-06-26  Thaddeus Trujillo - Yamaha U1 (1988), 319 Alder St
+  pitch before -13c at A4, after +0c
+  regulated the una corda
+  next: Dec 2024
+
+2024-06-26  Renata Lindahl - Chickering upright (1908), 1763 Railroad St
+  pitch before -9c at A4, after +0c
+  pins tight; mouse nest under the keybed, cleaned
+  next: Jun 2025
+
+2024-07-11  Merritt Padilla - Kimball studio upright (1979), 2025 Arroyo St
+  pitch before -29c at A4, after -3c
+  hammers grooved, quoted a reshape; mouse nest under the keybed, cleaned
+  next: Jul 2025
+
+2024-07-23  Hollis Arvizu - Baldwin Hamilton studio (1996), 2229 Alder St
+  pitch before -9c at A4, after +0c
+  pedal squeak, lubed the trapwork
+  next: Jan 2025
+
+2024-08-12  Loretta Tremaine - Mason & Hamlin A (1919), 2140 Cholla St
+  pitch before -13c at A4, after +0c
+  pins tight; pedal squeak, lubed the trapwork
+  next: Feb 2025
+
+2024-08-13  Nell Gallegos - Baldwin Acrosonic spinet (1962), 1699 Cholla St
+  pitch before -5c at A4, after +0c
+  cracked soundboard, old, not getting worse; cat hair everywhere
+  next: Feb 2025
+
+2024-08-14  Calloway Unified, CUSD PO 2024-081 (9)
+  CHS choir room Yamaha U1: -4c -> 0
+  CHS auditorium Kawai RX-2 grand: -5c -> 0
+  CHS band room Baldwin studio: -22c -> 0
+  CMS music room Kimball console: -7c -> 0
+  CMS cafeteria Wurlitzer spinet: -18c -> 0
+  Alder Elem. Yamaha P22: -14c -> 0
+  Alder Elem. Baldwin Hamilton: -12c -> 0
+  Juniper Elem. Everett studio: -15c -> 0
+  Juniper Elem. Samick console: -8c -> 0
+  invoice sent
+
+2024-08-15  Dry Creek SD, DCSD PO 2024-050 (6)
+  DCHS choir Yamaha U3: -20c -> 0
+  DCHS stage Young Chang grand: -11c -> 0
+  DCMS music Baldwin Hamilton: -9c -> 0
+  Dry Creek Elem. Kimball studio: -21c -> 0
+  Mesa Elem. Yamaha P22: -17c -> 0
+  Mesa Elem. Story & Clark console: -8c -> 0
+  invoice sent
+
+2024-08-28  Imogen Sandoval - Everett studio (1974), 725 Cholla St
+  pitch before -2c at A4, after +0c
+  pins tight; hammers grooved, quoted a reshape
+  next: Feb 2025
+
+2024-10-09  Benedikt Ybarra - Wurlitzer console (1971), 904 Pinon St
+  pitch before -6c at A4, after +0c
+  replaced a broken bass string (A1)
+  next: Oct 2025
+
+2024-10-22  Cyrus Salcido - Samick console (1999), 218 Alder St
+  pitch before -9c at A4, after +0c
+  cracked soundboard, old, not getting worse
+  next: Apr 2025
+
+2024-11-01  Abel Chacon - Baldwin Hamilton studio (1996), 139 Sunset St
+  pitch before -38c at A4, after -3c
+  cat hair everywhere
+  next: Nov 2025
+
+2024-11-04  Amos Okafor - Kimball studio upright (1979), 683 Ridge St
+  pitch before -27c at A4, after -3c
+  pins tight; cracked soundboard, old, not getting worse
+  next: Nov 2025
+
+2024-11-07  Ignacio Baca - Wurlitzer console (1971), 1811 Arroyo St
+  pitch before -16c at A4, after +0c
+  eased two sticking keys; replaced a broken bass string (A1)
+  next: Nov 2025
+
+2024-11-08  Harriet Weight - Steinway M (1926), 2219 Alder St
+  pitch before -14c at A4, after +0c
+  cracked soundboard, old, not getting worse
+  next: May 2025
+
+2024-11-13  Calvin Esquibel - Wurlitzer console (1971), 1827 Sunset St
+  pitch before -37c at A4, after -3c
+  cracked soundboard, old, not getting worse; eased two sticking keys
+  next: Nov 2025
+
+2024-11-16  Wendell Ashby - Yamaha U1 (1988), 405 Pinon St
+  pitch before -12c at A4, after +0c
+  damper felt worn, told them; eased two sticking keys
+  next: Nov 2025
+
+2024-11-21  Ruben Serrano - Yamaha C3 (2003), 234 Sunset St
+  pitch before -33c at A4, after -3c
+  replaced a broken bass string (A1)
+  next: Nov 2025
+
+2024-11-23  Orrin Thistle - Yamaha U1 (1988), 873 Ridge St
+  pitch before -14c at A4, after +0c
+  eased two sticking keys
+  next: Nov 2025
+
+2024-11-27  Matthias Ostrowski - Steinway M (1926), 489 Arroyo St
+  pitch before -34c at A4, after -3c
+  hammers grooved, quoted a reshape; cat hair everywhere
+  next: Nov 2025
+
+2024-12-03  Ofelia Archuleta - Story & Clark console (1984), 1015 Juniper St
+  pitch before -27c at A4, after -3c
+  eased two sticking keys
+  next: Dec 2025
+
+2024-12-06  Thaddeus Trujillo - Yamaha U1 (1988), 319 Alder St
+  pitch before -13c at A4, after +0c
+  hammers grooved, quoted a reshape
+  next: Jun 2025
+
+2024-12-07  Sterling Vance - Kimball studio upright (1979), 372 Alder St
+  pitch before -4c at A4, after +0c
+  replaced a broken bass string (A1); humidity 18%, recommended a Dampp-Chaser
+  next: Jun 2025
+
+2024-12-25  Junia Fairweather - Steinway K-52 (1981), 1491 Mesa St
+  pitch before -15c at A4, after +0c
+  hammers grooved, quoted a reshape; mouse nest under the keybed, cleaned
+  next: Dec 2025

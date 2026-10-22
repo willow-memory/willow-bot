@@ -1,0 +1,96 @@
+TUNING LOG 2020 (typed from the notebook)
+
+2020-11-03  Wendell Ashby - Yamaha U1 (1988), 405 Pinon St
+  pitch before -16c at A4, after +0c
+  cat hair everywhere
+  next: Nov 2021
+
+2020-11-06  Matthias Ostrowski - Steinway M (1926), 489 Arroyo St
+  pitch before -19c at A4, after +0c
+  voiced down the top octave, bright
+  next: Nov 2021
+
+2020-11-14  Amos Okafor - Kimball studio upright (1979), 683 Ridge St
+  pitch before -34c at A4, after -3c
+  hammers grooved, quoted a reshape; replaced a broken bass string (A1)
+  next: Nov 2021
+
+2020-11-15  Sterling Vance - Kimball studio upright (1979), 372 Alder St
+  pitch before -12c at A4, after +0c
+  humidity 18%, recommended a Dampp-Chaser; pins tight
+  next: May 2021
+
+2020-11-21  Winifred Marchetti - Steinway K-52 (1981), 1657 Railroad St
+  pitch before -21c at A4, after +0c
+  pins a little loose in the tenor, held
+  next: Nov 2021
+
+2020-11-25  Ruben Serrano - Yamaha C3 (2003), 234 Sunset St
+  pitch before -28c at A4, after -3c
+  cracked soundboard, old, not getting worse; pins a little loose in the tenor, held
+  next: Nov 2021
+
+2020-11-27  Harriet Weight - Steinway M (1926), 2219 Alder St
+  pitch before -2c at A4, after +0c
+  pins tight
+  next: May 2021
+
+2020-11-30  Ofelia Archuleta - Story & Clark console (1984), 1015 Juniper St
+  pitch before -28c at A4, after -3c
+  replaced a broken bass string (A1); pins tight
+  next: Nov 2021
+
+2020-12-06  Ignacio Baca - Wurlitzer console (1971), 1811 Arroyo St
+  pitch before -6c at A4, after +0c
+  cracked soundboard, old, not getting worse
+  next: Dec 2021
+
+2020-12-07  Junia Fairweather - Steinway K-52 (1981), 1491 Mesa St
+  pitch before -30c at A4, after -3c
+  mouse nest under the keybed, cleaned; pedal squeak, lubed the trapwork
+  next: Dec 2021
+
+2020-12-11  Orrin Thistle - Yamaha U1 (1988), 873 Ridge St
+  pitch before -27c at A4, after -3c
+  mouse nest under the keybed, cleaned; regulated the una corda
+  next: Dec 2021
+
+2020-12-13  Calvin Esquibel - Wurlitzer console (1971), 1827 Sunset St
+  pitch before -25c at A4, after -3c
+  damper felt worn, told them
+  next: Dec 2021
+
+2020-12-15  Dario Pruitt - Samick console (1999), 1836 Ridge St
+  pitch before -17c at A4, after +0c
+  damper felt worn, told them; hammers grooved, quoted a reshape
+  next: Dec 2021
+
+2020-12-17  Gus Whitlock - Yamaha C3 (2003), 1037 Pinon St
+  pitch before -31c at A4, after -3c
+  replaced a broken bass string (A1)
+  next: Dec 2021
+
+2020-12-21  Hollis Arvizu - Baldwin Hamilton studio (1996), 2229 Alder St
+  pitch before -12c at A4, after +0c
+  pins tight
+  next: Jun 2021
+
+2020-12-25  Ansel Duffy - Baldwin Hamilton studio (1996), 1149 Arroyo St
+  pitch before -33c at A4, after -3c
+  pins tight; cat hair everywhere
+  next: Dec 2021
+
+2020-12-27  Pilar Caldwell - Everett studio (1974), 1423 Juniper St
+  pitch before -14c at A4, after +0c
+  pins tight
+  next: Dec 2021
+
+2020-12-29  Thaddeus Trujillo - Yamaha U1 (1988), 319 Alder St
+  pitch before -5c at A4, after +0c
+  pins a little loose in the tenor, held; mouse nest under the keybed, cleaned
+  next: Jun 2021
+
+2020-12-30  Delphine Lindqvist - Story & Clark console (1984), 2381 Railroad St
+  pitch before -31c at A4, after -3c
+  regulated the una corda; pedal squeak, lubed the trapwork
+  next: Dec 2021
