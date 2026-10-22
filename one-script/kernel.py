@@ -63,6 +63,7 @@ import secrets
 import sys
 import tempfile
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 
 try:
@@ -320,8 +321,14 @@ def rank(pile: list[dict], bite: str) -> list[dict]:
     held = [(c, {w for w in want if holds(w, set(words(c["text"])))}) for c in pile]
     held = [(c, h) for c, h in held if len(h) >= HOLD * len(want)]
     df = {w: sum(w in h for _, h in held) for w in want}
+    # exact, not float: a float sum's last bit depends on the order the set is
+    # walked in, which is the process's hash seed, so on Python 3.9-3.11 the
+    # same folder and bite ranked differently from run to run (13 runs in 400
+    # on one pile); 3.12's compensated sum hides it, and a port can't copy that
     scored = [
-        (sum(1 / df[w] for w in h), c["path"], c["line"], c) for c, h in held if h
+        (sum(Fraction(1, df[w]) for w in h), c["path"], c["line"], c)
+        for c, h in held
+        if h
     ]
     return [c for *_, c in sorted(scored, key=lambda s: (-s[0], s[1], s[2]))[:TOP]]
 

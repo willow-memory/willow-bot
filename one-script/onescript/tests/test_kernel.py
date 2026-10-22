@@ -7,6 +7,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -174,3 +175,53 @@ def test_a_file_name_with_a_line_separator_doesnt_brick_the_box(tmp_path):
     rec = record.Record(box, lambda: "", "", object())  # the one script reads it too
     assert rec.verify_chain() == [] and [r["kind"] for r in rec.rows()][-1] == "bite"
     assert cli("bite", *b, "how much sun do tomatoes want").returncode == 0
+
+
+#: A pile found by search (2026-10-21) where the float score's last bit, and so
+#: the order of two chunks, followed the hash seed on Python 3.11: 13 runs in
+#: 400 ranked it 11, 9, 5 instead of 11, 5, 9.
+SEED_PILE = [
+    "w1 w6",
+    "w3 w1 w0 w2",
+    "w4 w2 w0 w5 w3",
+    "w2 w3 w0 w4 w1",
+    "w4 w1 w3 w5",
+    "w2 w6 w1 w3 w0",
+    "w5 w0 w2 w1",
+    "w5 w1 w0",
+    "w2 w4 w1",
+    "w3 w6 w1 w4 w5 w2",
+    "w5 w3 w6",
+    "w1 w2 w3 w6 w0 w4",
+    "w5 w2 w4",
+]
+SEED_BITE = "w4 w2 w6 w1 w3 w0"
+
+
+def test_the_rank_is_the_same_under_every_hash_seed():
+    """Scores are exact (Fraction), so the set's walk order can't move them."""
+    pile = [
+        {"path": f"f{i:02d}.md", "line": 1, "text": t, "id": str(i)}
+        for i, t in enumerate(SEED_PILE)
+    ]
+    code = (
+        "import json,sys,importlib.util as u;"
+        f"s=u.spec_from_file_location('k',{str(HERE)!r});k=u.module_from_spec(s);"
+        "s.loader.exec_module(k);"
+        "print(','.join(c['id'] for c in k.rank(json.loads(sys.argv[1]),sys.argv[2])))"
+    )
+    # the old Pythons are where a float sum walks in set order: use any here
+    pys = [sys.executable] + [
+        p for v in ("3.9", "3.10", "3.11") if (p := shutil.which(f"python{v}"))
+    ]
+    got = {
+        subprocess.run(
+            [py, "-c", code, json.dumps(pile), SEED_BITE],
+            capture_output=True,
+            text=True,
+            env={"PYTHONHASHSEED": str(seed)},
+        ).stdout.strip()
+        for seed in (0, 80, 101, 102, 126, 156)
+        for py in pys
+    }
+    assert got == {"11,5,9"}
