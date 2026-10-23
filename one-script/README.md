@@ -29,8 +29,8 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `onescript/oauth_resource.py` | `bind()`: every OAuth code and token carries the resource it was issued for, so a server can turn on `validate_token_resource` without refusing its own tokens. Not wired into Grove or willow-mcp yet |
 | `scripts/oauth/oauth_probe.py` | Deterministic OAuth: blind wagers forecast before they run, pins for answers already seen; the live flow against willows-grove and willow-mcp serve mode on loopback and Google's hosted MCP servers (read-only, no credentials), N runs each; disagreeing runs are `drift`, a pin that moves is `changed` |
 | `deep_thought.py` | The morning screen |
-| `kernel.py` | The smallest script for anyone: the whole loop on their own folder, stdlib only (IDEAS 113) |
-| `kernel_vectors/` | `kernel.py` in any language: generated tables, 4,595 cases, `compare.py` (every box under every implementation), and three ports: Java, TypeScript, C# |
+| `kernel.py` | willow-memory/willow's kernel, copied and pinned by `kernel.pin` (its commit and SHA-256); a test fails if this copy differs. Change it in willow, never here. Its tests, vectors, ports, add-ons and demos live in willow; `onescript/tests/test_kernel.py` keeps only the checks that it is still the one script's record, seal and bite key |
+| `kernel.pin` | which willow commit `kernel.py` is, and its SHA-256 |
 
 ## OAuth: which server a token is for
 

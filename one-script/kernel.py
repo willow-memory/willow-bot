@@ -1,56 +1,51 @@
-"""kernel.py: the smallest script that runs the whole loop, for anyone. Python 3.9+, stdlib only.
-
+"""kernel.py: answers questions from your own files. Python 3.9+, stdlib only.
     python kernel.py init    --box DIR --pile FOLDER --key FILE [--words FILE]
-    python kernel.py bite    --box DIR "your words"
-    python kernel.py propose --box DIR --file ROWS.jsonl
+    python kernel.py bite    --box DIR "your question"
+    python kernel.py propose --box DIR --file SUGGESTIONS.jsonl
     python kernel.py seal    --box DIR proposal:<sha256>
     python kernel.py verify  --box DIR
     python kernel.py out     --box DIR
     python kernel.py test
 
-The operator, 2026-10-22: "the smallest script the system can run for any
-native user, so their first bite isn't filled with mine." Its pile is the
-person's own folder and nothing else: no law, no corpus, no ledger, no key but
-theirs. It was found, not designed: merged into one box, every demo in the
-fleet (Nestor's, the Grove's, the Forge's, 24 Python demos in 9 repos) turned
-out to be the same small loop in costume (add a pair, look it up, serve it only
-when a human sealed it, keep every step on a chain), and Nestor's
-`demo/sixty_seconds.py` tells it in eight beats. `test` runs those eight beats.
+The pile (--pile) is your own folder, and it is only ever read. The box
+(--box) is a folder this script keeps its record in. The key (--key) is a
+file of 32 random bytes, readable only by you and kept outside the box: it
+is what approves an answer.
 
-The loop:
-    init     a box, and a key that is theirs (a file outside the box, 0600);
-             --words names their own words list, kept the same way: a line
-             `due = next` reads their word as their folder's
-    bite     their words against their own files. A sealed answer for these
-             words is served (exit 0: a human said it). Else their files'
-             chunks that hold the words are served (exit 0: their pile is
-             things they already said yes to); a chunk that only asks the
-             question back is marked `echo` and answers nothing. Else nothing
-             (exit 42). Pages are read as the text they show
-    propose  a model's rows, one JSON object a line: {path, data, cites,
-             claim}. Through the door: a plain relative path, a claim that says
-             why, and cites only from what the last bite served. A pass waits
-             on the person (exit 42); nothing is written
-    seal     the person's proof over one proposal's exact hash, made from their
-             key. Only then is it written, and its bite is answered
-    verify   the chain, every row, and every seal's proof re-checked: a forged
-             seal is never served, whatever it claims
-    out      what is waiting on the person (42 while anything is)
+    init     makes the box and your key, and links your folder. --words names
+             your own words list, kept like the key: a line `due = next, later`
+             reads your word "due" as any of the words your files use
+    bite     a question against your files. An answer you approved for these
+             words comes first (exit 0). Else up to three passages of your
+             files that hold the question's words (exit 0: your files say it);
+             a passage that only asks the question back is marked `echo` and
+             answers nothing. Else nothing (exit 42). Web pages are read as
+             the text they show
+    propose  suggested answers (from a model, say), one JSON object a line:
+             {path, data, cites, claim}. Each needs a plain relative path, a
+             claim that says why, and cites only from what the last bite
+             returned. One that passes waits for you (exit 42); nothing is
+             written yet
+    seal     your approval of one suggestion: an HMAC-SHA-256 over its exact
+             hash, made with your key. Only then is it written, and given as
+             the answer to its question
+    verify   re-checks every row of the record and every approval: a forged
+             approval is never accepted, whatever it claims
+    out      what is waiting for your approval (exit 42 while anything is)
+    test     runs every step once in a temporary folder and checks eight
+             properties
 
-The rows are the one script's own (`onescript/record.py`): the same keys, the
-same canon (family A), hash = SHA-256 of the row without `hash`, GENESIS to
-start, so `Record.verify_chain` checks a kernel box unchanged. Its record
-holds hashes and places, never the person's words. Its seal is
-`onescript/sign.py`'s (`hmac_parts(key, "seal", subject)`), and its bite key is
-`onescript/words.py`'s (`bite_key`), byte for byte. Built on `genesis.py`
-(willow-bot `claude/genesis`): the lock, the fsync, the torn tail refused, an
-edit seen.
+The record is one JSON line per step. Each row holds the SHA-256 of the row
+before it, starting from 64 zeros, so editing any past row breaks the chain.
+It keeps hashes and places (file and line), never the words of a question or
+of your files. Writes take a file lock and are fsynced; a half-written last
+line is refused, not repaired.
 
-Exit codes, genesis's:
-    0   a human said it: their pile holds it, or their seal does
-    42  not enough information to say a human said this was true
-    2   refused: a bad command line, a box that isn't theirs, a chain that
-        doesn't verify. Nothing is appended past a break.
+Exit codes:
+    0   a person said it: your files hold it, or you approved it
+    42  not enough to say a person said it is true
+    2   refused: a bad command line, a box that isn't yours, a record that
+        doesn't verify. Nothing is written past a break.
 """
 
 from __future__ import annotations
@@ -77,13 +72,12 @@ GENESIS = "0" * 64
 ALIVE, ESCALATE, REFUSED = 0, 42, 2
 ROW_KEYS = {"n", "kind", "who", "family", "standing", "version", "ts", "prev", "hash"}
 VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-WORD = re.compile(r"[^\W_]+")  # onescript/words.py, the key rule (v1)
+WORD = re.compile(r"[^\W_]+")  # a word: letters and digits, no underscore
 TOP = 3  # chunks served for a bite
-HOLD = 0.5  # the share of a bite's words a chunk must hold; the operator's number
+HOLD = 0.5  # the share of a bite's words a chunk must hold
 #: Words that never count toward holding a bite: "how do I bake sourdough
-#: bread" is not held by a chunk that says "how" and "do". English, and a
-#: placeholder list, the operator's to name; a bite in another language keeps
-#: every word.
+#: bread" is not held by a chunk that says "how" and "do". English; a bite in
+#: another language keeps every word.
 FUNCTION = frozenset(
     "a an the and or but if of to in on at by for from with about as into than"
     " then so is are was were be been being am do does did done have has had i"
@@ -93,12 +87,12 @@ FUNCTION = frozenset(
 )
 SNIFF = 8192  # bytes looked at to tell text from binary: a NUL byte means binary
 MAX_FILE = 1_000_000  # bytes read from one file of the pile
-MAX_CHUNK = 500  # characters in one chunk: the one script's pile.MAX
+MAX_CHUNK = 500  # characters in one chunk
 
 
-# ── the record: genesis's, in the one script's format ───────────────────────
+# ── the record ──────────────────────────────────────────────────────────────
 def canon(row: dict) -> str:
-    """Family A, byte for byte (`onescript/canon.py` sorted_compact_utf8)."""
+    """Canonical JSON: keys sorted, no spaces, UTF-8 kept as is."""
     return json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -118,7 +112,7 @@ def read(path: Path) -> tuple[list[dict], list[str]]:
     if data and not data.endswith("\n"):
         return [], ["torn tail: the last line is unterminated; a human looks first"]
     rows, breaks, prev = [], [], GENESIS
-    # "\n" only, as onescript/record.py reads it: canon keeps a raw U+2028,
+    # "\n" only: canon keeps a raw U+2028,
     # U+2029 or U+0085 in a string (a file name in a served `where`), and
     # str.splitlines() would cut the row there and brick the box
     lines = data.split("\n")[:-1] if data else []
@@ -167,9 +161,9 @@ def append(box: Path, ts: str, kind: str, who: str = "kernel", **fields) -> dict
     return row
 
 
-# ── the seal and the bite key: the one script's, byte for byte ──────────────
+# ── the seal and the bite key ───────────────────────────────────────────────
 def proof(key: bytes, subject: str) -> str:
-    """`onescript/sign.py` hmac_parts(key, "seal", subject)."""
+    """HMAC-SHA-256 under their key, over "seal", a unit separator, the subject."""
     return hmac.new(
         key, "\x1f".join(("seal", subject)).encode(), hashlib.sha256
     ).hexdigest()
@@ -180,7 +174,8 @@ def words(text: str) -> list[str]:
 
 
 def bite_key(text: str) -> str | None:
-    """`onescript/words.py` bite_key: the words in order, one space between."""
+    """The SHA-256 of the words in order, one space between: the same question
+    retyped in another case or punctuation has the same key."""
     ws = words(text)
     return h256(" ".join(ws)) if ws else None
 
@@ -270,7 +265,7 @@ def init(box: Path, pile: Path, key: Path, ts: str, wl: Path | None = None) -> i
         cfg["words"] = str(wl.resolve())
     (box / "kernel.json").write_text(json.dumps(cfg, sort_keys=True) + "\n")
     row = append(box, ts, "boot", loop="open", pile_sha256=h256(cfg["pile"]))
-    print(f"open loop, row {row['n']} {row['hash'][:16]}: the box is yours")
+    print(f"ready: record started, row {row['n']} {row['hash'][:16]}")
     return ALIVE
 
 
@@ -286,15 +281,46 @@ def _lines_kept(m: re.Match) -> str:
 def html_text(text: str) -> str:
     """The words a page shows: scripts, styles, comments and tags out, entities
     read, every line where it was. A first bite on a page is never served
-    `<button>` and `<!doctype>` (Nieves's shoebox, June's farm)."""
+    `<button>` and `<!doctype>`."""
     return html.unescape(_TAG.sub(_lines_kept, _HIDDEN.sub(_lines_kept, text)))
 
 
+def stem(w: str) -> str:
+    """An English word's plain form, by a few suffix rules, so owe, owes, owed
+    and owing are one word (Hollis's "who still owes me money", Teodora's "how
+    much do I still owe dev"). Only words of ASCII letters: another language,
+    or a serial, is left as written. Irregular forms (paid) are her words
+    list's job."""
+    if len(w) < 3 or not (w.isascii() and w.isalpha()):
+        return w
+    s = w
+    if len(s) > 4 and s[-3:] in ("ies", "ied"):
+        s = s[:-3] + "y"
+    elif len(s) > 4 and s.endswith("ing"):
+        s = s[:-3]
+    elif len(s) > 3 and s.endswith("ed"):
+        s = s[:-2]
+    elif len(s) > 3 and s.endswith("s") and not s.endswith("ss"):
+        s = s[:-1]
+    if len(s) > 3 and s[-1] == s[-2] and s[-1] not in "aeiouls":
+        s = s[:-1]  # running, planned
+    if len(s) > 2 and s.endswith("e"):
+        s = s[:-1]
+    return s
+
+
+def forms(ws) -> set[str]:
+    """Words, and each one's plain form (`stem`)."""
+    out = set(ws)
+    return out | {stem(w) for w in out}
+
+
 def holds(w: str, toks: set[str]) -> bool:
-    """A word holds where it is a token; one with a digit in it (a VIN, a
-    serial, a case number) also holds where a token starts or ends with it:
-    "that one ending 672841" finds 1HGEJ6672841 (Big Jim's lot)."""
-    if w in toks:
+    """A word holds where it is a token, or its plain form is (`toks` built
+    by `forms`); one with a digit in it (a VIN, a serial, a case number) also
+    holds where a token starts or ends with it: "that one ending 672841"
+    finds 1HGEJ6672841."""
+    if w in toks or stem(w) in toks:
         return True
     return (
         len(w) >= 4
@@ -309,8 +335,7 @@ ECHO_RUN = 8  # words in a row, in the bite's order, that make a chunk an echo
 def echo(bite: str, text: str) -> bool:
     """Whether `text` holds the bite's own words in its own order: the whole
     bite, or `ECHO_RUN` of its words in a row (a long opener never fits in one
-    chunk whole). The question asked back is not its answer (the Dispatches
-    audit's trap: "a question nobody audited must NOT be answered")."""
+    chunk whole). The question asked back is not its answer."""
     ws, ts = words(bite), words(text)
     n = min(len(ws), ECHO_RUN)
     if n < 3:
@@ -369,11 +394,25 @@ def _date(y: str, m: str, d: str) -> str:
     return y + m + d if ok else ""
 
 
+def _day_month(a: str, b: str, y: str) -> str:
+    """A date written a/b/y or a.b.y, as YYYYMMDD, only when it can't be
+    misread: one of a and b over 12 says which is the day, or they're equal.
+    11/03/2023 could be either, and the kernel never guesses."""
+    x, z = int(a), int(b)
+    if x == z or x > 12 >= z:  # 5/5 reads the same either way
+        return _date(y, f"{z:02d}", f"{x:02d}")
+    if z > 12 >= x:
+        return _date(y, f"{x:02d}", f"{z:02d}")
+    return ""
+
+
 def newest(text: str) -> str:
     """The latest date written in `text`, as YYYYMMDD, or "" for none: an ISO
-    date (2026-10-14) or a compact one (20261014, a calendar's), each a whole
-    run of ASCII digits, never part of a longer number. Read by hand, not by
-    a regex, so a port reads the same dates."""
+    date (2026-10-14), a compact one (20261014, a calendar's), or a day and a
+    month either way round with a four-digit year (21/10/2026, 10.21.2026),
+    read only when one part is over 12. Each a whole run of ASCII digits, never
+    part of a longer number. Read by hand, not by a regex, so a port reads the
+    same dates."""
     best, i = "", 0
     while i < len(text):
         n = _digits(text, i)
@@ -388,6 +427,15 @@ def newest(text: str) -> str:
                 got = _date(text[i : i + 4], text[i + 5 : i + 7], text[i + 8 : i + 10])
                 if got:
                     n = 10
+        elif n <= 2 and (sep := text[i + n : i + n + 1]) in ("/", "."):
+            m = _digits(text, i + n + 1)
+            j = i + n + 1 + m
+            if 1 <= m <= 2 and text[j : j + 1] == sep and _digits(text, j + 1) == 4:
+                got = _day_month(
+                    text[i : i + n], text[i + n + 1 : j], text[j + 1 : j + 5]
+                )
+                if got:
+                    n = j + 5 - i
         best = max(best, got)
         i += n
     return best
@@ -396,7 +444,7 @@ def newest(text: str) -> str:
 def toks(c: dict) -> set[str]:
     """A chunk's words: its text's and its path's. A folder's name is the
     person's word too: Laszlo's care log never says "Dad", its folder does."""
-    return set(words(c["text"])) | set(words(c["path"]))
+    return forms(words(c["text"]) + words(c["path"]))
 
 
 def held_by(w: str, toks: set[str], alias: dict) -> bool:
@@ -473,345 +521,10 @@ def dates(pile: list[dict]) -> list[int]:
 DEFINES = re.compile(r"\b(?:def|function|sub|class|func|fn)\s+([A-Za-z_][A-Za-z0-9_]*)")
 MAKE = {"make", "build", "write", "create", "generate"}
 NEXT = {
-    "other words": "a meaning match (the fleet's: Nestor's semantic_matcher)",
-    "unused": "a call graph or a code search (the fleet's: script_match)",
-    "made": "a builder (the fleet's: the Forge, forge_bite)",
+    "other words": "add it to your words list, or use a search that matches by meaning",
+    "unused": "a code search or call graph can say what calls it",
+    "made": "this reads what your files hold; making something needs another tool",
 }
-
-
-def _id_char(ch: str) -> bool:
-    return ch.isascii() and (ch.isalnum() or ch in "-/")
-
-
-def ids(text: str) -> list[str]:
-    """The numbers in `text` that name one thing: a run of ASCII letters,
-    digits, `-` and `/`, trimmed of its end marks, holding a digit and a mark
-    inside (a purchase order's 2025-063, a case's WR-2026-0117, a phone's
-    555-0161). A date isn't one (`newest` reads it): dates are the newest
-    reading's. In order, each once."""
-    out, i = [], 0
-    while i < len(text):
-        j = i
-        while j < len(text) and _id_char(text[j]):
-            j += 1
-        run = text[i:j].strip("-/")
-        if (
-            any(c.isdigit() for c in run)
-            and any(c in "-/" for c in run)
-            and not newest(run)
-            and run not in out
-        ):
-            out.append(run)
-        i = j + 1 if j == i else j
-    return out
-
-
-def shape(i: str) -> str:
-    """What an id looks like: digits as 9, letters as A, marks kept."""
-    return "".join("9" if c.isdigit() else "A" if c.isalpha() else c for c in i)
-
-
-def missing(pile: list[dict], served: list[dict]) -> list[dict]:
-    """What isn't there: for each shape of id in a served chunk, every
-    other file (not one the answer came from: that one is being read) that
-    names at least half the folder's ids of that shape but not all, and the
-    ones it doesn't that another file names beside ones it does. Odile's books name 21 of her 24 purchase orders; the
-    three they don't are the question."""
-    by_file: dict[str, set[str]] = {}
-    for c in pile:
-        by_file.setdefault(c["path"], set()).update(ids(c["text"]))
-    every = set().union(*by_file.values()) if by_file else set()
-    out = []
-    # what she was shown names it, not just a file it came from: an order
-    # somewhere in her tuning log is no reason to say it under "I'm tired"
-    paths = list(dict.fromkeys(c["path"] for c in served))
-    shapes = dict.fromkeys(shape(i) for c in served for i in ids(c["text"]))
-    for sh in shapes:
-        group = {i for i in every if shape(i) == sh}
-        for path in sorted(set(by_file) - set(paths)):
-            k = len(group & by_file[path])
-            if 2 * k >= len(group) and k < len(group):
-                have = group & by_file[path]
-                # missing only where another file names it beside ones this
-                # file has: a Kawai's K-300 and a van's E-150 share a shape,
-                # never a page, so neither is missing from the other's file
-                gone = sorted(
-                    i
-                    for i in group - by_file[path]
-                    if any(i in f and f & have for f in by_file.values())
-                )
-                if not gone:
-                    continue
-                out.append(
-                    {
-                        "why": f"{', '.join(gone)}: not in {path}",
-                        "where": f"{path} names {k} of the {len(group)} like them",
-                    }
-                )
-    return out
-
-
-def cells(line: str) -> list[str]:
-    """One line of comma-separated values: a cell in double quotes may hold
-    commas, and "" inside it is one quote."""
-    out, cur, quoted, i = [], [], False, 0
-    while i < len(line):
-        ch = line[i]
-        if quoted and ch == '"' and line[i + 1 : i + 2] == '"':
-            cur.append('"')
-            i += 1
-        elif ch == '"':
-            quoted = not quoted
-        elif ch == "," and not quoted:
-            out.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-        i += 1
-    return out + ["".join(cur)]
-
-
-def number(cell: str) -> tuple[int, int] | None:
-    """A cell that is a decimal number, as (digits, places): 75.1 is (751, 1).
-    ASCII digits, an optional minus and point, nothing else."""
-    s = cell.strip()
-    whole, _, frac = s[1:].partition(".") if s[:1] == "-" else s.partition(".")
-    ok = whole and all("0" <= c <= "9" for c in whole + frac) and (frac or "." not in s)
-    if not ok:
-        return None
-    n = int(whole + frac)
-    return (-n if s[:1] == "-" else n), len(frac)
-
-
-def day(d: str) -> int:
-    """Days since 1970-01-01 for a YYYYMMDD, by integer arithmetic alone."""
-    y, m, dd = int(d[:4]), int(d[4:6]), int(d[6:])
-    y -= m <= 2
-    era = y // 400
-    yoe = y - era * 400
-    doy = (153 * (m + (-3 if m > 2 else 9)) + 2) // 5 + dd - 1
-    return era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy - 719468
-
-
-def shown(n: tuple[int, int]) -> str:
-    v, places = n
-    digits = str(abs(v)).rjust(places + 1, "0")
-    body = digits[: len(digits) - places] + ("." + digits[-places:] if places else "")
-    return ("-" if v < 0 else "") + body
-
-
-def iso(d: str) -> str:
-    return f"{d[:4]}-{d[4:6]}-{d[6:]}"
-
-
-WEEK = 7  # days: a change is said against the row a week before the latest
-WEEKS = 4  # and the biggest move in any one week, over this many back
-
-
-def change(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
-    """b - a, exactly, at the finer of their two places."""
-    places = max(a[1], b[1])
-    return b[0] * 10 ** (places - b[1]) - a[0] * 10 ** (places - a[1]), places
-
-
-def bigger(a: tuple[int, int], b: tuple[int, int]) -> bool:
-    """|a| > |b|, exactly: each scaled by the other's places."""
-    return abs(a[0]) * 10 ** b[1] > abs(b[0]) * 10 ** a[1]
-
-
-def moved(diff: tuple[int, int]) -> str:
-    if diff[0] == 0:
-        return "no change"
-    return f"{'up' if diff[0] > 0 else 'down'} {shown((abs(diff[0]), diff[1]))}"
-
-
-def week_before(got: list, d: str) -> tuple[str, tuple[int, int]] | None:
-    """The latest row at least a week before `d`, or None."""
-    before = [(x, n) for x, n in got if day(x) <= day(d) - WEEK]
-    return before[-1] if before else None
-
-
-def series(path: str, text: str) -> list[dict]:
-    """Numbers over time: a table (comma-separated, a header first) whose rows
-    start with a date, each later than the last, says for each column of
-    numbers its latest value and how it stands to the one a week before. A
-    ledger repeats its dates, so it is never a series; the kernel says what
-    moved, never whether it matters."""
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    if len(lines) < 3:
-        return []
-    head, rows = cells(lines[0]), []
-    if newest(lines[0]) or len(head) < 2:
-        return []
-    for ln in lines[1:]:
-        cs = cells(ln)
-        d = newest(cs[0])
-        if d and cs[0].strip() in (d, iso(d)):
-            rows.append((d, cs))
-    if len(rows) < 2 or any(b[0] <= a[0] for a, b in zip(rows, rows[1:])):
-        return []
-    out = []
-    for col in range(1, len(head)):
-        got = [(d, n) for d, cs in rows if col < len(cs) and (n := number(cs[col]))]
-        if len(got) < 2:
-            continue
-        (d1, last), name = got[-1], head[col].strip() or f"column {col + 1}"
-        if (b := week_before(got, d1)) is None:
-            continue
-        d0, then = b
-        why = f"{name}: {shown(last)} on {iso(d1)}, {moved(change(then, last))} from "
-        why += f"{shown(then)} on {iso(d0)}"
-        # the biggest move in one week, among the last WEEKS: the latest week
-        # can sit under a line that an earlier one crossed
-        best = None
-        for d, n in got:
-            if day(d) > day(d1) - WEEK * WEEKS and (b := week_before(got, d)):
-                diff = change(b[1], n)
-                if best is None or bigger(diff, best[0]):  # a tie keeps the earlier
-                    best = (diff, b[0], d)
-        if best is not None and (best[1], best[2]) != (d0, d1):
-            why += f"; the most in one week of the last {WEEKS}: {moved(best[0])}"
-            why += f", {iso(best[1])} to {iso(best[2])}"
-        out.append(
-            {
-                "why": why,
-                "where": f"{path}: {len(rows)} dated rows, {iso(rows[0][0])} to "
-                f"{iso(rows[-1][0])}",
-            }
-        )
-    return out
-
-
-MONTHS = {
-    m: n
-    for n, names in enumerate(
-        [
-            ("jan", "january"), ("feb", "february"), ("mar", "march"),
-            ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
-            ("aug", "august"), ("sep", "sept", "september"), ("oct", "october"),
-            ("nov", "november"), ("dec", "december"),
-        ],
-        1,
-    )
-    for m in names
-}  # fmt: skip
-
-
-def _digit(ch: str) -> bool:
-    return len(ch) == 1 and "0" <= ch <= "9"
-
-
-def _letter(ch: str) -> bool:
-    return len(ch) == 1 and ("a" <= ch <= "z" or "A" <= ch <= "Z")
-
-
-def _runs(text: str) -> list[tuple[int, int]]:
-    """Where each run of ASCII letters, or of ASCII digits, starts and ends."""
-    out, i = [], 0
-    while i < len(text):
-        same = _digit if _digit(text[i]) else _letter if _letter(text[i]) else None
-        if same is None:
-            i += 1
-            continue
-        j = i
-        while j < len(text) and same(text[j]):
-            j += 1
-        out.append((i, j))
-        i = j
-    return out
-
-
-def written(text: str) -> list[tuple[str, str]]:
-    """Every date written in `text`, in order, as (YYYYMMDD, as written): ISO
-    and compact (`newest`'s), and English month names with a year, a day or
-    not between ("Oct 2027" is its first; "March 20, 2026"). Between a month
-    and the rest, only spaces, commas and points."""
-    out, runs = [], _runs(text)
-    for k, (a, b) in enumerate(runs):
-        t = text[a:b]
-        if _digit(t[0]):
-            if len(t) == 8 and (d := newest(t)):
-                out.append((d, t))
-            elif len(t) == 4 and (d := newest(text[a : a + 10])) and d[:4] == t:
-                if text[a : a + 10] == iso(d) and not _digit(text[a + 10 : a + 11]):
-                    out.append((d, iso(d)))
-            continue
-        if t.lower() not in MONTHS or k + 1 >= len(runs):
-            continue
-
-        def gap(x: int) -> bool:
-            between = text[runs[x - 1][1] : runs[x][0]]
-            return bool(between) and all(c in " ,." for c in between)
-
-        def year(x: int) -> str | None:
-            y = text[runs[x][0] : runs[x][1]]
-            return y if len(y) == 4 and y[:2] in ("19", "20") and gap(x) else None
-
-        m = f"{MONTHS[t.lower()]:02d}"
-        nxt = text[runs[k + 1][0] : runs[k + 1][1]]
-        if (
-            _digit(nxt[0])
-            and len(nxt) <= 2
-            and 1 <= int(nxt) <= 31
-            and gap(k + 1)
-            and k + 2 < len(runs)
-            and (y := year(k + 2))
-        ):
-            out.append((y + m + f"{int(nxt):02d}", text[a : runs[k + 2][1]]))
-        elif y := year(k + 1):
-            out.append((y + m + "01", text[a : runs[k + 1][1]]))
-    return out
-
-
-def gone_by(
-    pile: list[dict], served: list[dict], today: str, want: set, alias: dict
-) -> list[dict]:
-    """Has this date passed: in a log (lines that start with an ISO date, and
-    the lines under each), the latest entry under each heading (its first
-    line, less the date) that names a later date, now gone by, with nothing
-    written under that heading since, on a line that holds one of the bite's
-    words. A log kept a file a year is one log: the served file's whole
-    folder is read. Odile's "next: May 2026" under
-    Harriet's last visit, and no visit since, is a tuning due."""
-    out = []
-    for folder in dict.fromkeys(c["path"].rpartition("/")[0] for c in served):
-        entries, path, cur = [], None, None
-        for c in pile:  # chunks order: a file's chunks in a row
-            if c["path"].rpartition("/")[0] != folder:
-                continue
-            if c["path"] != path:
-                path, cur = c["path"], None
-            for line in c["text"].splitlines():
-                s = line.strip()
-                d = newest(s[:10])
-                if d and s[:10] == iso(d) and not _digit(s[10:11]):
-                    cur = (d, s[10:].strip(), [])
-                    entries.append(cur)
-                # a date counts where its line holds one of the bite's words
-                # (or one their list reads it as): "who's due" reaches next:
-                if cur is not None and any(
-                    held_by(w, set(words(s)), alias) for w in want
-                ):
-                    cur[2].extend(w for w in written(s) if w[0] > cur[0])
-        latest: dict[str, tuple] = {}
-        for e in entries:  # a later entry, or a later line on the same day, wins
-            if e[1] and e[0] >= latest.get(e[1], ("",))[0]:
-                latest[e[1]] = e
-        due = sorted(
-            (min(e[2]), head)
-            for head, e in latest.items()
-            if e[2] and min(e[2])[0] <= today
-        )
-        if due:
-            out.append(
-                {
-                    "why": "gone by, nothing written since: "
-                    + "; ".join(f"{h} ({w})" for (_, w), h in due),
-                    "where": f"{folder or '.'}/: {len(due)} of {len(latest)} "
-                    f"headings, as of {iso(today)}",
-                }
-            )
-    return out
 
 
 def look(
@@ -819,13 +532,12 @@ def look(
     bite: str,
     served: list[dict],
     alias: dict | None = None,
-    today: str = "",
 ) -> list[dict]:
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
-    it); what isn't there (`missing`); numbers over time (`series`); a bite of
-    common words only; a request to make something."""
+    it); a bite of common words only; a request to make something. More
+    readings are built on top, never in here (adapters/readings)."""
     out = []
     ws = words(bite)
     want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
@@ -865,11 +577,6 @@ def look(
                     "next": NEXT["unused"],
                 }
             )
-    out += missing(pile, served)
-    if today:
-        out += gone_by(pile, served, today, set(want), alias)
-    for path in dict.fromkeys(c["path"] for c in served):  # the whole table
-        out += series(path, "\n".join(c["text"] for c in pile if c["path"] == path))
     if ws and ws[0] in MAKE:
         out.append({"why": "this asks for something made", "next": NEXT["made"]})
     return out
@@ -928,8 +635,7 @@ def bite(box: Path, text: str, ts: str) -> int:
     state = "populated" if answers else "echo" if refs else "empty"
     doc = {"state": state, "bite_key": k}
     doc["served"] = [{**r, "text": c["text"]} for r, c in zip(refs, served)]
-    today = newest(ts[:10])
-    if hints := look(pile, text, served if answers else [], alias, today):
+    if hints := look(pile, text, served if answers else [], alias):
         doc["look"] = hints  # printed for them; the record keeps no words
     print(json.dumps(doc, ensure_ascii=False))
     return ALIVE if answers else ESCALATE
@@ -1052,7 +758,7 @@ def out(box: Path, ts: str) -> int:
     return ESCALATE if waiting else ALIVE
 
 
-# ── the eight beats (Nestor's demo/sixty_seconds.py), as the test ───────────
+# ── the eight beats, as the test ────────────────────────────────────────────
 def test() -> None:
     """Runs in a temporary directory, never in a box of yours."""
     import contextlib
