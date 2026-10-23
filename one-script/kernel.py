@@ -536,8 +536,8 @@ def look(
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
-    it); a bite of common words only; a request to make something. More
-    readings are built on top, never in here (adapters/readings)."""
+    it); a bite of common words only; a request to make something. Anything
+    more is built on top, never in here."""
     out = []
     ws = words(bite)
     want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
