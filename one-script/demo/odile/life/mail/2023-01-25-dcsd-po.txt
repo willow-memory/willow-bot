@@ -1,5 +1,0 @@
-DRY CREEK SD - PURCHASE ORDER
-DCSD PO 2023-040
-Vendor: Odile Varga Piano Service
-Tune 6 pianos @ $125  = $750
-Remit invoice to the Business Office, ap@dcsd.example.org

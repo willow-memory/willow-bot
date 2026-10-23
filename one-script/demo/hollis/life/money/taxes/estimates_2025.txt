@@ -1,7 +1,0 @@
-2025 ESTIMATED TAX (1040-ES)  - per Dana
-Amount each quarter: $1450.00
-
-Q1  Apr 15          paid 2025-04-15  $1450.00  conf 94609097
-Q2  Jun 15          paid 2025-06-15  $1450.00  conf 23454943
-Q3  Sep 15          paid 2025-09-15  $1450.00  conf 62647368
-Q4  Jan 15 next yr  paid 2026-01-15  $1450.00  conf 72489075

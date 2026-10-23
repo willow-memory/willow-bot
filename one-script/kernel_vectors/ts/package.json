@@ -1,7 +1,0 @@
-{
-  "name": "kernel-ts",
-  "private": true,
-  "description": "kernel.py in TypeScript, held to ../cases.json by ../compare.py",
-  "scripts": { "build": "tsc -p ." },
-  "devDependencies": { "typescript": "5.9.3", "@types/node": "22.18.0" }
-}

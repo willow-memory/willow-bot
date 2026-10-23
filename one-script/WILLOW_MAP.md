@@ -1,5 +1,10 @@
 # The map for `willow-memory/willow`
 
+**Status, 2026-10-23: moved.** willow landed (PR 1, 127c85e). willow-bot's
+`kernel.py` is now willow's, pinned by `kernel.pin`; its `kernel_vectors/`,
+`adapters/` and `demo/` are gone, so there is one live copy of each. The
+map below is kept as it was written.
+
 The kernel's public home, mapped before anything moves. Settled with the
 operator on 2026-10-23.
 

@@ -1,56 +1,51 @@
-"""kernel.py: the smallest script that runs the whole loop, for anyone. Python 3.9+, stdlib only.
-
+"""kernel.py: answers questions from your own files. Python 3.9+, stdlib only.
     python kernel.py init    --box DIR --pile FOLDER --key FILE [--words FILE]
-    python kernel.py bite    --box DIR "your words"
-    python kernel.py propose --box DIR --file ROWS.jsonl
+    python kernel.py bite    --box DIR "your question"
+    python kernel.py propose --box DIR --file SUGGESTIONS.jsonl
     python kernel.py seal    --box DIR proposal:<sha256>
     python kernel.py verify  --box DIR
     python kernel.py out     --box DIR
     python kernel.py test
 
-The operator, 2026-10-22: "the smallest script the system can run for any
-native user, so their first bite isn't filled with mine." Its pile is the
-person's own folder and nothing else: no law, no corpus, no ledger, no key but
-theirs. It was found, not designed: merged into one box, every demo in the
-fleet (Nestor's, the Grove's, the Forge's, 24 Python demos in 9 repos) turned
-out to be the same small loop in costume (add a pair, look it up, serve it only
-when a human sealed it, keep every step on a chain), and Nestor's
-`demo/sixty_seconds.py` tells it in eight beats. `test` runs those eight beats.
+The pile (--pile) is your own folder, and it is only ever read. The box
+(--box) is a folder this script keeps its record in. The key (--key) is a
+file of 32 random bytes, readable only by you and kept outside the box: it
+is what approves an answer.
 
-The loop:
-    init     a box, and a key that is theirs (a file outside the box, 0600);
-             --words names their own words list, kept the same way: a line
-             `due = next` reads their word as their folder's
-    bite     their words against their own files. A sealed answer for these
-             words is served (exit 0: a human said it). Else their files'
-             chunks that hold the words are served (exit 0: their pile is
-             things they already said yes to); a chunk that only asks the
-             question back is marked `echo` and answers nothing. Else nothing
-             (exit 42). Pages are read as the text they show
-    propose  a model's rows, one JSON object a line: {path, data, cites,
-             claim}. Through the door: a plain relative path, a claim that says
-             why, and cites only from what the last bite served. A pass waits
-             on the person (exit 42); nothing is written
-    seal     the person's proof over one proposal's exact hash, made from their
-             key. Only then is it written, and its bite is answered
-    verify   the chain, every row, and every seal's proof re-checked: a forged
-             seal is never served, whatever it claims
-    out      what is waiting on the person (42 while anything is)
+    init     makes the box and your key, and links your folder. --words names
+             your own words list, kept like the key: a line `due = next, later`
+             reads your word "due" as any of the words your files use
+    bite     a question against your files. An answer you approved for these
+             words comes first (exit 0). Else up to three passages of your
+             files that hold the question's words (exit 0: your files say it);
+             a passage that only asks the question back is marked `echo` and
+             answers nothing. Else nothing (exit 42). Web pages are read as
+             the text they show
+    propose  suggested answers (from a model, say), one JSON object a line:
+             {path, data, cites, claim}. Each needs a plain relative path, a
+             claim that says why, and cites only from what the last bite
+             returned. One that passes waits for you (exit 42); nothing is
+             written yet
+    seal     your approval of one suggestion: an HMAC-SHA-256 over its exact
+             hash, made with your key. Only then is it written, and given as
+             the answer to its question
+    verify   re-checks every row of the record and every approval: a forged
+             approval is never accepted, whatever it claims
+    out      what is waiting for your approval (exit 42 while anything is)
+    test     runs every step once in a temporary folder and checks eight
+             properties
 
-The rows are the one script's own (`onescript/record.py`): the same keys, the
-same canon (family A), hash = SHA-256 of the row without `hash`, GENESIS to
-start, so `Record.verify_chain` checks a kernel box unchanged. Its record
-holds hashes and places, never the person's words. Its seal is
-`onescript/sign.py`'s (`hmac_parts(key, "seal", subject)`), and its bite key is
-`onescript/words.py`'s (`bite_key`), byte for byte. Built on `genesis.py`
-(willow-bot `claude/genesis`): the lock, the fsync, the torn tail refused, an
-edit seen.
+The record is one JSON line per step. Each row holds the SHA-256 of the row
+before it, starting from 64 zeros, so editing any past row breaks the chain.
+It keeps hashes and places (file and line), never the words of a question or
+of your files. Writes take a file lock and are fsynced; a half-written last
+line is refused, not repaired.
 
-Exit codes, genesis's:
-    0   a human said it: their pile holds it, or their seal does
-    42  not enough information to say a human said this was true
-    2   refused: a bad command line, a box that isn't theirs, a chain that
-        doesn't verify. Nothing is appended past a break.
+Exit codes:
+    0   a person said it: your files hold it, or you approved it
+    42  not enough to say a person said it is true
+    2   refused: a bad command line, a box that isn't yours, a record that
+        doesn't verify. Nothing is written past a break.
 """
 
 from __future__ import annotations
@@ -77,13 +72,12 @@ GENESIS = "0" * 64
 ALIVE, ESCALATE, REFUSED = 0, 42, 2
 ROW_KEYS = {"n", "kind", "who", "family", "standing", "version", "ts", "prev", "hash"}
 VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-WORD = re.compile(r"[^\W_]+")  # onescript/words.py, the key rule (v1)
+WORD = re.compile(r"[^\W_]+")  # a word: letters and digits, no underscore
 TOP = 3  # chunks served for a bite
-HOLD = 0.5  # the share of a bite's words a chunk must hold; the operator's number
+HOLD = 0.5  # the share of a bite's words a chunk must hold
 #: Words that never count toward holding a bite: "how do I bake sourdough
-#: bread" is not held by a chunk that says "how" and "do". English, and a
-#: placeholder list, the operator's to name; a bite in another language keeps
-#: every word.
+#: bread" is not held by a chunk that says "how" and "do". English; a bite in
+#: another language keeps every word.
 FUNCTION = frozenset(
     "a an the and or but if of to in on at by for from with about as into than"
     " then so is are was were be been being am do does did done have has had i"
@@ -93,12 +87,12 @@ FUNCTION = frozenset(
 )
 SNIFF = 8192  # bytes looked at to tell text from binary: a NUL byte means binary
 MAX_FILE = 1_000_000  # bytes read from one file of the pile
-MAX_CHUNK = 500  # characters in one chunk: the one script's pile.MAX
+MAX_CHUNK = 500  # characters in one chunk
 
 
-# ── the record: genesis's, in the one script's format ───────────────────────
+# ── the record ──────────────────────────────────────────────────────────────
 def canon(row: dict) -> str:
-    """Family A, byte for byte (`onescript/canon.py` sorted_compact_utf8)."""
+    """Canonical JSON: keys sorted, no spaces, UTF-8 kept as is."""
     return json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -118,7 +112,7 @@ def read(path: Path) -> tuple[list[dict], list[str]]:
     if data and not data.endswith("\n"):
         return [], ["torn tail: the last line is unterminated; a human looks first"]
     rows, breaks, prev = [], [], GENESIS
-    # "\n" only, as onescript/record.py reads it: canon keeps a raw U+2028,
+    # "\n" only: canon keeps a raw U+2028,
     # U+2029 or U+0085 in a string (a file name in a served `where`), and
     # str.splitlines() would cut the row there and brick the box
     lines = data.split("\n")[:-1] if data else []
@@ -167,9 +161,9 @@ def append(box: Path, ts: str, kind: str, who: str = "kernel", **fields) -> dict
     return row
 
 
-# ── the seal and the bite key: the one script's, byte for byte ──────────────
+# ── the seal and the bite key ───────────────────────────────────────────────
 def proof(key: bytes, subject: str) -> str:
-    """`onescript/sign.py` hmac_parts(key, "seal", subject)."""
+    """HMAC-SHA-256 under their key, over "seal", a unit separator, the subject."""
     return hmac.new(
         key, "\x1f".join(("seal", subject)).encode(), hashlib.sha256
     ).hexdigest()
@@ -180,7 +174,8 @@ def words(text: str) -> list[str]:
 
 
 def bite_key(text: str) -> str | None:
-    """`onescript/words.py` bite_key: the words in order, one space between."""
+    """The SHA-256 of the words in order, one space between: the same question
+    retyped in another case or punctuation has the same key."""
     ws = words(text)
     return h256(" ".join(ws)) if ws else None
 
@@ -270,7 +265,7 @@ def init(box: Path, pile: Path, key: Path, ts: str, wl: Path | None = None) -> i
         cfg["words"] = str(wl.resolve())
     (box / "kernel.json").write_text(json.dumps(cfg, sort_keys=True) + "\n")
     row = append(box, ts, "boot", loop="open", pile_sha256=h256(cfg["pile"]))
-    print(f"open loop, row {row['n']} {row['hash'][:16]}: the box is yours")
+    print(f"ready: record started, row {row['n']} {row['hash'][:16]}")
     return ALIVE
 
 
@@ -286,7 +281,7 @@ def _lines_kept(m: re.Match) -> str:
 def html_text(text: str) -> str:
     """The words a page shows: scripts, styles, comments and tags out, entities
     read, every line where it was. A first bite on a page is never served
-    `<button>` and `<!doctype>` (Nieves's shoebox, June's farm)."""
+    `<button>` and `<!doctype>`."""
     return html.unescape(_TAG.sub(_lines_kept, _HIDDEN.sub(_lines_kept, text)))
 
 
@@ -324,7 +319,7 @@ def holds(w: str, toks: set[str]) -> bool:
     """A word holds where it is a token, or its plain form is (`toks` built
     by `forms`); one with a digit in it (a VIN, a serial, a case number) also
     holds where a token starts or ends with it: "that one ending 672841"
-    finds 1HGEJ6672841 (Big Jim's lot)."""
+    finds 1HGEJ6672841."""
     if w in toks or stem(w) in toks:
         return True
     return (
@@ -340,8 +335,7 @@ ECHO_RUN = 8  # words in a row, in the bite's order, that make a chunk an echo
 def echo(bite: str, text: str) -> bool:
     """Whether `text` holds the bite's own words in its own order: the whole
     bite, or `ECHO_RUN` of its words in a row (a long opener never fits in one
-    chunk whole). The question asked back is not its answer (the Dispatches
-    audit's trap: "a question nobody audited must NOT be answered")."""
+    chunk whole). The question asked back is not its answer."""
     ws, ts = words(bite), words(text)
     n = min(len(ws), ECHO_RUN)
     if n < 3:
@@ -527,9 +521,9 @@ def dates(pile: list[dict]) -> list[int]:
 DEFINES = re.compile(r"\b(?:def|function|sub|class|func|fn)\s+([A-Za-z_][A-Za-z0-9_]*)")
 MAKE = {"make", "build", "write", "create", "generate"}
 NEXT = {
-    "other words": "a meaning match (the fleet's: Nestor's semantic_matcher)",
-    "unused": "a call graph or a code search (the fleet's: script_match)",
-    "made": "a builder (the fleet's: the Forge, forge_bite)",
+    "other words": "add it to your words list, or use a search that matches by meaning",
+    "unused": "a code search or call graph can say what calls it",
+    "made": "this reads what your files hold; making something needs another tool",
 }
 
 
@@ -764,7 +758,7 @@ def out(box: Path, ts: str) -> int:
     return ESCALATE if waiting else ALIVE
 
 
-# ── the eight beats (Nestor's demo/sixty_seconds.py), as the test ───────────
+# ── the eight beats, as the test ────────────────────────────────────────────
 def test() -> None:
     """Runs in a temporary directory, never in a box of yours."""
     import contextlib

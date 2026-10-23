@@ -1,4 +1,0 @@
-Router: NetBox-7F2A
-WiFi password: plum-otter-4471
-Admin page: http://192.0.2.1  (admin / on the sticker under the router)
-Guest network: NetBox-Guest / maisie-loves-cats

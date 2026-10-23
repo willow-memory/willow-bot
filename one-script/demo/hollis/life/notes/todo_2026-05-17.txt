@@ -1,7 +1,0 @@
-TODO
-- fix porch step
-- bank deposit
-- call Dad
-- gutters
-- renew Guild membership
-- return library books
