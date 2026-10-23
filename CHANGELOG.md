@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [1.20.0](https://github.com/willow-memory/willow-bot/compare/v1.19.0...v1.20.0) (2026-10-23)
+
+
+### Added
+
+* **kernel:** word forms are one word, and dates as people write them ([d942564](https://github.com/willow-memory/willow-bot/commit/d9425645a4b56caea14248b7d65ac8e4104b1bac))
+
+
+### Changed
+
+* **adapters:** what isn't there comes out of the readings ([6c38192](https://github.com/willow-memory/willow-bot/commit/6c3819256e9fa0f57aba8319da08d22fa10bac9a))
+* **kernel:** the readings move out, to an adapter built on top ([2ad42dd](https://github.com/willow-memory/willow-bot/commit/2ad42dd051152b02ece16d5eb0dfcc92ea86e5c0))
+* **one-script:** the kernel is willow's, pinned; readings out, two blind characters, word forms and dates ([6452dc6](https://github.com/willow-memory/willow-bot/commit/6452dc66434c2ba2ffd4be8ba5f55a4ac9b543ff))
+
 ## [1.19.0](https://github.com/willow-memory/willow-bot/compare/v1.18.0...v1.19.0) (2026-10-22)
 
 
