@@ -3,6 +3,7 @@
     python kernel.py bite    --box DIR "your question"
     python kernel.py propose --box DIR --file SUGGESTIONS.jsonl
     python kernel.py seal    --box DIR proposal:<sha256>
+    python kernel.py decline --box DIR proposal:<sha256>
     python kernel.py verify  --box DIR
     python kernel.py out     --box DIR
     python kernel.py test
@@ -29,8 +30,10 @@ is what approves an answer.
     seal     your approval of one suggestion: an HMAC-SHA-256 over its exact
              hash, made with your key. Only then is it written, and given as
              the answer to its question
-    verify   re-checks every row of the record and every approval: a forged
-             approval is never accepted, whatever it claims
+    decline  your No to one suggestion, proved with your key the same way:
+             it is never offered again, and can't be sealed after
+    verify   re-checks every row of the record and every approval and No: a
+             forged one is never accepted, whatever it claims
     out      what is waiting for your approval (exit 42 while anything is)
     test     runs every step once in a temporary folder and checks eight
              properties
@@ -59,14 +62,19 @@ import re
 import secrets
 import sys
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
 
 try:
     import fcntl
-except ImportError:  # Windows: no advisory lock, one writer at a time by hand
+except ImportError:  # Windows: msvcrt locks a byte of the record instead
     fcntl = None  # type: ignore[assignment]
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
 
 GENESIS = "0" * 64
 ALIVE, ESCALATE, REFUSED = 0, 42, 2  # 42: silence escalates to the person (CONST-0-6)
@@ -139,8 +147,7 @@ def append(box: Path, ts: str, kind: str, who: str = "kernel", **fields) -> dict
     """One row on the chain, under a lock, fsynced with its directory."""
     path = box / "record.jsonl"
     with path.open("a+", encoding="utf-8", newline="") as f:
-        if fcntl is not None:
-            fcntl.flock(f, fcntl.LOCK_EX)
+        lock(f)
         rows, breaks = read(path)  # the true tail, read under the lock
         if breaks:
             raise RuntimeError("; ".join(breaks))
@@ -163,16 +170,35 @@ def append(box: Path, ts: str, kind: str, who: str = "kernel", **fields) -> dict
     return row
 
 
+def lock(f) -> None:
+    """One writer at a time: flock where there is one; on Windows, msvcrt's
+    lock on the record's first byte, tried until it is free (its own retry
+    gives up after ten seconds)."""
+    if fcntl is not None:
+        fcntl.flock(f, fcntl.LOCK_EX)
+    elif msvcrt is not None:
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                continue
+
+
 # ── the seal and the bite key ───────────────────────────────────────────────
-def proof(key: bytes, subject: str) -> str:
-    """HMAC-SHA-256 under their key, over "seal", a unit separator, the subject."""
+def proof(key: bytes, subject: str, act: str = "seal") -> str:
+    """HMAC-SHA-256 under their key, over the act ("seal", or "decline" for a
+    No), a unit separator, the subject."""
     return hmac.new(
-        key, "\x1f".join(("seal", subject)).encode(), hashlib.sha256
+        key, "\x1f".join((act, subject)).encode(), hashlib.sha256
     ).hexdigest()
 
 
 def words(text: str) -> list[str]:
-    return WORD.findall(text.lower())
+    """A text's words, lowercased and composed (NFC): a file that spells é as
+    e and a combining accent, as macOS often saves it, holds the é you type."""
+    return WORD.findall(unicodedata.normalize("NFC", text.lower()))
 
 
 def bite_key(text: str) -> str | None:
@@ -455,7 +481,32 @@ def held_by(w: str, toks: set[str], alias: dict) -> bool:
     return any(holds(x, toks) for x in [w, *alias.get(w, [])])
 
 
-def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
+def _held(pile: list[dict], want: set[str], alias: dict, days: list[int]) -> list:
+    """(chunk, date, the words it holds) for each chunk holding `HOLD` of
+    `want`, in pile order."""
+    held = [
+        (c, d, {w for w in want if held_by(w, toks(c), alias)})
+        for c, d in zip(pile, days)
+    ]
+    return [(c, d, h) for c, d, h in held if len(h) >= HOLD * len(want)]
+
+
+def holding(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
+    """Every chunk `rank` would weigh for the bite, in pile order, none left
+    out for `TOP` and none for a copy: the passages that hold it."""
+    want = set(words(bite)) - FUNCTION
+    if not want:
+        return []
+    return [c for c, *_ in _held(pile, want, alias or {}, [0] * len(pile))]
+
+
+def rank(
+    pile: list[dict],
+    bite: str,
+    alias: dict | None = None,
+    top: int | None = None,
+    dated=None,
+) -> list[dict]:
     """The chunks holding at least `HOLD` of the bite's content words (not
     `FUNCTION`) in their text or their path (`toks`), rarest words weighing
     most; among equal scores, the newest
@@ -464,15 +515,13 @@ def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
     "how" and "do" doesn't hold "when does the frost come" or "how do I bake
     sourdough bread": an answer it doesn't have is never improvised (beat 1).
     A bite of function words alone is held by nothing: say more. `alias` is
-    their words list (`parse_words`)."""
+    their words list (`parse_words`). `top` serves more than `TOP` (an
+    add-on listing every match); `dated` gives each chunk's date in place of
+    `dates` (an index that has them already). Neither changes the order."""
     want = set(words(bite)) - FUNCTION
     if not want:
         return []
-    held = [
-        (c, d, {w for w in want if held_by(w, toks(c), alias or {})})
-        for c, d in zip(pile, dates(pile))
-    ]
-    held = [(c, d, h) for c, d, h in held if len(h) >= HOLD * len(want)]
+    held = _held(pile, want, alias or {}, (dated or dates)(pile))
     df = {w: sum(w in h for *_, h in held) for w in want}
     # exact, not float: a float sum's last bit depends on the order the set is
     # walked in, which is the process's hash seed, so on Python 3.9-3.11 the
@@ -498,7 +547,7 @@ def rank(pile: list[dict], bite: str, alias: dict | None = None) -> list[dict]:
     # out the van memo she still has to act on)
     out: list[dict] = []
     for *_, c in order:
-        if len(out) == TOP:
+        if len(out) == (TOP if top is None else top):
             break
         if all(c["id"] != x["id"] for x in out):
             out.append(c)
@@ -586,19 +635,25 @@ def look(
 
 
 # ── the loop ────────────────────────────────────────────────────────────────
-def sealed(box: Path, rows: list[dict]) -> dict[str, dict]:
+def sealed(box: Path, rows: list[dict], act: str = "seal") -> dict[str, dict]:
     """Each proposal a seal row holds, by subject, only while its proof holds
     under the person's key. A forged seal is in neither: it is reported by
-    `verify`, and never served (CONST-0-2, CONST-0-4)."""
+    `verify`, and never served (CONST-0-2, CONST-0-4). With act "decline",
+    the same for the person's No."""
     key, _ = read_key(Path(config(box)["key"]), box)
     out = {}
     for r in rows:
-        if r["kind"] == "seal" and key is not None:
+        if r["kind"] == act and key is not None:
             if hmac.compare_digest(
-                proof(key, r.get("subject", "")), str(r.get("proof"))
+                proof(key, r.get("subject", ""), act), str(r.get("proof"))
             ):
                 out[r["subject"]] = r
     return out
+
+
+def declined(box: Path, rows: list[dict]) -> dict[str, dict]:
+    """Each proposal the person declined, by subject, while its proof holds."""
+    return sealed(box, rows, "decline")
 
 
 def bite(box: Path, text: str, ts: str) -> int:
@@ -709,6 +764,9 @@ def seal(box: Path, subj: str, ts: str) -> int:
     if not any(r["kind"] == "proposal" and r.get("subject") == subj for r in rows):
         print(f"refused: {subj} is not a proposal in this box", file=sys.stderr)
         return REFUSED
+    if subj in (no := declined(box, rows)):
+        print(f"refused: you declined {subj} at row {no[subj]['n']}", file=sys.stderr)
+        return REFUSED
     key, why = read_key(Path(config(box)["key"]), box)
     if key is None:
         print(f"refused: {why}", file=sys.stderr)
@@ -728,6 +786,34 @@ def seal(box: Path, subj: str, ts: str) -> int:
     return ALIVE
 
 
+def decline(box: Path, subj: str, ts: str) -> int:
+    rows, breaks = read(box / "record.jsonl")
+    if breaks:
+        print("refused:", *breaks, sep="\n  ", file=sys.stderr)
+        return REFUSED
+    if not any(r["kind"] == "proposal" and r.get("subject") == subj for r in rows):
+        print(f"refused: {subj} is not a proposal in this box", file=sys.stderr)
+        return REFUSED
+    for done, said in (
+        (sealed(box, rows), "sealed"),
+        (declined(box, rows), "declined"),
+    ):
+        if subj in done:
+            print(
+                f"refused: you {said} {subj} at row {done[subj]['n']}", file=sys.stderr
+            )
+            return REFUSED
+    key, why = read_key(Path(config(box)["key"]), box)
+    if key is None:
+        print(f"refused: {why}", file=sys.stderr)
+        return REFUSED
+    append(
+        box, ts, "decline", who="human", subject=subj, proof=proof(key, subj, "decline")
+    )
+    print(f"declined {subj}; it won't be offered again")
+    return ALIVE
+
+
 def verify(box: Path) -> int:
     rows, breaks = read(box / "record.jsonl")
     if breaks:
@@ -737,8 +823,15 @@ def verify(box: Path) -> int:
     forged = [
         r["n"] for r in rows if r["kind"] == "seal" and r.get("subject") not in good
     ]
+    no = declined(box, rows)
+    nos = [
+        r["n"] for r in rows if r["kind"] == "decline" and r.get("subject") not in no
+    ]
     if forged:
         print(f"the chain holds; seal rows {forged} don't prove under your key")
+    if nos:
+        print(f"the chain holds; decline rows {nos} don't prove under your key")
+    if forged or nos:
         return ESCALATE
     print(f"the chain holds: {len(rows)} rows, {len(good)} sealed")
     return ALIVE
@@ -749,10 +842,11 @@ def out(box: Path, ts: str) -> int:
     if breaks:
         print("refused:", *breaks, sep="\n  ", file=sys.stderr)
         return REFUSED
-    good = sealed(box, rows)
+    good, no = sealed(box, rows), declined(box, rows)
     waiting = [
         r["subject"] for r in rows
-        if r["kind"] == "proposal" and r.get("verdict") == "pass" and r["subject"] not in good
+        if r["kind"] == "proposal" and r.get("verdict") == "pass"
+        and r["subject"] not in good and r["subject"] not in no
     ]  # fmt: skip
     append(
         box, ts, "out", waiting=len(waiting), tip=rows[-1]["hash"] if rows else GENESIS
@@ -900,6 +994,8 @@ def main(argv: list[str]) -> int:
         )
     if verb == "seal" and len(args) == 1 and args[0].startswith("proposal:"):
         return seal(box, args[0], ts)
+    if verb == "decline" and len(args) == 1 and args[0].startswith("proposal:"):
+        return decline(box, args[0], ts)
     if verb == "verify" and not args:
         return verify(box)
     if verb == "out" and not args:

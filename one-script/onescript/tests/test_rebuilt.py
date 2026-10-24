@@ -22,6 +22,9 @@ one = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(one)
 WILLOW = one.find_willow(None)
 NOW = ["--now", "2026-10-24T09:00:00Z"]
+#: willow's session-seal add-on, which checkout leans on; a willow without it
+#: (one from before it merged) is said `unreachable`, and both are held below
+SEALS = WILLOW is not None and one.piece(WILLOW, "session-seal") is not None
 
 pytestmark = pytest.mark.skipif(
     WILLOW is None, reason="willow-memory/willow isn't beside willow-bot"
@@ -149,11 +152,15 @@ def test_checkout_reverses_views_and_bundles_the_session(tmp_path, pile):
     assert got.returncode == 42, got.stdout + got.stderr
     out = got.stdout
     assert "CHECK-OUT" in out and "predictions: 0 of 0 right" in out
-    assert "NEEDS YOU" in out and "SESSION" in out
+    assert "NEEDS YOU" in out
     kinds = [r["kind"] for r in rows(box)]
-    assert kinds[-1] == "session" and "checkout" in kinds
-    s = rows(box)[-1]
-    assert s["from"] == 0 and s["to"] == kinds.index("checkout")
+    if SEALS:
+        assert "SESSION" in out and kinds[-1] == "session" and "checkout" in kinds
+        s = rows(box)[-1]
+        assert s["from"] == 0 and s["to"] == kinds.index("checkout")
+    else:
+        assert "session: unreachable: the session-seal add-on isn't here" in out
+        assert kinds[-1] == "checkout", "nothing bundled, nothing pretended"
     got = run("seed", "--box", str(box), "bees", *NOW)
     assert got.returncode == 2 and "no open check-in" in got.stderr
 
@@ -231,10 +238,14 @@ def test_a_sealed_answer_is_served_first_by_seed_and_escalate(tmp_path, pile):
     got = run("seed", "--box", str(box), "bees swarm", *NOW)
     doc = json.loads(got.stdout)
     assert got.returncode == 0 and doc["state"] == "sealed"
-    # seed populated, escalate sealed, the session's own bite empty: a tie
-    assert doc["predicted"] == {"likely": "empty", "n": 3, "got": "sealed",
-                                "right": False,
-                                "seen": {"empty": 1, "populated": 1, "sealed": 1}}  # fmt: skip
+    if SEALS:  # seed populated, escalate sealed, the session's own bite empty
+        assert doc["predicted"] == {"likely": "empty", "n": 3, "got": "sealed",
+                                    "right": False,
+                                    "seen": {"empty": 1, "populated": 1, "sealed": 1}}  # fmt: skip
+    else:  # no session bundled, so no bite of its own: populated and sealed tie
+        assert doc["predicted"] == {"likely": "populated", "n": 2, "got": "sealed",
+                                    "right": False,
+                                    "seen": {"populated": 1, "sealed": 1}}  # fmt: skip
     assert doc["again"] == {"times": 3, "rung": "standing"}
 
 
