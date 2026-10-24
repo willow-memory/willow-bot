@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.21.0](https://github.com/willow-memory/willow-bot/compare/v1.20.0...v1.21.0) (2026-10-24)
+
+
+### Added
+
+* **voice:** the status comment relays a repo's similar list from its CI ([68b71fe](https://github.com/willow-memory/willow-bot/commit/68b71fe89c74d673789b4e31714cf70e69e58de4))
+* **voice:** the status comment relays a repo's similar list from its CI ([53b782d](https://github.com/willow-memory/willow-bot/commit/53b782d86a9887ee2b0eeebec9f64c6ecb0e3d64))
+
 ## [1.20.0](https://github.com/willow-memory/willow-bot/compare/v1.19.0...v1.20.0) (2026-10-23)
 
 
