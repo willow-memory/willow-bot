@@ -334,6 +334,36 @@ def list_check_runs(repo_full_name: str, ref: str, *, max_pages: int = 3) -> lis
                            params={"filter": "latest"}, max_pages=max_pages, key="check_runs")
 
 
+def list_workflow_runs(repo_full_name: str, head_sha: str, *, max_pages: int = 1) -> list[dict]:
+    """The Actions runs for one commit, newest first. Needs ``actions: read``."""
+    return _repo_get_pages(repo_full_name, "/actions/runs", params={"head_sha": head_sha},
+                           max_pages=max_pages, key="workflow_runs")
+
+
+def list_run_artifacts(repo_full_name: str, run_id: int) -> list[dict]:
+    """The artifacts one Actions run kept. Needs ``actions: read``."""
+    return _repo_get_pages(repo_full_name, f"/actions/runs/{run_id}/artifacts",
+                           max_pages=1, key="artifacts")
+
+
+def download_artifact(repo_full_name: str, artifact_id: int, *, max_bytes: int = 1_000_000) -> bytes:
+    """An artifact's zip, under the install token. GitHub answers with a
+    redirect to short-lived storage, which requests follows (dropping the
+    Authorization header on the way, as it should). Raises on an
+    unconfigured App, an HTTP error, or a zip over ``max_bytes``."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — cannot download an artifact")
+    r = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/actions/artifacts/{artifact_id}/zip",
+        headers=_auth_headers(repo_full_name),
+        timeout=30,
+    )
+    r.raise_for_status()
+    if len(r.content) > max_bytes:
+        raise RuntimeError(f"artifact {artifact_id} is {len(r.content)} bytes, over {max_bytes}")
+    return r.content
+
+
 def get_combined_status(repo_full_name: str, ref: str) -> dict:
     """The legacy commit-status rollup for ``ref``: ``state`` is one of
     success / failure / pending, ``statuses`` lists each context."""

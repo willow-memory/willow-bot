@@ -22,5 +22,6 @@
     "willow-memory/willow-gate": {"venv": "willow-mcp", "extras": []}
   },
   "voice": {"orgs": ["willow-memory"]},
+  "similar": {"repos": ["willow-memory/Willow"]},
   "grove": {"ci_red_orgs": ["willow-memory"], "operator_sender": "sean-campbell"}
 }

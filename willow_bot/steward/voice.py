@@ -321,12 +321,15 @@ def _ci_detail_line(item: dict | None) -> str | None:
     return _tick._ci_line_filed(item)
 
 
-def _status_comment_body(key: str, head_sha: str, state: dict) -> str:
+def _status_comment_body(key: str, head_sha: str, state: dict, similar: dict | None = None) -> str:
     """The bot's terse view for this (PR, head_sha): audit dispatched or
     not, CI red legs filed for this sha or none, and the CI line as told
     to the seat (when an item is filed for this head). No clock: the body
     changes only when the view does. No exposition — a seat or operator
-    reading the PR gets a few lines."""
+    reading the PR gets a few lines. For a repo whose CI keeps a
+    ``similar`` artifact, its list follows (``steward.similar``)."""
+    from willow_bot.steward import similar as _similar
+
     audit = "dispatched" if key in (state.get("audit_dispatched") or {}) else "not dispatched"
     red = _ci_red_legs_for_sha(state, head_sha)
     if red and not _head_is_red(state, key, head_sha):
@@ -339,7 +342,29 @@ def _status_comment_body(key: str, head_sha: str, state: dict) -> str:
         f"- audit: {audit}\n"
         f"- CI red: {ci}\n"
         + (f"- {detail}\n" if detail else "")
+        + _similar.section(similar)
     )
+
+
+def _similar_for(repo: str, head_sha: str, entry: dict) -> dict | None:
+    """The ``similar`` list for a PR whose repo the profile names, from the
+    voice cache when this head's answer is settled (a list, or a run that
+    says nothing was added), else read again: CI may still be running, or a
+    read that failed may work next tick. None for any other repo."""
+    from willow_bot import operator_profile
+    from willow_bot.steward import similar as _similar
+
+    if repo.lower() not in operator_profile.similar_repos():
+        return None
+    held = entry.get("similar")
+    if isinstance(held, dict) and held.get("sha") == head_sha and held.get("settled"):
+        return held.get("result")
+    result = _similar.fetch(repo, head_sha)
+    settled = result.get("state") == "populated" or (
+        result.get("state") == "empty" and _similar.NOTHING_ADDED in result.get("why", "")
+    )
+    entry["similar"] = {"sha": head_sha, "settled": settled, "result": result}
+    return result
 
 
 def _audit_state_ok(key: str, state: dict) -> bool:
@@ -466,7 +491,7 @@ def run_voice(
         repo, pr_num = pr
         entry = cache["prs"].setdefault(key, {})
         stamp = time.time()
-        body = _status_comment_body(key, head_sha, state)
+        body = _status_comment_body(key, head_sha, state, _similar_for(repo, head_sha, entry))
         comment_digest = _digest(head_sha, body)
         if _fresh(entry, "comment", comment_digest, stamp):
             voiced.append({"repo_pr": key, "head_sha": head_sha, "action": "unchanged"})
