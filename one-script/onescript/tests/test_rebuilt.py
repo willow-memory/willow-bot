@@ -236,3 +236,27 @@ def test_a_sealed_answer_is_served_first_by_seed_and_escalate(tmp_path, pile):
                                 "right": False,
                                 "seen": {"empty": 1, "populated": 1, "sealed": 1}}  # fmt: skip
     assert doc["again"] == {"times": 3, "rung": "standing"}
+
+
+def test_the_rebuilt_one_script_on_willows_blind_demo(tmp_path):
+    """Bernadette, built blind in willow's demo/, as the rebuilt one script's
+    pile: her raw files, no readers, the way the one script reads a repo."""
+    make = WILLOW / "demo" / "bernadette" / "make_life.py"
+    if not make.is_file():
+        pytest.skip("this willow has no demo/bernadette")
+    (tmp_path / "make_life.py").write_bytes(make.read_bytes())
+    subprocess.run([sys.executable, "make_life.py"], cwd=tmp_path, check=True,
+                   capture_output=True)  # fmt: skip
+    box = opened(tmp_path, tmp_path / "life")
+    got = run("seed", "--box", str(box), "whats the deadline for the tax", *NOW)
+    doc = json.loads(got.stdout)
+    top = doc["served"][0]
+    assert (
+        got.returncode == 0 and top["where"] == "Notes/Bernie's Vault/Tax 2025-26.md:3"
+    )
+    assert "31 Oct" in top["text"]  # her N6, the return due 31 October
+    got = run("escalate", "--box", str(box), "did i promise siobhan anything", *NOW)
+    assert got.returncode == 42, "siobhan isn't siobhán: it goes to the person"
+    assert json.loads(got.stdout)["end"] == "escalated:to_the_person"
+    assert run("checkout", "--box", str(box), *NOW).returncode == 42
+    assert record.Record(box, lambda: "", "", object()).verify_chain() == []

@@ -48,6 +48,12 @@ person's key.
   Nestor's draft pair. That add-on is on the willow branch of the same name
   as this one. Until it merges, `one.py` against willow's `main` says
   `session-seal` is `unreachable`, and the rest still runs.
+- **On willow's blind demo.** `test_rebuilt.py` also runs `one.py` on
+  Bernadette (`demo/bernadette` in willow), a person an agent built without
+  seeing the code. It reads her raw files, with no readers, the way the one
+  script reads a repo: her tax note answers "whats the deadline for the tax",
+  and "did i promise siobhan anything" goes to the person, since "siobhan"
+  isn't her "Siobhán".
 - **The kernel reads the one script's own box.** Willow's `kernel.read`
   verifies willow-bot's own `.flow/onescript/record.jsonl`, written by the
   prompt hook: every row has the kernel's keys and the same chain.
