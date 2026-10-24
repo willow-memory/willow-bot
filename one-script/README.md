@@ -31,6 +31,7 @@ sealed build, so it isn't in the wheel and moving it cut no release.
 | `deep_thought.py` | The morning screen |
 | `kernel.py` | willow-memory/willow's kernel, copied and pinned by `kernel.pin` (its commit and SHA-256); a test fails if this copy differs. Change it in willow, never here. Its tests, vectors, ports, add-ons and demos live in willow; `onescript/tests/test_kernel.py` keeps only the checks that it is still the one script's record, seal and bite key |
 | `kernel.pin` | which willow commit `kernel.py` is, and its SHA-256 |
+| `rebuilt/one.py` | The seven parts again, done by willow's kernel and add-ons in one stdlib file, with willow beside the bot; `one.py map` lists every part here and willow's piece for it ([rebuilt/README.md](rebuilt/README.md)) |
 
 ## OAuth: which server a token is for
 
