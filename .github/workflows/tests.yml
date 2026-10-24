@@ -148,6 +148,25 @@ jobs:
           ref: ${{ steps.nestor_ref.outputs.ref }}
           path: nestor
 
+      # willow beside the bot, so onescript/tests/test_rebuilt.py runs rebuilt/one.py
+      # on willow's kernel and add-ons. Read only: nothing here changes willow.
+      - name: Which willow
+        id: willow_ref
+        shell: bash
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/willow-memory/Willow "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          repository: willow-memory/Willow
+          ref: ${{ steps.willow_ref.outputs.ref }}
+          path: Willow
+
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
