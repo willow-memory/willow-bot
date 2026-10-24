@@ -58,6 +58,12 @@ this prefix are read (for the receipt) but never added or removed
   `<!-- willow-bot:status head=<sha> -->` (`pr_voice.comment_marker`). A
   repeat call for the same head_sha updates that comment; a new head_sha
   opens a fresh one.
+- For a repo the operator profile names under `similar.repos`, the status
+  comment also carries the repo's own `similar` list: what's already on its
+  add-on list near what the PR adds, read from the CI run's `similar`
+  artifact for that head (`steward/similar.py`; needs the App's
+  `actions: read`). The text comes from a run on the PR's code, so it is
+  relayed escaped, with mentions broken, and cut at 6,000 characters.
 - Check-run: one per `(repo, head_sha)` named `pr_voice.CHECK_NAME`
   (`willow-bot/steward`), looked up by `(head_sha, name, filter=app)`
   before deciding create vs. update (`pr_voice.publish_check`).

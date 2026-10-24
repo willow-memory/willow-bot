@@ -178,6 +178,13 @@ def grove_ci_red_orgs() -> list[str]:
     return [o.lower() for o in _str_list(_section("grove").get("ci_red_orgs"))]
 
 
+def similar_repos() -> list[str]:
+    """Repos whose CI keeps a ``similar`` artifact the status comment relays:
+    what's already on the repo's add-on list near what a pull request adds.
+    Lowercased; empty when the profile names none."""
+    return [r.lower() for r in _str_list(_section("similar").get("repos"))]
+
+
 def grove_operator_sender() -> str:
     """The operator's sender name in Grove, or "" when not configured."""
     return str(_section("grove").get("operator_sender") or "").strip()
