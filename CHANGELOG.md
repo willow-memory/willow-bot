@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [1.22.0](https://github.com/willow-memory/willow-bot/compare/v1.21.0...v1.22.0) (2026-10-24)
+
+
+### Added
+
+* **one-script:** the one script rebuilt from willow's kernel and add-ons ([c6ac4a3](https://github.com/willow-memory/willow-bot/commit/c6ac4a31ef0edbbbece15f5574900fe2a44650ae))
+* **one-script:** the one script rebuilt from willow's kernel and add-ons ([4ae9339](https://github.com/willow-memory/willow-bot/commit/4ae9339f4e3b9ba41e057f27d7423436bc2c3342))
+
+
+### Fixed
+
+* **one-script:** pin the kernel to willow b2da5d0, and hold the rebuilt tests to a willow without session-seal ([ea8725b](https://github.com/willow-memory/willow-bot/commit/ea8725b9aec699f597e9f9f711e6554d1e926810))
+* **one-script:** pin the kernel to willow b2da5d0; the rebuilt tests hold a willow without session-seal ([5fdb92c](https://github.com/willow-memory/willow-bot/commit/5fdb92c2737fcbe94c9a1136fde70f263481fbad))
+
 ## [1.21.0](https://github.com/willow-memory/willow-bot/compare/v1.20.0...v1.21.0) (2026-10-24)
 
 
