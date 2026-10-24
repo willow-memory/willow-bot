@@ -69,7 +69,7 @@ except ImportError:  # Windows: no advisory lock, one writer at a time by hand
     fcntl = None  # type: ignore[assignment]
 
 GENESIS = "0" * 64
-ALIVE, ESCALATE, REFUSED = 0, 42, 2
+ALIVE, ESCALATE, REFUSED = 0, 42, 2  # 42: silence escalates to the person (CONST-0-6)
 ROW_KEYS = {"n", "kind", "who", "family", "standing", "version", "ts", "prev", "hash"}
 VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 WORD = re.compile(r"[^\W_]+")  # a word: letters and digits, no underscore
@@ -110,6 +110,7 @@ def read(path: Path) -> tuple[list[dict], list[str]]:
         return [], []
     data = path.read_bytes().decode("utf-8")
     if data and not data.endswith("\n"):
+        # append-only; repairing it is a person's act, never this code's (CONST-0-5)
         return [], ["torn tail: the last line is unterminated; a human looks first"]
     rows, breaks, prev = [], [], GENESIS
     # "\n" only: canon keeps a raw U+2028,
@@ -143,6 +144,7 @@ def append(box: Path, ts: str, kind: str, who: str = "kernel", **fields) -> dict
         rows, breaks = read(path)  # the true tail, read under the lock
         if breaks:
             raise RuntimeError("; ".join(breaks))
+        # only the person ratifies (CONST-0-2)
         sealed = kind == "seal" and who == "human"
         row = {"n": len(rows), "kind": kind, "who": who, "family": "kernel"}
         row.update(standing="sealed" if sealed else "unattested", version=VERSION)
@@ -191,7 +193,8 @@ def config(box: Path) -> dict:
 
 
 def read_key(path: Path, box: Path) -> tuple[bytes | None, str | None]:
-    """Their key: hex in a file outside the box, readable only by them."""
+    """Their key: hex in a file outside the box, readable only by them. It is
+    the human key the constitution requires (CONST-0-4)."""
     if path.resolve().is_relative_to(box.resolve()):
         return None, "the key can't live inside the box"
     try:
@@ -536,8 +539,8 @@ def look(
     """Where to look, from what the folder holds: the bite's words no file
     has; each function a served chunk defines, and whether anything else in
     the folder names it (text can show a definition, not that nothing calls
-    it); a bite of common words only; a request to make something. More
-    readings are built on top, never in here (adapters/readings)."""
+    it); a bite of common words only; a request to make something. Anything
+    more is built on top, never in here."""
     out = []
     ws = words(bite)
     want = [w for w in dict.fromkeys(ws) if w not in FUNCTION]
@@ -586,7 +589,7 @@ def look(
 def sealed(box: Path, rows: list[dict]) -> dict[str, dict]:
     """Each proposal a seal row holds, by subject, only while its proof holds
     under the person's key. A forged seal is in neither: it is reported by
-    `verify`, and never served."""
+    `verify`, and never served (CONST-0-2, CONST-0-4)."""
     key, _ = read_key(Path(config(box)["key"]), box)
     out = {}
     for r in rows:
@@ -642,7 +645,8 @@ def bite(box: Path, text: str, ts: str) -> int:
 
 
 def door(prop: object, served: set[str]) -> str | None:
-    """Why a proposed row doesn't pass, or None."""
+    """Why a proposed row doesn't pass, or None. A suggestion reaches no
+    further than the box and what the last bite served (CONST-0-3)."""
     keys = {"path", "data", "cites", "claim"}
     if not isinstance(prop, dict) or set(prop) != keys:
         return "a row is exactly {path, data, cites, claim}"
@@ -693,6 +697,7 @@ def propose(box: Path, lines: list[str], ts: str) -> int:
         else:
             append(box, ts, "proposal", verdict="refused", line=i, why=why)
             print(f"refused  line {i}: {why}")
+    # passing the door is not acceptance: it waits for the person (CONST-0-1)
     return ESCALATE if waiting else ALIVE
 
 
@@ -709,7 +714,7 @@ def seal(box: Path, subj: str, ts: str) -> int:
         print(f"refused: {why}", file=sys.stderr)
         return REFUSED
     prop = json.loads((box / "proposals" / f"{subj[9:]}.json").read_text())
-    if subject_of(prop) != subj:
+    if subject_of(prop) != subj:  # approved bytes are proposed bytes (CONST-0-4)
         print(
             "refused: the proposal's bytes changed since it was proposed",
             file=sys.stderr,
