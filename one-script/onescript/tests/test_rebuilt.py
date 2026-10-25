@@ -267,7 +267,13 @@ def test_the_rebuilt_one_script_on_willows_blind_demo(tmp_path):
     )
     assert "31 Oct" in top["text"]  # her N6, the return due 31 October
     got = run("escalate", "--box", str(box), "did i promise siobhan anything", *NOW)
-    assert got.returncode == 42, "siobhan isn't siobhán: it goes to the person"
+    doc = json.loads(got.stdout)  # "anything" is a common word since willow dedd32d
+    assert got.returncode == 0 and doc["end"] == "answered"
+    assert "Mail/Sent/2022-12-12 Happy 17th to our Aoife.eml:15" in [
+        s["where"] for s in doc["served"]
+    ]
+    got = run("escalate", "--box", str(box), "when is the snorkelling trip", *NOW)
+    assert got.returncode == 42, "nothing of hers says it: it goes to the person"
     assert json.loads(got.stdout)["end"] == "escalated:to_the_person"
     assert run("checkout", "--box", str(box), *NOW).returncode == 42
     assert record.Record(box, lambda: "", "", object()).verify_chain() == []

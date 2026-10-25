@@ -150,6 +150,9 @@ jobs:
 
       # willow beside the bot, so onescript/tests/test_rebuilt.py runs rebuilt/one.py
       # on willow's kernel and add-ons. Read only: nothing here changes willow.
+      # A change that spans repos rides one branch name in each; else willow at
+      # the commit one-script/kernel.pin names, not its main, so a kernel change
+      # there never reddens this repo: re-pinning is a change made here.
       - name: Which willow
         id: willow_ref
         shell: bash
@@ -159,7 +162,7 @@ jobs:
           if git ls-remote --exit-code --heads https://github.com/willow-memory/Willow "$BRANCH" >/dev/null; then
             echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "ref=$(python3 -c 'import json; print(json.load(open("willow-bot/one-script/kernel.pin"))["commit"])')" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@v7
         with:

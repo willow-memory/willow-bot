@@ -85,13 +85,16 @@ TOP = 3  # chunks served for a bite
 HOLD = 0.5  # the share of a bite's words a chunk must hold
 #: Words that never count toward holding a bite: "how do I bake sourdough
 #: bread" is not held by a chunk that says "how" and "do". English; a bite in
-#: another language keeps every word.
+#: another language keeps every word. "anything", "someone" and their kin name
+#: no topic either: "did i promise siobhan anything" is held by the promise.
 FUNCTION = frozenset(
     "a an the and or but if of to in on at by for from with about as into than"
     " then so is are was were be been being am do does did done have has had i"
     " me my we our you your he she it its they them their this that these those"
     " what which who whom whose when where why how much many can could would"
-    " should will shall may might must not no yes there here s t".split()
+    " should will shall may might must not no yes there here s t"
+    " anything something nothing everything anyone someone everyone anybody"
+    " somebody everybody nobody anywhere somewhere everywhere nowhere".split()
 )
 SNIFF = 8192  # bytes looked at to tell text from binary: a NUL byte means binary
 MAX_FILE = 1_000_000  # bytes read from one file of the pile
