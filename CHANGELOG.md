@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.22.1](https://github.com/willow-memory/willow-bot/compare/v1.22.0...v1.22.1) (2026-10-26)
+
+
+### Fixed
+
+* **one-script:** check out willow at the pinned kernel's commit; pin to willow dedd32d ([dd011a5](https://github.com/willow-memory/willow-bot/commit/dd011a5f13c5991d9dd98098669e504bd818e55c))
+* **one-script:** check out willow at the pinned kernel's commit; pin to willow dedd32d ([fac177a](https://github.com/willow-memory/willow-bot/commit/fac177a7d276aa5d31a9df4cec2c832d9f85ffb1))
+
 ## [1.22.0](https://github.com/willow-memory/willow-bot/compare/v1.21.0...v1.22.0) (2026-10-24)
 
 
