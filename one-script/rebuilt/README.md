@@ -52,8 +52,8 @@ person's key.
   Bernadette (`demo/bernadette` in willow), a person an agent built without
   seeing the code. It reads her raw files, with no readers, the way the one
   script reads a repo: her tax note answers "whats the deadline for the tax",
-  and "did i promise siobhan anything" goes to the person, since "siobhan"
-  isn't her "Siobhán".
+  "did i promise siobhan anything" serves the email she wrote the promise in,
+  and a question nothing of hers answers goes to the person.
 - **The kernel reads the one script's own box.** Willow's `kernel.read`
   verifies willow-bot's own `.flow/onescript/record.jsonl`, written by the
   prompt hook: every row has the kernel's keys and the same chain.
