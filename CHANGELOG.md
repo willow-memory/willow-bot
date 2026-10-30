@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.24.0](https://github.com/willow-memory/willow-bot/compare/v1.23.0...v1.24.0) (2026-10-30)
+
+
+### Added
+
+* **voice:** a language issue's list entry, from Willow's language form ([bfa4367](https://github.com/willow-memory/willow-bot/commit/bfa4367db2363723d7760954a28558cec111fdde))
+* **voice:** a language issue's list entry, from Willow's language form ([ba93082](https://github.com/willow-memory/willow-bot/commit/ba93082a75524271109f5aa6c31adac6bddc80e7))
+
 ## [1.23.0](https://github.com/willow-memory/willow-bot/compare/v1.22.1...v1.23.0) (2026-10-30)
 
 
