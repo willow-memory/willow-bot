@@ -3483,6 +3483,21 @@ def run_app_grant() -> dict:
     return _emit(app_grant.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
+def run_keep_current() -> dict:
+    """What should be current and isn't (``willow_bot.steward.keep_current``):
+    a pull asked for each checkout a webhook left behind, and what needs a
+    person filed once. Installs, restarts and copies nothing."""
+    from willow_bot.steward import keep_current
+
+    enable_mcp = mcp_enabled()
+    call = None
+    if enable_mcp:
+        from willow_bot.steward import mcp_client
+
+        call = mcp_client.call
+    return _emit(keep_current.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
+
+
 def _run_upstream_desk() -> dict:
     from willow_bot.steward.upstream_desk import run_upstream_desk
 
@@ -3566,6 +3581,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("ingress", run_ingress),
             ("redeliver", run_redeliver),
             ("app-grant", run_app_grant),
+            ("keep-current", run_keep_current),
             ("voice", run_voice),
         ):
             try:
@@ -3670,12 +3686,15 @@ def main(argv: list[str] | None = None) -> int:
         from willow_bot import venvs
 
         return venvs.main(args[1:])
+    if args[0] == "keep-current":
+        run_keep_current()
+        return 0
     if args[0] == "current":
         from willow_bot import current
 
         return current.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|venvs [--plan] [--json]|current [--json]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|venvs [--plan] [--json]|current [--json]|keep-current|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2
