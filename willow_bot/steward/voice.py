@@ -45,6 +45,10 @@ and the operator profile's ``pr_hygiene`` section:
 - ``willow-bot/stale`` — the head commit is older than ``stale_days``
 - ``willow-bot/title`` — off by default; the title is not a conventional
   commit (``feat: …``, ``fix(scope)!: …``)
+- ``willow-bot/area/NAME`` — off by default; a file the PR changes matches
+  one of the globs ``pr_hygiene.paths`` lists under NAME (shell-style, as
+  ``fnmatch`` reads them, so ``*`` crosses ``/``). The changed files are
+  read once per head (``github_app.list_pull_files``) and cached
 
 A fact the bot cannot read this tick (the PR is unreadable, GitHub has
 not computed mergeability yet, the head's date is unknown) leaves its
@@ -62,6 +66,7 @@ the audit is still pending and nothing else is known yet.
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import re
@@ -73,7 +78,8 @@ SIZE_PREFIX = "willow-bot/size/"
 CONFLICT_LABEL = "willow-bot/conflict"
 STALE_LABEL = "willow-bot/stale"
 TITLE_LABEL = "willow-bot/title"
-HYGIENE_PREFIXES = (SIZE_PREFIX, CONFLICT_LABEL, STALE_LABEL, TITLE_LABEL)
+AREA_PREFIX = "willow-bot/area/"
+HYGIENE_PREFIXES = (SIZE_PREFIX, CONFLICT_LABEL, STALE_LABEL, TITLE_LABEL, AREA_PREFIX)
 # Upper bounds (exclusive) on lines added + deleted.
 SIZE_BUCKETS = ((10, "xs"), (50, "s"), (250, "m"), (1000, "l"))
 _CONVENTIONAL = re.compile(
@@ -81,12 +87,21 @@ _CONVENTIONAL = re.compile(
 )
 _RECHECK_S = 24 * 3600  # an unchanged comment / check is re-written at most daily
 _MAX_COMMIT_DATES = 500
+_MAX_FILE_LISTS = 200
+#: GitHub's pulls/files listing stops at 3000; ours reads this many
+_FILES_READ = 300
 
 
 def _fetch_pull(repo: str, pr_num: int) -> dict:
     import github_app
 
     return github_app.get_pull(repo, pr_num)
+
+
+def _fetch_files(repo: str, pr_num: int) -> list[str]:
+    import github_app
+
+    return [str(f.get("filename") or "") for f in github_app.list_pull_files(repo, pr_num)]
 
 
 def _fetch_commit_date(repo: str, sha: str) -> str:
@@ -111,6 +126,7 @@ def _load_cache() -> dict:
         data = {}
     data.setdefault("prs", {})
     data.setdefault("commit_dates", {})
+    data.setdefault("files", {})
     return data
 
 
@@ -119,6 +135,9 @@ def _save_cache(cache: dict) -> None:
     dates = cache.get("commit_dates") or {}
     if len(dates) > _MAX_COMMIT_DATES:
         cache["commit_dates"] = dict(list(dates.items())[-_MAX_COMMIT_DATES:])
+    files = cache.get("files") or {}
+    if len(files) > _MAX_FILE_LISTS:
+        cache["files"] = dict(list(files.items())[-_MAX_FILE_LISTS:])
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(".json.tmp")
@@ -172,6 +191,34 @@ def _head_date(repo: str, key: str, head_sha: str, state: dict, cache: dict) -> 
     return _parse_when(dates[head_sha])
 
 
+def _areas(raw: object) -> dict[str, list[str]]:
+    """``pr_hygiene.paths`` as ``{name: [glob, ...]}``, keeping only names a
+    label can carry (lowercase letters, digits and ``-``) and string globs."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for name, globs in raw.items():
+        if isinstance(name, str) and re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name):
+            kept = [g for g in (globs if isinstance(globs, list) else [globs]) if isinstance(g, str) and g]
+            if kept:
+                out[name] = kept
+    return out
+
+
+def _changed_files(repo: str, key: str, head_sha: str, cache: dict) -> list[str] | None:
+    """The files the PR changes at this head, read once per head; None when
+    GitHub can't be read, so the area labels stay as they are."""
+    lists = cache.setdefault("files", {})
+    slot = f"{key}@{head_sha}"
+    if slot not in lists:
+        _, _, num = key.rpartition("#")
+        try:
+            lists[slot] = _fetch_files(repo, int(num))
+        except Exception:  # noqa: BLE001 — unknown, not empty
+            return None
+    return list(lists[slot])
+
+
 def _hygiene(repo: str, key: str, pull: dict, state: dict, cache: dict,
              settings: dict, now: datetime) -> tuple[set[str], set[str]]:
     """(labels to have, label prefixes to leave as they are) for one PR."""
@@ -198,6 +245,17 @@ def _hygiene(repo: str, key: str, pull: dict, state: dict, cache: dict,
             desired.add(STALE_LABEL)
     if settings.get("conventional_titles") and not _CONVENTIONAL.match(str(pull.get("title") or "")):
         desired.add(TITLE_LABEL)
+    areas = _areas(settings.get("paths"))
+    if areas:
+        head_sha = str((pull.get("head") or {}).get("sha") or "")
+        files = _changed_files(repo, key, head_sha, cache) if head_sha else None
+        if files is None:
+            keep.add(AREA_PREFIX)
+        else:
+            desired |= {AREA_PREFIX + name for name, globs in areas.items()
+                        if any(fnmatch.fnmatchcase(f, g) for f in files for g in globs)}
+            if len(files) >= _FILES_READ:  # the listing may stop short: an absent area is unknown
+                keep.add(AREA_PREFIX)
     return desired, keep
 
 

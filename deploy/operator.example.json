@@ -41,6 +41,19 @@
     "size": true,
     "conflict": true,
     "stale_days": 21,
-    "conventional_titles": false
+    "conventional_titles": false,
+    "paths": {
+      "language": [
+        "adapters/stdlib/words-*"
+      ],
+      "demo": [
+        "demo/*"
+      ]
+    }
+  },
+  "idea_entries": {
+    "repos": [
+      "your-org/your-main-repo"
+    ]
   }
 }
