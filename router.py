@@ -16,7 +16,7 @@ import runes
 import sigh
 import troll
 from integrations import fleet_bridge
-from willow_bot import contributions, welcome
+from willow_bot import contributions, idea_entry, operator_profile, welcome
 from willow_bot.check_prs import pr_numbers
 
 log = logging.getLogger("willow-bot.router")
@@ -298,8 +298,11 @@ def _handle_issues(payload: dict, post: Callable) -> None:
     issue = payload.get("issue", {})
 
     if action == "opened":
+        entered = _idea_entry(repo, issue, post)
         # A first-timer gets the welcome instead of a quip: one comment, not two.
         if _welcome(repo, issue.get("number"), issue.get("user"), issue.get("author_association"), post):
+            return
+        if entered:  # the entry already answered it; no quip on top
             return
         # The same gate every other line passes: the voice's orgs, never an
         # outside contributor, once per issue, under the daily cap. This line
@@ -311,6 +314,28 @@ def _handle_issues(payload: dict, post: Callable) -> None:
         msg = quips.pick("gap_filed")
         if msg:
             post(repo, issue.get("number"), msg)
+
+
+def _idea_entry(repo: str, issue: dict, post: Callable) -> bool:
+    """Answer a new add-on idea issue with its list entry, where the
+    operator profile names the repo (``willow_bot.idea_entry``). True when
+    posted. Never on a bot's issue, and never breaks the webhook."""
+    try:
+        if repo.lower() not in operator_profile.idea_entry_repos():
+            return False
+        if (issue.get("user") or {}).get("type") == "Bot":
+            return False
+        names = {str((lb or {}).get("name") or "") for lb in issue.get("labels") or []}
+        if idea_entry.LABEL not in names:
+            return False
+        item = idea_entry.entry(str(issue.get("body") or ""))
+        if item is None:
+            return False
+        post(repo, issue.get("number"), idea_entry.comment(item))
+        return True
+    except Exception:  # noqa: BLE001 — the entry must never break the webhook
+        log.exception("idea entry failed on %s#%s", repo, issue.get("number"))
+        return False
 
 
 def _handle_fork(payload: dict, post: Callable) -> None:

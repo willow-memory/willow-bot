@@ -775,3 +775,64 @@ def test_titles_are_checked_only_when_the_profile_asks(home, fake_reconcile, liv
                                       ("feat:x", False), ("WIP", False)])
 def test_conventional_titles(title, ok):
     assert bool(voice._CONVENTIONAL.match(title)) is ok
+
+
+# ── area labels: the files a PR changes ───────────────────────────────────
+
+
+@pytest.fixture
+def areas(monkeypatch, tmp_path):
+    import json as _json
+
+    from willow_bot import operator_profile
+
+    prof = tmp_path / "operator.json"
+    prof.write_text(_json.dumps({"pr_hygiene": {"paths": {
+        "language": ["adapters/stdlib/words-*"], "demo": ["demo/*"], "Bad Name": ["x"]}}}))
+    monkeypatch.setenv(operator_profile.PROFILE_ENV, str(prof))
+    operator_profile.reset()
+    files: dict[tuple[str, int], list[str]] = {}
+    reads = []
+
+    def _fetch(repo, pr):
+        reads.append((repo, pr))
+        if (repo, pr) not in files:
+            raise RuntimeError("unreadable")
+        return files[(repo, pr)]
+
+    monkeypatch.setattr(voice, "_fetch_files", _fetch)
+    yield files, reads
+    operator_profile.reset()
+
+
+def test_an_area_label_comes_from_the_files_changed(home, fake_reconcile, live, areas):
+    files, reads = areas
+    live[("o/r", 1)] = _pull()
+    files[("o/r", 1)] = ["adapters/stdlib/words-tlh/words_tlh.py", "CHANGELOG.md"]
+    voice.run_voice({"open": ["o/r#1"]})
+    got = _labels_for(fake_reconcile)
+    assert voice.AREA_PREFIX + "language" in got and voice.AREA_PREFIX + "demo" not in got
+    assert not any("bad" in label.lower() for label in got)
+    voice.run_voice({"open": ["o/r#1"]})
+    assert reads == [("o/r", 1)]  # read once per head
+
+
+def test_unreadable_files_keep_the_area_labels(home, monkeypatch, live, areas):
+    seen = {}
+
+    def _rec(repo, pr_number, desired, *, owned_prefix=pr_labels.DEFAULT_PREFIX, keep=()):
+        seen.update(desired=set(desired), keep=set(keep))
+        return {"status": "ok", "action": "no-op"}
+
+    monkeypatch.setattr(pr_labels, "reconcile_labels", _rec)
+    live[("o/r", 1)] = _pull()
+    voice.run_voice({"open": ["o/r#1"]})
+    assert voice.AREA_PREFIX in seen["keep"]
+    assert not any(label.startswith(voice.AREA_PREFIX) for label in seen["desired"])
+
+
+def test_no_paths_means_no_file_read(home, fake_reconcile, live, monkeypatch):
+    monkeypatch.setattr(voice, "_fetch_files", lambda repo, pr: pytest.fail("read the files"))
+    live[("o/r", 1)] = _pull()
+    voice.run_voice({"open": ["o/r#1"]})
+    assert not any(label.startswith(voice.AREA_PREFIX) for label in _labels_for(fake_reconcile))

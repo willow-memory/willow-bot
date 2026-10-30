@@ -185,6 +185,12 @@ def similar_repos() -> list[str]:
     return [r.lower() for r in _str_list(_section("similar").get("repos"))]
 
 
+def idea_entry_repos() -> list[str]:
+    """Repos whose new add-on idea issues get the list entry written out
+    (``willow_bot.idea_entry``). Lowercased; empty when the profile names none."""
+    return [r.lower() for r in _str_list(_section("idea_entries").get("repos"))]
+
+
 def grove_operator_sender() -> str:
     """The operator's sender name in Grove, or "" when not configured."""
     return str(_section("grove").get("operator_sender") or "").strip()
@@ -196,6 +202,7 @@ _HYGIENE_DEFAULTS: dict[str, Any] = {
     "conflict": True,           # willow-bot/conflict while GitHub says the PR cannot merge
     "stale_days": 21,           # willow-bot/stale once the head commit is this old; 0 turns it off
     "conventional_titles": False,  # willow-bot/title when the PR title is not a conventional commit
+    "paths": {},                # willow-bot/area/NAME when a changed file matches one of NAME's globs
 }
 
 
