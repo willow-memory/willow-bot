@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.26.0](https://github.com/willow-memory/willow-bot/compare/v1.25.0...v1.26.0) (2026-10-30)
+
+
+### Added
+
+* **current:** each checkout against its origin, each copy against its source ([a83e2e2](https://github.com/willow-memory/willow-bot/commit/a83e2e229c7ee94f4e37c3e145ca16e485a1ee8d))
+
 ## [1.25.0](https://github.com/willow-memory/willow-bot/compare/v1.24.1...v1.25.0) (2026-10-30)
 
 
