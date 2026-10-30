@@ -317,7 +317,7 @@ def _handle_issues(payload: dict, post: Callable) -> None:
 
 
 def _idea_entry(repo: str, issue: dict, post: Callable) -> bool:
-    """Answer a new add-on idea issue with its list entry, where the
+    """Answer a new add-on idea or language issue with its list entry, where the
     operator profile names the repo (``willow_bot.idea_entry``). True when
     posted. Never on a bot's issue, and never breaks the webhook."""
     try:
@@ -326,9 +326,7 @@ def _idea_entry(repo: str, issue: dict, post: Callable) -> bool:
         if (issue.get("user") or {}).get("type") == "Bot":
             return False
         names = {str((lb or {}).get("name") or "") for lb in issue.get("labels") or []}
-        if idea_entry.LABEL not in names:
-            return False
-        item = idea_entry.entry(str(issue.get("body") or ""))
+        item = idea_entry.entry_for(names, str(issue.get("body") or ""))
         if item is None:
             return False
         post(repo, issue.get("number"), idea_entry.comment(item))
