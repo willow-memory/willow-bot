@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.23.0](https://github.com/willow-memory/willow-bot/compare/v1.22.1...v1.23.0) (2026-10-30)
+
+
+### Added
+
+* **voice:** area labels from the files a PR changes, and an idea issue's list entry ([4bb3a99](https://github.com/willow-memory/willow-bot/commit/4bb3a995be309427e8dc242a9c37c2544c7a2a9e))
+* **voice:** area labels from the files a PR changes, and an idea issue's list entry ([ad39279](https://github.com/willow-memory/willow-bot/commit/ad392797b949eeea98c0b7bae683b567be098498))
+
 ## [1.22.1](https://github.com/willow-memory/willow-bot/compare/v1.22.0...v1.22.1) (2026-10-26)
 
 
