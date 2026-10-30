@@ -40,9 +40,18 @@ recreate it inside. It runs nothing.
 `status` (and `venvs`) also show each venv's installed set (count and a hash) and, for the bot's own venvs, drift from a lock you generate: `pip-compile --generate-hashes` into `$WILLOW_HOME/willow-bot/locks/<venv>.requirements.lock`. No lock reads as "none", never as "no drift". The bot never writes a lock.
 
 Recreate, never `mv`: every script in a venv's `bin/` names the old interpreter
-path in its shebang. The plan freezes the old venv's packages, builds a new venv,
-re-installs the editable checkouts (add back their extras, e.g. `[dev,seat]`),
-and runs `pip check`. Then re-render the units onto it
+path in its shebang. The plan builds a new venv from what was asked for in the
+old one: the packages installed by name (pip's `REQUESTED` marker) and the
+editable checkouts with the extras they were installed with, all held to the
+old venv's versions as constraints (`-c`). The versions stay the same, and the
+leftovers a freeze would copy in stay out; upgrading is a change of its own,
+never part of a move. Then `pip check`. Two venvs that would land on one name
+(a box venv and a checkout's, say) are said before either moves.
+
+`venvs` finds a venv behind a symlink (`willow-mcp/.venv` -> elsewhere) under
+its real path, with the link as an alias, and names the units that run each
+one from their running processes, so a unit that starts it through a
+launcher script is named too. Then re-render the units onto it
 (`scripts/install-service.sh --all` picks the new venv once it exists),
 restart them, and remove the old venv by hand.
 

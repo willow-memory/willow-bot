@@ -15,8 +15,17 @@ removes the old one by hand.
 
 Recreate, never move: a venv is not relocatable. Every script in its
 ``bin/`` names the old interpreter path in its shebang, so a moved venv
-runs the wrong Python or none. The plan builds a fresh venv from the old
-one's package list and editable checkouts instead.
+runs the wrong Python or none. The plan builds a fresh venv from what was
+asked for in the old one (its editable checkouts, with the extras they were
+installed with, and the packages someone installed by name) held to the old
+one's versions as constraints: the same versions, without the leftovers a
+freeze would copy in. Moving is not upgrading; an upgrade is its own change.
+
+A venv reached through a symlink (``willow-mcp/.venv`` -> somewhere else) is
+found through the link and counted once, under its real path, with the link
+kept as an alias. Which units run it is read from the running processes
+(``/proc/<pid>/cmdline`` of each running user unit), so a unit that starts
+it through a launcher script or a symlinked path is still named.
 
 Inside means under ``$WILLOW_HOME/willow-bot/`` or inside a willow-bot
 checkout (``one-script/deep_thought.measure_venvs`` draws the same line).
@@ -27,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,6 +112,9 @@ def _walk(root: Path) -> tuple[list[Path], list[str]]:
             found.append(here)
             dirnames[:] = []
             continue
+        # os.walk never enters a symlinked dir; a venv behind one is still a
+        # venv here (willow-mcp/.venv -> .willow/venvs/willow-mcp), so look in.
+        found += [here / d for d in dirnames if (here / d).is_symlink() and (here / d / "pyvenv.cfg").is_file()]
         if len(here.relative_to(root).parts) >= MAX_DEPTH:
             dirnames[:] = []
             continue
@@ -254,6 +267,107 @@ def drift(venv: Path, have: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_REQ_EXTRA = re.compile(r"^Requires-Dist:\s*([A-Za-z0-9][A-Za-z0-9._-]*).*extra\s*==\s*['\"]([^'\"]+)['\"]")
+
+
+def requested(venv: Path) -> list[str]:
+    """Distributions someone installed by name (pip's ``REQUESTED`` marker,
+    PEP 376), not editable and not pip's own tooling: what the plan asks for
+    again. A dependency pulled in by another has no marker."""
+    out: list[str] = []
+    for site in _site_packages(venv):
+        for entry in sorted(site.glob("*.dist-info")):
+            m = _DIST_INFO.match(entry.name)
+            if not m or not (entry / "REQUESTED").is_file():
+                continue
+            if (entry / "direct_url.json").is_file():
+                try:
+                    direct = json.loads((entry / "direct_url.json").read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    direct = {}
+                if (direct.get("dir_info") or {}).get("editable"):
+                    continue
+            name = _norm(m["name"])
+            if name not in _TOOLING:
+                out.append(name)
+    return sorted(set(out))
+
+
+def extras_of(venv: Path, checkout: str) -> list[str]:
+    """The extras ``checkout`` was installed editable with, as far as the
+    venv shows: an extra whose every requirement is installed. pip records no
+    extras, so this is read from what is there, and an extra with no
+    requirements of its own is never counted."""
+    have = installed(venv).get("packages") or {}
+    for site in _site_packages(venv):
+        for entry in site.glob("*.dist-info"):
+            try:
+                direct = json.loads((entry / "direct_url.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if unquote(urlparse(str(direct.get("url") or "")).path) != checkout:
+                continue
+            try:
+                meta = (entry / "METADATA").read_text(encoding="utf-8")
+            except OSError:
+                return []
+            needs: dict[str, set[str]] = {}
+            for line in meta.splitlines():
+                m = _REQ_EXTRA.match(line)
+                if m:
+                    needs.setdefault(m.group(2), set()).add(_norm(m.group(1)))
+            return sorted(x for x, names in needs.items() if names and all(n in have for n in names))
+    return []
+
+
+def _main_pids() -> dict[str, int]:
+    """Each running systemd user service and its main pid. Raises ``OSError``
+    when ``systemctl`` can't be asked (no user session): then who runs a venv
+    is unknown, never "nobody"."""
+    got = subprocess.run(
+        ["systemctl", "--user", "show", "--type=service", "--state=running", "--property=Id,MainPID", "*"],
+        capture_output=True, text=True, timeout=20, check=False,
+    )  # fmt: skip
+    if got.returncode != 0:
+        raise OSError(got.stderr.strip() or f"systemctl exited {got.returncode}")
+    pids: dict[str, int] = {}
+    for block in got.stdout.strip().split("\n\n"):
+        props = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        if props.get("Id") and props.get("MainPID", "0").isdigit() and int(props["MainPID"]):
+            pids[props["Id"]] = int(props["MainPID"])
+    return pids
+
+
+def _cmdline(pid: int) -> list[str]:
+    try:
+        return [a for a in Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace").split("\0") if a]
+    except OSError:
+        return []
+
+
+def running() -> dict[str, Any]:
+    """Which running user units run from which venv: ``{"status", "venvs":
+    {real venv path: [unit, ...]}}``. A process runs from a venv when an
+    argument of its command line is under that venv's ``bin/`` (the venv's own
+    python, or an entry point whose shebang names it). ``unreachable`` when
+    the units can't be listed."""
+    try:
+        pids = _main_pids()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "unreachable", "detail": str(exc)[:200], "venvs": {}}
+    out: dict[str, list[str]] = {}
+    for unit, pid in sorted(pids.items()):
+        for arg in _cmdline(pid):
+            path = Path(arg)
+            if path.parent.name != "bin" or not (path.parent.parent / "pyvenv.cfg").is_file():
+                continue
+            key = str(path.parent.parent.resolve())
+            if unit not in out.setdefault(key, []):
+                out[key].append(unit)
+            break
+    return {"status": "populated" if out else "empty", "venvs": out}
+
+
 def _target_name(venv: Path) -> str:
     """``<checkout>/.venv`` is named for its checkout; anything else keeps
     its own name."""
@@ -277,12 +391,15 @@ def inventory() -> dict[str, Any]:
         for venv in found:
             key = venv.resolve()
             if key in seen:
+                if venv != key and str(venv) not in seen[key]["aliases"]:
+                    seen[key]["aliases"].append(str(venv))
                 continue
-            cfg = _read_cfg(venv)
+            cfg = _read_cfg(key)
             inside = any(key.is_relative_to(h) for h in homes)
             have = installed(key)
             seen[key] = {
                 "path": str(key),
+                "aliases": [str(venv)] if venv != key else [],
                 "root": label,
                 "inside": inside,
                 "python": _python_version(cfg),
@@ -294,6 +411,13 @@ def inventory() -> dict[str, Any]:
                 if inside
                 else {"status": "unchecked", "drift": None, "detail": "outside the bot: not ours to lock"},
             }
+    runs = running()
+    for key, v in seen.items():
+        if runs["status"] == "unreachable":
+            v["runs"] = {"status": "unreachable", "detail": runs["detail"], "units": []}
+        else:
+            units = runs["venvs"].get(str(key), [])
+            v["runs"] = {"status": "populated" if units else "empty", "units": units}
     venvs = sorted(seen.values(), key=lambda v: (v["inside"], v["path"]))
     outside = [v for v in venvs if not v["inside"]]
     return {
@@ -310,19 +434,21 @@ def _unit_dir() -> Path:
     return Path(os.environ.get("XDG_CONFIG_HOME", "") or Path.home() / ".config") / "systemd" / "user"
 
 
-def references(old: str) -> list[str]:
-    """Installed systemd user units whose text names ``old``. Read-only: the
-    operator re-renders them (``scripts/install-service.sh``)."""
+def references(*names: str) -> list[str]:
+    """Installed systemd user units whose text names any of ``names`` (a
+    venv's real path and each symlink to it). Read-only: the operator
+    re-renders them (``scripts/install-service.sh``)."""
     hits: list[str] = []
     unit_dir = _unit_dir()
     if not unit_dir.is_dir():
         return hits
     for unit in sorted(unit_dir.glob("*.service")):
         try:
-            if old in unit.read_text(encoding="utf-8"):
-                hits.append(str(unit))
+            text = unit.read_text(encoding="utf-8")
         except OSError:
             continue
+        if any(n and n in text for n in names):
+            hits.append(str(unit))
     return hits
 
 
@@ -334,6 +460,10 @@ def plan(inv: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return []
     home = Path(inv["home"])
     steps: list[dict[str, Any]] = []
+    landing: dict[str, list[str]] = {}
+    for v in inv["venvs"]:
+        if not v["inside"]:
+            landing.setdefault(_target_name(Path(v["path"])), []).append(v["path"])
     for v in inv["venvs"]:
         if v["inside"]:
             continue
@@ -341,25 +471,40 @@ def plan(inv: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         target = home / _target_name(old)
         major_minor = ".".join(v["python"].split(".")[:2])
         py = f"python{major_minor}" if major_minor else "python3"
-        reqs = target / "requirements.from-old.txt"
+        held = target / "constraints.from-old.txt"
+        # What was asked for, held to the versions it has: the same versions,
+        # no leftovers. Upgrading is a separate change, never part of a move.
+        asks = [f"'{p}[{','.join(x)}]'" if (x := extras_of(old, p)) else f"'{p}'" for p in v["editables"]]
+        named = requested(old)
         cmds = [
             f"{py} -m venv {target}",
-            f"{old}/bin/pip list --format=freeze --exclude-editable > {reqs}",
-            f"{target}/bin/pip install -r {reqs}",
+            f"{old}/bin/pip list --format=freeze --exclude-editable > {held}",
         ]
-        cmds += [f"{target}/bin/pip install -e '{path}'  # add the extras it had, e.g. [dev,seat]"
-                 for path in v["editables"]]
+        if named:
+            cmds.append(f"{target}/bin/pip install -c {held} {' '.join(named)}")
+        cmds += [f"{target}/bin/pip install -c {held} -e {a}" for a in asks]
         cmds.append(f"{target}/bin/pip check")
-        units = references(str(old))
+        units = references(str(old), *v.get("aliases", []))
+        running_units = (v.get("runs") or {}).get("units", [])
         notes = []
         if target.exists():
             notes.append(f"{target} already exists: check it before reusing the name")
+        others = [p for p in landing.get(target.name, []) if p != str(old)]
+        if others:
+            notes.append(f"{', '.join(others)} would land at {target} too: decide whether they become one"
+                         " venv (and which set wins) before recreating either")  # fmt: skip
+        if not named and not asks:
+            notes.append("nothing in it was installed by name or editable: say what it is for before recreating it")
         if any(Path(p).name == "willow-bot" for p in v["editables"]):
             cmds.append(f"{target}/bin/python -c 'import willow_bot'")
+        if running_units and not units:
+            notes.append(f"run by {', '.join(running_units)} through a path no unit file names"
+                         " (a launcher script or a symlink): repoint that, too")  # fmt: skip
         steps.append({
             "old": str(old),
             "new": str(target),
             "python": v["python"] or "unknown",
+            "runs": running_units,
             "commands": cmds,
             "repoint": [f"{u} names the old path: re-render it "
                         f"(WILLOW_BOT_VENV_BIN={target}/bin scripts/install-service.sh <unit>)"
@@ -385,7 +530,11 @@ def _print_text(inv: dict[str, Any], steps: list[dict[str, Any]] | None) -> None
         where = "inside " if v["inside"] else "OUTSIDE"
         have = v["installed"]
         pkgs = f"{have['count']} pkgs #{have['hash']}" if "hash" in have else f"packages {have['status']}"
-        print(f"  {where}  {v['path']}  python {v['python'] or '?'}  {pkgs}  lock: {_lock_word(v['lock'])}")
+        runs = v.get("runs") or {}
+        ran = ", ".join(runs.get("units") or []) or ("unknown" if runs.get("status") == "unreachable" else "nothing")
+        print(f"  {where}  {v['path']}  python {v['python'] or '?'}  {pkgs}  lock: {_lock_word(v['lock'])}  runs: {ran}")
+        for alias in v.get("aliases") or []:
+            print(f"           also {alias}")
     for bad in inv["unreadable"]:
         print(f"  could not read {bad}")
     if steps is None:
