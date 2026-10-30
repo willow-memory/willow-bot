@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.25.0](https://github.com/willow-memory/willow-bot/compare/v1.24.1...v1.25.0) (2026-10-30)
+
+
+### Added
+
+* **venvs:** every venv found, who runs it, and a move that isn't an upgrade ([cfdaac4](https://github.com/willow-memory/willow-bot/commit/cfdaac45f8ca2c163a29345f9aab034eb3cc1454))
+* **venvs:** every venv found, who runs it, and a move that isn't an upgrade ([027a396](https://github.com/willow-memory/willow-bot/commit/027a39683293ae7ea905c9ea95755f987f064751))
+
 ## [1.24.1](https://github.com/willow-memory/willow-bot/compare/v1.24.0...v1.24.1) (2026-10-30)
 
 
