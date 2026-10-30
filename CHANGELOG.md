@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.27.0](https://github.com/willow-memory/willow-bot/compare/v1.26.0...v1.27.0) (2026-10-30)
+
+
+### Added
+
+* **steward:** keep-current, the loop asking for what's behind ([f0f9306](https://github.com/willow-memory/willow-bot/commit/f0f930677e06234eedbddea9ee0065dc031fa80c))
+* **steward:** keep-current, the loop asking for what's behind ([29cdf88](https://github.com/willow-memory/willow-bot/commit/29cdf880c92f0e975374779489540c76405a4f56))
+
 ## [1.26.0](https://github.com/willow-memory/willow-bot/compare/v1.25.0...v1.26.0) (2026-10-30)
 
 
