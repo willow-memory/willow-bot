@@ -1,0 +1,23 @@
+{
+ "_doc": "What is held to a source somewhere else, for `willow-bot-steward current`. Each rule names a repo as owner/name and a path in it; the comparison is of the local checkouts, whose own freshness `current` reports beside it. bytes: the copy is the source's bytes (after `replace`, each [in the copy, in the source]). pin: a JSON pin {repo, commit, path, sha256} whose sha256 should be the source file's. engine: a workspace's own dry run says which engine paths each vertical lacks; its overrides are never drift. workflow: each repo's newest run of a scheduled workflow, and how old it is.",
+ "bytes": [
+  {"copy": "willow-memory/willow-mcp:src/willow_mcp/scrub_local.py", "source": "willow-memory/willow-bot:one-script/onescript/scrub.py"},
+  {"copy": "willow-memory/willow-mcp:src/willow_mcp/canon_local.py", "source": "willow-memory/willow-bot:one-script/onescript/canon.py"},
+  {"copy": "willow-memory/willow-mcp:src/willow_mcp/clock_local.py", "source": "willow-memory/willow-bot:one-script/onescript/clock.py"},
+  {"copy": "willow-memory/willow-mcp:src/willow_mcp/states_local.py", "source": "willow-memory/willow-bot:one-script/onescript/states.py"},
+  {"copy": "willow-memory/willow-mcp:src/willow_mcp/sign_local.py", "source": "willow-memory/willow-bot:one-script/onescript/sign.py",
+   "replace": [["from . import canon_local as canon\n", "from . import canon\n"]]},
+  {"copy": "willow-memory/willow-mcp:src/willow_mcp/onescript_reach.py", "source": "willow-memory/willow-bot:one-script/onescript/reach_bootstrap.py"},
+  {"copy": "willow-memory/ratatosk:ratatosk/onescript_reach.py", "source": "willow-memory/willow-bot:one-script/onescript/reach_bootstrap.py"},
+  {"copy": "willow-memory/willows-grove:grove/onescript_reach.py", "source": "willow-memory/willow-bot:one-script/onescript/reach_bootstrap.py"}
+ ],
+ "pin": [
+  {"pin": "willow-memory/willow-bot:one-script/kernel.pin", "source": "willow-memory/willow:kernel.py"}
+ ],
+ "engine": [
+  {"workspace": "almanac-data/almanac-data", "dry_run": ["scripts/propagate-engine.sh", "--dry-run"]}
+ ],
+ "workflow": [
+  {"repos_of": "almanac-data/almanac-data", "workflow": "link-check.yml", "max_age_days": 2}
+ ]
+}
