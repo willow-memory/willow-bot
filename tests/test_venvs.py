@@ -32,6 +32,8 @@ def roots(tmp_path, monkeypatch):
     gh.mkdir()
     monkeypatch.setenv("GITHUB_ROOT", str(gh))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    # No real systemctl: what runs is this machine's, never a test's.
+    monkeypatch.setattr(venvs, "_main_pids", dict)
     return box, gh
 
 
@@ -86,7 +88,9 @@ def test_plan_recreates_never_moves(roots, tmp_path):
     cmds = "\n".join(step["commands"])
     assert cmds.startswith(f"python3.12 -m venv {target}")
     assert "--exclude-editable" in cmds
-    assert f"pip install -e '{checkout}'" in cmds
+    held = target / "constraints.from-old.txt"
+    assert f"pip install -c {held} -e '{checkout}'" in cmds
+    assert "pip install -r" not in cmds, "a move asks for what was asked for, never the whole freeze"
     assert "pip check" in cmds
     assert not any(c.startswith(("mv ", "rm ")) for c in step["commands"])
     assert "by hand" in step["then"]
@@ -317,3 +321,120 @@ def test_cli_text_shows_hash_and_lock_word(roots, capsys):
     assert venvs.main([]) == 0
     out = capsys.readouterr().out
     assert "1 pkgs #" in out and "lock: matches" in out
+
+
+def _dist(venv: Path, name: str, version: str, *, requested: bool = False, meta: str = "",
+          editable: Path | None = None) -> None:
+    dist = venv / "lib" / "python3.12" / "site-packages" / f"{name}-{version}.dist-info"
+    dist.mkdir(parents=True)
+    if requested:
+        (dist / "REQUESTED").write_text("")
+    if meta:
+        (dist / "METADATA").write_text(meta)
+    if editable is not None:
+        (dist / "direct_url.json").write_text(json.dumps({"url": editable.as_uri(), "dir_info": {"editable": True}}))
+
+
+def test_a_venv_behind_a_symlink_is_found_once_under_its_real_path(roots, tmp_path):
+    _, gh = roots
+    real = _fake_venv(gh / "willow-memory" / ".willow" / "venvs" / "willow-mcp")  # deeper than MAX_DEPTH
+    link = gh / "willow-memory" / "willow-mcp" / ".venv"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+
+    inv = venvs.inventory()
+
+    found = [v for v in inv["venvs"] if v["path"] == str(real.resolve())]
+    assert len(found) == 1, "the real venv, counted once"
+    assert found[0]["aliases"] == [str(link)]
+    assert inv["outside"] == 1
+
+
+def test_a_unit_running_through_a_link_or_a_launcher_is_named(roots, monkeypatch):
+    box, gh = roots
+    real = _fake_venv(gh / "org" / ".willow" / "venvs" / "svc")
+    link = gh / "org" / "svc" / ".venv"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+    other = _fake_venv(box / "venvs" / "willow-bot")
+    pids = {"svc-serve.service": 11, "launcher.service": 12, "bot.service": 13, "plain.service": 14}
+    lines = {
+        11: [f"{link}/bin/python3", "-m", "svc"],  # through the symlink
+        12: [f"{real}/bin/python3", "-m", "svc"],  # a launcher exec'd the real one
+        13: [f"{other}/bin/python", f"{other}/bin/willow-bot"],
+        14: ["/usr/bin/sleep", "60"],  # no venv
+    }
+    monkeypatch.setattr(venvs, "_main_pids", lambda: pids)
+    monkeypatch.setattr(venvs, "_cmdline", lambda pid: lines[pid])
+
+    by_path = {v["path"]: v for v in venvs.inventory()["venvs"]}
+
+    assert by_path[str(real.resolve())]["runs"] == {
+        "status": "populated", "units": ["launcher.service", "svc-serve.service"]}
+    assert by_path[str(other.resolve())]["runs"]["units"] == ["bot.service"]
+
+
+def test_who_runs_a_venv_is_unknown_never_nobody_when_units_cant_be_listed(roots, monkeypatch):
+    box, _ = roots
+    venv = _fake_venv(box / "venvs" / "willow-bot")
+
+    def no_session():
+        raise OSError("Failed to connect to bus")
+
+    monkeypatch.setattr(venvs, "_main_pids", no_session)
+    [v] = [v for v in venvs.inventory()["venvs"] if v["path"] == str(venv.resolve())]
+    assert v["runs"]["status"] == "unreachable" and v["runs"]["units"] == []
+
+
+def test_the_plan_asks_again_for_what_was_installed_by_name_and_its_extras(roots, tmp_path):
+    box, _ = roots
+    checkout = tmp_path / "checkout" / "tool"
+    checkout.mkdir(parents=True)
+    old = _fake_venv(box / "venvs" / "tool")
+    meta = ("Name: tool\n"
+            "Requires-Dist: pytest; extra == 'dev'\n"
+            "Requires-Dist: mcp>=2; extra == 'mcp'\n"
+            "Requires-Dist: textual; extra == 'tui'\n")  # fmt: skip
+    _dist(old, "tool", "1.0", requested=True, meta=meta, editable=checkout)
+    _dist(old, "pytest", "9.1.1")  # dev's, pulled in
+    _dist(old, "mcp", "2.2.0", requested=True)  # mcp's, and asked for by name too
+    _dist(old, "requests", "2.32.3", requested=True)
+    _dist(old, "urllib3", "2.7.0")  # a dependency: never asked for
+    _dist(old, "pip", "26.2.1", requested=True)  # the venv's own tooling
+
+    [step] = venvs.plan()
+
+    held = paths.venvs_dir() / "tool" / "constraints.from-old.txt"
+    cmds = step["commands"]
+    assert f"{paths.venvs_dir() / 'tool'}/bin/pip install -c {held} mcp requests" in cmds
+    assert f"{paths.venvs_dir() / 'tool'}/bin/pip install -c {held} -e '{checkout}[dev,mcp]'" in cmds
+    joined = "\n".join(cmds)
+    assert "urllib3" not in joined and " pip " not in joined.replace("bin/pip ", "")
+    assert "tui" not in joined, "textual isn't installed, so [tui] wasn't asked for"
+
+
+def test_two_venvs_that_would_land_on_one_name_are_said_before_either_moves(roots, tmp_path):
+    box, gh = roots
+    _fake_venv(box / "venvs" / "willow-mcp")
+    _fake_venv(gh / "willow-memory" / "willow-mcp" / ".venv")
+
+    steps = venvs.plan()
+
+    assert len(steps) == 2
+    for step in steps:
+        assert any("would land at" in n and "become one" in n for n in step["notes"]), step["notes"]
+
+
+def test_a_unit_naming_a_symlink_to_the_venv_is_listed_to_repoint(roots, tmp_path):
+    _, gh = roots
+    real = _fake_venv(gh / "org" / ".willow" / "venvs" / "svc")
+    link = gh / "org" / "svc" / ".venv"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+    units = tmp_path / "xdg" / "systemd" / "user"
+    units.mkdir(parents=True)
+    (units / "svc.service").write_text(f"ExecStart={link}/bin/python3 -m svc\n")
+
+    [step] = venvs.plan()
+
+    assert len(step["repoint"]) == 1 and "svc.service" in step["repoint"][0]
