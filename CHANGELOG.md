@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.24.1](https://github.com/willow-memory/willow-bot/compare/v1.24.0...v1.24.1) (2026-10-30)
+
+
+### Fixed
+
+* **one-script:** pin the kernel to willow 3ae163b, a seal bound to its question ([b1c1772](https://github.com/willow-memory/willow-bot/commit/b1c17726d5234bab2cb2833e2b333e4123435e0d))
+* **one-script:** pin the kernel to willow 3ae163b, a seal bound to its question ([4972912](https://github.com/willow-memory/willow-bot/commit/49729122ff18ced6649b8547abb18c006d6e6300))
+
 ## [1.24.0](https://github.com/willow-memory/willow-bot/compare/v1.23.0...v1.24.0) (2026-10-30)
 
 
