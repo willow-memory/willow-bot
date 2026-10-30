@@ -1,0 +1,251 @@
+"""willow_bot.steward.keep_current — what's behind, and the person told once.
+
+It writes gitsync triggers and files ``human_required``; it never installs,
+restarts or copies. The git checks run on real repos; systemd, the trigger
+writer and the MCP calls are stubbed.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+
+from willow_bot.steward import keep_current as kc
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True).stdout
+
+
+def _commit(repo: Path, name: str, text: str = "x") -> str:
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
+    (repo / name).write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-q", "-m", name)
+    return _git(repo, "rev-parse", "HEAD").strip()
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "checkout"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "main")
+    _commit(r, "app.py", "v1")
+    return r
+
+
+def _started_now() -> int:
+    """A unit start time after everything so far, with the next commits
+    landing in a later second (the reflog keeps whole seconds)."""
+    started = int(time.time())
+    time.sleep(1.1)
+    return started
+
+
+def test_docs_are_not_code():
+    assert kc.is_doc("README.md") and kc.is_doc("docs/x.py") and kc.is_doc("pkg/docs/y.py")
+    assert kc.is_doc("posts/day.md") and not kc.is_doc("src/app.py") and not kc.is_doc("pyproject.toml")
+
+
+def test_a_pull_of_docs_after_a_start_owes_no_restart(repo):
+    started = _started_now()
+    _commit(repo, "README.md", "more words")
+    assert kc.code_since(repo, started)["status"] == "empty"
+
+
+def test_code_that_moved_after_a_start_is_named(repo):
+    started = _started_now()
+    _commit(repo, "README.md", "words")
+    _commit(repo, "src/app.py", "v2")
+    got = kc.code_since(repo, started)
+    assert got["status"] == "populated" and got["paths"] == ["src/app.py"]
+
+
+def test_a_start_older_than_the_reflog_is_unknown_not_clean(repo):
+    assert kc.code_since(repo, 0)["status"] == "unreachable"
+
+
+def test_each_unit_whose_code_moved_is_owed_a_restart(repo, monkeypatch):
+    started = _started_now()
+    _commit(repo, "src/app.py", "v2")
+    other = repo.parent / "other"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    _commit(other, "lib.py")
+    quiet_start = _started_now()
+    inv = {"venvs": [
+        {"path": "/v/a", "editables": [str(repo)], "runs": {"units": ["a.service"]}},
+        {"path": "/v/b", "editables": [str(other)], "runs": {"units": ["b.service"]}},
+        {"path": "/v/c", "editables": [str(repo)], "runs": {"units": []}},  # runs nothing
+    ]}
+    props = {"a.service": {"Id": "a.service", "ActiveEnterTimestamp": f"@{started}"},
+             "b.service": {"Id": "b.service", "ActiveEnterTimestamp": f"@{quiet_start}", "WorkingDirectory": str(other)}}
+    monkeypatch.setattr(kc, "_unit_props", lambda units: {u: props[u] for u in units})
+
+    got = kc.restarts_owed(inv)
+
+    assert [(o["unit"], o["paths"]) for o in got["owed"]] == [("a.service", ["src/app.py"])]
+
+
+def test_when_systemd_cant_be_asked_restarts_are_unknown(monkeypatch):
+    def no_bus(units):
+        raise OSError("Failed to connect to bus")
+
+    monkeypatch.setattr(kc, "_unit_props", no_bus)
+    inv = {"venvs": [{"path": "/v", "editables": [], "runs": {"units": ["a.service"]}}]}
+    assert kc.restarts_owed(inv)["status"] == "unreachable"
+
+
+def _editable(venv: Path, checkout: Path, installed: float) -> None:
+    dist = venv / "lib" / "python3.12" / "site-packages" / "thing-1.0.dist-info"
+    dist.mkdir(parents=True)
+    direct = dist / "direct_url.json"
+    direct.write_text(json.dumps({"url": checkout.as_uri(), "dir_info": {"editable": True}}))
+    os.utime(direct, (installed, installed))
+
+
+def test_an_install_older_than_its_pyproject_is_stale_once_per_checkout(repo, tmp_path):
+    _commit(repo, "pyproject.toml", "[project]\ndependencies = ['PyJWT==2.15.1']\n")
+    old = tmp_path / "old-venv"
+    fresh = tmp_path / "fresh-venv"
+    _editable(old, repo, installed=1_000_000)
+    _editable(fresh, repo, installed=time.time() + 60)
+    inv = {"venvs": [
+        {"path": str(old), "editables": [str(repo), str(repo)], "runs": {"units": ["a.service"]}},
+        {"path": str(fresh), "editables": [str(repo)], "runs": {"units": ["b.service"]}},
+        {"path": str(old), "editables": [str(repo)], "runs": {"units": []}},  # runs nothing: not checked
+    ]}
+
+    got = kc.stale_installs(inv)
+
+    assert [(s["venv"], s["checkout"]) for s in got["stale"]] == [(str(old), str(repo))]
+
+
+def test_stale_installs_are_one_item_per_venv():
+    stale = [{"venv": "/v", "checkout": f"/c/{n}", "commit": "abc", "units": ["u.service"]} for n in ("a", "b")]
+    found = kc.findings({"install": {"stale": stale}})
+    assert list(found) == ["install:/v"]
+    assert "a (abc), b (abc)" in found["install:/v"]["summary"]
+
+
+def test_behind_asks_a_pull_only_for_a_clean_checkout(monkeypatch):
+    rows = [{"repo": "o/clean", "state": "behind", "dirty": 0}, {"repo": "o/mine", "state": "behind", "dirty": 2},
+            {"repo": "o/ok", "state": "current", "dirty": 0}, {"repo": "o/away", "state": "off-default", "dirty": 0}]
+    monkeypatch.setattr(kc.current, "checkouts", lambda: {"checkouts": rows})
+    asked = []
+    monkeypatch.setattr(kc, "_trigger", lambda repo: asked.append(repo) or "requested")
+
+    got = kc.behind()
+
+    assert asked == ["o/clean"]
+    assert [b["pull"] for b in got["behind"]] == ["requested", "not asked: the checkout has changes"]
+
+
+class _Desk:
+    """A stand-in for the MCP calls: files, resolves, and can refuse."""
+
+    def __init__(self, refuse: bool = False):
+        self.filed: list[dict] = []
+        self.resolved: list[str] = []
+        self.refuse = refuse
+
+    def __call__(self, tool: str, args: dict):
+        if self.refuse:
+            return {"error": "gate denied"}
+        if tool == "human_required_enqueue":
+            self.filed.append(args)
+            return {"id": f"hr-{len(self.filed)}"}
+        self.resolved.append(args["item_id"])
+        return {"ok": True}
+
+
+@pytest.fixture
+def quiet(monkeypatch):
+    """Nothing real: an inventory with nothing in it, the slow checks
+    stubbed. Tests set ``owed`` to what restarts_owed should find."""
+    monkeypatch.setattr(kc.venvs, "inventory", lambda: {"venvs": []})
+    state = {"owed": [], "copies": {"status": "populated", "bytes": [], "pin": [], "engine": [], "workflow": []}}
+    monkeypatch.setattr(kc, "restarts_owed", lambda inv: {"status": "populated" if state["owed"] else "empty",
+                                                         "owed": state["owed"]})  # fmt: skip
+    monkeypatch.setattr(kc, "behind", lambda: {"status": "empty", "behind": []})
+    monkeypatch.setattr(kc.current, "copies", lambda: state["copies"])
+    return state
+
+
+_OWED = {"unit": "a.service", "checkout": "/c", "head": "b" * 40, "then": "a" * 40, "paths": ["x.py"], "started": 1}
+
+
+def test_a_finding_is_filed_once_and_resolved_when_it_clears(quiet):
+    desk = _Desk()
+    quiet["owed"] = [_OWED]
+
+    first = kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1000)
+    second = kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1300)
+    quiet["owed"] = []
+    third = kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1600)
+
+    assert [i["state"] for i in first["items"]] == ["filed"]
+    assert [i["state"] for i in second["items"]] == ["open"] and len(desk.filed) == 1
+    assert [i["state"] for i in third["items"]] == ["resolved"] and desk.resolved == ["hr-1"]
+    assert kc.load()["filed"] == {}
+
+
+def test_a_refused_filing_is_retried_never_marked_filed(quiet):
+    quiet["owed"] = [_OWED]
+    got = kc.run(enable_mcp=True, call=_Desk(refuse=True), app="willow-bot", now=1000)
+    assert got["items"][0]["state"] == "could-not-file" and kc.load()["filed"] == {}
+    desk = _Desk()
+    assert kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1300)["items"][0]["state"] == "filed"
+
+
+def test_without_mcp_nothing_is_filed_and_it_says_so(quiet):
+    quiet["owed"] = [_OWED]
+    got = kc.run(enable_mcp=False, call=None, now=1000)
+    assert got["items"][0]["state"] == "unfiled"
+
+
+def test_a_section_that_didnt_run_resolves_nothing(quiet):
+    desk = _Desk()
+    quiet["copies"] = {"status": "populated", "bytes": [{"copy": "o/a:x.py", "source": "o/b:x.py",
+                                                         "status": "populated", "current": False}],
+                       "pin": [], "engine": [], "workflow": []}  # fmt: skip
+    kc.run(enable_mcp=True, call=desk, now=100_000)
+    assert len(desk.filed) == 1
+    # An hour on: copies aren't due (daily), so their item stands though not looked at.
+    quiet["copies"] = {"status": "populated", "bytes": [], "pin": [], "engine": [], "workflow": []}
+    kc.run(enable_mcp=True, call=desk, now=103_600)
+    assert desk.resolved == []
+    # A day on, they run again; it's gone, so it's resolved.
+    kc.run(enable_mcp=True, call=desk, now=100_000 + 86_400)
+    assert desk.resolved == ["hr-1"]
+
+
+def test_an_unreachable_check_never_resolves_what_it_filed(quiet):
+    desk = _Desk()
+    quiet["copies"] = {"status": "populated", "bytes": [{"copy": "o/a:x.py", "source": "o/b:x.py",
+                                                         "status": "populated", "current": False}],
+                       "pin": [], "engine": [], "workflow": []}  # fmt: skip
+    kc.run(enable_mcp=True, call=desk, now=100_000)
+    quiet["copies"] = {"status": "unreachable", "detail": "registry unreadable"}
+    kc.run(enable_mcp=True, call=desk, now=100_000 + 86_400)
+    assert desk.resolved == []
+
+
+def test_the_slow_checks_keep_their_cadence(quiet, monkeypatch):
+    calls = []
+    monkeypatch.setattr(kc, "behind", lambda: calls.append("behind") or {"status": "empty", "behind": []})
+    for now in (0, 300, 3600, 3900):
+        kc.run(now=now)
+    assert calls == ["behind", "behind"], "hourly: at 0 and 3600"
+
+
+def test_an_engine_vertical_behind_is_its_own_item_and_an_override_never_one():
+    copies = {"engine": [{"workspace": "almanac-data/almanac-data",
+                          "behind": {"agriculture-almanac": {"update": ["AGENTS.md"], "add": []}},
+                          "overrides": {"climate-almanac": ["AGENTS.md"]}}]}  # fmt: skip
+    found = kc.findings({"copies": copies})
+    assert list(found) == ["engine:almanac-data/almanac-data:agriculture-almanac"]
