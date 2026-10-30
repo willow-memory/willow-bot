@@ -156,3 +156,85 @@ def test_no_entry(posts, profile, event, prof):
     profile(prof)
     router.route("issues", event, post)
     assert not any(idea_entry.MARKER in b for _, _, b in out)
+
+
+# ── the language form (.github/ISSUE_TEMPLATE/language.yml) ───────────────
+
+LANG_FORM = """### Language
+
+Welsh (Cymraeg)
+
+### Its code
+
+cy
+
+### Its common words
+
+```text
+a, y, yn
+mae
+'r
+```
+
+### What it does that English doesn't
+
+Mutates the first letter of a word.
+
+### Where the list comes from, and its licence
+
+My own knowledge"""
+
+
+def test_the_language_form_becomes_a_pack_entry():
+    got = idea_entry.language_entry(LANG_FORM)
+    assert got == {
+        "name": "words-cy",
+        "kind": "stdlib",
+        "section": "Your own words",
+        "line": 'Welsh common words ("a", "y", "yn").',
+        "source": "new",
+        "writes": "record",
+        "network": "none",
+        "tags": "no-install, offline, records, words, welsh",
+    }
+
+
+def test_a_name_that_cant_be_a_tag_leaves_the_tag_out():
+    got = idea_entry.language_entry(LANG_FORM.replace("Welsh (Cymraeg)", "Español"))
+    assert got["line"].startswith("Español common words") and got["tags"].endswith(", words")
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("### Its code\n\ncy", "### Its code\n\nWelsh"),  # not a code
+        ("### Its code\n\ncy", "### Its code\n\nc"),
+        ("My own knowledge", "_No response_"),  # the source is required
+        ("Welsh (Cymraeg)", ""),
+    ],
+)
+def test_no_pack_entry_when_a_field_cant_be_one(old, new):
+    assert idea_entry.language_entry(LANG_FORM.replace(old, new)) is None
+
+
+def test_the_label_picks_the_form():
+    assert idea_entry.entry_for({"language"}, LANG_FORM)["name"] == "words-cy"
+    assert idea_entry.entry_for({"idea"}, FORM)["name"] == "bank"
+    assert idea_entry.entry_for({"bug"}, FORM) is None
+    assert "the source goes on its card" in idea_entry.comment(idea_entry.language_entry(LANG_FORM))
+    assert "the source goes on its card" not in idea_entry.comment(idea_entry.entry(FORM))
+
+
+def test_a_new_language_issue_gets_its_entry(posts, profile):
+    out, post = posts
+    profile({"idea_entries": {"repos": [REPO]}})
+    router.route("issues", _opened(labels=("language",), body=LANG_FORM), post)
+    assert len(out) == 1 and '"name": "words-cy"' in out[0][2]
+
+
+def test_the_languages_tracking_issue_gets_nothing(posts, profile):
+    out, post = posts
+    profile({"idea_entries": {"repos": [REPO]}})
+    tracking = "Willow should work for questions in your language.\n\n## Where things stand\n"
+    router.route("issues", _opened(labels=("good first issue", "language"), body=tracking), post)
+    assert not any(idea_entry.MARKER in b for _, _, b in out)
