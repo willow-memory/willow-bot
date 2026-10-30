@@ -190,12 +190,12 @@ def lock(f) -> None:
 
 
 # ── the seal and the bite key ───────────────────────────────────────────────
-def proof(key: bytes, subject: str, act: str = "seal") -> str:
+def proof(key: bytes, subject: str, act: str = "seal", asked: str | None = None) -> str:
     """HMAC-SHA-256 under their key, over the act ("seal", or "decline" for a
-    No), a unit separator, the subject."""
-    return hmac.new(
-        key, "\x1f".join((act, subject)).encode(), hashlib.sha256
-    ).hexdigest()
+    No), a unit separator, the subject; and, for a seal that names the
+    question it answers, another separator and that question's key."""
+    parts = (act, subject) if asked is None else (act, subject, asked)
+    return hmac.new(key, "\x1f".join(parts).encode(), hashlib.sha256).hexdigest()
 
 
 def words(text: str) -> list[str]:
@@ -641,17 +641,69 @@ def look(
 def sealed(box: Path, rows: list[dict], act: str = "seal") -> dict[str, dict]:
     """Each proposal a seal row holds, by subject, only while its proof holds
     under the person's key. A forged seal is in neither: it is reported by
-    `verify`, and never served (CONST-0-2, CONST-0-4). With act "decline",
-    the same for the person's No."""
+    `verify`, and never served (CONST-0-2, CONST-0-4). A seal row that names
+    a question (`bite_key`) is proved over it too, so the question is the
+    person's to name; one from before that has no such field and is proved
+    the old way. With act "decline", the same for the person's No."""
     key, _ = read_key(Path(config(box)["key"]), box)
     out = {}
     for r in rows:
         if r["kind"] == act and key is not None:
+            asked = r.get("bite_key") if act == "seal" and "bite_key" in r else None
+            if "bite_key" in r and act == "seal" and not isinstance(asked, str):
+                continue
             if hmac.compare_digest(
-                proof(key, r.get("subject", ""), act), str(r.get("proof"))
+                proof(key, r.get("subject", ""), act, asked), str(r.get("proof"))
             ):
                 out[r["subject"]] = r
     return out
+
+
+def proposed_under(
+    rows: list[dict], subj: str, before: int | None = None
+) -> str | None:
+    """The question a proposal was last made under, from the record: the
+    bite its last passing proposal row names (before row `before`, if given).
+    None when the record names none."""
+    last = None
+    for r in rows:
+        if before is not None and r["n"] >= before:
+            break
+        if r["kind"] == "proposal" and r.get("subject") == subj:
+            if r.get("verdict") == "pass":
+                last = r
+    i = last.get("bite_row") if last else None
+    if isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(rows):
+        return None
+    key = rows[i].get("bite_key") if rows[i]["kind"] == "bite" else None
+    return key if isinstance(key, str) else None
+
+
+def standing(
+    box: Path, rows: list[dict], subj: str, seal: dict
+) -> tuple[dict | None, str | None, str | None]:
+    """What a seal stands on: (the proposal, the question it was sealed for,
+    None), or (None, None, why not). The key signed the subject, the hash of
+    the proposal's bytes, so the file is served only while it still hashes to
+    that (CONST-0-4); and the question is the one the seal names, which its
+    proof covers. A seal from before that names none, and takes the record's:
+    the bite the proposal was made under before the seal. Never a field of
+    the file."""
+    try:
+        prop = json.loads((box / "proposals" / f"{subj[9:]}.json").read_text())
+        same = subject_of(prop) == subj
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, None, "is missing or can't be read"
+    if not same:
+        return None, None, "is not the bytes that were sealed"
+    key = (
+        seal["bite_key"]
+        if "bite_key" in seal
+        else proposed_under(rows, subj, seal["n"])
+    )
+    if key is None:
+        return None, None, "was made under no question the record names"
+    return prop, key, None
 
 
 def declined(box: Path, rows: list[dict]) -> dict[str, dict]:
@@ -668,9 +720,11 @@ def bite(box: Path, text: str, ts: str) -> int:
     if k is None:
         print("refused: a bite with no words", file=sys.stderr)
         return REFUSED
-    for subj in sealed(box, rows):  # a sealed answer for these words, first
-        prop = json.loads((box / "proposals" / f"{subj[9:]}.json").read_text())
-        if prop.get("bite_key") == k:
+    for subj, row in sealed(
+        box, rows
+    ).items():  # a sealed answer for these words, first
+        prop, asked, why = standing(box, rows, subj, row)
+        if why is None and asked == k:
             append(box, ts, "bite", bite_key=k, answered_by=subj, served=[])
             print(json.dumps({"state": "sealed", "answer": prop["data"], "by": subj}))
             return ALIVE
@@ -781,7 +835,17 @@ def seal(box: Path, subj: str, ts: str) -> int:
             file=sys.stderr,
         )
         return REFUSED
-    append(box, ts, "seal", who="human", subject=subj, proof=proof(key, subj))
+    asked = proposed_under(rows, subj)  # the question this is the answer to
+    if asked is None:
+        print(
+            f"refused: the record names no question {subj} was made under",
+            file=sys.stderr,
+        )
+        return REFUSED
+    append(
+        box, ts, "seal", who="human", subject=subj, bite_key=asked,
+        proof=proof(key, subj, "seal", asked),
+    )  # fmt: skip
     out = box / "written" / prop["path"]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(prop["data"], encoding="utf-8")
@@ -830,11 +894,20 @@ def verify(box: Path) -> int:
     nos = [
         r["n"] for r in rows if r["kind"] == "decline" and r.get("subject") not in no
     ]
+    drifted = []
+    for subj, row in good.items():
+        prop, _, why = standing(box, rows, subj, row)
+        if why is None and prop.get("bite_key") != proposed_under(rows, subj):
+            why = "names another question than the record"
+        if why is not None:
+            drifted.append((subj, why))
+    for subj, why in drifted:
+        print(f"the chain holds; {subj} is sealed, but its proposal file {why}")
     if forged:
         print(f"the chain holds; seal rows {forged} don't prove under your key")
     if nos:
         print(f"the chain holds; decline rows {nos} don't prove under your key")
-    if forged or nos:
+    if forged or nos or drifted:
         return ESCALATE
     print(f"the chain holds: {len(rows)} rows, {len(good)} sealed")
     return ALIVE
