@@ -6,6 +6,8 @@ removes a venv.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,7 @@ def roots(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     # No real systemctl: what runs is this machine's, never a test's.
     monkeypatch.setattr(venvs, "_main_pids", dict)
+    monkeypatch.setattr(venvs, "_children", lambda pid: [])
     return box, gh
 
 
@@ -372,6 +375,40 @@ def test_a_unit_running_through_a_link_or_a_launcher_is_named(roots, monkeypatch
     assert by_path[str(real.resolve())]["runs"] == {
         "status": "populated", "units": ["launcher.service", "svc-serve.service"]}
     assert by_path[str(other.resolve())]["runs"]["units"] == ["bot.service"]
+
+
+def test_a_unit_runs_the_venv_its_child_process_runs_from(roots, monkeypatch):
+    """2026-10-31: the steward runs from the bot's venv and keeps a willow-mcp
+    child from the box's; willow-mcp moved, and keep-current owed the steward
+    no restart because only the main process was read."""
+    box, _ = roots
+    bot = _fake_venv(box / "willow-bot" / "venvs" / "willow-bot")
+    mcp = _fake_venv(box / "venvs" / "willow-mcp")
+    lines = {
+        21: [f"{bot}/bin/python", f"{bot}/bin/willow-bot-steward", "loop"],
+        22: ["/bin/sh", "-c", "x"],
+        23: [f"{mcp}/bin/python", "-m", "willow_mcp"],
+    }
+    monkeypatch.setattr(venvs, "_main_pids", lambda: {"willow-bot-steward.service": 21})
+    monkeypatch.setattr(venvs, "_children", lambda pid: [22, 23] if pid == 21 else [])
+    monkeypatch.setattr(venvs, "_cmdline", lambda pid: lines[pid])
+
+    by_path = {v["path"]: v for v in venvs.inventory()["venvs"]}
+
+    assert by_path[str(bot.resolve())]["runs"]["units"] == ["willow-bot-steward.service"]
+    assert by_path[str(mcp.resolve())]["runs"]["units"] == ["willow-bot-steward.service"]
+
+
+def test_children_are_read_from_proc_all_the_way_down():
+    import os
+
+    me = os.getpid()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert child.pid in venvs._children(me)
+    finally:
+        child.kill()
+        child.wait()
 
 
 def test_who_runs_a_venv_is_unknown_never_nobody_when_units_cant_be_listed(roots, monkeypatch):
