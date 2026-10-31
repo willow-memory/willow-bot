@@ -759,6 +759,34 @@ def test_a_prless_red_resolves_when_a_later_head_on_its_branch_goes_green(home, 
     assert c.named("human_required_resolve")[0]["note"].startswith(f"superseded by {REL2} on the same branch, green")
 
 
+def test_a_red_release_resolves_when_a_later_tag_publishes(home, monkeypatch):
+    """willow-bot's v1.29.5 `publish` failed (a digest mismatch) and v1.30.0
+    published fine; each tag is a branch of its own, so nothing followed
+    v1.29.5 and its item stayed open."""
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    base = time.time()
+    deposits.append_local(_row(MCP, REL, 30, "build", "success", branch="v1.29.5", received_at=_iso(base)))
+    deposits.append_local(_row(MCP, REL, 31, "publish", "failure", branch="v1.29.5", received_at=_iso(base)))
+    (filed,) = tick.run_ci()["filed"]
+    for i, leg in enumerate(("build", "publish")):
+        deposits.append_local(_row(MCP, REL2, 32 + i, leg, "success", branch="v1.30.0",
+                                   received_at=_iso(base + 600)))
+    r = tick.run_ci()
+    assert r["resolved"] == [{"where": f"{MCP}@{REL[:12]}@{REL}", "item_id": filed["id"],
+                              "superseded_by": REL2, "how": "superseded-on-branch-green"}]
+
+
+def test_tags_share_one_group_and_branches_keep_their_own():
+    assert tick._ci_branch_key(MCP, "v1.29.5") == tick._ci_branch_key(MCP, "v1.30.0") == f"{MCP}~<tags>"
+    assert tick._ci_branch_key(MCP, "willow-bot-v1.30.0") == f"{MCP}~<tags>"
+    assert tick._ci_branch_key(MCP, "v1.0.0-rc.1") == f"{MCP}~<tags>"
+    assert tick._ci_branch_key(MCP, "master") == f"{MCP}~master"
+    assert tick._ci_branch_key(MCP, "release-1.2") == f"{MCP}~release-1.2"
+    assert tick._ci_branch_key(MCP, "") == f"{MCP}~"
+
+
 def test_a_prless_red_is_not_superseded_by_a_later_red_head(home, monkeypatch):
     """The PR rule, read on a branch: a later head that is also red resolves
     nothing (it files its own item)."""
