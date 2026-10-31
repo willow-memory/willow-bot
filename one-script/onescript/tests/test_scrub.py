@@ -40,6 +40,8 @@ GROQ = "gsk_" + "a" * 40
 HF = "hf_" + "b" * 30
 CEREBRAS = "csk-" + "c" * 30
 XAI = "xai-" + "d" * 30
+#: A fine-grained personal access token: `github_pat_`, 22, `_`, 59.
+GITHUB_PAT = "github_pat_" + "1A" * 11 + "_" + "b2" * 29 + "c"
 PEM = (
     "-----BEGIN OPENSSH PRIVATE KEY-----\n"
     "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ==\n"
@@ -62,6 +64,7 @@ FUNNEL = [
     (AWS, "aws_access_key_id"),
     (PROVIDER, "provider_api_key"),
     (GITHUB, "github_token"),
+    (GITHUB_PAT, "github_pat"),
     (SLACK, "slack_token"),
     (GOOGLE, "google_api_key"),
     (STRIPE, "stripe_key"),
@@ -566,6 +569,8 @@ PII_POSITIVES = [
     # willow-2.0 apps/nest/pipeline/scrub.py PII_PATTERNS
     ("bank", "account number: 4417"),
     ("case_no", "see claim no: WC-2026-0042"),
+    ("case_no", "Case No. 2024-CV-1234 was filed"),
+    ("case_no", "case #A12 is set"),
     ("dob", "born 03/04/2018"),
     # corpus-lens egress_shapes.py, tests/test_egress_shapes.py
     ("home_path", "read from /home/jordan/.claude/projects"),
@@ -598,6 +603,9 @@ PII_NEGATIVES = [
     "2026-09-15 08:30 · Dept 4",
     "Entry 14 — response filed 2026-08-01",
     "Case FL-2026-00123, Superior Court",
+    # 2026-10-31: "no" read as "No." and the next word as the number
+    "the claim no longer open was closed",
+    "a case number pending review",
     "mailing ZIP is 87501-1234",
     "Tue/Thu 3-7pm, alternating weekends",
     "took that into account when scheduling 3 visits",
@@ -717,3 +725,13 @@ def test_without_names_no_name_is_found_and_the_ceiling_still_rules():
     assert scrub.withhold(text, 2) == text
     assert scrub.withhold(text, 3, names=CAST) == text  # names are L3
     assert scrub.names_rule([" ", ""]) is None
+
+
+def test_a_fine_grained_github_token_is_found_at_its_length_and_taken_out_glued():
+    """2026-10-31: `github_pat_` is not a `gh?_` shape, and no rule saw one."""
+    assert len(GITHUB_PAT) == len("github_pat_") + 22 + 1 + 59
+    assert scrub.find(f"x{GITHUB_PAT}TRAIL", ("credentials_bounded",)) == [
+        ("github_pat", GITHUB_PAT)
+    ]
+    ok, out = gone(f"prefix{GITHUB_PAT}suffix", GITHUB_PAT)
+    assert ok and "github_pat_" not in out
