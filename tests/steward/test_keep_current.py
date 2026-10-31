@@ -173,6 +173,8 @@ def quiet(monkeypatch):
                                                          "owed": state["owed"]})  # fmt: skip
     monkeypatch.setattr(kc, "behind", lambda: {"status": "empty", "behind": []})
     monkeypatch.setattr(kc.current, "copies", lambda: state["copies"])
+    state["pypi"] = {"status": "populated", "venvs": []}
+    monkeypatch.setattr(kc.pypi_fresh, "report", lambda: state["pypi"])
     return state
 
 
@@ -249,3 +251,23 @@ def test_an_engine_vertical_behind_is_its_own_item_and_an_override_never_one():
                           "overrides": {"climate-almanac": ["AGENTS.md"]}}]}  # fmt: skip
     found = kc.findings({"copies": copies})
     assert list(found) == ["engine:almanac-data/almanac-data:agriculture-almanac"]
+
+
+def test_a_vulnerable_venv_is_one_high_item_naming_each_fix_and_its_range(quiet):
+    desk = _Desk()
+    quiet["pypi"] = {"status": "populated", "venvs": [{"path": "/v", "packages": [
+        {"name": "urllib3", "installed": "2.7.0", "kind": "vulnerable", "vulnerabilities": ["GHSA-1"],
+         "fix": "2.8.0", "fix_in_range": True},
+        {"name": "pillow", "installed": "12.3.0", "kind": "vulnerable", "vulnerabilities": ["GHSA-2"],
+         "fix": "13.0.0", "fix_in_range": False},
+        {"name": "uvicorn", "installed": "0.42.0", "kind": "pinned"},
+        {"name": "lxml", "installed": "6.1.2", "kind": "patch", "to": "6.1.3"},
+    ]}]}  # fmt: skip
+
+    kc.run(enable_mcp=True, call=desk, now=100_000)
+
+    [item] = desk.filed
+    assert item["priority"] == "high" and item["source_ref"] == "keep-current:pypi:/v"
+    assert "urllib3 2.7.0 -> 2.8.0 (inside its declared range" in item["summary"]
+    assert "pillow 12.3.0 -> 13.0.0 (OUTSIDE its declared range" in item["summary"]
+    assert "uvicorn" not in item["summary"] and "lxml" not in item["summary"], "pins and plain upgrades aren't filed"

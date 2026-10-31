@@ -20,6 +20,7 @@ willow-bot-steward contributions --backfill  # fill the ledger from GitHub histo
 willow-bot-steward venvs [--plan]  # D2: which venvs are inside the bot, and how to recreate the rest inside (prints, runs nothing)
 willow-bot-steward current [--json]  # each checkout against its origin, and each copy against its source (copies.json): reads only
 willow-bot-steward keep-current  # one tick of the loop's keep-current step: pull triggers for checkouts left behind, human_required for restarts owed, stale installs and copies behind
+willow-bot-steward pypi [--json]  # every venv's packages against PyPI: vulnerable, yanked, pinned on purpose, patch, minor, major (7-day cooldown): reads only
 willow-bot-contribute [--user LOGIN]   # anyone: your projects, what waits on you, openings (your GITHUB_TOKEN or gh login, never the App's)
 willow-bot-steward heartbeat  # curated willow-mcp tools when WILLOW_BOT_MCP=1
 willow-bot-deterministic serve   # host loopback runner (Unix socket for Kart)

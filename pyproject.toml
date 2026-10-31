@@ -27,6 +27,8 @@ dependencies = [
     "PyJWT==2.15.1",
     "cryptography>=44.0.0",
     "requests==2.34.2",
+    # Version and range reading for pypi_fresh (PEP 440): what pip itself uses.
+    "packaging==26.3",
 ]
 
 [project.optional-dependencies]

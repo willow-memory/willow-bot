@@ -3686,6 +3686,10 @@ def main(argv: list[str] | None = None) -> int:
         from willow_bot import venvs
 
         return venvs.main(args[1:])
+    if args[0] == "pypi":
+        from willow_bot import pypi_fresh
+
+        return pypi_fresh.main(args[1:])
     if args[0] == "keep-current":
         run_keep_current()
         return 0
@@ -3694,7 +3698,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return current.main(args[1:])
     print(
-        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|venvs [--plan] [--json]|current [--json]|keep-current|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
+        "usage: willow-bot-steward [tick|loop|heartbeat|sweep|resolve|install-receipts|mirror|ci|ci-legacy-clear|catchup|upstream-desk|audit|ingress|redeliver|app-grant|ci-backfill|voice|status [--brief]|inbox <state>|scan|contributions [--days N|--all] [--repo R] [--backfill]|venvs [--plan] [--json]|current [--json]|keep-current|pypi [--json]|ci-comments-retire <repo#pr> --reason … [--apply]|annul --match … --reason … --authorization … [--apply]]",
         file=sys.stderr,
     )
     return 2

@@ -20,6 +20,10 @@ Each tick (``run``), four checks, each with its own cadence:
   would have written; the next sweep pulls it as usual.
 - **copies** (daily): a byte copy, pin, engine path or scheduled workflow
   from ``current.copies`` that has fallen behind its source.
+- **pypi** (daily): a venv holding a package with a known vulnerability, or
+  a yanked release (``pypi_fresh``), filed at high priority with each fix
+  and whether the venv's own ranges allow it. Upgrades that are only newer
+  are counted in the receipt, never filed.
 
 What needs a person is filed once as ``human_required`` (with
 ``WILLOW_BOT_MCP``), keyed so the same finding is never filed twice, and
@@ -34,11 +38,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from willow_bot import current, venvs
+from willow_bot import current, pypi_fresh, venvs
 from willow_bot import paths as _paths
 
 #: Seconds between runs of the slower checks; the cheap ones run every tick.
-CADENCE = {"behind": 3600, "copies": 86400}
+CADENCE = {"behind": 3600, "copies": 86400, "pypi": 86400}
 _DOC_SUFFIXES = (".md", ".rst", ".txt")
 _DOC_DIRS = ("docs/", "posts/")
 
@@ -247,6 +251,23 @@ def findings(sections: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
                 "summary": (f"Engine paths to propagate: {', '.join(paths['update'] + paths['add'])}. "
                             "Its own dry run decided this; local overrides are never counted."),
             }
+    for v in (sections.get("pypi") or {}).get("venvs", []):
+        bad = [p for p in v.get("packages", []) if p.get("kind") in ("vulnerable", "yanked")]
+        if not bad:
+            continue
+        lines = []
+        for p in bad:
+            if p["kind"] == "yanked":
+                lines.append(f"{p['name']} {p['installed']} was yanked")
+                continue
+            where = "inside its declared range" if p.get("fix_in_range") else "OUTSIDE its declared range"
+            lines.append(f"{p['name']} {p['installed']} -> {p.get('fix') or 'no fix released'} ({where}; "
+                         f"{', '.join(p['vulnerabilities'][:3])})")  # fmt: skip
+        found[f"pypi:{v['path']}"] = {
+            "section": "pypi", "priority": "high",
+            "title": f"{v['path']} has {len(bad)} vulnerable or yanked package(s)"[:200],
+            "summary": "; ".join(lines),
+        }
     for w in cp.get("workflow", []):
         for r in w.get("runs", []):
             if r.get("status") == "populated" and (r["stale"] or r["failed"]):
@@ -278,6 +299,10 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
         sections["copies"] = current.copies()
         ran["copies"] = now
         checked.add("copies")
+    if _due(state, "pypi", now):
+        sections["pypi"] = pypi_fresh.report()
+        ran["pypi"] = now
+        checked.add("pypi")
     # A section that couldn't run says nothing about what it would have found.
     checked = {s for s in checked if (sections.get(s) or {}).get("status") != "unreachable"}
 
@@ -292,7 +317,8 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
             items.append({"key": key, "state": "unfiled", "reason": "WILLOW_BOT_MCP not enabled", "title": f["title"]})
             continue
         try:
-            result = call("human_required_enqueue", {"app_id": app, "kind": "review", "priority": "normal",
+            result = call("human_required_enqueue", {"app_id": app, "kind": "review",
+                                                     "priority": f.get("priority", "normal"),
                                                      "title": f["title"], "summary": f["summary"][:2000],
                                                      "source_ref": f"keep-current:{key}"[:200]})  # fmt: skip
             err = result.get("error") if isinstance(result, dict) else None
@@ -329,6 +355,7 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
         "restart_owed": [(o["unit"], o["checkout"]) for o in sections["restart"].get("owed", [])],
         "stale_installs": [(s["venv"], s["checkout"]) for s in sections["install"].get("stale", [])],
         "pull_asked": [(b.get("repo"), b["pull"]) for b in (sections.get("behind") or {}).get("behind", [])],
+        "pypi": {v["path"]: v.get("counts", {}) for v in (sections.get("pypi") or {}).get("venvs", [])},
         "unreachable": {k: v.get("detail") for k, v in sections.items() if v.get("status") == "unreachable"},
         "items": items,
     }
