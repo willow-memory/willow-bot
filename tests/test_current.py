@@ -239,13 +239,50 @@ def test_a_scheduled_workflow_is_stale_failed_never_run_or_unknown_per_repo(root
     assert runs["down"]["status"] == "unreachable"
 
 
+def _catalog_json(*entries) -> str:
+    return json.dumps({"name": "x", "count": len(entries), "entries": list(entries)})
+
+
+def test_a_catalog_names_only_live_entries_the_probe_got_no_response_from(root, tmp_path, monkeypatch):
+    (root / "almanac-data" / ".git").mkdir(parents=True)
+    dry = "".join(f"=== {v} ===\n  = x\n" for v in ("energy-almanac", "civic-almanac", "gone-almanac"))
+    monkeypatch.setattr(current, "_run_dry", lambda where, cmd: dry)
+    _files(root, {
+        "almanac-data/energy-almanac:catalog.json": _catalog_json(
+            {"id": "down", "status": "live", "observed": {"checked": "2026-10-30", "reachable": False}},
+            {"id": "blocked", "status": "live", "observed": {"reachable": True, "http_status": 403}},
+            {"id": "unprobed", "status": "live", "observed": {"checked": "2026-10-31", "reachable": None}},
+            {"id": "already-dark", "status": "dark", "observed": {"reachable": False}},
+            {"id": "static", "status": "frozen", "observed": {"reachable": False}},
+        ),
+        "almanac-data/civic-almanac:catalog.json": "not json",
+    })  # fmt: skip
+    reg = _registry(tmp_path, engine=[{"workspace": "almanac-data/almanac-data", "dry_run": ["x"]}],
+                    catalog=[{"repos_of": "almanac-data/almanac-data", "path": "catalog.json"}])  # fmt: skip
+
+    [cat] = current.copies(reg)["catalog"]
+    rows = {v["repo"].split("/")[1]: v for v in cat["verticals"]}
+
+    # A 403 is a response; an unprobed entry is unknown; dark is already decided.
+    assert [e["id"] for e in rows["energy-almanac"]["unreached"]] == ["down", "static"]
+    assert rows["energy-almanac"]["entries"] == 5
+    assert rows["civic-almanac"]["status"] == "unreachable"
+    assert rows["gone-almanac"]["status"] == "unreachable"  # no checkout, never "nothing unreached"
+
+
+def test_a_catalog_rule_without_its_engine_is_unreachable(tmp_path):
+    reg = _registry(tmp_path, catalog=[{"repos_of": "almanac-data/almanac-data"}])
+    [cat] = current.copies(reg)["catalog"]
+    assert cat["status"] == "unreachable"
+
+
 def test_a_registry_that_cant_be_read_is_unreachable(tmp_path):
     assert current.copies(tmp_path / "nope.json")["status"] == "unreachable"
 
 
 def test_the_shipped_registry_names_only_repo_paths_and_known_rules():
     rules = json.loads(current.REGISTRY.read_text(encoding="utf-8"))
-    assert set(rules) <= {"_doc", "bytes", "pin", "engine", "workflow"}
+    assert set(rules) <= {"_doc", "bytes", "pin", "engine", "workflow", "catalog"}
     for rule in rules["bytes"]:
         for ref in (rule["copy"], rule["source"]):
             repo, path = ref.split(":", 1)

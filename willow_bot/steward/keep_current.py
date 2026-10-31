@@ -27,7 +27,8 @@ Each tick (``run``), four checks, each with its own cadence:
   origin (``current.checkout``) gets the gitsync trigger the push webhook
   would have written; the next sweep pulls it as usual.
 - **copies** (daily): a byte copy, pin, engine path or scheduled workflow
-  from ``current.copies`` that has fallen behind its source.
+  from ``current.copies`` that has fallen behind its source, and almanac
+  catalog entries still marked live that the link checker could not reach.
 - **pypi** (daily): a venv holding a package with a known vulnerability, or
   a yanked release (``pypi_fresh``), filed at high priority with each fix
   and whether the venv's own ranges allow it. Upgrades that are only newer
@@ -426,6 +427,22 @@ def findings(sections: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
             "section": "pypi", "priority": "high",
             "title": f"{v['path']} has {len(bad)} vulnerable or yanked package(s)"[:200],
             "summary": "; ".join(lines),
+        }
+    # One item per almanac workspace, the engine precedent: one decision per
+    # catalog sweep, not one item per entry.
+    for c in cp.get("catalog", []):
+        rows = [v for v in c.get("verticals", []) if v.get("status") == "populated" and v.get("unreached")]
+        if not rows:
+            continue
+        count = sum(len(v["unreached"]) for v in rows)
+        lines = [f"{v['repo']}: {', '.join(str(e['id']) for e in v['unreached'])}" for v in rows]
+        found[f"catalog:{c['repos_of']}"] = {
+            "section": "copies",
+            "title": (f"{count} almanac entr{'y is' if count == 1 else 'ies are'} marked live "
+                      f"but unreachable ({c['repos_of']})")[:200],
+            "summary": ("The link checker's last probe got no response from these, and each is still marked "
+                        "live or frozen: " + "; ".join(lines) + ". A curator decides each status in a PR "
+                        "(dark, moved, or a transient outage to leave alone); nothing here changes one."),
         }
     for w in cp.get("workflow", []):
         for r in w.get("runs", []):
