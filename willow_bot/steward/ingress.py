@@ -34,10 +34,15 @@ States, never collapsed:
 - ``unanswered`` — the newest ``FAILING_STREAK`` deliveries got no HTTP
   answer at all (status code 0: timed out, refused, TLS). Nothing is
   listening, or nothing is reachable.
+- ``split`` — fewer than ``FAILING_STREAK`` in a row failed, but at least
+  that many of the newest ``SPLIT_RECENT`` did, between deliveries answered
+  2xx: a route that reaches the bot only some of the time (two targets
+  taking turns). It outranks ``ok`` and ``degraded``: a newest 2xx on such a
+  route says nothing about the next delivery.
 
 Only 2xx is success: GitHub does not follow redirects, so a 3xx is a failure.
 
-``failing`` and ``unanswered`` each file ONE ``human_required`` item per
+``failing``, ``unanswered`` and ``split`` each file ONE ``human_required`` item per
 episode, resolved when the newest delivery is 2xx again. Every verdict
 carries ``latest_age_s`` — how old the newest delivery is — because a
 month-old 2xx still reads ``ok``.
@@ -69,7 +74,13 @@ from willow_bot.paths import bot_dir
 FILE_NAME = "ingress.json"
 WINDOW = 30
 FAILING_STREAK = 3
-_FLAGGED = ("failing", "unanswered")
+#: ``split``: at least FAILING_STREAK of the newest SPLIT_RECENT deliveries
+#: failed, between ones answered 2xx. A route with two targets taking turns
+#: (2026-10-31: the public URL answered 422 and 404 in strict alternation,
+#: the bot and another listener) never fails FAILING_STREAK in a row, so it
+#: read "degraded" or "ok" while losing half of every event.
+SPLIT_RECENT = 10
+_FLAGGED = ("failing", "unanswered", "split")
 #: A newest delivery older than this reads ``quiet``, not ``ok``: an old
 #: success says nothing about the route now (Loki 757108E8).
 QUIET_AFTER_DAYS_ENV = "WILLOW_BOT_INGRESS_QUIET_DAYS"
@@ -171,8 +182,19 @@ def assess(deliveries: list[dict], *, now: float | None = None) -> dict[str, Any
     last_ok = next((d for d in rows if _ok(d)), None)
     last_fail = next((d for d in rows if not _ok(d)), None)
     age = _age_s(rows[0].get("delivered_at"), now)
-    if streak == 0:
-        status = "quiet" if age is not None and age > _quiet_after_s() else "ok"
+    recent = rows[:SPLIT_RECENT]
+    # Only failures NEWER than a 2xx in the recent window count: the route
+    # worked and then failed again. Failures all older than the newest 2xx
+    # are an episode that recovered, and read "ok" as before.
+    oldest_ok = max((i for i, d in enumerate(recent) if _ok(d)), default=-1)
+    recent_failed = sum(1 for d in recent[:oldest_ok] if not _ok(d))
+    split = streak < FAILING_STREAK and recent_failed >= FAILING_STREAK
+    if age is not None and age > _quiet_after_s() and streak == 0:
+        status = "quiet"
+    elif split:
+        status = "split"
+    elif streak == 0:
+        status = "ok"
     elif streak < FAILING_STREAK:
         # Fewer than FAILING_STREAK failures in a row — including a record
         # holding only one or two deliveries — is not yet an episode.
@@ -186,6 +208,8 @@ def assess(deliveries: list[dict], *, now: float | None = None) -> dict[str, Any
         "window": len(rows),
         "failing_streak": streak,
         "failed_in_window": sum(1 for d in rows if not _ok(d)),
+        "recent": len(recent),
+        "failed_in_recent": recent_failed,
         "by_status_code": dict(sorted(by_code.items())),
         "latest": _brief(rows[0]),
         "latest_age_s": age,
@@ -232,16 +256,27 @@ def _flag_title(verdict: dict) -> str:
     n = verdict.get("failing_streak")
     if verdict["status"] == "unanswered":
         return f"App webhook unanswered: last {n} deliveries got {_answer(lf)}"[:200]
+    if verdict["status"] == "split":
+        return (f"App webhook split: {verdict.get('failed_in_recent')} of the newest {verdict.get('recent')} "
+                f"deliveries answered {_answer(lf)}, the rest 2xx")[:200]
     return f"App webhook failing: last {n} deliveries answered {_answer(lf)}"[:200]
 
 
 def _flag_summary(verdict: dict, hook_url: str) -> str:
     ls = verdict.get("last_success") or {}
     port = os.environ.get("BOT_PORT", "").strip() or "9000"
+    if verdict["status"] == "split":
+        first = (f"GitHub's delivery record for this install's App webhook: {verdict.get('failed_in_recent')} of the "
+                 f"newest {verdict.get('recent')} deliveries were not answered 2xx, between ones that were "
+                 f"(by status code over {verdict.get('window')}: {verdict.get('by_status_code')}). Answers that "
+                 "alternate like this are what a route with two targets taking turns looks like: one of them "
+                 "the bot, one not.")
+    else:
+        first = (f"GitHub's delivery record for this install's App webhook: the newest "
+                 f"{verdict.get('failing_streak')} of {verdict.get('window')} deliveries were not answered 2xx "
+                 f"(by status code: {verdict.get('by_status_code')}; 0 = no HTTP answer).")
     return "\n".join([
-        f"GitHub's delivery record for this install's App webhook: the newest "
-        f"{verdict.get('failing_streak')} of {verdict.get('window')} deliveries were not answered 2xx "
-        f"(by status code: {verdict.get('by_status_code')}; 0 = no HTTP answer).",
+        first,
         f"GitHub posts to: {hook_url or '(hook URL could not be read)'}",
         f"Last success: {ls.get('delivered_at') or 'none in the window'}.",
         f"The bot listens on 127.0.0.1:{port}/webhook; the ingress route must reach it.",
