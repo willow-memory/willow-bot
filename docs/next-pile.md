@@ -110,6 +110,91 @@ From 10-30's privacy work (Willow #117, which brought `privacy` and
 - "claim no longer open" is redacted to `[case_no]`, a false positive
 - `github_pat_` tokens are not caught
 
+## Pile 2: the same afternoon
+
+*Drafted 2026-10-31, after the first pile was built.* Made the same way, with
+more of the bot's own data. The inputs were:
+
+- the 94 open queue items and the 510 open gaps
+- the day's `willow-bot` and `willow-bot-steward` journals, turned into dated
+  passages by Willow's `logs`
+- the almanac catalogs, read by Willow's `almanac`
+- the day's `ci_outcomes.jsonl`, replayed through `run_ci` on a scratch home
+
+`box-health` checked the box, and `duplicates` and `contradictions` read it.
+`almanac` and the bot's `current` agree: the same 132 entries in 11
+verticals, and the same one live entry the link checker couldn't reach
+(`noaa-billion-dollar-disasters`).
+
+### 7. A burst of pushes filed false reds (M, high): built, #203
+
+Thirteen "CI red" and "CI stuck" items were filed on almanac `main` heads,
+about 80 minutes late. Each one was a run cancelled by the next push, plus its
+aggregate `test`, which fails whenever a leg it needs is cancelled. The ci
+step read 50 rows a tick, and 2,509 check runs left it ~740 KB behind. Its
+"no successor after 10 min" then meant "not read yet". Replaying the day:
+before the fix, 33 heads filed and 51 ticks to catch up; after it, 5 heads
+filed, all real, and 6 ticks.
+
+### 8. The sweep ignored the clone a flag names (S, med): built, willow-mcp #742
+
+The bot finds `rudi193-cmd/safe-app-store` at `safe-app-store-public` by
+scanning remotes and writes that clone into the flag. willow-mcp's
+`sweep_triggers` read only the flag's file name, so it refused the flag
+ENOCLONE on every tick since 10-20. It is live; the flag was consumed at 17:42Z.
+
+### 9. keep-current can't see the steward's willow-mcp child (S, med)
+
+The steward keeps one stdio willow-mcp child for its whole life. When
+willow-mcp moves, keep-current lists no restart for `willow-bot-steward`,
+because it checks that unit only against willow-bot's checkout and venv. #742
+sat on disk unused until the steward was restarted by hand. *Fix:* count the
+venv the child runs from (`WILLOW_BOT_MCP_COMMAND`'s, holding the editable
+willow-mcp) among the steward's code, or have `mcp_client` start a new child
+when that checkout's HEAD moves.
+
+### 10. A red release on a tag never resolves (S, low)
+
+willow-bot's v1.29.5 `publish` failed with a digest mismatch, and Jeles's
+v0.17.0 `publish` failed too. A tag is a branch of its own, so
+`superseded-on-branch-green` never fires. *Fix:* resolve a tag's red when a
+later tag in the same repo passes the same leg.
+
+### 11. The mirror can't keep up on a busy day (M, low; a decision)
+
+It lands ~17 rows a tick within its 30 calls. Its lag grew from 103 KB at
+06:15 to 1.2 MB at 17:04. No code in the fleet reads
+`willow_bot_ci_deposits`. *Decide:* drop the mirror, batch it, or keep it and
+accept the lag.
+
+### 12. Vulnerability fixes aren't applied (L, high)
+
+Ten "has N vulnerable or yanked package(s)" items are open, across the box,
+dev and service venvs. The venv policy (1c, 2026-10-30) says a fix for a
+vulnerability is applied at once, and the operator is told afterwards. The
+bot only files the items. This is the per-venv lock and build-beside design.
+
+### 13. Deliveries given up during the split route (S, low)
+
+`redeliver` gave up on 90 deliveries after 5 tries each, while one route
+answered 404. Those events never reached the bot, and nothing names them.
+
+### 14. To check: the engine fold
+
+The ten "is behind its engine" items fold into one at the next daily copies
+check, about 00:02Z on 2026-11-01.
+
+### Not the bot's: found on the way
+
+- **Willow's `logs` wrote mirrors the kernel never reads** (built:
+  Willow #126). The steward's day mirrored to 5.9 MB, and the kernel reads at
+  most 1 MB from one file. `init` said nothing; `box-health` said "3 files
+  can't be read".
+- **Willow's `box-health` doesn't say why** a file can't be read: too large,
+  not UTF-8, or binary.
+- **`duplicates` finds nothing in logs:** every line carries its own time.
+  That is not a bug; for logs, ask the kernel or `timeline`.
+
 ## Not the bot's: found on the way
 
 - **willow-mcp's gate files a refusal again every time it happens.**
