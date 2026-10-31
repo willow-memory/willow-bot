@@ -43,6 +43,10 @@ from willow_bot import paths as _paths
 
 #: Seconds between runs of the slower checks; the cheap ones run every tick.
 CADENCE = {"behind": 3600, "copies": 86400, "pypi": 86400}
+#: Filings per tick: the steward's MCP calls share one rate (willow-mcp's 60 a
+#: minute per app), so a backlog is filed a few at a time, most urgent first.
+FILE_PER_TICK = 5
+_URGENCY = {"restart": 0, "pypi": 1, "install": 2, "copies": 3}
 _DOC_SUFFIXES = (".md", ".rst", ".txt")
 _DOC_DIRS = ("docs/", "posts/")
 
@@ -81,10 +85,13 @@ def is_doc(name: str) -> bool:
 
 def head_at(checkout: Path, when: float) -> str | None:
     """The commit ``checkout`` had checked out at ``when``: the newest reflog
-    entry at or before it. ``None`` when the reflog doesn't reach back."""
-    for line in _git(checkout, "log", "-g", "--format=%H %ct", "HEAD").splitlines():
-        sha, _, ct = line.partition(" ")
-        if ct.isdigit() and int(ct) <= when:
+    entry made at or before it, by the reflog's own time (when HEAD moved),
+    never the commit's date: an old commit pulled late moved HEAD late.
+    ``None`` when the reflog doesn't reach back."""
+    for line in _git(checkout, "log", "-g", "--date=unix", "--format=%H %gd", "HEAD").splitlines():
+        sha, _, selector = line.partition(" ")
+        moved = selector.rpartition("{")[2].rstrip("}")
+        if moved.isdigit() and int(moved) <= when:
             return sha
     return None
 
@@ -307,15 +314,26 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
     checked = {s for s in checked if (sections.get(s) or {}).get("status") != "unreachable"}
 
     found = findings(sections)
+    # A finding of a check that didn't run this tick stands until that check
+    # runs again: carried, so one still waiting to be filed isn't dropped.
+    for key, f in (state.get("found") or {}).items():
+        if f.get("section") not in checked and key not in found:
+            found[key] = f
     filed: dict[str, dict[str, Any]] = dict(state.get("filed") or {})
     items: list[dict[str, Any]] = []
-    for key, f in sorted(found.items()):
+    budget = FILE_PER_TICK
+    order = sorted(found.items(), key=lambda kv: (kv[1].get("priority") != "high", _URGENCY.get(kv[1]["section"], 9), kv[0]))
+    for key, f in order:
         if key in filed:
             items.append({"key": key, "state": "open", "id": filed[key]["id"]})
             continue
         if not enable_mcp or call is None:
             items.append({"key": key, "state": "unfiled", "reason": "WILLOW_BOT_MCP not enabled", "title": f["title"]})
             continue
+        if budget <= 0:
+            items.append({"key": key, "state": "waiting", "reason": "filed a few per tick; next tick"})
+            continue
+        budget -= 1
         try:
             result = call("human_required_enqueue", {"app_id": app, "kind": "review",
                                                      "priority": f.get("priority", "normal"),
@@ -327,6 +345,8 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
         item_id = result.get("id") if isinstance(result, dict) and not err else None
         if err or not item_id:
             items.append({"key": key, "state": "could-not-file", "error": str(err or "no item id")[:300]})
+            if "rate_limited" in str(err):
+                budget = 0  # the rate is spent: the rest wait for the next tick
         else:
             filed[key] = {"id": item_id, "since": now, "section": f["section"]}
             items.append({"key": key, "state": "filed", "id": item_id})
@@ -347,7 +367,7 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
         else:
             items.append({"key": key, "state": "resolved", "id": row["id"]})
             del filed[key]
-    _save({"ran": ran, "filed": filed})
+    _save({"ran": ran, "filed": filed, "found": found})
     return {
         "event": "steward_keep_current",
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
