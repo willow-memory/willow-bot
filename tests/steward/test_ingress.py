@@ -432,3 +432,50 @@ def test_redact_url_is_the_carried_copy_of_the_one_scripts():
     assert ingress.redact_url(SECRET_URL) == scrub.redact_url(SECRET_URL)
     assert ingress.redact_url(SECRET_URL) == "https://hooks.example.invalid:8443/webhook"
     assert ingress.redact_url("") == ""
+
+
+# ── split: a route that reaches the bot only some of the time ───────────────
+
+ALTERNATING = [_d(i, 200 if i % 2 else 404) for i in range(1, 11)]  # odd ids 2xx, even 404; newest (10) a 404
+
+
+def test_assess_alternating_answers_are_split_not_degraded_or_ok():
+    """2026-10-31: the public URL answered 422 and 404 in strict turns (two
+    targets), so no three failed in a row and it read degraded or ok."""
+    v = ingress.assess(ALTERNATING)
+    assert v["status"] == "split" and v["failing_streak"] == 1
+    assert v["recent"] == 10 and v["failed_in_recent"] == 5
+    v = ingress.assess(ALTERNATING + [_d(11, 200)])  # the newest a 2xx: still split, never ok
+    assert v["status"] == "split" and v["failing_streak"] == 0
+
+
+def test_assess_an_episode_that_recovered_is_ok_not_split():
+    v = ingress.assess([_d(1, 404), _d(2, 404), _d(3, 404), _d(4, 404), _d(5, 200)])
+    assert v["status"] == "ok" and v["failed_in_recent"] == 0
+
+
+def test_assess_one_blip_after_a_recovery_is_degraded_not_split():
+    v = ingress.assess([_d(1, 404), _d(2, 404), _d(3, 404), _d(4, 200), _d(5, 404)])
+    assert v["status"] == "degraded" and v["failed_in_recent"] == 1
+
+
+def test_assess_old_failures_beyond_the_recent_window_do_not_split():
+    old = [_d(i, 200 if i % 2 else 404) for i in range(1, 9)]
+    v = ingress.assess(old + [_d(i, 200) for i in range(9, 9 + ingress.SPLIT_RECENT)])
+    assert v["status"] == "ok"
+
+
+def test_split_files_one_flag_saying_two_targets_and_never_resolves_on_a_2xx(github):
+    github["deliveries"] = list(ALTERNATING)
+    c = _Client()
+    r = ingress.run(enable_mcp=True, call=c, app="willow-bot")
+    assert r["status"] == "split" and r["flag"] == {"state": "filed", "id": "hr-9"}
+    [item] = c.named("human_required_enqueue")
+    assert item["title"] == "App webhook split: 5 of the newest 10 deliveries answered HTTP 404, the rest 2xx"
+    assert "two targets taking turns" in item["summary"] and HOOK in item["summary"]
+    github["deliveries"] = ALTERNATING + [_d(11, 200)]
+    r2 = ingress.run(enable_mcp=True, call=c, app="willow-bot")
+    assert r2["flag"]["state"] == "open" and c.named("human_required_resolve") == []
+    github["deliveries"] = ALTERNATING + [_d(i, 200) for i in range(11, 11 + ingress.SPLIT_RECENT)]
+    r3 = ingress.run(enable_mcp=True, call=c, app="willow-bot")
+    assert r3["status"] == "ok" and r3["flag"] == {"state": "resolved", "id": "hr-9"}
