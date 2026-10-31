@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.30.0](https://github.com/willow-memory/willow-bot/compare/v1.29.5...v1.30.0) (2026-10-31)
+
+
+### Added
+
+* **current:** read each almanac catalog for entries live but unreachable ([4233003](https://github.com/willow-memory/willow-bot/commit/42330037335567a6782309d5d8f5654f3f4e282a))
+* **current:** read each almanac catalog for entries live but unreachable ([b5462b4](https://github.com/willow-memory/willow-bot/commit/b5462b4749dd173c62d15cd1f31cc6cd48c4de2a))
+
 ## [1.29.5](https://github.com/willow-memory/willow-bot/compare/v1.29.4...v1.29.5) (2026-10-31)
 
 
