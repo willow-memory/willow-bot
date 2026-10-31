@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.29.3](https://github.com/willow-memory/willow-bot/compare/v1.29.2...v1.29.3) (2026-10-31)
+
+
+### Fixed
+
+* **steward:** the ingress check flags a route that reaches the bot only some of the time ([7994aa1](https://github.com/willow-memory/willow-bot/commit/7994aa1fb877e7fcd147ed9a36d85ac48fedd3a8))
+
 ## [1.29.2](https://github.com/willow-memory/willow-bot/compare/v1.29.1...v1.29.2) (2026-10-31)
 
 
