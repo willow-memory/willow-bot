@@ -1,3 +1,3 @@
 """willow-bot — GitHub App webhook + orchestrator-feeding steward."""
 
-__version__ = "1.30.0"
+__version__ = "1.31.0"
