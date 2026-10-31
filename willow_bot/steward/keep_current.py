@@ -1,7 +1,7 @@
 """keep_current.py — the steward acting on what ``current`` sees, as far as
-the bot may act alone: it writes the pull trigger a webhook never did, and
-files for the person what needs a person. It installs, restarts and copies
-nothing.
+the bot may act alone: it writes the pull trigger a webhook never did,
+refreshes a stale install where there is precedent, and files for the person
+what needs a person. It restarts, upgrades and copies nothing.
 
 Each tick (``run``), four checks, each with its own cadence:
 
@@ -10,11 +10,19 @@ Each tick (``run``), four checks, each with its own cadence:
   checkout installed editable into the venv it runs from. "Changed" is the
   commit checked out when the unit started (from the checkout's reflog)
   against ``HEAD``, counting only files that aren't docs: a pull of
-  Markdown owes nothing.
-- **stale install** (every tick): an editable install older than its
-  checkout's last ``pyproject.toml`` change, so a new dependency, pin or
-  entry point never reached the venv (the willow-bot label read 1.8.0 for
-  weeks while the code was 1.24).
+  Markdown owes nothing. A venv whose packages were reinstalled after the
+  unit started owes one too.
+- **stale install** (every tick): an editable install older than the
+  arrival (reflog time) of its checkout's last ``pyproject.toml`` change, so
+  a new dependency, pin or entry point never reached the venv (the
+  willow-bot label read 1.8.0 for weeks while the code was 1.24). Refreshed
+  by the bot, two a tick, only where there is precedent: the checkout's own
+  ``.venv`` (what ``install_receipt`` already does after a pull), or the box
+  venv willow-mcp's pip_sync allowlist pairs with its repo (through the
+  broker), from a clean checkout on its default branch, after a dry run with
+  no conflict; ``pip check`` after, and a broken result is filed high.
+  Another repo installed into a venv is never the bot's to refresh: filed.
+  ``WILLOW_BOT_KEEP_CURRENT_REFRESH=0`` turns refreshing off.
 - **behind** (hourly): a checkout on its default branch, clean, behind its
   origin (``current.checkout``) gets the gitsync trigger the push webhook
   would have written; the next sweep pulls it as usual.
@@ -33,6 +41,7 @@ tick resolves nothing. State lives in ``willow-bot/keep_current.json``.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -46,7 +55,7 @@ CADENCE = {"behind": 3600, "copies": 86400, "pypi": 86400}
 #: Filings per tick: the steward's MCP calls share one rate (willow-mcp's 60 a
 #: minute per app), so a backlog is filed a few at a time, most urgent first.
 FILE_PER_TICK = 5
-_URGENCY = {"restart": 0, "pypi": 1, "install": 2, "copies": 3}
+_URGENCY = {"refresh": 0, "restart": 0, "pypi": 1, "install": 2, "copies": 3}
 _DOC_SUFFIXES = (".md", ".rst", ".txt")
 _DOC_DIRS = ("docs/", "posts/")
 
@@ -135,9 +144,11 @@ def _unit_props(units: list[str]) -> dict[str, dict[str, str]]:
 def restarts_owed(inv: dict[str, Any]) -> dict[str, Any]:
     """Each running unit whose code changed since it started."""
     by_unit: dict[str, list[Path]] = {}
+    venvs_of: dict[str, list[Path]] = {}
     for v in inv.get("venvs", []):
         for unit in (v.get("runs") or {}).get("units", []):
             by_unit.setdefault(unit, []).extend(Path(p) for p in v.get("editables", []))
+            venvs_of.setdefault(unit, []).append(Path(v["path"]))
     try:
         props = _unit_props(sorted(by_unit))
     except (OSError, subprocess.SubprocessError) as exc:
@@ -155,7 +166,30 @@ def restarts_owed(inv: dict[str, Any]) -> dict[str, Any]:
             change = code_since(root, int(started))
             if change["status"] == "populated":
                 owed.append({"unit": unit, "checkout": str(root), "started": int(started), **change})
+        # Reinstalled after the start (a refresh, an upgrade): the running
+        # process still has the old packages loaded.
+        for venv in venvs_of.get(unit, []):
+            newest = max((d.stat().st_mtime for d in venv.glob("lib/python*/site-packages/*.dist-info")), default=0)
+            if newest > int(started):
+                owed.append({"unit": unit, "checkout": str(venv), "started": int(started), "status": "populated",
+                             "head": f"install@{int(newest)}", "then": "", "paths": [f"packages reinstalled in {venv}"]})  # fmt: skip
     return {"status": "populated" if owed else "empty", "owed": owed}
+
+
+def arrived_at(checkout: Path, commit: str) -> int | None:
+    """When ``commit`` arrived in ``checkout``'s HEAD, by the reflog's time:
+    the oldest reflog entry, walking back from the newest, that still
+    contains it. ``None`` when the reflog has no entry containing it."""
+    arrived = None
+    for line in _git(checkout, "log", "-g", "--date=unix", "--format=%H %gd", "HEAD").splitlines():
+        sha, _, selector = line.partition(" ")
+        got = subprocess.run(["git", "-C", str(checkout), "merge-base", "--is-ancestor", commit, sha],
+                             capture_output=True, timeout=20, check=False)  # fmt: skip
+        if got.returncode != 0:
+            break
+        moved = selector.rpartition("{")[2].rstrip("}")
+        arrived = int(moved) if moved.isdigit() else arrived
+    return arrived
 
 
 def _installed_at(venv: Path, checkout: str) -> float | None:
@@ -181,13 +215,106 @@ def stale_installs(inv: dict[str, Any]) -> dict[str, Any]:
         for checkout in dict.fromkeys(v.get("editables", [])):
             when = _installed_at(Path(v["path"]), checkout)
             try:
-                changed = _git(Path(checkout), "log", "-1", "--format=%ct %h", "--", "pyproject.toml").split()
+                changed = _git(Path(checkout), "log", "-1", "--format=%H %ct", "--", "pyproject.toml").split()
+                arrived = arrived_at(Path(checkout), changed[0]) if changed else None
             except (OSError, subprocess.SubprocessError):
                 continue
-            if when is not None and changed and int(changed[0]) > when:
+            moved = max(int(changed[1]), arrived or 0) if changed else 0
+            if when is not None and changed and moved > when:
                 stale.append({"venv": v["path"], "checkout": checkout, "units": v["runs"]["units"],
-                              "installed": int(when), "pyproject": int(changed[0]), "commit": changed[1]})  # fmt: skip
+                              "installed": int(when), "pyproject": moved, "commit": changed[0][:7]})  # fmt: skip
     return {"status": "populated" if stale else "empty", "stale": stale}
+
+
+#: Refreshes per tick: each is a real pip install.
+REFRESH_PER_TICK = 2
+
+
+def _refresh_enabled() -> bool:
+    return os.environ.get("WILLOW_BOT_KEEP_CURRENT_REFRESH", "1").strip() != "0"
+
+
+def _allowlisted_venv(repo: str) -> str | None:
+    """The box venv willow-mcp's pip_sync allowlist binds ``repo`` to, from the
+    box's own copy (the broker checks it again; this only spares a refusal)."""
+    try:
+        allow = json.loads((_paths.willow_home() / "constitutional" / "pip_sync_allowlist.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, _paths.BoxNotConfigured):
+        return None
+    pairs = {k.lower(): v for k, v in (allow.get("pairs") or {}).items() if isinstance(v, dict)}
+    return (pairs.get(repo.lower()) or {}).get("venv")
+
+
+def how_to_refresh(venv: Path, checkout: Path) -> str | None:
+    """``own`` when ``venv`` is the checkout's own ``.venv`` (what
+    install_receipt already refreshes after a pull), ``broker`` when it is the
+    box venv the pip_sync allowlist pairs with the checkout's repo, else
+    ``None``: another repo installed into a venv isn't the bot's to touch."""
+    own = checkout / ".venv"
+    if own.exists() and own.resolve() == venv.resolve():
+        return "own"
+    try:
+        homes = {_paths.venvs_dir().resolve(), _paths.legacy_venvs_dir().resolve()}
+    except _paths.BoxNotConfigured:
+        return None
+    repo = current._origin_repo(checkout)
+    if venv.resolve().parent in homes and repo and _allowlisted_venv(repo) == venv.name:
+        return "broker"
+    return None
+
+
+def _clean_on_default(checkout: Path) -> str | None:
+    """Why ``checkout`` shouldn't be installed from, or ``None`` when it's clean
+    and on its default branch."""
+    try:
+        if _git(checkout, "status", "--porcelain", "--untracked-files=no").strip():
+            return "the checkout has changes"
+        default = _git(checkout, "symbolic-ref", "--short", "refs/remotes/origin/HEAD").strip().partition("/")[2]
+        branch = _git(checkout, "branch", "--show-current").strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"git: {exc}"[:200]
+    return None if default and branch == default else f"on {branch or '(detached)'}, not {default or 'the default'}"
+
+
+def _pip(venv: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([str(venv / "bin" / "pip"), *args], capture_output=True, text=True, timeout=600, check=False)
+
+
+def refresh(stale: dict[str, Any], *, call=None) -> dict[str, Any]:
+    """Refresh one stale editable install where the bot may: dry run first, and
+    ``pip check`` after. Returns its receipt; ``state`` is ``refreshed``,
+    ``broken`` (installed, but ``pip check`` fails), ``refused`` (not tried,
+    and why) or ``failed``."""
+    venv, checkout = Path(stale["venv"]), Path(stale["checkout"])
+    row: dict[str, Any] = {"venv": str(venv), "checkout": str(checkout)}
+    how = how_to_refresh(venv, checkout)
+    if how is None:
+        return {**row, "state": "refused", "why": "another repo's install: the person's to refresh"}
+    why = _clean_on_default(checkout)
+    if why:
+        return {**row, "state": "refused", "how": how, "why": why}
+    if how == "broker":
+        if call is None:
+            return {**row, "state": "refused", "how": how, "why": "WILLOW_BOT_MCP not enabled"}
+        try:
+            result = call("pip_sync_execute", {"checkout": str(checkout), "venv": venv.name})
+        except Exception as exc:  # noqa: BLE001 — said, retried next tick
+            return {**row, "state": "failed", "how": how, "why": str(exc)[:300]}
+        if not isinstance(result, dict) or result.get("error") or not result.get("ok", True):
+            return {**row, "state": "failed", "how": how, "why": str((result or {}).get("error") or result)[:300]}
+    else:
+        extras = venvs.extras_of(venv, str(checkout))
+        target = f"{checkout}[{','.join(extras)}]" if extras else str(checkout)
+        dry = _pip(venv, "install", "--dry-run", "-e", target)
+        if dry.returncode != 0 or "ERROR" in dry.stderr:
+            return {**row, "state": "refused", "how": how, "why": "dry run: " + (dry.stderr.strip() or dry.stdout.strip())[-300:]}
+        done = _pip(venv, "install", "-q", "-e", target)
+        if done.returncode != 0:
+            return {**row, "state": "failed", "how": how, "why": (done.stderr.strip() or "pip failed")[-300:]}
+    check = _pip(venv, "check")
+    if check.returncode != 0:
+        return {**row, "state": "broken", "how": how, "why": check.stdout.strip()[-500:]}
+    return {**row, "state": "refreshed", "how": how}
 
 
 def _trigger(repo: str) -> str:
@@ -228,6 +355,12 @@ def findings(sections: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
             "summary": (f"{o['checkout']} moved from {o['then'][:12]} to {o['head'][:12]} after {o['unit']} started; "
                         f"{len(o['paths'])} code files changed ({', '.join(o['paths'][:5])}). "
                         f"Restart it: systemctl --user restart {o['unit']}"),
+        }
+    for b in sections.get("refresh", {}).get("broken", []):
+        found[f"refresh-broken:{b['venv']}"] = {
+            "section": "refresh", "priority": "high",
+            "title": f"refreshing {Path(b['checkout']).name} left {b['venv']} with broken requirements"[:200],
+            "summary": f"pip check after the refresh: {b['why']}",
         }
     by_venv: dict[str, list[dict[str, Any]]] = {}
     for s in sections.get("install", {}).get("stale", []):
@@ -297,8 +430,16 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
     state = load()
     ran = dict(state.get("ran") or {})
     inv = venvs.inventory()
+    refreshed: list[dict[str, Any]] = []
+    if _refresh_enabled():
+        for st in stale_installs(inv)["stale"]:
+            if len([r for r in refreshed if r["state"] != "refused"]) >= REFRESH_PER_TICK:
+                break
+            refreshed.append(refresh(st, call=call if enable_mcp else None))
     sections: dict[str, dict[str, Any]] = {"restart": restarts_owed(inv), "install": stale_installs(inv)}
-    checked = {"restart", "install"}
+    sections["refresh"] = {"status": "populated" if refreshed else "empty",
+                           "broken": [r for r in refreshed if r["state"] == "broken"]}  # fmt: skip
+    checked = {"restart", "install", "refresh"}
     if _due(state, "behind", now):
         sections["behind"] = behind()
         ran["behind"] = now
@@ -374,6 +515,7 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
         "ran": sorted(sections),
         "restart_owed": [(o["unit"], o["checkout"]) for o in sections["restart"].get("owed", [])],
         "stale_installs": [(s["venv"], s["checkout"]) for s in sections["install"].get("stale", [])],
+        "refreshed": [(r["venv"], r["checkout"], r["state"], r.get("why", "")[:120]) for r in refreshed],
         "pull_asked": [(b.get("repo"), b["pull"]) for b in (sections.get("behind") or {}).get("behind", [])],
         "pypi": {v["path"]: v.get("counts", {}) for v in (sections.get("pypi") or {}).get("venvs", [])},
         "unreachable": {k: v.get("detail") for k, v in sections.items() if v.get("status") == "unreachable"},

@@ -319,3 +319,150 @@ def test_a_rate_limit_stops_the_tick_and_retries_later(quiet):
     got = kc.run(enable_mcp=True, call=limited, now=100_000)
     assert calls == ["human_required_enqueue"], "one refusal and the tick stops asking"
     assert [i["state"] for i in got["items"]].count("waiting") == 3
+
+
+# ── refreshing a stale install, where the bot may ─────────────────────────
+
+
+def _with_origin(repo: Path, tmp_path: Path) -> None:
+    """Give ``repo`` a bare origin whose HEAD is main, as a clone has."""
+    origin = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "-u", "origin", "main")
+    _git(repo, "remote", "set-head", "origin", "main")
+
+
+def test_a_pyproject_change_pulled_after_the_install_is_stale_whatever_its_date(repo, tmp_path):
+    # Committed (and dated) before the install, but it reached HEAD after it.
+    _git(repo, "checkout", "-q", "-b", "incoming")
+    _commit(repo, "pyproject.toml", "[project]\ndependencies = ['x==2']\n")
+    _git(repo, "checkout", "-q", "main")
+    venv = tmp_path / "venv"
+    _editable(venv, repo, installed=time.time())
+    time.sleep(1.1)
+    _git(repo, "merge", "-q", "--ff-only", "incoming")
+    inv = {"venvs": [{"path": str(venv), "editables": [str(repo)], "runs": {"units": ["a.service"]}}]}
+    assert [s["checkout"] for s in kc.stale_installs(inv)["stale"]] == [str(repo)]
+
+
+def test_the_bot_refreshes_only_a_checkouts_own_venv_or_an_allowlisted_box_pair(repo, tmp_path, monkeypatch):
+    own = tmp_path / "venvs-elsewhere" / "repo-venv"
+    own.mkdir(parents=True)
+    (repo / ".venv").symlink_to(own)
+    assert kc.how_to_refresh(own, repo) == "own"
+    box = kc._paths.legacy_venvs_dir() / "willow-mcp"
+    box.mkdir(parents=True)
+    monkeypatch.setattr(kc.current, "_origin_repo", lambda checkout: "willow-memory/willow-mcp")
+    assert kc.how_to_refresh(box, repo) is None, "no allowlist: not the bot's"
+    allow = kc._paths.willow_home() / "constitutional" / "pip_sync_allowlist.json"
+    allow.parent.mkdir(parents=True, exist_ok=True)
+    allow.write_text(json.dumps({"pairs": {"willow-memory/willow-mcp": {"venv": "willow-mcp"}}}))
+    assert kc.how_to_refresh(box, repo) == "broker"
+    assert kc.how_to_refresh(tmp_path / "someone-elses", repo) is None, "another repo's venv"
+
+
+def test_a_checkout_with_changes_or_on_a_branch_is_never_installed_from(repo, tmp_path):
+    _with_origin(repo, tmp_path)
+    assert kc._clean_on_default(repo) is None
+    (repo / "app.py").write_text("edited")
+    assert kc._clean_on_default(repo) == "the checkout has changes"
+    _git(repo, "checkout", "-q", "--", "app.py")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    assert "on feature" in kc._clean_on_default(repo)
+
+
+class _FakePip:
+    def __init__(self, *, dry=0, dry_err="", install=0, check=0, check_out=""):
+        self.calls: list[tuple[str, ...]] = []
+        self.answers = {"--dry-run": (dry, "", dry_err), "install": (install, "", ""), "check": (check, check_out, "")}
+
+    def __call__(self, venv, *args):
+        self.calls.append(args)
+        key = "--dry-run" if "--dry-run" in args else args[0]
+        code, out, err = self.answers[key]
+        return subprocess.CompletedProcess(args, code, out, err)
+
+
+@pytest.fixture
+def own_stale(repo, tmp_path, monkeypatch):
+    _with_origin(repo, tmp_path)
+    venv = tmp_path / "v"
+    venv.mkdir()
+    (repo / ".venv").symlink_to(venv)
+    monkeypatch.setattr(kc.venvs, "extras_of", lambda v, c: ["dev"])
+    return {"venv": str(venv), "checkout": str(repo), "units": ["a.service"], "commit": "abc"}
+
+
+def test_an_own_venv_refresh_dry_runs_installs_with_its_extras_and_checks(own_stale, monkeypatch):
+    pip = _FakePip()
+    monkeypatch.setattr(kc, "_pip", pip)
+    got = kc.refresh(own_stale)
+    assert got["state"] == "refreshed" and got["how"] == "own"
+    target = f"{own_stale['checkout']}[dev]"
+    assert pip.calls == [("install", "--dry-run", "-e", target), ("install", "-q", "-e", target), ("check",)]
+
+
+def test_a_dry_run_that_conflicts_installs_nothing(own_stale, monkeypatch):
+    pip = _FakePip(dry=1, dry_err="ERROR: Cannot install x because these package versions have conflicting deps")
+    monkeypatch.setattr(kc, "_pip", pip)
+    got = kc.refresh(own_stale)
+    assert got["state"] == "refused" and "conflicting" in got["why"]
+    assert len(pip.calls) == 1, "only the dry run"
+
+
+def test_a_refresh_that_breaks_requirements_is_said_broken(own_stale, monkeypatch):
+    monkeypatch.setattr(kc, "_pip", _FakePip(check=1, check_out="grove 1.0 has requirement cryptography<50"))
+    got = kc.refresh(own_stale)
+    assert got["state"] == "broken" and "cryptography<50" in got["why"]
+
+
+def test_a_broker_refresh_goes_through_pip_sync_and_its_refusal_is_said(repo, tmp_path, monkeypatch):
+    _with_origin(repo, tmp_path)
+    box = kc._paths.legacy_venvs_dir() / "willow-mcp"
+    box.mkdir(parents=True)
+    monkeypatch.setattr(kc, "how_to_refresh", lambda v, c: "broker")
+    monkeypatch.setattr(kc, "_pip", _FakePip())
+    stale = {"venv": str(box), "checkout": str(repo), "units": ["w.service"], "commit": "abc"}
+    asked = []
+    ok = kc.refresh(stale, call=lambda tool, args: asked.append((tool, args)) or {"ok": True, "synced": True})
+    assert ok["state"] == "refreshed" and asked == [("pip_sync_execute", {"checkout": str(repo), "venv": "willow-mcp"})]
+    no = kc.refresh(stale, call=lambda tool, args: {"ok": False, "error": "ENOALLOW"})
+    assert no["state"] == "failed" and "ENOALLOW" in no["why"]
+    assert kc.refresh(stale, call=None)["state"] == "refused"
+
+
+def test_run_refreshes_a_few_a_tick_files_broken_ones_and_can_be_switched_off(quiet, monkeypatch):
+    stale = [{"venv": f"/v{i}", "checkout": f"/c{i}", "units": ["u.service"], "commit": "abc"} for i in range(4)]
+    monkeypatch.setattr(kc, "stale_installs", lambda inv: {"status": "populated", "stale": stale})
+    done = []
+
+    def refresh(st, call=None):
+        done.append(st["venv"])
+        return {"venv": st["venv"], "checkout": st["checkout"], "state": "broken" if st["venv"] == "/v0" else "refreshed",
+                "why": "x 1 has requirement y<2"}  # fmt: skip
+
+    monkeypatch.setattr(kc, "refresh", refresh)
+    desk = _Desk()
+    kc.run(enable_mcp=True, call=desk, now=1000)
+    assert done == ["/v0", "/v1"], "two refreshes a tick"
+    broken = [f for f in desk.filed if f["source_ref"].startswith("keep-current:refresh-broken:")]
+    assert len(broken) == 1 and broken[0]["priority"] == "high"
+    monkeypatch.setenv("WILLOW_BOT_KEEP_CURRENT_REFRESH", "0")
+    done.clear()
+    kc.run(enable_mcp=True, call=desk, now=1300)
+    assert done == [], "switched off"
+
+
+def test_a_venv_reinstalled_after_its_unit_started_owes_a_restart(tmp_path, monkeypatch):
+    venv = tmp_path / "v"
+    dist = venv / "lib" / "python3.12" / "site-packages" / "x-1.0.dist-info"
+    dist.mkdir(parents=True)
+    started = int(time.time()) - 100
+    os.utime(dist, (started + 50, started + 50))
+    inv = {"venvs": [{"path": str(venv), "editables": [], "runs": {"units": ["a.service"]}}]}
+    monkeypatch.setattr(kc, "_unit_props", lambda units: {"a.service": {"ActiveEnterTimestamp": f"@{started}"}})
+    [owed] = kc.restarts_owed(inv)["owed"]
+    assert owed["unit"] == "a.service" and owed["head"].startswith("install@")
+    os.utime(dist, (started - 50, started - 50))
+    assert kc.restarts_owed(inv)["owed"] == []
