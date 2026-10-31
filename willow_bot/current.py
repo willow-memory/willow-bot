@@ -208,7 +208,8 @@ def _run_dry(workspace: Path, cmd: list[str]) -> str:
     got = subprocess.run(cmd, cwd=workspace, capture_output=True, text=True, timeout=180, check=False)
     if got.returncode != 0:
         raise OSError((got.stderr.strip() or f"{cmd[0]} exited {got.returncode}")[:200])
-    return got.stdout
+    # stderr too: the script names a vertical it has no folder for there.
+    return got.stdout + got.stderr
 
 
 def parse_engine(out: str) -> dict[str, dict[str, list[str]]]:
@@ -228,18 +229,26 @@ def parse_engine(out: str) -> dict[str, dict[str, list[str]]]:
     return verticals
 
 
+def parse_missing(out: str) -> list[str]:
+    """The verticals the dry run skipped, ``SKIP <vertical> — not linked at
+    <path>``: named in its list, with no folder in the workspace, so neither
+    checked against the engine nor counted among the verticals it saw."""
+    return sorted({line.split()[1] for line in out.splitlines() if line.startswith("SKIP ") and "not linked" in line})
+
+
 def _engine(rule: dict[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {"rule": "engine", "workspace": rule["workspace"]}
     where = repo_path(rule["workspace"])
     if where is None:
         return {**row, "status": "unreachable", "detail": f"no local checkout of {rule['workspace']}"}
     try:
-        verticals = parse_engine(_run_dry(where, list(rule["dry_run"])))
+        out = _run_dry(where, list(rule["dry_run"]))
     except (OSError, subprocess.SubprocessError) as exc:
         return {**row, "status": "unreachable", "detail": str(exc)[:200]}
+    verticals = parse_engine(out)
     behind = {v: {"update": p["update"], "add": p["add"]} for v, p in verticals.items() if p["update"] or p["add"]}
     return {**row, "status": "populated" if verticals else "empty", "verticals": sorted(verticals),
-            "behind": behind, "overrides": {v: p["override"] for v, p in verticals.items() if p["override"]}}  # fmt: skip
+            "missing": parse_missing(out), "behind": behind, "overrides": {v: p["override"] for v, p in verticals.items() if p["override"]}}  # fmt: skip
 
 
 def _newest_run(repo: str, workflow: str) -> dict[str, Any] | None:
@@ -259,7 +268,7 @@ def _workflow(rule: dict[str, Any], engines: list[dict[str, Any]], now: datetime
     if not of or of[0].get("status") != "populated":
         return {**row, "status": "unreachable", "detail": f"no verticals known from {rule['repos_of']}"}
     runs = []
-    for vertical in of[0]["verticals"]:
+    for vertical in sorted(of[0]["verticals"] + of[0].get("missing", [])):
         repo = f"{owner}/{vertical}"
         try:
             run = _newest_run(repo, rule["workflow"])
@@ -291,7 +300,7 @@ def _catalog(rule: dict[str, Any], engines: list[dict[str, Any]]) -> dict[str, A
     if not of or of[0].get("status") != "populated":
         return {**row, "status": "unreachable", "detail": f"no verticals known from {rule['repos_of']}"}
     verticals = []
-    for vertical in of[0]["verticals"]:
+    for vertical in sorted(of[0]["verticals"] + of[0].get("missing", [])):
         repo = f"{owner}/{vertical}"
         raw, why = _read(f"{repo}:{path}")
         if raw is None:
@@ -365,7 +374,8 @@ def _print_text(rep: dict[str, Any]) -> None:
         if e["status"] == "unreachable":
             print(f"engine unknown  {e['workspace']}  ({e['detail']})")
             continue
-        print(f"engine {e['workspace']}: {len(e['verticals'])} verticals, {len(e['behind'])} behind the engine")
+        print(f"engine {e['workspace']}: {len(e['verticals'])} verticals, {len(e['behind'])} behind the engine"
+              + (f", {len(e['missing'])} not on this box: {', '.join(e['missing'])}" if e.get("missing") else ""))
         for v, paths in sorted(e["behind"].items()):
             print(f"         {v}: {', '.join(paths['update'] + paths['add'])}")
         for v, paths in sorted(e["overrides"].items()):

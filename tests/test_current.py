@@ -210,6 +210,31 @@ def test_an_engine_report_names_the_verticals_behind_and_keeps_overrides_apart(r
     assert eng["overrides"] == {"climate-almanac": ["AGENTS.md"]}
 
 
+def test_a_vertical_the_dry_run_skipped_is_missing_and_still_read_from_github(root, tmp_path, monkeypatch):
+    """2026-10-31: four new verticals, not cloned here, went unnamed; the
+    script said so only on stderr."""
+    (root / "almanac-data" / ".git").mkdir(parents=True)
+    dry = DRY_RUN + "SKIP tech-almanac — not linked at /x/tech-almanac\nSKIP labor-almanac — not linked at /x/labor-almanac\n"
+    monkeypatch.setattr(current, "_run_dry", lambda where, cmd: dry)
+    asked = []
+    monkeypatch.setattr(current, "_newest_run", lambda repo, wf: asked.append(repo))
+    reg = _registry(tmp_path, engine=[{"workspace": "almanac-data/almanac-data", "dry_run": ["x"]}],
+                    workflow=[{"repos_of": "almanac-data/almanac-data", "workflow": "link-check.yml",
+                               "max_age_days": 2}])  # fmt: skip
+
+    got = current.copies(reg)
+    [eng] = got["engine"]
+
+    assert eng["missing"] == ["labor-almanac", "tech-almanac"]
+    assert eng["verticals"] == ["agriculture-almanac", "climate-almanac"], "only what the dry run checked"
+    assert "almanac-data/tech-almanac" in asked and len(asked) == 4
+
+
+def test_a_dry_runs_stderr_reaches_the_parser(tmp_path):
+    out = current._run_dry(tmp_path, ["sh", "-c", "echo '=== a ==='; echo 'SKIP b — not linked at /b' >&2"])
+    assert current.parse_missing(out) == ["b"] and list(current.parse_engine(out)) == ["a"]
+
+
 def test_a_scheduled_workflow_is_stale_failed_never_run_or_unknown_per_repo(root, tmp_path, monkeypatch):
     (root / "almanac-data" / ".git").mkdir(parents=True)
     dry = "".join(f"=== {v} ===\n  = x\n" for v in ("fresh", "old", "red", "never", "down"))
