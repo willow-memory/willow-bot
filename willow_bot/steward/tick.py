@@ -2028,6 +2028,9 @@ def _ci_line_resolved(item: dict) -> str:
         "closed-merged": "PR merged",
         "closed": "PR closed",
         "superseded-on-branch": f"superseded by {by} on the same branch",
+        "red-closed-merged": "PR merged with this red",
+        "red-closed": "PR closed",
+        "superseded-on-branch-green": f"superseded by {by} on the same branch, green",
     }.get(how, how)
     return f"CI resolved: {where} @ {sha7} — {why}"
 
@@ -2469,7 +2472,12 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     # resolve the item moot with the red live, because the candidates were
     # read before the filing loop set `stuck = False`. The MCP-off path
     # calls it early only to report what it WOULD resolve.
-    def _resolve_candidates(filed_map: dict, filed_cancelled_map: dict) -> list[tuple[str, dict, str, str]]:
+    def _resolve_candidates(filed_map: dict, filed_cancelled_map: dict,
+                            joined: frozenset = frozenset()) -> list[tuple[str, dict, str, str]]:
+        # `joined`: ids of items a leg was filed into or appended to this
+        # tick. A real red is retired by closure only on a tick after its
+        # last leg, so a red and a close landing together still read as
+        # live once (Loki FE91FF0E).
         out: list[tuple[str, dict, str, str]] = []
         for item_key, item in items.items():
             if item.get("resolved"):
@@ -2490,20 +2498,37 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                     out.append((item_key, item, sha, "superseded"))
                     found = True
                     break
-            if found or not _item_is_stuck_only(item, filed_map, filed_cancelled_map):
+            if found:
                 continue
+            stuck_only = _item_is_stuck_only(item, filed_map, filed_cancelled_map)
             if item["pr"] and pr_key in closed:
-                how = "closed-merged" if closed[pr_key].get("merged") else "closed"
-                out.append((item_key, item, item["head_sha"], how))
+                # A red on a PR no longer open is moot, merged or not — the
+                # rule the legacy pass already holds ("reds on PRs no longer
+                # open are moot"); the base branch's own run carries any red
+                # that merged. Before, only a stuck-only item took this
+                # route and a real red stayed open for good.
+                merged = closed[pr_key].get("merged")
+                if stuck_only:
+                    out.append((item_key, item, item["head_sha"], "closed-merged" if merged else "closed"))
+                elif item.get("id") not in joined:
+                    out.append((item_key, item, item["head_sha"], "red-closed-merged" if merged else "red-closed"))
                 continue
             if not item["pr"] and item.get("branch"):
                 on_branch = heads.get(_ci_branch_key(item["repo"], item["branch"])) or {}
                 mine_b = on_branch.get(item["head_sha"])
-                later = [s for s, at in on_branch.items()
-                         if s != item["head_sha"] and at is not None and mine_b is not None and at > mine_b]
-                if later:
-                    out.append((item_key, item, sorted(later, key=lambda s: on_branch[s])[-1],
-                                "superseded-on-branch"))
+                later = sorted((s for s, at in on_branch.items()
+                                if s != item["head_sha"] and at is not None and mine_b is not None and at > mine_b),
+                               key=lambda s: on_branch[s])
+                if later and stuck_only:
+                    out.append((item_key, item, later[-1], "superseded-on-branch"))
+                elif later:
+                    # A head with no PR has no PR group, so the green route
+                    # above never sees its successors: the same rule (a later
+                    # head green over this item's legs) read on its branch.
+                    green = [s for s in later
+                             if _head_is_green(head_legs.get(_ci_head_key(item["repo"], None, s)) or {}, expected)]
+                    if green:
+                        out.append((item_key, item, green[0], "superseded-on-branch-green"))
         return out
 
     def _persist() -> None:
@@ -2607,9 +2632,38 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
 
     resolved, resolve_refused = [], []
     # After the filing loop: this tick's reds have joined their items and
-    # cleared `stuck` where they landed, so a closed PR with a live red on
-    # it is not a candidate.
-    for item_key, item, sha, how in _resolve_candidates(filed_now, filed_cancelled_now):
+    # cleared `stuck` where they landed, so a closed PR with a red that
+    # landed this tick is not a candidate yet (`joined`).
+    joined = frozenset(str(x["id"]) for x in [*filed, *appended] if x.get("id"))
+    candidates = _resolve_candidates(filed_now, filed_cancelled_now, joined)
+    # The routes a real red gained reach items filed long ago, some already
+    # closed in the queue by hand. `human_required_resolve` on a closed item
+    # overwrites its status, resolver and note, so the queue is read once
+    # first: a closed item is marked done here and never re-stamped. A queue
+    # that cannot be read holds those candidates for the next tick.
+    if any(how in _CI_RED_MOOT_HOWS for _, _, _, how in candidates):
+        listing, list_err = pace.call(call, "human_required_list", {
+            "app_id": app, "kind": "review", "status": "open", "limit": _CI_LEGACY_LIST_LIMIT,
+        })
+        rows = listing.get("items") if isinstance(listing, dict) else listing
+        open_ids = ({str(r.get("id")) for r in rows if isinstance(r, dict)}
+                    if list_err is None and isinstance(rows, list) else None)
+        kept_candidates = []
+        for cand in candidates:
+            item_key, item, sha, how = cand
+            if how not in _CI_RED_MOOT_HOWS or (open_ids is not None and str(item["id"]) in open_ids):
+                kept_candidates.append(cand)
+            elif open_ids is None:
+                receipt.setdefault("resolve_held", []).append(
+                    {"where": item_key, "item_id": item["id"], "how": how,
+                     "reason": f"open queue unreadable: {list_err or 'unrecognised listing shape'}"[:200]})
+            else:
+                item["resolved"] = {"by": sha, "how": how, "at": receipt["at"], "already_closed": True}
+                state.setdefault("ci_notified", {}).setdefault(str(item["id"]), {})["resolved"] = "already closed"
+                receipt.setdefault("already_closed", []).append({"where": item_key, "item_id": item["id"],
+                                                                 "how": how})
+        candidates = kept_candidates
+    for item_key, item, sha, how in candidates:
         if pace.budget_spent:
             break  # the rest resolve next tick; the candidates are recomputed from state
         note = {
@@ -2618,6 +2672,10 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
             "closed-merged": f"moot: PR merged; stuck cancelled run at {receipt['at']}",
             "closed": f"moot: PR closed; stuck cancelled run at {receipt['at']}",
             "superseded-on-branch": f"superseded by {sha} on the same branch; stuck cancelled run at {receipt['at']}",
+            "red-closed-merged": (f"moot: PR merged with this red; its base branch's own run carries "
+                                  f"it from here ({receipt['at']})"),
+            "red-closed": f"moot: PR closed without merge at {receipt['at']}",
+            "superseded-on-branch-green": f"superseded by {sha} on the same branch, green at {receipt['at']}",
         }[how]
         result, err = pace.call(call, "human_required_resolve", {
             "app_id": app, "item_id": item["id"], "status": "resolved", "note": note,
@@ -2682,6 +2740,9 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
 # anything but run_ci.
 _CI_LEGACY_TITLE_RE = re.compile(r"^CI red: \S+ — (?!\d+ leg\(s\): ).+ (failure|timed_out|cancelled|startup_failure)$")
 _CI_LEGACY_LIST_LIMIT = 500
+# The resolve routes a real red takes (`_resolve_candidates`): each is checked
+# against the open queue before it resolves anything.
+_CI_RED_MOOT_HOWS = frozenset({"red-closed-merged", "red-closed", "superseded-on-branch-green"})
 
 
 def _is_legacy_ci_item(item: dict, *, own_ids: set[str]) -> bool:
