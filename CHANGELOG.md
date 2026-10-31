@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [1.28.0](https://github.com/willow-memory/willow-bot/compare/v1.27.0...v1.28.0) (2026-10-31)
+
+
+### Added
+
+* **pypi:** every venv's packages against PyPI, vulnerable ones filed daily ([3d8254f](https://github.com/willow-memory/willow-bot/commit/3d8254f399c0b4155cff74d68005d7e9ba9adb75))
+* **pypi:** every venv's packages against PyPI, vulnerable ones filed daily ([d707b50](https://github.com/willow-memory/willow-bot/commit/d707b5026b59a43726941b87c3b9e97c6664580e))
+
+
+### Fixed
+
+* **steward:** keep-current files the urgent first, a few a tick, by reflog time ([57bc767](https://github.com/willow-memory/willow-bot/commit/57bc76720541577ea2b2e7c9d07b5e3c57ae865b))
+
 ## [1.27.0](https://github.com/willow-memory/willow-bot/compare/v1.26.0...v1.27.0) (2026-10-30)
 
 
