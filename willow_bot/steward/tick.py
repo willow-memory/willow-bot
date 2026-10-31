@@ -792,11 +792,22 @@ def _ci_epoch(value: object) -> float | None:
     return dt.timestamp()
 
 
+# A release tag (`v0.17.0`, `willow-bot-v1.30.0`, `v1.0.0-rc.1`): a run on
+# one is a branch of its own, so nothing ever follows it there.
+_CI_TAG_RE = re.compile(r"(?:[A-Za-z0-9_.-]+-)?v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?")
+
+
 def _ci_branch_key(repo: str, branch: str) -> str:
     """The successor group for a head with no PR: every head the bot has
     seen on ``repo``'s ``branch``. Spelled so it can never collide with a
-    ``repo#pr`` key (``#`` is not legal in a branch name's position here)."""
-    return f"{repo}~{branch}"
+    ``repo#pr`` key (``#`` is not legal in a branch name's position here).
+
+    Every release tag of a repo is one group, ``repo~<tags>`` (``<`` is not
+    legal in a branch name): a tag is never pushed to twice, so a red
+    ``publish`` on ``v1.29.5`` was followed by nothing and stayed open after
+    ``v1.30.0`` published fine (willow-bot, 2026-10-31). Its successor is
+    the next tag."""
+    return f"{repo}~<tags>" if _CI_TAG_RE.fullmatch(branch or "") else f"{repo}~{branch}"
 
 
 def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
