@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.29.2](https://github.com/willow-memory/willow-bot/compare/v1.29.1...v1.29.2) (2026-10-31)
+
+
+### Fixed
+
+* **steward:** keep-current files one restart item per unit ([31bc656](https://github.com/willow-memory/willow-bot/commit/31bc656356b204fb8eb27c1303aca40ecec41506))
+* **steward:** keep-current files one restart item per unit ([45714c0](https://github.com/willow-memory/willow-bot/commit/45714c0c3a9a1ea76e1fef6b0d3e5a5e366d6355))
+
 ## [1.29.1](https://github.com/willow-memory/willow-bot/compare/v1.29.0...v1.29.1) (2026-10-31)
 
 

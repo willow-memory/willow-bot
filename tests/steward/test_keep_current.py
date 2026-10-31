@@ -151,6 +151,7 @@ class _Desk:
     def __init__(self, refuse: bool = False):
         self.filed: list[dict] = []
         self.resolved: list[str] = []
+        self.notes: dict[str, str] = {}
         self.refuse = refuse
 
     def __call__(self, tool: str, args: dict):
@@ -160,6 +161,7 @@ class _Desk:
             self.filed.append(args)
             return {"id": f"hr-{len(self.filed)}"}
         self.resolved.append(args["item_id"])
+        self.notes[args["item_id"]] = args.get("note", "")
         return {"ok": True}
 
 
@@ -466,3 +468,58 @@ def test_a_venv_reinstalled_after_its_unit_started_owes_a_restart(tmp_path, monk
     assert owed["unit"] == "a.service" and owed["head"].startswith("install@")
     os.utime(dist, (started - 50, started - 50))
     assert kc.restarts_owed(inv)["owed"] == []
+
+
+# ── one restart item per unit ────────────────────────────────────────────────
+
+_INSTALL = {"unit": "a.service", "checkout": "/v", "head": "install@1700", "then": "", "paths": ["packages reinstalled in /v"],
+            "started": 1}  # fmt: skip
+
+
+def test_every_reason_a_unit_owes_its_restart_is_one_item(quiet):
+    """grove-serve owed one restart to willows-grove, willow-mcp and a
+    reinstalled venv at once, and was three items (2026-10-31)."""
+    desk = _Desk()
+    quiet["owed"] = [_OWED, {**_OWED, "checkout": "/d", "head": "c" * 40}, _INSTALL]
+    kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1000)
+    (filed,) = desk.filed
+    assert filed["source_ref"] == "keep-current:restart:a.service"
+    assert filed["title"] == "a.service runs code older than its checkout"
+    assert filed["summary"] == (
+        f"Since a.service started, /c moved from {'a' * 12} to {'b' * 12} (1 code files: x.py); "
+        f"/d moved from {'a' * 12} to {'c' * 12} (1 code files: x.py); packages were reinstalled in /v. "
+        "Restart it: systemctl --user restart a.service")
+
+
+def test_a_new_commit_before_the_restart_files_nothing_new(quiet):
+    desk = _Desk()
+    quiet["owed"] = [_OWED]
+    kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1000)
+    quiet["owed"] = [{**_OWED, "head": "d" * 40}]  # the checkout moved again; still not restarted
+    kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1300)
+    assert len(desk.filed) == 1 and desk.resolved == []
+    quiet["owed"] = []  # restarted
+    kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1600)
+    assert desk.resolved == ["hr-1"]
+
+
+def test_items_filed_per_commit_fold_into_the_units_newest(quiet):
+    """The build before keyed a restart item by (unit, commit). The newest
+    becomes the unit's one item; the rest resolve saying where they went,
+    and nothing is filed again."""
+    desk = _Desk()
+    kc._save({"ran": {}, "found": {}, "filed": {
+        f"restart:a.service:{'a' * 40}": {"id": "hr-old", "since": 10, "section": "restart"},
+        f"restart:a.service:{'b' * 40}": {"id": "hr-new", "since": 20, "section": "restart"},
+        "restart:a.service:install@1700": {"id": "hr-mid", "since": 15, "section": "restart"},
+        f"restart:gone.service:{'a' * 40}": {"id": "hr-gone", "since": 10, "section": "restart"},
+    }})
+    quiet["owed"] = [_OWED, _INSTALL]
+    got = kc.run(enable_mcp=True, call=desk, app="willow-bot", now=1000)
+    assert desk.filed == []
+    assert kc.load()["filed"] == {"restart:a.service": {"id": "hr-new", "since": 20, "section": "restart"}}
+    assert sorted(desk.resolved) == ["hr-gone", "hr-mid", "hr-old"]
+    notes = {i["id"]: i for i in got["items"] if i["state"] == "resolved"}
+    assert set(notes) == {"hr-gone", "hr-mid", "hr-old"}
+    assert desk.notes["hr-old"] == "keep-current: folded into hr-new, one restart item per unit"
+    assert desk.notes["hr-gone"] == "keep-current: no longer found"
