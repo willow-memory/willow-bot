@@ -1,5 +1,5 @@
 {
- "_doc": "What is held to a source somewhere else, for `willow-bot-steward current`. Each rule names a repo as owner/name and a path in it; the comparison is of the local checkouts, whose own freshness `current` reports beside it. bytes: the copy is the source's bytes (after `replace`, each [in the copy, in the source]). pin: a JSON pin {repo, commit, path, sha256} whose sha256 should be the source file's. engine: a workspace's own dry run says which engine paths each vertical lacks; its overrides are never drift. workflow: each repo's newest run of a scheduled workflow, and how old it is.",
+ "_doc": "What is held to a source somewhere else, for `willow-bot-steward current`. Each rule names a repo as owner/name and a path in it; the comparison is of the local checkouts, whose own freshness `current` reports beside it. bytes: the copy is the source's bytes (after `replace`, each [in the copy, in the source]). pin: a JSON pin {repo, commit, path, sha256} whose sha256 should be the source file's. engine: a workspace's own dry run says which engine paths each vertical lacks; its overrides are never drift. workflow: each repo's newest run of a scheduled workflow, and how old it is. catalog: each vertical's generated catalog.json, for entries still marked live or frozen that the link checker got no response from (status stays the curator's).",
  "bytes": [
   {"copy": "willow-memory/willow-mcp:src/willow_mcp/scrub_local.py", "source": "willow-memory/willow-bot:one-script/onescript/scrub.py"},
   {"copy": "willow-memory/willow-mcp:src/willow_mcp/canon_local.py", "source": "willow-memory/willow-bot:one-script/onescript/canon.py"},
@@ -19,5 +19,8 @@
  ],
  "workflow": [
   {"repos_of": "almanac-data/almanac-data", "workflow": "link-check.yml", "max_age_days": 2}
+ ],
+ "catalog": [
+  {"repos_of": "almanac-data/almanac-data", "path": "catalog.json"}
  ]
 }

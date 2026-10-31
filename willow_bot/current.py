@@ -12,7 +12,9 @@ says, for each thing that has to keep up with something else:
 - **copies**: files held to a source in another repo (``copies.json``): byte
   copies (after a known replacement), pins (``kernel.pin``), an engine
   workspace's propagation (its own dry run decides, and its overrides are
-  never drift), and a scheduled workflow's newest run in each repo.
+  never drift), a scheduled workflow's newest run in each repo, and each
+  almanac vertical's catalog: entries still marked live that the link checker
+  could not reach.
 
 Every answer is ``populated``, ``empty`` or ``unreachable``: a check that
 could not run says so and is never counted as current. The comparisons are of
@@ -275,6 +277,42 @@ def _workflow(rule: dict[str, Any], engines: list[dict[str, Any]], now: datetime
     return {**row, "status": "populated", "runs": runs}
 
 
+def _catalog(rule: dict[str, Any], engines: list[dict[str, Any]]) -> dict[str, Any]:
+    """Each vertical's generated catalog, read for the one disagreement a person
+    has to settle: an entry the curator still calls ``live`` or ``frozen`` that
+    the link checker's last probe got no response from at all
+    (``observed.reachable`` false). A 403 behind bot protection is a response,
+    so it is never counted here; ``status`` is the curator's to change, never
+    this check's."""
+    path = rule.get("path", "catalog.json")
+    row: dict[str, Any] = {"rule": "catalog", "repos_of": rule["repos_of"], "path": path}
+    owner = rule["repos_of"].split("/", 1)[0]
+    of = [e for e in engines if e.get("workspace") == rule["repos_of"]]
+    if not of or of[0].get("status") != "populated":
+        return {**row, "status": "unreachable", "detail": f"no verticals known from {rule['repos_of']}"}
+    verticals = []
+    for vertical in of[0]["verticals"]:
+        repo = f"{owner}/{vertical}"
+        raw, why = _read(f"{repo}:{path}")
+        if raw is None:
+            verticals.append({"repo": repo, "status": "unreachable", "detail": why})
+            continue
+        try:
+            entries = json.loads(raw).get("entries")
+        except (json.JSONDecodeError, AttributeError) as exc:
+            verticals.append({"repo": repo, "status": "unreachable", "detail": f"{path} isn't a catalog: {exc}"[:200]})
+            continue
+        if not isinstance(entries, list):
+            verticals.append({"repo": repo, "status": "unreachable", "detail": f"{path} has no entries list"})
+            continue
+        unreached = [{"id": e.get("id"), "status": e.get("status"), "checked": (e.get("observed") or {}).get("checked")}
+                     for e in entries if isinstance(e, dict) and e.get("status") in ("live", "frozen")
+                     and (e.get("observed") or {}).get("reachable") is False]  # fmt: skip
+        verticals.append({"repo": repo, "status": "populated" if entries else "empty", "entries": len(entries),
+                          "unreached": unreached})  # fmt: skip
+    return {**row, "status": "populated", "verticals": verticals}
+
+
 def copies(registry: Path = REGISTRY, *, now: datetime | None = None) -> dict[str, Any]:
     """Every copy in ``registry`` against its source."""
     try:
@@ -289,6 +327,7 @@ def copies(registry: Path = REGISTRY, *, now: datetime | None = None) -> dict[st
         "pin": [_pin(r) for r in rules.get("pin", [])],
         "engine": engines,
         "workflow": [_workflow(r, engines, now) for r in rules.get("workflow", [])],
+        "catalog": [_catalog(r, engines) for r in rules.get("catalog", [])],
     }
 
 
@@ -340,6 +379,19 @@ def _print_text(rep: dict[str, Any]) -> None:
         for r in bad:
             why = r.get("detail") or f"{r['conclusion']} {r['age_days']} days ago"
             print(f"         {r['repo']}: {why}")
+    for c in cp.get("catalog", []):
+        if c["status"] == "unreachable":
+            print(f"catalog unknown {c['repos_of']}  ({c['detail']})")
+            continue
+        read = [v for v in c["verticals"] if v["status"] != "unreachable"]
+        unreached = sum(len(v["unreached"]) for v in read)
+        print(f"catalog {c['repos_of']}: {sum(v['entries'] for v in read)} entries in {len(read)} verticals, "
+              f"{unreached} marked live the link checker could not reach")  # fmt: skip
+        for v in c["verticals"]:
+            if v["status"] == "unreachable":
+                print(f"         {v['repo']}: unknown ({v['detail']})")
+            elif v["unreached"]:
+                print(f"         {v['repo']}: {', '.join(str(e['id']) for e in v['unreached'])}")
 
 
 def main(argv: list[str] | None = None) -> int:

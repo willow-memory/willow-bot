@@ -260,6 +260,27 @@ def test_an_engine_workspace_behind_is_one_item_and_an_override_never_counts():
     assert "climate-almanac" not in found["engine:almanac-data/almanac-data"]["summary"]
 
 
+def test_unreached_catalog_entries_are_one_item_per_workspace():
+    copies = {"catalog": [{"repos_of": "almanac-data/almanac-data", "verticals": [
+        {"repo": "almanac-data/energy-almanac", "status": "populated", "entries": 11,
+         "unreached": [{"id": "eia-923", "status": "live"}, {"id": "ember", "status": "live"}]},
+        {"repo": "almanac-data/civic-almanac", "status": "populated", "entries": 11, "unreached": []},
+        {"repo": "almanac-data/gone-almanac", "status": "unreachable", "detail": "no local checkout"},
+    ]}]}  # fmt: skip
+    found = kc.findings({"copies": copies})
+    assert list(found) == ["catalog:almanac-data/almanac-data"]
+    item = found["catalog:almanac-data/almanac-data"]
+    assert item["title"] == "2 almanac entries are marked live but unreachable (almanac-data/almanac-data)"
+    assert "almanac-data/energy-almanac: eia-923, ember" in item["summary"]
+    assert "civic-almanac" not in item["summary"] and "gone-almanac" not in item["summary"]
+
+
+def test_a_catalog_with_nothing_unreached_files_nothing():
+    copies = {"catalog": [{"repos_of": "almanac-data/almanac-data", "verticals": [
+        {"repo": "almanac-data/energy-almanac", "status": "populated", "entries": 11, "unreached": []}]}]}  # fmt: skip
+    assert kc.findings({"copies": copies}) == {}
+
+
 def test_every_vertical_behind_one_engine_is_named_in_its_one_item():
     copies = {"engine": [{"workspace": "almanac-data/almanac-data", "behind": {
         "health-almanac": {"update": ["AGENTS.md"], "add": []},
