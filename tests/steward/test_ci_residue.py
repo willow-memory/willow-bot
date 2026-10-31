@@ -339,6 +339,113 @@ def test_a_head_with_a_red_and_a_stuck_leg_is_still_red(home, monkeypatch):
     assert item["title"].startswith("CI red: ")
 
 
+# ── a burst of pushes: cancelled legs and the aggregate (2026-10-31) ─────────
+
+ALM = "almanac-data/science-almanac"
+A1 = "7da0feed1d080ed67e9e3cd33d3c1c20fbcedcaa"
+A2 = "93f7f20000000000000000000000000000000000"
+
+
+def _cancelled_push(sha, cid, at):
+    """What one push to main left when the next push cancelled it: both
+    validate legs cancelled, and the aggregate `test` failed because of it."""
+    for i, leg in enumerate(("validate (3.11)", "validate (3.13)")):
+        deposits.append_local(_row(ALM, sha, cid + i, leg, "cancelled", branch="main", received_at=_iso(at)))
+    deposits.append_local(_row(ALM, sha, cid + 2, "test", "failure", branch="main", received_at=_iso(at + 5)))
+
+
+def test_an_aggregate_failed_only_by_cancelled_legs_drops_when_they_are_superseded(home, monkeypatch):
+    """science-almanac, 2026-10-31: five pushes to main inside four minutes;
+    each run but the last was cancelled, its aggregate `test` concluded
+    failure, and each head was filed "CI red: … 1 leg(s): test"."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    base = time.time()
+    _cancelled_push(A1, 1, base)
+    r = tick.run_ci()
+    assert r["aggregate_held"] and c.named("human_required_enqueue") == []
+    for i, leg in enumerate(("validate (3.11)", "validate (3.13)", "test")):
+        deposits.append_local(_row(ALM, A2, 10 + i, leg, "success", branch="main", received_at=_iso(base + 60)))
+    r2 = tick.run_ci()
+    assert {x["state"] for x in r2["cancelled"]} == {"superseded"}
+    assert r2["aggregate_dropped"] == [{"where": f"{ALM}@{A1[:12]}", "leg": "test",
+                                        "reason": "its needed legs were cancelled, and those were superseded"}]
+    assert c.named("human_required_enqueue") == []
+    assert json.loads(state_path().read_text())["ci_aggregate_held"] == {}
+
+
+def test_an_aggregate_landing_after_its_legs_were_superseded_is_dropped(home, monkeypatch):
+    """willow-mcp#743 at 53f3ebf in the 2026-10-31 replay: the cancelled legs
+    were settled superseded and the head pruned one tick before the failed
+    aggregate arrived, which then saw nothing cancelled beside it and filed."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    base = time.time()
+    for i, leg in enumerate(("validate (3.11)", "validate (3.13)")):
+        deposits.append_local(_row(ALM, A1, 1 + i, leg, "cancelled", branch="main", received_at=_iso(base)))
+    deposits.append_local(_row(ALM, A2, 10, "validate (3.11)", "success", branch="main", received_at=_iso(base + 60)))
+    r = tick.run_ci()
+    assert {x["state"] for x in r["cancelled"]} == {"superseded"}
+    deposits.append_local(_row(ALM, A1, 3, "test", "failure", branch="main", received_at=_iso(base + 90)))
+    r2 = tick.run_ci()
+    assert [x["leg"] for x in r2["aggregate_dropped"]] == ["test"]
+    assert c.named("human_required_enqueue") == []
+
+
+def test_a_held_aggregate_files_with_its_legs_when_they_go_stuck(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    _cancelled_push(A1, 1, time.time())
+    tick.run_ci()
+    assert c.named("human_required_enqueue") == []
+    monkeypatch.setattr(tick, "_ci_clock", _later(11))
+    r = tick.run_ci()
+    assert {x["state"] for x in r["cancelled"]} == {"stuck"}
+    (item,) = c.named("human_required_enqueue")
+    assert "test concluded failure (aggregate)" in item["summary"]
+    assert "validate (3.11) concluded cancelled" in item["summary"]
+
+
+def test_an_aggregate_beside_a_real_red_files_at_once(home, monkeypatch):
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(ALM, A1, 1, "validate (3.11)", "failure", branch="main"))
+    deposits.append_local(_row(ALM, A1, 2, "validate (3.13)", "cancelled", branch="main"))
+    deposits.append_local(_row(ALM, A1, 3, "test", "failure", branch="main"))
+    r = tick.run_ci()
+    assert "aggregate_held" not in r
+    (item,) = c.named("human_required_enqueue")
+    assert item["title"].startswith("CI red: ") and "validate (3.11)" in item["title"]
+
+
+def test_no_leg_ages_into_stuck_while_its_successor_is_unread(home, monkeypatch):
+    """The step read 50 rows a tick; a burst left it hours behind, and a
+    cancelled leg whose successor sat in the unread rows was filed stuck."""
+    _prime()
+    c = _Client()
+    _use(monkeypatch, c)
+    base = time.time()
+    deposits.append_local(_row(MCP, REL, 1, "lint", "cancelled", branch="master", received_at=_iso(base)))
+    tick.run_ci()
+    monkeypatch.setattr(tick, "_CI_PER_TICK", 2)
+    for i in range(3):
+        deposits.append_local(_row("x/other", f"{i:040d}", 20 + i, "lint", "success", branch="main"))
+    deposits.append_local(_row(MCP, REL2, 2, "lint", "success", branch="master", received_at=_iso(base + 60)))
+    monkeypatch.setattr(tick, "_ci_clock", _later(11))
+    r = tick.run_ci()
+    assert r["behind"] > 0
+    assert r["cancelled"] == [{"repo": MCP, "pr": None, "head_sha": REL, "leg": "lint", "state": "waiting",
+                               "held": "reader-behind"}]
+    r2 = tick.run_ci()
+    assert "behind" not in r2
+    assert [x["state"] for x in r2["cancelled"]] == ["superseded"]
+    assert c.named("human_required_enqueue") == []
+
+
 # ── 2. each step paces through its own budget ────────────────────────────────
 
 class _Metered:
