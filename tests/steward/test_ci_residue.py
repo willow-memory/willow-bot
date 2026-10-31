@@ -68,6 +68,27 @@ class _Client:
         return [i for n, i in self.calls if n == name]
 
 
+class _QueueClient(_Client):
+    """`_Client` that keeps the queue it is asked to change: what it filed
+    stays open until resolved (or `closed` by hand), and
+    `human_required_list` answers with the open items, as the broker does."""
+
+    def __init__(self):
+        super().__init__()
+        self.open: set[str] = set()
+
+    def __call__(self, name, inputs):
+        if name == "human_required_list":
+            self.calls.append((name, inputs))
+            return {"items": [{"id": i, "status": "open"} for i in sorted(self.open)]}
+        out = super().__call__(name, inputs)
+        if name == "human_required_enqueue":
+            self.open.add(out["id"])
+        elif name == "human_required_resolve":
+            self.open.discard(inputs["item_id"])
+        return out
+
+
 def _use(monkeypatch, client):
     monkeypatch.setattr("willow_bot.steward.mcp_client.call", client)
 
@@ -590,20 +611,49 @@ def test_a_stuck_item_from_the_previous_build_is_recognised_by_the_filed_maps(ho
     assert [(x["item_id"], x["how"]) for x in r["resolved"]] == [("hr-old", "closed-merged")]
 
 
-def test_a_red_item_on_a_closed_pr_does_not_resolve_by_closure(home, monkeypatch):
+def test_a_red_item_on_a_merged_pr_resolves_moot_and_says_it_merged_red(home, monkeypatch):
+    """Was `..._does_not_resolve_by_closure`: a real red stayed open for good
+    once its PR merged (willows-grove#171 @ 8c53c26, 2026-10-31). The legacy
+    pass already holds reds on PRs no longer open as moot; the tick now
+    does too, and its note says the red merged."""
     _prime()
-    c = _Client()
+    c = _QueueClient()
     _use(monkeypatch, c)
     deposits.append_local(_row(MCP, PRSHA, 14, "test", "failure", pr=590))
-    tick.run_ci()
+    (filed,) = tick.run_ci()["filed"]
     _close(f"{MCP}#590", merged=True)
     r = tick.run_ci()
-    assert r["resolved"] == [] and c.named("human_required_resolve") == []
+    assert r["resolved"] == [{"where": f"{MCP}#590@{PRSHA}", "item_id": filed["id"],
+                              "superseded_by": PRSHA, "how": "red-closed-merged"}]
+    (res,) = c.named("human_required_resolve")
+    assert res["note"].startswith("moot: PR merged with this red; its base branch's own run carries it")
+    assert tick.run_ci()["resolved"] == []
+
+
+def test_a_red_item_on_a_pr_closed_without_merge_resolves_moot(home, monkeypatch):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 20, "test", "failure", pr=594))
+    tick.run_ci()
+    _close(f"{MCP}#594", merged=False)
+    assert [x["how"] for x in tick.run_ci()["resolved"]] == ["red-closed"]
+    assert c.named("human_required_resolve")[0]["note"].startswith("moot: PR closed without merge")
+
+
+def test_a_red_on_an_open_pr_is_not_resolved_by_anything_closure_reads(home, monkeypatch):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 21, "test", "failure", pr=595))
+    tick.run_ci()
+    _close(f"{MCP}#999", merged=True)  # another PR closing is not this one
+    assert tick.run_ci()["resolved"] == [] and c.named("human_required_resolve") == []
 
 
 def test_a_red_joining_a_stuck_item_makes_it_no_longer_stuck_only(home, monkeypatch):
     _prime()
-    c = _Client()
+    c = _QueueClient()
     _use(monkeypatch, c)
     deposits.append_local(_row(MCP, PRSHA, 15, "lint", "cancelled", pr=591))
     tick.run_ci()
@@ -613,7 +663,9 @@ def test_a_red_joining_a_stuck_item_makes_it_no_longer_stuck_only(home, monkeypa
     tick.run_ci()
     assert json.loads(state_path().read_text())["ci_items"][f"{MCP}#591@{PRSHA}"]["stuck"] is False
     _close(f"{MCP}#591", merged=True)
-    assert tick.run_ci()["resolved"] == []
+    # No longer stuck, so it is not retired as a "stuck cancelled run": it
+    # retires as the real red it now is, on a PR that merged.
+    assert [x["how"] for x in tick.run_ci()["resolved"]] == ["red-closed-merged"]
 
 
 def test_merged_synced_alone_reads_as_closed_not_merged(home, monkeypatch):
@@ -664,6 +716,173 @@ def test_an_old_build_stuck_item_with_a_red_this_tick_is_not_moot_either(home, m
     deposits.append_local(_row(MCP, PRSHA, 19, "test", "failure", pr=593))
     r = tick.run_ci()
     assert [a["check"] for a in r["appended"]] == ["test"] and r["resolved"] == []
+
+
+def test_a_red_and_a_close_in_the_same_tick_resolve_as_the_red_one_tick_later(home, monkeypatch):
+    """The race tests above hold the tick that saw both. The tick after, the
+    red is still on a PR that merged: moot, said as a red, never as a stuck
+    cancelled run."""
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 22, "lint", "failure", pr=596))
+    tick.run_ci()
+    _close(f"{MCP}#596", merged=True)
+    deposits.append_local(_row(MCP, PRSHA, 23, "test", "failure", pr=596))  # same tick as the close
+    r = tick.run_ci()
+    assert [a["check"] for a in r["appended"]] == ["test"] and r["resolved"] == []
+    assert [x["how"] for x in tick.run_ci()["resolved"]] == ["red-closed-merged"]
+
+
+# ── a red with no PR: superseded on its branch only by a green head ──────────
+
+def _red_on_master(c, base):
+    deposits.append_local(_row(MCP, REL, 24, "test", "failure", branch="master", received_at=_iso(base)))
+    (filed,) = tick.run_ci()["filed"]
+    item = json.loads(state_path().read_text())["ci_items"][f"{MCP}@{REL[:12]}@{REL}"]
+    assert item["stuck"] is False and item["branch"] == "master"
+    return filed
+
+
+def test_a_prless_red_resolves_when_a_later_head_on_its_branch_goes_green(home, monkeypatch):
+    """rudi193-cmd/safe-app-store's master reds stayed open after later
+    heads landed (2026-10-31): the branch route was for stuck items only."""
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    base = time.time()
+    filed = _red_on_master(c, base)
+    deposits.append_local(_row(MCP, REL2, 25, "test", "success", branch="master", received_at=_iso(base + 60)))
+    r = tick.run_ci()
+    assert r["resolved"] == [{"where": f"{MCP}@{REL[:12]}@{REL}", "item_id": filed["id"],
+                              "superseded_by": REL2, "how": "superseded-on-branch-green"}]
+    assert c.named("human_required_resolve")[0]["note"].startswith(f"superseded by {REL2} on the same branch, green")
+
+
+def test_a_prless_red_is_not_superseded_by_a_later_red_head(home, monkeypatch):
+    """The PR rule, read on a branch: a later head that is also red resolves
+    nothing (it files its own item)."""
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    base = time.time()
+    _red_on_master(c, base)
+    deposits.append_local(_row(MCP, REL2, 26, "test", "failure", branch="master", received_at=_iso(base + 60)))
+    r = tick.run_ci()
+    assert r["resolved"] == [] and [f["head_sha"] for f in r["filed"]] == [REL2]
+
+
+def test_a_prless_red_is_not_superseded_by_a_later_head_missing_one_of_its_legs(home, monkeypatch):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    base = time.time()
+    _red_on_master(c, base)
+    deposits.append_local(_row(MCP, REL2, 27, "lint", "success", branch="master", received_at=_iso(base + 60)))
+    assert tick.run_ci()["resolved"] == []  # `test` has not reported on REL2
+    deposits.append_local(_row(MCP, REL2, 28, "test", "success", branch="master", received_at=_iso(base + 60)))
+    assert [x["how"] for x in tick.run_ci()["resolved"]] == ["superseded-on-branch-green"]
+
+
+def test_an_earlier_green_head_on_the_branch_does_not_resolve_a_later_red(home, monkeypatch):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    base = time.time()
+    deposits.append_local(_row(MCP, REL2, 29, "test", "success", branch="master", received_at=_iso(base - 3600)))
+    tick.run_ci()
+    _red_on_master(c, base)
+    assert tick.run_ci()["resolved"] == [] and c.named("human_required_resolve") == []
+
+
+# ── the queue is read before a red is retired: closed by hand stays as it is ─
+
+def test_a_red_already_closed_in_the_queue_is_marked_done_not_restamped(home, monkeypatch):
+    """`human_required_resolve` on a closed item overwrites its resolver and
+    note; 31 such items sat in the live box's state on 2026-10-31, closed by
+    hand. The bot marks them done and never calls resolve on them."""
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 30, "test", "failure", pr=597))
+    (filed,) = tick.run_ci()["filed"]
+    c.open.discard(filed["id"])  # the operator closed it by hand
+    _close(f"{MCP}#597", merged=True)
+    r = tick.run_ci()
+    assert r["resolved"] == [] and c.named("human_required_resolve") == []
+    assert r["already_closed"] == [{"where": f"{MCP}#597@{PRSHA}", "item_id": filed["id"],
+                                    "how": "red-closed-merged"}]
+    assert not [n for n in r.get("notified", []) if n.get("kind") == "resolved"]
+    assert f"{MCP}#597@{PRSHA}" not in json.loads(state_path().read_text())["ci_items"]  # done, pruned
+    r2 = tick.run_ci()
+    assert "already_closed" not in r2 and len(c.named("human_required_list")) == 1
+
+
+def _watch(repo, pr):
+    from willow_bot.steward import pr_watch
+
+    p = pr_watch.watch_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    table = pr_watch.load(p)
+    table[f"{repo}#{pr}"] = {"app_id": "hanuman", "session_id": "sess-1", "channel": "#hanuman",
+                             "opened_at": "2026-09-21T02:03:12Z", "head": "feat/x"}
+    p.write_text(json.dumps(table))
+
+
+def _resolved_lines(c):
+    return [i["content"] for n, i in c.calls
+            if n == "grove_send_message" and str(i.get("content", "")).startswith("CI resolved:")]
+
+
+@pytest.mark.parametrize("closed_by_hand", [False, True])
+def test_a_watcher_hears_a_red_retired_only_when_the_bot_retired_it(home, monkeypatch, closed_by_hand):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    _watch(MCP, 600)
+    deposits.append_local(_row(MCP, PRSHA, 33, "test", "failure", pr=600))
+    (filed,) = tick.run_ci()["filed"]
+    if closed_by_hand:
+        c.open.discard(filed["id"])
+    _close(f"{MCP}#600", merged=True)
+    tick.run_ci()
+    tick.run_ci()
+    if closed_by_hand:
+        assert _resolved_lines(c) == [] and c.named("human_required_resolve") == []
+    else:
+        assert _resolved_lines(c) == [f"CI resolved: {MCP}#600 @ {PRSHA[:7]} — PR merged with this red"]
+
+
+def test_a_red_is_held_when_the_open_queue_cannot_be_read(home, monkeypatch):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 31, "test", "failure", pr=598))
+    (filed,) = tick.run_ci()["filed"]
+    _close(f"{MCP}#598", merged=True)
+
+    def refuse_list(name, inputs):
+        if name == "human_required_list":
+            return {"error": "gate denied"}
+        return c(name, inputs)
+
+    _use(monkeypatch, refuse_list)
+    r = tick.run_ci()
+    assert r["resolved"] == [] and c.named("human_required_resolve") == []
+    (held,) = r["resolve_held"]
+    assert held["item_id"] == filed["id"] and "gate denied" in held["reason"]
+    _use(monkeypatch, c)
+    assert [x["how"] for x in tick.run_ci()["resolved"]] == ["red-closed-merged"]
+
+
+def test_the_queue_is_not_read_on_a_tick_with_no_red_to_retire(home, monkeypatch):
+    _prime()
+    c = _QueueClient()
+    _use(monkeypatch, c)
+    deposits.append_local(_row(MCP, PRSHA, 32, "test", "failure", pr=599))
+    tick.run_ci()
+    tick.run_ci()
+    assert c.named("human_required_list") == []
 
 
 def test_audit_status_precedence_matches_ci(home, monkeypatch):
