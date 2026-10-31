@@ -247,12 +247,43 @@ def test_the_slow_checks_keep_their_cadence(quiet, monkeypatch):
     assert calls == ["behind", "behind"], "hourly: at 0 and 3600"
 
 
-def test_an_engine_vertical_behind_is_its_own_item_and_an_override_never_one():
+def test_an_engine_workspace_behind_is_one_item_and_an_override_never_counts():
+    """Was one item per vertical: ten identical almanac items for one
+    decision. The operator, 2026-10-31: "fold"."""
     copies = {"engine": [{"workspace": "almanac-data/almanac-data",
                           "behind": {"agriculture-almanac": {"update": ["AGENTS.md"], "add": []}},
                           "overrides": {"climate-almanac": ["AGENTS.md"]}}]}  # fmt: skip
     found = kc.findings({"copies": copies})
-    assert list(found) == ["engine:almanac-data/almanac-data:agriculture-almanac"]
+    assert list(found) == ["engine:almanac-data/almanac-data"]
+    assert found["engine:almanac-data/almanac-data"]["title"] == (
+        "agriculture-almanac is behind its engine (almanac-data/almanac-data)")
+    assert "climate-almanac" not in found["engine:almanac-data/almanac-data"]["summary"]
+
+
+def test_every_vertical_behind_one_engine_is_named_in_its_one_item():
+    copies = {"engine": [{"workspace": "almanac-data/almanac-data", "behind": {
+        "health-almanac": {"update": ["AGENTS.md"], "add": []},
+        "civic-almanac": {"update": ["AGENTS.md"], "add": ["CONTRIBUTING.md"]}}}]}  # fmt: skip
+    (item,) = kc.findings({"copies": copies}).values()
+    assert item["title"] == "2 verticals are behind their engine (almanac-data/almanac-data)"
+    assert item["summary"].startswith(
+        "Engine paths to propagate, per vertical: civic-almanac: AGENTS.md, CONTRIBUTING.md; "
+        "health-almanac: AGENTS.md.")
+
+
+def test_engine_items_filed_per_vertical_fold_into_the_newest(quiet):
+    desk = _Desk()
+    ws = "almanac-data/almanac-data"
+    kc._save({"ran": {}, "found": {}, "filed": {
+        f"engine:{ws}:civic-almanac": {"id": "hr-a", "since": 10, "section": "copies"},
+        f"engine:{ws}:health-almanac": {"id": "hr-b", "since": 20, "section": "copies"},
+    }})
+    quiet["copies"] = {"status": "populated", "bytes": [], "pin": [], "workflow": [], "engine": [
+        {"workspace": ws, "behind": {"civic-almanac": {"update": ["AGENTS.md"], "add": []}}}]}  # fmt: skip
+    kc.run(enable_mcp=True, call=desk, app="willow-bot", now=100_000)
+    assert desk.filed == [] and desk.resolved == ["hr-a"]
+    assert desk.notes["hr-a"] == "keep-current: folded into hr-b, one engine item per workspace"
+    assert kc.load()["filed"] == {f"engine:{ws}": {"id": "hr-b", "since": 20, "section": "copies"}}
 
 
 def test_a_vulnerable_venv_is_one_high_item_naming_each_fix_and_its_range(quiet):

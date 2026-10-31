@@ -396,13 +396,20 @@ def findings(sections: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
             found[f"pin:{p['pin']}"] = {"section": "copies", "title": f"{p['pin']} is behind {p['source']}"[:200],
                                         "summary": "Pinned at " + p.get("pinned", "?") + "; since: "
                                         + "; ".join(p.get("since", [])[:5])}  # fmt: skip
+    # One item per engine workspace, naming every vertical behind it: the
+    # operator, 2026-10-31, of ten identical almanac items: "fold".
     for e in cp.get("engine", []):
-        for vertical, paths in sorted((e.get("behind") or {}).items()):
-            found[f"engine:{e['workspace']}:{vertical}"] = {
-                "section": "copies", "title": f"{vertical} is behind its engine ({e['workspace']})"[:200],
-                "summary": (f"Engine paths to propagate: {', '.join(paths['update'] + paths['add'])}. "
-                            "Its own dry run decided this; local overrides are never counted."),
-            }
+        behind = sorted((e.get("behind") or {}).items())
+        if not behind:
+            continue
+        lines = [f"{vertical}: {', '.join(paths['update'] + paths['add'])}" for vertical, paths in behind]
+        found[f"engine:{e['workspace']}"] = {
+            "section": "copies",
+            "title": (f"{behind[0][0]} is behind its engine ({e['workspace']})" if len(behind) == 1
+                      else f"{len(behind)} verticals are behind their engine ({e['workspace']})")[:200],
+            "summary": ("Engine paths to propagate, per vertical: " + "; ".join(lines) + ". "
+                        "Each vertical's own dry run decided this; local overrides are never counted."),
+        }
     for v in (sections.get("pypi") or {}).get("venvs", []):
         bad = [p for p in v.get("packages", []) if p.get("kind") in ("vulnerable", "yanked")]
         if not bad:
@@ -474,11 +481,13 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
             found[key] = f
     filed: dict[str, dict[str, Any]] = dict(state.get("filed") or {})
     # Restart items used to be filed per (unit, commit) as
-    # `restart:<unit>:<head>`. A unit still owing a restart keeps its newest
-    # such item as its one item; the others resolve, saying where they went.
+    # `restart:<unit>:<head>`, and engine items per (workspace, vertical) as
+    # `engine:<workspace>:<vertical>`. A unit or workspace still found keeps
+    # its newest such item as its one item; the others resolve, saying where
+    # they went.
     folded_into: dict[str, str] = {}
     for key in found:
-        if not key.startswith("restart:") or key in filed:
+        if not key.startswith(("restart:", "engine:")) or key in filed:
             continue
         olds = sorted((k for k in filed if k.startswith(f"{key}:")), key=lambda k: filed[k].get("since") or 0)
         if olds:
@@ -521,7 +530,8 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
             items.append({"key": key, "state": "open", "id": row["id"], "detail": "cleared; resolve owed"})
             continue
         try:
-            note = (f"keep-current: folded into {folded_into[key]}, one restart item per unit"
+            one = "one engine item per workspace" if key.startswith("engine:") else "one restart item per unit"
+            note = (f"keep-current: folded into {folded_into[key]}, {one}"
                     if key in folded_into else "keep-current: no longer found")
             result = call("human_required_resolve", {"app_id": app, "item_id": row["id"], "status": "resolved",
                                                      "note": note})  # fmt: skip
