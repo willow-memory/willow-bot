@@ -465,7 +465,9 @@ def run_audit(*, enable_mcp: bool | None = None) -> dict:
 
 # ── the mirror step: local CI deposits reach the store ───────────────────────
 
-_MIRROR_PER_TICK = 200
+_MIRROR_PER_TICK = 3000
+# Rows in one store record: about 70 KB of deposits.
+_MIRROR_BATCH_ROWS = 100
 
 
 def _mirror_offset_path() -> Path:
@@ -474,18 +476,73 @@ def _mirror_offset_path() -> Path:
     return deposits_dir() / "mirror.offset"
 
 
+def _mirror_batches_path() -> Path:
+    from willow_bot.deposits import deposits_dir
+
+    return deposits_dir() / "mirror_batches.json"
+
+
+def _load_batches(offset: int) -> dict:
+    """``{"per_row_until": n, "batches": {record_id: [start, end]}}``: where
+    the store holds the mirror's rows. Rows before ``per_row_until`` landed
+    one record each, under ``record_id_for``; rows after it, in batches over
+    their byte ranges. A first run that finds no index starts batching at
+    ``offset``: everything before it was mirrored one row at a time."""
+    p = _mirror_batches_path()
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("batches"), dict):
+        data = {"per_row_until": offset, "batches": {}}
+    return data
+
+
+def _save_batches(index: dict) -> None:
+    p = _mirror_batches_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(index, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(p)
+
+
+def _batch_id(start: int, end: int) -> str:
+    return f"ci-batch-{start}-{end}"
+
+
+def _rows_between(src: Path, start: int, end: int) -> list[dict]:
+    """The JSON rows of ``src`` in the byte range ``[start, end)``."""
+    out = []
+    with src.open("rb") as fh:
+        fh.seek(start)
+        while fh.tell() < end:
+            line = fh.readline()
+            if not line:
+                break
+            try:
+                rec = json.loads(line.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
+    return out
+
+
 def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     """Mirror new rows of ``deposits/ci_outcomes.jsonl`` into the store.
 
     The webhook unit writes every check outcome locally and — because it
     runs without MCP — never mirrors: 506 local rows against 6 in
     ``willow_bot_ci_deposits`` on 2026-09-14. This step reads from a byte
-    offset, ``store_put``s each new row under its ``record_id_for`` (so a
-    re-run is an overwrite, not a duplicate), and advances the offset only
-    past rows that landed. Capped per tick. Honest absence when MCP is off.
+    offset and ``store_put``s the new rows in batches of up to
+    ``_MIRROR_BATCH_ROWS``, each one record under ``ci-batch-<start>-<end>``
+    (its byte range, so a re-run is an overwrite, not a duplicate), and
+    advances the offset only past batches that landed. One record a row
+    landed ~17 rows a tick against the store's 60 calls a minute and fell
+    1.2 MB behind on 2026-10-31; the operator chose batches. Capped per
+    tick. Honest absence when MCP is off.
     """
-    from willow_bot.deposits import (COLLECTION, deposits_jsonl, is_annul, record_id_for,
-                                     void_set_before)
+    from willow_bot.deposits import COLLECTION, deposits_jsonl, is_annul, record_id_for, void_set_before
 
     if enable_mcp is None:
         enable_mcp = mcp_enabled()
@@ -509,45 +566,96 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
     from willow_bot.steward import mcp_client
 
     app = _resolve_app_id()
-    mirrored, failed = 0, None
+    mirrored, batches, failed = 0, 0, None
     annulled_skipped, annulled_mirrors = 0, 0
     malformed = 0
     pace = _Pacer(_MIRROR_TIME_BUDGET_S, calls=_MIRROR_CALLS_PER_TICK)
+    index = _load_batches(offset)
     # Voided rows (gap 9) never reach the store — the void set is built over
     # the whole file first, so a row voided by an annul later in this same
     # window is skipped too. An annul row met in the window also retracts
-    # any copy the mirror landed BEFORE the annul (`store_delete` by the
-    # voided row's record_id — the store keys mirrored rows that way, so
-    # the id is derivable from the file); `mirrored_ids` maps only rows
-    # before the offset, which is exactly what has been mirrored.
+    # any copy the mirror landed BEFORE the annul: a row landed on its own
+    # (before ``per_row_until``) by `store_delete` of its record_id, the
+    # id derivable from the file (`mirrored_ids` maps only those); a row
+    # in a batch by putting the batch again without it, or deleting the
+    # batch when nothing is left.
     voids = void_set_before(src)
-    mirrored_ids = _mirrored_ids_by_hash(src, offset)
+    mirrored_ids = _mirrored_ids_by_hash(src, min(offset, index["per_row_until"]))
+    pending: list[dict] = []
+    pending_start = offset
+
+    def flush() -> bool:
+        nonlocal mirrored, batches, failed, offset, pending, pending_start
+        if not pending:
+            return True
+        record_id = _batch_id(pending_start, offset)
+        record = {"kind": "ci_outcome_batch", "start": pending_start, "end": offset, "rows": pending}
+        _, err = pace.call(mcp_client.call, "store_put",
+                           {"app_id": app, "collection": COLLECTION, "record": record,
+                            "record_id": record_id, "deviation": 0})
+        if err is not None:
+            failed = err
+            offset = pending_start
+            pending = []
+            return False
+        index["batches"][record_id] = [pending_start, offset]
+        mirrored += len(pending)
+        batches += 1
+        pending, pending_start = [], offset
+        return True
+
+    def retract_from_batches(hashes: set, legacy: set) -> bool:
+        nonlocal annulled_mirrors, failed
+        for record_id, (b_start, b_end) in sorted(index["batches"].items(), key=lambda kv: kv[1][0]):
+            rows = _rows_between(src, b_start, b_end)
+            hit = [r for r in rows if r.get("row_hash") in hashes or record_id_for(r) in legacy]
+            if not hit:
+                continue
+            kept = [r for r in rows if r not in hit and not is_annul(r) and not voids.voided(r)]
+            if kept:
+                record = {"kind": "ci_outcome_batch", "start": b_start, "end": b_end, "rows": kept}
+                _, err = pace.call(mcp_client.call, "store_put",
+                                   {"app_id": app, "collection": COLLECTION, "record": record,
+                                    "record_id": record_id, "deviation": 0})
+                gone = err is None
+            else:
+                result, err = pace.call(mcp_client.call, "store_delete",
+                                        {"app_id": app, "collection": COLLECTION, "record_id": record_id})
+                gone = err is None and isinstance(result, dict) and result.get("deleted") is True
+                if err is None:
+                    del index["batches"][record_id]
+            if err is not None:
+                failed = err
+                return False
+            if gone:
+                annulled_mirrors += len(hit)
+        return True
+
     with src.open("rb") as fh:
         fh.seek(offset)
-        while mirrored < _MIRROR_PER_TICK:
+        while mirrored + len(pending) < _MIRROR_PER_TICK:
             line = fh.readline()
             if not line:
                 break
             if not line.endswith(b"\n"):
                 break  # a row still being written; next tick
             text = line.decode("utf-8", errors="replace").strip()
-            if not text:
-                offset = fh.tell()
-                continue
             # A complete line that is not a JSON object (a torn write that
             # still ended in a newline) is counted and stepped over. Raising
             # here left the offset unwritten, so every later tick re-read the
             # same line and raised again: the mirror stopped for good. run_ci
             # and _mirrored_ids_by_hash already skip such a line.
             try:
-                rec = json.loads(text)
+                rec = json.loads(text) if text else None
             except json.JSONDecodeError:
                 rec = None
-            if not isinstance(rec, dict):
+            if text and not isinstance(rec, dict):
                 malformed += 1
-                offset = fh.tell()
-                continue
-            if is_annul(rec):
+            if isinstance(rec, dict) and is_annul(rec):
+                # What came before the annul lands first, so every row it
+                # names that the mirror reached is in a landed record.
+                if not flush():
+                    break
                 voids.take(rec)
                 # Only ids the mirror has landed (chained: by hash → id;
                 # legacy: by id, gated the same way) — and a retraction is
@@ -568,30 +676,29 @@ def run_mirror(*, enable_mcp: bool | None = None) -> dict:
                         annulled_mirrors += 1
                 if failed is not None:
                     break
-                offset = fh.tell()
+                hashes = {h for h in rec.get("voids") or [] if isinstance(h, str)}
+                legacy = {v for v in rec.get("voids_legacy") or [] if isinstance(v, str)}
+                if not retract_from_batches(hashes, legacy):
+                    break
+                offset = pending_start = fh.tell()
                 continue
-            if voids.voided(rec):
+            if isinstance(rec, dict) and voids.voided(rec):
                 annulled_skipped += 1
-                offset = fh.tell()
-                continue
-            args = {"app_id": app, "collection": COLLECTION, "record": rec,
-                    "record_id": record_id_for(rec), "deviation": 0}
-            # willow-mcp meters every app at 60/min with a burst of 10 and
-            # answers the 11th call {"error": "rate_limited", "retry_after": N}.
-            # The first live mirror stopped there with 7 rows landed (2026-09-15
-            # 00:28Z). Pace instead: wait what the limiter asks, retry the same
-            # row, inside this step's budget — the row is never skipped.
-            result, err = pace.call(mcp_client.call, "store_put", args)
-            if err is not None:
-                failed = err
-                break
-            mirrored += 1
+            elif isinstance(rec, dict):
+                pending.append(rec)
             offset = fh.tell()
+            if not pending:
+                pending_start = offset
+            elif len(pending) >= _MIRROR_BATCH_ROWS and not flush():
+                break
+    if failed is None:
+        flush()
+    _save_batches(index)
     off_path.parent.mkdir(parents=True, exist_ok=True)
     off_path.write_text(f"{offset}\n", encoding="utf-8")
     behind = size - offset
     status = "ok" if failed is None else ("paced" if pace.budget_spent else "could-not-run")
-    receipt.update(status=status, mirrored=mirrored, new_offset=offset, behind=behind,
+    receipt.update(status=status, mirrored=mirrored, batches=batches, new_offset=offset, behind=behind,
                    annulled=annulled_skipped, annulled_mirrors=annulled_mirrors, **pace.receipt())
     if malformed:
         receipt["malformed"] = malformed
