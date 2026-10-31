@@ -345,26 +345,45 @@ def _cmdline(pid: int) -> list[str]:
         return []
 
 
+def _children(pid: int) -> list[int]:
+    """Every process below ``pid``, children first, from ``/proc``."""
+    out: list[int] = []
+    todo = [pid]
+    while todo:
+        for task in Path(f"/proc/{todo.pop()}/task").glob("*/children"):
+            try:
+                kids = [int(k) for k in task.read_text().split()]
+            except (OSError, ValueError):
+                continue
+            out += kids
+            todo += kids
+    return out
+
+
 def running() -> dict[str, Any]:
     """Which running user units run from which venv: ``{"status", "venvs":
     {real venv path: [unit, ...]}}``. A process runs from a venv when an
     argument of its command line is under that venv's ``bin/`` (the venv's own
-    python, or an entry point whose shebang names it). ``unreachable`` when
-    the units can't be listed."""
+    python, or an entry point whose shebang names it). Every process of the
+    unit counts, its main one and those below it: the steward's long-lived
+    willow-mcp child runs from another venv than the steward, and a unit that
+    runs it owes a restart when its code moves. ``unreachable`` when the
+    units can't be listed."""
     try:
         pids = _main_pids()
     except (OSError, subprocess.SubprocessError) as exc:
         return {"status": "unreachable", "detail": str(exc)[:200], "venvs": {}}
     out: dict[str, list[str]] = {}
-    for unit, pid in sorted(pids.items()):
-        for arg in _cmdline(pid):
-            path = Path(arg)
-            if path.parent.name != "bin" or not (path.parent.parent / "pyvenv.cfg").is_file():
-                continue
-            key = str(path.parent.parent.resolve())
-            if unit not in out.setdefault(key, []):
-                out[key].append(unit)
-            break
+    for unit, main in sorted(pids.items()):
+        for pid in [main, *_children(main)]:
+            for arg in _cmdline(pid):
+                path = Path(arg)
+                if path.parent.name != "bin" or not (path.parent.parent / "pyvenv.cfg").is_file():
+                    continue
+                key = str(path.parent.parent.resolve())
+                if unit not in out.setdefault(key, []):
+                    out[key].append(unit)
+                break
     return {"status": "populated" if out else "empty", "venvs": out}
 
 
