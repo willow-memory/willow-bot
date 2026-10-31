@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [1.31.0](https://github.com/willow-memory/willow-bot/compare/v1.30.0...v1.31.0) (2026-10-31)
+
+
+### Added
+
+* **steward:** the deposit mirror lands rows in batches ([51cf19a](https://github.com/willow-memory/willow-bot/commit/51cf19aecf3b9490238b9aef294476aec33fd02a))
+* **steward:** the deposit mirror lands rows in batches ([2adc804](https://github.com/willow-memory/willow-bot/commit/2adc804186f125288a3ade38d0f066c82e67ac55))
+
+
+### Fixed
+
+* **steward:** a burst of pushes no longer files false reds and stucks ([838dc81](https://github.com/willow-memory/willow-bot/commit/838dc81f5ff862b2b807c86d8be8820ec4d14e56))
+* **steward:** a burst of pushes no longer files false reds and stucks ([3b8dde3](https://github.com/willow-memory/willow-bot/commit/3b8dde3714ff02bba8246eb5f84ed7f52fd02cee))
+* **steward:** a red release on a tag resolves when a later tag passes ([7ff84e1](https://github.com/willow-memory/willow-bot/commit/7ff84e14eeee595c63b69ca8e60c03bba1675fe9))
+* **steward:** a red release on a tag resolves when a later tag passes ([fefa4cf](https://github.com/willow-memory/willow-bot/commit/fefa4cf875c4dd4eae1ca4dc7645c5451e79af4f))
+* **venvs:** a unit runs every venv its processes run from, children too ([d40ba59](https://github.com/willow-memory/willow-bot/commit/d40ba597147941a1f50f71345dd0421e3100caf0))
+* **venvs:** a unit runs every venv its processes run from, children too ([d544672](https://github.com/willow-memory/willow-bot/commit/d544672ebd8e78b313c0d5b9b78e0372ab64f5ee))
+
 ## [1.30.0](https://github.com/willow-memory/willow-bot/compare/v1.29.5...v1.30.0) (2026-10-31)
 
 
