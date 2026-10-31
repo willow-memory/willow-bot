@@ -348,13 +348,25 @@ def behind() -> dict[str, Any]:
 def findings(sections: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
     """``{dedupe key: {"section", "title", "summary"}}`` for what needs a person."""
     found: dict[str, dict[str, str]] = {}
+    # One item per unit: a unit can owe its restart to several checkouts and
+    # a reinstalled venv at once (grove-serve ran willows-grove, willow-mcp
+    # and a reinstall behind, three items for one restart, 2026-10-31), and
+    # one restart clears them all.
+    by_unit: dict[str, list[dict[str, Any]]] = {}
     for o in sections.get("restart", {}).get("owed", []):
-        found[f"restart:{o['unit']}:{o['head']}"] = {
+        by_unit.setdefault(o["unit"], []).append(o)
+    for unit, rows in sorted(by_unit.items()):
+        why = []
+        for o in rows:
+            if str(o["head"]).startswith("install@"):
+                why.append(f"packages were reinstalled in {o['checkout']}")
+            else:
+                why.append(f"{o['checkout']} moved from {o['then'][:12]} to {o['head'][:12]} "
+                           f"({len(o['paths'])} code files: {', '.join(o['paths'][:5])})")
+        found[f"restart:{unit}"] = {
             "section": "restart",
-            "title": f"{o['unit']} runs code older than its checkout"[:200],
-            "summary": (f"{o['checkout']} moved from {o['then'][:12]} to {o['head'][:12]} after {o['unit']} started; "
-                        f"{len(o['paths'])} code files changed ({', '.join(o['paths'][:5])}). "
-                        f"Restart it: systemctl --user restart {o['unit']}"),
+            "title": f"{unit} runs code older than its checkout"[:200],
+            "summary": f"Since {unit} started, {'; '.join(why)}. Restart it: systemctl --user restart {unit}",
         }
     for b in sections.get("refresh", {}).get("broken", []):
         found[f"refresh-broken:{b['venv']}"] = {
@@ -461,6 +473,17 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
         if f.get("section") not in checked and key not in found:
             found[key] = f
     filed: dict[str, dict[str, Any]] = dict(state.get("filed") or {})
+    # Restart items used to be filed per (unit, commit) as
+    # `restart:<unit>:<head>`. A unit still owing a restart keeps its newest
+    # such item as its one item; the others resolve, saying where they went.
+    folded_into: dict[str, str] = {}
+    for key in found:
+        if not key.startswith("restart:") or key in filed:
+            continue
+        olds = sorted((k for k in filed if k.startswith(f"{key}:")), key=lambda k: filed[k].get("since") or 0)
+        if olds:
+            filed[key] = filed.pop(olds[-1])
+            folded_into.update({k: filed[key]["id"] for k in olds[:-1]})
     items: list[dict[str, Any]] = []
     budget = FILE_PER_TICK
     order = sorted(found.items(), key=lambda kv: (kv[1].get("priority") != "high", _URGENCY.get(kv[1]["section"], 9), kv[0]))
@@ -498,8 +521,10 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "", now: float | None
             items.append({"key": key, "state": "open", "id": row["id"], "detail": "cleared; resolve owed"})
             continue
         try:
+            note = (f"keep-current: folded into {folded_into[key]}, one restart item per unit"
+                    if key in folded_into else "keep-current: no longer found")
             result = call("human_required_resolve", {"app_id": app, "item_id": row["id"], "status": "resolved",
-                                                     "note": "keep-current: no longer found"})  # fmt: skip
+                                                     "note": note})  # fmt: skip
             err = result.get("error") if isinstance(result, dict) else None
         except Exception as exc:  # noqa: BLE001 — retried next tick
             err = str(exc)[:300]
