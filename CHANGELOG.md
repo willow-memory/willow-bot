@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.31.2](https://github.com/willow-memory/willow-bot/compare/v1.31.1...v1.31.2) (2026-10-31)
+
+
+### Fixed
+
+* **current:** name almanac verticals missing from the workspace ([70b953f](https://github.com/willow-memory/willow-bot/commit/70b953f62b3b0a792ce2460b3b8223fff6383e04))
+* **current:** name almanac verticals missing from the workspace ([351f11c](https://github.com/willow-memory/willow-bot/commit/351f11cd068be05a1921a555b10df814d11446fd))
+
 ## [1.31.1](https://github.com/willow-memory/willow-bot/compare/v1.31.0...v1.31.1) (2026-10-31)
 
 
