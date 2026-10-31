@@ -411,6 +411,21 @@ def findings(sections: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
             "summary": ("Engine paths to propagate, per vertical: " + "; ".join(lines) + ". "
                         "Each vertical's own dry run decided this; local overrides are never counted."),
         }
+    # A vertical the dry run skipped is never "behind": say so, or it is silent.
+    for e in cp.get("engine", []):
+        missing = e.get("missing") or []
+        if not missing:
+            continue
+        owner = e["workspace"].split("/", 1)[0]
+        found[f"engine-missing:{e['workspace']}"] = {
+            "section": "copies",
+            "title": ((f"{missing[0]} is" if len(missing) == 1 else f"{len(missing)} verticals are")
+                      + f" not in {e['workspace']}'s workspace on this box")[:200],
+            "summary": ("Its engine dry run skipped them, so their drift goes unchecked: " + ", ".join(missing)
+                        + ". Clone each beside the others: "
+                        + "; ".join(f"git clone https://github.com/{owner}/{v}.git <workspace>/{v}" for v in missing)
+                        + "."),
+        }
     for v in (sections.get("pypi") or {}).get("venvs", []):
         bad = [p for p in v.get("packages", []) if p.get("kind") in ("vulnerable", "yanked")]
         if not bad:

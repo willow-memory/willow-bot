@@ -260,6 +260,17 @@ def test_an_engine_workspace_behind_is_one_item_and_an_override_never_counts():
     assert "climate-almanac" not in found["engine:almanac-data/almanac-data"]["summary"]
 
 
+def test_verticals_missing_from_the_workspace_are_one_item_naming_the_clones():
+    copies = {"engine": [{"workspace": "almanac-data/almanac-data", "behind": {},
+                          "missing": ["labor-almanac", "tech-almanac"]}]}  # fmt: skip
+    found = kc.findings({"copies": copies})
+    assert list(found) == ["engine-missing:almanac-data/almanac-data"]
+    item = found["engine-missing:almanac-data/almanac-data"]
+    assert item["title"] == "2 verticals are not in almanac-data/almanac-data's workspace on this box"
+    assert "git clone https://github.com/almanac-data/tech-almanac.git <workspace>/tech-almanac" in item["summary"]
+    assert kc.findings({"copies": {"engine": [{"workspace": "w/w", "missing": []}]}}) == {}
+
+
 def test_unreached_catalog_entries_are_one_item_per_workspace():
     copies = {"catalog": [{"repos_of": "almanac-data/almanac-data", "verticals": [
         {"repo": "almanac-data/energy-almanac", "status": "populated", "entries": 11,
