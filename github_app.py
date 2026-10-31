@@ -218,6 +218,36 @@ def list_hook_deliveries(per_page: int = 30) -> list[dict]:
     return [d for d in data if isinstance(d, dict)]
 
 
+def hook_deliveries_since(since_id: int | None, *, max_pages: int = 30) -> list[dict]:
+    """The App webhook's deliveries newer than ``since_id``, newest first,
+    paging back by GitHub's cursor until a page reaches ``since_id`` or
+    ``max_pages`` are read. ``None`` reads the newest page only. A delivery
+    at or below ``since_id`` on the last page is kept: a later redelivery's
+    success says nothing about it, but its own record does. Raises on an
+    unconfigured App or HTTP error."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured")
+    url: str | None = "https://api.github.com/app/hook/deliveries"
+    params: dict | None = {"per_page": 100}
+    out: list[dict] = []
+    for _ in range(max_pages if since_id is not None else 1):
+        r = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {_make_jwt()}", "Accept": "application/vnd.github+json"},
+            params=params,
+            timeout=15,
+        )
+        r.raise_for_status()
+        page = r.json()
+        if not isinstance(page, list):
+            raise RuntimeError("unexpected /app/hook/deliveries answer")
+        out += [d for d in page if isinstance(d, dict)]
+        url, params = (r.links.get("next") or {}).get("url"), None
+        if not url or any(int(d.get("id") or 0) <= since_id for d in page if isinstance(d, dict)):
+            break
+    return out
+
+
 def hook_url() -> str:
     """The URL the App webhook posts to — and nothing else from
     ``/app/hook/config``, whose answer can carry the webhook ``secret``.

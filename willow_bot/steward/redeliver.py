@@ -10,6 +10,14 @@ GitHub to redeliver it (`github_app.redeliver`). The redelivery carries the
 same `X-GitHub-Delivery` guid, so bot.py's delivery guard still runs each
 event once.
 
+Each tick reads every delivery since the newest one the last tick read
+(``redeliver.cursor``), not only the newest ``WINDOW``: at 18:13Z on
+2026-10-31 a nine-minute tick held 2,900 deliveries and the newest hundred
+were its last twenty seconds, and a delivery that failed and scrolled past them was never asked
+for again. ``unread`` in the receipt says when ``MAX_PAGES`` ran out first.
+A guid seen answered 2xx is marked answered and never counted as given up
+(17 of the 37 "gave up" GitHub still held had reached the bot).
+
 Bounded: at most ``MAX_ATTEMPTS`` redeliveries per guid (a delivery that
 keeps failing is the `ingress` flag's job, not an endless retry) and
 ``MAX_PER_TICK`` per tick. Attempts are kept in
@@ -29,6 +37,8 @@ FILE_NAME = "redeliver.json"
 WINDOW = 100
 MAX_ATTEMPTS = 5
 MAX_PER_TICK = 20
+#: Pages of 100 read back to the last tick's newest delivery, at most.
+MAX_PAGES = 60
 #: How long a guid's attempt count is kept after its last attempt.
 KEEP_DAYS = 7
 
@@ -37,11 +47,24 @@ def path() -> Path:
     return bot_dir() / FILE_NAME
 
 
-def _fetch_deliveries() -> list[dict]:
+def _fetch_deliveries(since: int | None = None) -> list[dict]:
     """A module-level name so the test floor can keep it off the network."""
     import github_app
 
-    return github_app.list_hook_deliveries(per_page=WINDOW)
+    if since is None:
+        return github_app.list_hook_deliveries(per_page=WINDOW)
+    return github_app.hook_deliveries_since(since, max_pages=MAX_PAGES)
+
+
+def _cursor_path() -> Path:
+    return bot_dir() / "redeliver.cursor"
+
+
+def _load_cursor() -> int | None:
+    try:
+        return int(_cursor_path().read_text().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def _redeliver(delivery_id: int) -> None:
@@ -64,7 +87,8 @@ def _ok(d: dict) -> bool:
 
 
 def plan(deliveries: list[dict], attempts: dict[str, dict], *, limit: int = MAX_PER_TICK) -> list[dict]:
-    """The deliveries to ask for again, newest first. Pure."""
+    """The deliveries to ask for again: those asked fewest times first, then
+    newest first. Pure."""
     wanted = _wanted_events()
     answered = {d.get("guid") for d in deliveries if _ok(d)}
     out: list[dict] = []
@@ -76,12 +100,15 @@ def plan(deliveries: list[dict], attempts: dict[str, dict], *, limit: int = MAX_
         if d.get("event") not in wanted:
             continue
         seen_guids.add(guid)
+        if (attempts.get(guid) or {}).get("answered"):
+            continue
         if int((attempts.get(guid) or {}).get("n") or 0) >= MAX_ATTEMPTS:
             continue
         out.append(d)
-        if len(out) >= limit:
-            break
-    return out
+    # Fewest attempts first, then newest: past the cap, the newest failures
+    # would otherwise be asked again every tick and the older never once.
+    out.sort(key=lambda d: int((attempts.get(d["guid"]) or {}).get("n") or 0))
+    return out[:limit]
 
 
 def _load() -> dict[str, dict]:
@@ -107,29 +134,46 @@ def run() -> dict[str, Any]:
     """One pass. Returns the receipt (the caller emits it)."""
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     receipt: dict[str, Any] = {"event": "steward_redeliver", "at": at}
+    since = _load_cursor()
     try:
-        deliveries = _fetch_deliveries()
+        deliveries = _fetch_deliveries(since) if since is not None else _fetch_deliveries()
     except Exception as exc:  # noqa: BLE001 — unreachable is its own state, never "ok"
         receipt.update(status="unreachable", detail=f"{type(exc).__name__}: {exc}"[:300])
         return receipt
     now = time.time()
     attempts = {g: a for g, a in _load().items()
                 if isinstance(a, dict) and now - float(a.get("last") or 0) < KEEP_DAYS * 86400}
+    for d in deliveries:
+        if _ok(d) and d.get("guid") in attempts:
+            attempts[d["guid"]]["answered"] = True
+    ids = [int(d.get("id") or 0) for d in deliveries]
+    unread = since is not None and bool(ids) and min(ids) > since and len(deliveries) >= MAX_PAGES * 100
     asked: list[dict] = []
     refused: list[dict] = []
-    for d in plan(deliveries, attempts):
+    todo = plan(deliveries, attempts, limit=len(deliveries))
+    # What isn't asked this tick (over the cap, or refused) keeps the cursor
+    # behind it, so the next tick reads back to it and asks again.
+    held = [int(d["id"]) for d in todo[MAX_PER_TICK:]]
+    for d in todo[:MAX_PER_TICK]:
         guid = d["guid"]
         try:
             _redeliver(int(d["id"]))
         except Exception as exc:  # noqa: BLE001 — one refusal never stops the rest
             refused.append({"id": d.get("id"), "event": d.get("event"), "error": str(exc)[:200]})
+            held.append(int(d["id"]))
             continue
         n = int((attempts.get(guid) or {}).get("n") or 0) + 1
         attempts[guid] = {"n": n, "last": now, "event": d.get("event")}
         asked.append({"id": d.get("id"), "event": d.get("event"), "status_code": d.get("status_code"),
                       "attempt": n})
-    gave_up = sorted(g for g, a in attempts.items() if int(a.get("n") or 0) >= MAX_ATTEMPTS)
+    gave_up = sorted(g for g, a in attempts.items()
+                     if int(a.get("n") or 0) >= MAX_ATTEMPTS and not a.get("answered"))
     _save(attempts)
+    if ids:
+        cursor = min(held) - 1 if held else max([*ids, since or 0])
+        _cursor_path().write_text(f"{cursor}\n", encoding="utf-8")
     receipt.update(status="partial" if refused else "ok", window=len(deliveries),
                    redelivered=asked, refused=refused, gave_up=len(gave_up))
+    if unread:
+        receipt["unread"] = True
     return receipt

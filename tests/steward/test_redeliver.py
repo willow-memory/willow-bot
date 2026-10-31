@@ -29,7 +29,7 @@ def test_one_guid_is_asked_once_per_tick_and_capped_overall():
 
 def test_run_asks_and_counts_attempts(monkeypatch):
     asked = []
-    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda: [_d(10, "g1"), _d(11, "g2", "pull_request")])
+    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda since=None: [_d(10, "g1"), _d(11, "g2", "pull_request")])
     monkeypatch.setattr(redeliver, "_redeliver", lambda i: asked.append(i))
     r = redeliver.run()
     assert r["status"] == "ok" and sorted(asked) == [10, 11]
@@ -41,7 +41,7 @@ def test_run_asks_and_counts_attempts(monkeypatch):
 
 def test_stops_after_max_attempts(monkeypatch):
     asked = []
-    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda: [_d(10, "g1")])
+    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda since=None: [_d(10, "g1")])
     monkeypatch.setattr(redeliver, "_redeliver", lambda i: asked.append(i))
     for _ in range(redeliver.MAX_ATTEMPTS + 3):
         r = redeliver.run()
@@ -52,7 +52,7 @@ def test_a_refused_redelivery_is_reported_and_not_counted(monkeypatch):
     def refuse(i):
         raise RuntimeError("422")
 
-    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda: [_d(10, "g1")])
+    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda since=None: [_d(10, "g1")])
     monkeypatch.setattr(redeliver, "_redeliver", refuse)
     r = redeliver.run()
     assert r["status"] == "partial" and r["refused"] and "g1" not in redeliver._load()
@@ -60,3 +60,45 @@ def test_a_refused_redelivery_is_reported_and_not_counted(monkeypatch):
 
 def test_unreachable_record_is_its_own_state():
     assert redeliver.run()["status"] == "unreachable"  # the test floor keeps it off the network
+
+
+def test_each_tick_reads_back_to_the_last_ticks_newest_delivery(monkeypatch):
+    """2026-10-31: at 1,450 deliveries an hour the newest 100 were four
+    minutes of a nine-minute tick; a failure that scrolled past them was
+    never asked for again."""
+    asked, since_seen = [], []
+
+    def fetch(since=None):
+        since_seen.append(since)
+        return [_d(30, "g3"), _d(20, "g2", code=200)] if since else [_d(10, "g1", code=200)]
+
+    monkeypatch.setattr(redeliver, "_fetch_deliveries", fetch)
+    monkeypatch.setattr(redeliver, "_redeliver", lambda i: asked.append(i))
+    redeliver.run()
+    redeliver.run()
+    assert since_seen == [None, 10] and asked == [30]
+    assert redeliver._load_cursor() == 30
+
+
+def test_what_the_cap_leaves_is_read_again_next_tick(monkeypatch):
+    monkeypatch.setattr(redeliver, "MAX_PER_TICK", 2)
+    page = [_d(i, f"g{i}") for i in (11, 12, 13, 14)]
+    redeliver._cursor_path().parent.mkdir(parents=True, exist_ok=True)
+    redeliver._cursor_path().write_text("10\n")
+    asked = []
+    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda since=None: page)
+    monkeypatch.setattr(redeliver, "_redeliver", lambda i: asked.append(i))
+    redeliver.run()
+    # newer than the cursor is read again: 12 and 11 are
+    assert asked == [14, 13] and redeliver._load_cursor() == 10
+    redeliver.run()
+    assert asked[2:] == [12, 11]
+
+
+def test_a_guid_answered_later_is_never_counted_as_given_up(monkeypatch):
+    """17 of the 37 "gave up" GitHub still held had reached the bot."""
+    redeliver._save({"g1": {"n": redeliver.MAX_ATTEMPTS, "last": __import__("time").time()}})
+    monkeypatch.setattr(redeliver, "_fetch_deliveries", lambda since=None: [_d(40, "g1", code=200)])
+    monkeypatch.setattr(redeliver, "_redeliver", lambda i: None)
+    assert redeliver.run()["gave_up"] == 0
+    assert redeliver._load()["g1"]["answered"] is True
