@@ -173,6 +173,8 @@ def quiet(monkeypatch):
                                                          "owed": state["owed"]})  # fmt: skip
     monkeypatch.setattr(kc, "behind", lambda: {"status": "empty", "behind": []})
     monkeypatch.setattr(kc.current, "copies", lambda: state["copies"])
+    state["pypi"] = {"status": "populated", "venvs": []}
+    monkeypatch.setattr(kc.pypi_fresh, "report", lambda: state["pypi"])
     return state
 
 
@@ -249,3 +251,71 @@ def test_an_engine_vertical_behind_is_its_own_item_and_an_override_never_one():
                           "overrides": {"climate-almanac": ["AGENTS.md"]}}]}  # fmt: skip
     found = kc.findings({"copies": copies})
     assert list(found) == ["engine:almanac-data/almanac-data:agriculture-almanac"]
+
+
+def test_a_vulnerable_venv_is_one_high_item_naming_each_fix_and_its_range(quiet):
+    desk = _Desk()
+    quiet["pypi"] = {"status": "populated", "venvs": [{"path": "/v", "packages": [
+        {"name": "urllib3", "installed": "2.7.0", "kind": "vulnerable", "vulnerabilities": ["GHSA-1"],
+         "fix": "2.8.0", "fix_in_range": True},
+        {"name": "pillow", "installed": "12.3.0", "kind": "vulnerable", "vulnerabilities": ["GHSA-2"],
+         "fix": "13.0.0", "fix_in_range": False},
+        {"name": "uvicorn", "installed": "0.42.0", "kind": "pinned"},
+        {"name": "lxml", "installed": "6.1.2", "kind": "patch", "to": "6.1.3"},
+    ]}]}  # fmt: skip
+
+    kc.run(enable_mcp=True, call=desk, now=100_000)
+
+    [item] = desk.filed
+    assert item["priority"] == "high" and item["source_ref"] == "keep-current:pypi:/v"
+    assert "urllib3 2.7.0 -> 2.8.0 (inside its declared range" in item["summary"]
+    assert "pillow 12.3.0 -> 13.0.0 (OUTSIDE its declared range" in item["summary"]
+    assert "uvicorn" not in item["summary"] and "lxml" not in item["summary"], "pins and plain upgrades aren't filed"
+
+
+def test_an_old_commit_pulled_after_a_start_is_still_owed(repo):
+    # A commit dated 2020 waits on a branch; the unit starts; then it is
+    # fast-forwarded in, as a late pull would. HEAD moved after the start.
+    _git(repo, "checkout", "-q", "-b", "old")
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "app.py").write_text("v2")
+    _git(repo, "add", "-A")
+    env = {**os.environ, "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z"}
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.org",
+                    "commit", "-q", "-m", "dated long ago"], check=True, env=env)  # fmt: skip
+    _git(repo, "checkout", "-q", "main")
+    started = _started_now()
+    _git(repo, "merge", "-q", "--ff-only", "old")
+    got = kc.code_since(repo, started)
+    assert got["status"] == "populated" and got["paths"] == ["src/app.py"], "HEAD moved after the start"
+
+
+def test_the_most_urgent_are_filed_first_and_only_a_few_a_tick(quiet):
+    desk = _Desk()
+    quiet["owed"] = [{**_OWED, "unit": f"u{i}.service"} for i in range(2)]
+    quiet["copies"] = {"status": "populated", "bytes": [
+        {"copy": f"o/a:{i}.py", "source": "o/b:x.py", "status": "populated", "current": False} for i in range(6)],
+        "pin": [], "engine": [], "workflow": []}  # fmt: skip
+    quiet["pypi"] = {"status": "populated", "venvs": [{"path": "/v", "packages": [
+        {"name": "urllib3", "installed": "2.7.0", "kind": "vulnerable", "vulnerabilities": ["A"], "fix": "2.8.0",
+         "fix_in_range": True}]}]}  # fmt: skip
+
+    got = kc.run(enable_mcp=True, call=desk, now=100_000)
+
+    assert [f["source_ref"].split(":")[1] for f in desk.filed] == ["pypi", "restart", "restart", "copy", "copy"]
+    assert sum(i["state"] == "waiting" for i in got["items"]) == 4
+    kc.run(enable_mcp=True, call=desk, now=100_300)
+    assert len(desk.filed) == 9, "the rest on the next tick"
+
+
+def test_a_rate_limit_stops_the_tick_and_retries_later(quiet):
+    calls = []
+
+    def limited(tool, args):
+        calls.append(tool)
+        return {"error": "rate_limited", "retry_after": 7}
+
+    quiet["owed"] = [{**_OWED, "unit": f"u{i}.service"} for i in range(4)]
+    got = kc.run(enable_mcp=True, call=limited, now=100_000)
+    assert calls == ["human_required_enqueue"], "one refusal and the tick stops asking"
+    assert [i["state"] for i in got["items"]].count("waiting") == 3
