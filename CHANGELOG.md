@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.29.5](https://github.com/willow-memory/willow-bot/compare/v1.29.4...v1.29.5) (2026-10-31)
+
+
+### Fixed
+
+* **steward:** keep-current files one engine item per workspace ([4f3004d](https://github.com/willow-memory/willow-bot/commit/4f3004d7fb6634d94e1c395435de5ec852be2510))
+* **steward:** keep-current files one engine item per workspace ([61a1e77](https://github.com/willow-memory/willow-bot/commit/61a1e7711b1c906949f17323517c26a4dbc74de9))
+
 ## [1.29.4](https://github.com/willow-memory/willow-bot/compare/v1.29.3...v1.29.4) (2026-10-31)
 
 
