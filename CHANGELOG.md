@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.31.1](https://github.com/willow-memory/willow-bot/compare/v1.31.0...v1.31.1) (2026-10-31)
+
+
+### Fixed
+
+* **redeliver:** read every delivery since the last tick, not the newest 100 ([1a7179a](https://github.com/willow-memory/willow-bot/commit/1a7179a36b4a96e7e1fa4e56726fde35cbf2c29c))
+
 ## [1.31.0](https://github.com/willow-memory/willow-bot/compare/v1.30.0...v1.31.0) (2026-10-31)
 
 
