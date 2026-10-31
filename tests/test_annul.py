@@ -202,7 +202,20 @@ def test_run_ci_honours_an_annul_before_its_offset(home, monkeypatch):
     assert c.named("human_required_enqueue") == []
 
 
-def test_mirror_skips_voided_rows_and_retracts_already_mirrored_copies(home, monkeypatch):
+def _landed_one_by_one(c):
+    """The store as it was before batches: every row so far landed as its
+    own record, under its record_id, and the mirror's offset is past them."""
+    src = dep.deposits_jsonl()
+    size = src.stat().st_size
+    for line in src.read_text().splitlines():
+        rec = json.loads(line)
+        if not dep.is_annul(rec):
+            c.stored.add(dep.record_id_for(rec))
+    tick._mirror_offset_path().write_text(f"{size}\n")
+    tick._mirror_batches_path().write_text(json.dumps({"per_row_until": size, "batches": {}}))
+
+
+def test_mirror_retracts_a_voided_row_by_putting_its_batch_again_without_it(home, monkeypatch):
     c = _Client()
     _use(monkeypatch, c)
     a = _row(FORGE, FIX, 11, "test", "failure", pr=4, url=URL)
@@ -210,7 +223,47 @@ def test_mirror_skips_voided_rows_and_retracts_already_mirrored_copies(home, mon
     dep.append_local(a)
     dep.append_local(b)
     r1 = tick.run_mirror()
-    assert r1["mirrored"] == 2 and r1["annulled"] == 0 and r1["annulled_mirrors"] == 0
+    assert r1["mirrored"] == 2 and r1["batches"] == 1 and r1["annulled_mirrors"] == 0
+    (put,) = c.named("store_put")
+    dep.append_local(dep.annul_record(voids=[a["row_hash"]], reason="fixture", authorization="x"))
+    late = _row(FORGE, FIX, 12, "lint", "failure", pr=4, url=URL)
+    dep.append_local(late)
+    dep.append_local(dep.annul_record(voids=[late["row_hash"]], reason="fixture", authorization="x"))
+    r2 = tick.run_mirror()
+    assert c.named("store_delete") == []
+    again = c.named("store_put")[1:]
+    # The batch that held `a` is put again under its own id, holding only `b`;
+    # `late` was voided before the mirror reached it, so it is never put.
+    assert [p["record_id"] for p in again] == [put["record_id"]]
+    assert [x["check_run_id"] for x in again[0]["record"]["rows"]] == [1]
+    assert r2["mirrored"] == 0 and r2["annulled_mirrors"] == 1 and r2["annulled"] == 1
+    assert r2["status"] == "ok" and r2["behind"] == 0
+
+
+def test_a_batch_left_empty_by_an_annul_is_deleted(home, monkeypatch):
+    c = _Client()
+    _use(monkeypatch, c)
+    leg = _legacy(FORGE, FIX, 5, "test", "failure", pr=4, url=URL)
+    (put,) = [p["record_id"] for p in (tick.run_mirror() and c.named("store_put"))]
+    dep.append_local(dep.annul_record(voids=[], voids_legacy=[dep.record_id_for(leg)],
+                                      reason="legacy fixture", authorization="x"))
+    r = tick.run_mirror()
+    assert [d["record_id"] for d in c.named("store_delete")] == [put]
+    assert r["annulled_mirrors"] == 1
+    assert json.loads(tick._mirror_batches_path().read_text())["batches"] == {}
+
+
+def test_mirror_skips_voided_rows_and_retracts_already_mirrored_copies(home, monkeypatch):
+    """Rows the store holds one record each, from before batches."""
+    c = _Client()
+    _use(monkeypatch, c)
+    a = _row(FORGE, FIX, 11, "test", "failure", pr=4, url=URL)
+    b = _row("x/y", REAL, 1, "test", "success", pr=9)
+    dep.append_local(a)
+    dep.append_local(b)
+    _landed_one_by_one(c)
+    r1 = tick.run_mirror()
+    assert r1["mirrored"] == 0 and r1["annulled"] == 0 and r1["annulled_mirrors"] == 0
     # The annul lands after the mirror already copied `a`.
     dep.append_local(dep.annul_record(voids=[a["row_hash"]], reason="fixture", authorization="x"))
     late = _row(FORGE, FIX, 12, "lint", "failure", pr=4, url=URL)
@@ -232,6 +285,7 @@ def test_mirror_retracts_a_voided_legacy_row_by_record_id(home, monkeypatch):
     c = _Client()
     _use(monkeypatch, c)
     leg = _legacy(FORGE, FIX, 5, "test", "failure", pr=4, url=URL)
+    _landed_one_by_one(c)
     tick.run_mirror()
     dep.append_local(dep.annul_record(voids=[], voids_legacy=[dep.record_id_for(leg)],
                                       reason="legacy fixture", authorization="x"))
@@ -249,7 +303,7 @@ def test_mirror_counts_only_what_the_store_actually_deleted(home, monkeypatch):
     leg = _legacy(FORGE, FIX, 5, "test", "failure", pr=4, url=URL)
     a = _row("x/y", REAL, 1, "test", "success", pr=9)
     dep.append_local(a)
-    tick.run_mirror()  # lands both: leg (legacy) and a
+    _landed_one_by_one(c)  # both landed, one record each: leg (legacy) and a
     # The store forgets `leg` out of band; the annul then finds nothing to delete.
     c.stored.discard(dep.record_id_for(leg))
     dep.append_local(dep.annul_record(voids=[], voids_legacy=[dep.record_id_for(leg)],

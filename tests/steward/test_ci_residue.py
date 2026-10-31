@@ -597,6 +597,7 @@ def test_audit_budget_spent_leaves_the_rest_pending(home, monkeypatch):
 def test_mirror_is_capped_in_calls_so_later_steps_keep_their_share(home, monkeypatch):
     t = _fake_time(monkeypatch)
     monkeypatch.setattr(tick, "_MIRROR_CALLS_PER_TICK", 4)
+    monkeypatch.setattr(tick, "_MIRROR_BATCH_ROWS", 1)
     c = _Metered(lambda: t["now"], burst=100)
     monkeypatch.setattr("willow_bot.steward.mcp_client.call", c)
     for i in range(10):
