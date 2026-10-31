@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.29.4](https://github.com/willow-memory/willow-bot/compare/v1.29.3...v1.29.4) (2026-10-31)
+
+
+### Fixed
+
+* **onescript:** the scrub takes out a fine-grained GitHub token and reads "no" as a word ([2716d71](https://github.com/willow-memory/willow-bot/commit/2716d718069b12757e10c2b3d4b0cb5ae79e3ca4))
+
 ## [1.29.3](https://github.com/willow-memory/willow-bot/compare/v1.29.2...v1.29.3) (2026-10-31)
 
 
