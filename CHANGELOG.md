@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.29.1](https://github.com/willow-memory/willow-bot/compare/v1.29.0...v1.29.1) (2026-10-31)
+
+
+### Fixed
+
+* **steward:** a real CI red retires when its PR closes or its branch goes green ([98b64ee](https://github.com/willow-memory/willow-bot/commit/98b64eec34754abf76164a41ed96a7ab65415cef))
+* **steward:** a real CI red retires when its PR closes or its branch goes green ([684d11d](https://github.com/willow-memory/willow-bot/commit/684d11de0f31d1e2c7fc262b4ed7e0ca91cd8a0f))
+
 ## [1.29.0](https://github.com/willow-memory/willow-bot/compare/v1.28.0...v1.29.0) (2026-10-31)
 
 
