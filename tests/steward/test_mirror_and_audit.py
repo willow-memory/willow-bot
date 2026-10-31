@@ -61,7 +61,16 @@ def test_mirror_is_absent_when_mcp_is_off_but_says_how_far_behind(home, monkeypa
     assert c.calls == []
 
 
-def test_mirror_puts_each_new_row_under_its_record_id_and_advances(home, monkeypatch):
+def _ends() -> list[int]:
+    """The byte offset after each row of the deposits file."""
+    ends, at = [], 0
+    for line in deposits.deposits_jsonl().read_bytes().splitlines(keepends=True):
+        at += len(line)
+        ends.append(at)
+    return ends
+
+
+def test_mirror_puts_new_rows_in_one_batch_under_its_byte_range_and_advances(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
     rows = [_row("forge-play/Forge", "b" * 40, i) for i in range(3)]
     for r in rows:
@@ -69,22 +78,43 @@ def test_mirror_puts_each_new_row_under_its_record_id_and_advances(home, monkeyp
     c = _Client()
     _use(monkeypatch, c)
     r = tick.run_mirror()
-    assert r["status"] == "ok" and r["mirrored"] == 3 and r["behind"] == 0
-    assert [n for n, _ in c.calls] == ["store_put"] * 3
-    assert c.calls[0][1]["collection"] == deposits.COLLECTION
-    assert c.calls[0][1]["record_id"] == deposits.record_id_for(rows[0])
-    assert c.calls[0][1]["record"]["check_run_id"] == 0
+    assert r["status"] == "ok" and r["mirrored"] == 3 and r["batches"] == 1 and r["behind"] == 0
+    assert [n for n, _ in c.calls] == ["store_put"]
+    put = c.calls[0][1]
+    assert put["collection"] == deposits.COLLECTION
+    assert put["record_id"] == f"ci-batch-0-{_ends()[-1]}"
+    assert put["record"]["kind"] == "ci_outcome_batch"
+    assert [x["check_run_id"] for x in put["record"]["rows"]] == [0, 1, 2]
     # a second run mirrors nothing new
     r2 = tick.run_mirror()
-    assert r2["mirrored"] == 0 and len(c.calls) == 3
+    assert r2["mirrored"] == 0 and len(c.calls) == 1
+
+
+def test_a_batch_holds_at_most_its_row_count(home, monkeypatch):
+    """2026-10-31: one record a row landed ~17 rows a tick and the mirror
+    fell 1.2 MB behind; a batch a call lands a hundred."""
+    monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setattr(tick, "_MIRROR_BATCH_ROWS", 4)
+    for i in range(10):
+        deposits.append_local(_row("o/r", "e" * 40, i))
+    c = _Client()
+    _use(monkeypatch, c)
+    r = tick.run_mirror()
+    assert r["mirrored"] == 10 and r["batches"] == 3 and r["behind"] == 0
+    assert [len(i["record"]["rows"]) for _, i in c.calls] == [4, 4, 2]
+    ends = _ends()
+    assert [i["record_id"] for _, i in c.calls] == [
+        f"ci-batch-0-{ends[3]}", f"ci-batch-{ends[3]}-{ends[7]}", f"ci-batch-{ends[7]}-{ends[9]}"]
 
 
 def test_mirror_stops_at_the_first_failure_and_keeps_the_offset_before_it(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setattr(tick, "_MIRROR_BATCH_ROWS", 1)
     rows = [_row("o/r", "c" * 40, i) for i in range(4)]
     for r in rows:
         deposits.append_local(r)
-    bad = deposits.record_id_for(rows[2])
+    ends = _ends()
+    bad = f"ci-batch-{ends[1]}-{ends[2]}"
     c = _Client(fail_on={bad})
     _use(monkeypatch, c)
     r = tick.run_mirror()
@@ -145,6 +175,7 @@ def test_mirror_paces_through_the_rate_limit_and_skips_no_row(home, monkeypatch)
     the mirror waits retry_after (fake clock), retries the SAME row, and
     every row lands in order — none skipped, none duplicated."""
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setattr(tick, "_MIRROR_BATCH_ROWS", 1)
     t = _fake_time(monkeypatch)
     rows = [_row("o/r", "9" * 40, i) for i in range(8)]
     for r in rows:
@@ -156,13 +187,15 @@ def test_mirror_paces_through_the_rate_limit_and_skips_no_row(home, monkeypatch)
     assert r["paced"] >= 2
     landed = [rid for rid in c.calls]
     # the refused record ids are retried immediately after the wait
-    ids = [deposits.record_id_for(x) for x in rows]
+    ends = _ends()
+    ids = [f"ci-batch-{a}-{b}" for a, b in zip([0, *ends], ends)]
     assert [rid for rid in landed if landed.count(rid) >= 1][0] == ids[0]
     assert sorted(set(landed), key=ids.index) == ids
 
 
 def test_mirror_stops_paced_when_the_time_budget_is_spent(home, monkeypatch):
     monkeypatch.setenv("WILLOW_BOT_MCP", "1")
+    monkeypatch.setattr(tick, "_MIRROR_BATCH_ROWS", 1)
     t = _fake_time(monkeypatch)
     monkeypatch.setattr(tick, "_MIRROR_TIME_BUDGET_S", 3.0)
     rows = [_row("o/r", "8" * 40, i) for i in range(6)]
