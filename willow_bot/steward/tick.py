@@ -720,7 +720,12 @@ _CI_CANCELLED = "cancelled"
 # Conclusions that mean "this leg passed or did not count". A head whose
 # every recorded leg is one of these, with at least one `success`, is green.
 _CI_GREEN = frozenset({"success", "skipped", "neutral"})
-_CI_PER_TICK = 50
+# Rows read per tick. Reading is cheap; what costs is per head (the
+# re-read, the filing), not per row. At 50 a burst of pushes outran it:
+# 2,509 check runs on 2026-10-31 left the step ~740 KB behind for hours,
+# so reds were filed 80 minutes late and cancelled legs whose successors
+# sat unread aged into "stuck".
+_CI_PER_TICK = 500
 
 # A cancelled leg with no successor head after this long is a stuck PR,
 # not a superseded run, and IS worth an item. Ten minutes: release-please
@@ -734,6 +739,9 @@ _CI_CANCELLED_GRACE_MIN_DEFAULT = 10
 # if: always()`) fails BECAUSE a leg failed. It is folded into that head's
 # item as an aggregate leg, never counted as a cause of its own.
 _CI_AGGREGATE_CHECKS = frozenset({"test"})
+# How long a head whose cancelled legs were settled is remembered for its
+# aggregate, which can arrive after the head's legs are pruned.
+_CI_SETTLED_KEEP_S = 86400.0
 
 _ci_clock = time.time
 
@@ -792,7 +800,8 @@ def _ci_branch_key(repo: str, branch: str) -> str:
 
 
 def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
-                      head_legs: dict | None = None, closed: dict | None = None) -> dict:
+                      head_legs: dict | None = None, closed: dict | None = None,
+                      caught_up: bool = True) -> dict:
     """Each pending cancelled leg gets exactly one of six states.
 
     * ``rerun`` — the same leg name on the same head has since reported a
@@ -823,6 +832,12 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
       (``pending_since``, wall clock, which is known), at which point it
       is ``stuck`` with ``aged_by: pending_since``. An unreadable input
       earns a wait, not a permanent seat in the pending set.
+
+    While the step has rows it hasn't read yet (``caught_up`` false), no
+    leg ages into ``stuck``: "no successor" then only means "not read
+    yet" (2026-10-31: thirteen almanac heads filed stuck or red while
+    their green successors sat in the unread part of the file). Such a
+    leg stays ``waiting`` with ``held: reader-behind``.
 
     Successor evidence is the bot's own deposits (``heads`` maps
     `repo#pr` — or `repo~branch` for PR-less heads — → {head_sha:
@@ -865,7 +880,8 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
                 out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1],
                             "aged_by": "pending_since"}
             elif isinstance(since, (int, float)) and now - since >= grace_s:
-                out[key] = {**leg, "state": "stuck", "aged_by": "pending_since"}
+                out[key] = ({**leg, "state": "stuck", "aged_by": "pending_since"} if caught_up
+                            else {**leg, "state": "waiting", "held": "reader-behind"})
             else:
                 out[key] = {**leg, "state": "unreachable"}
             continue
@@ -873,10 +889,50 @@ def _decide_cancelled(pending: dict, heads: dict, *, now: float, grace_s: float,
         if later:
             out[key] = {**leg, "state": "superseded", "successor": sorted(later, key=lambda s: seen[s])[-1]}
         elif now - mine >= grace_s:
-            out[key] = {**leg, "state": "stuck"}
+            out[key] = {**leg, "state": "stuck"} if caught_up else {**leg, "state": "waiting", "held": "reader-behind"}
         else:
             out[key] = {**leg, "state": "waiting"}
     return out
+
+
+def _sort_aggregate_reds(red: list[dict], held: dict, *, head_legs: dict, pending: dict,
+                         stuck: list[dict], filed_cancelled: dict,
+                         settled: dict | None = None) -> tuple[list[dict], dict, list[dict]]:
+    """The aggregate ``test`` job fails whenever a leg it needs fails OR is
+    cancelled, so a failed aggregate beside only cancelled legs says nothing
+    of its own: those legs were cancelled, most often by the next push.
+    Such an aggregate is held until the head's cancelled legs are decided,
+    then follows them: filed with them when they are ``stuck`` (as a red, as
+    before), dropped when they were superseded, re-run or moot.
+
+    An aggregate beside a real red, or beside no cancelled leg, files at
+    once as it always did, unless its head is in ``settled``: its cancelled
+    legs were already settled and pruned, so it is dropped the same way. Returns ``(red to file, still held, dropped)``;
+    ``held`` and the return's middle are keyed by leg key."""
+    from_heads_pending = {_ci_head_key(lg["repo"], lg["pr"], lg["head_sha"]) for lg in pending.values()}
+    stuck_heads = {_ci_head_key(lg["repo"], lg["pr"], lg["head_sha"]) for lg in stuck}
+    filed_shas = {k.split(":", 1)[0] for k in filed_cancelled}
+    out: list[dict] = []
+    keep: dict = {}
+    dropped: list[dict] = []
+    for leg in [lg for lg in red if lg["key"] not in held] + list(held.values()):
+        if leg["check"] not in _CI_AGGREGATE_CHECKS:
+            out.append(leg)
+            continue
+        head = _ci_head_key(leg["repo"], leg["pr"], leg["head_sha"])
+        others = {c: v for c, v in (head_legs.get(head) or {}).items() if c not in _CI_AGGREGATE_CHECKS}
+        if any(v in _CI_RED for v in others.values()):
+            out.append(leg)
+        elif _CI_CANCELLED not in others.values() and head not in (settled or {}):
+            out.append(leg)
+        elif head in from_heads_pending:
+            keep[leg["key"]] = leg
+        elif head in stuck_heads or leg["head_sha"] in filed_shas:
+            out.append(leg)
+        else:
+            dropped.append({"where": _ci_pr_key(leg["repo"], leg["pr"], leg["head_sha"]), "leg": leg["check"],
+                            "reason": "its needed legs were cancelled, and those were superseded"})
+    return out, keep, dropped
 
 
 def _head_is_green(later_legs: dict, expected: set[str]) -> bool:
@@ -2307,6 +2363,9 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
                         cancelled_pending.setdefault(leg["key"], {**leg, "pending_since": now})
                 scanned += 1
             offset = fh.tell()
+    caught_up = offset >= src.stat().st_size
+    if not caught_up:
+        receipt["behind"] = src.stat().st_size - offset
     receipt["red"] = [_public(r) for r in red]
     receipt["annulled"] = annulled_skipped
 
@@ -2320,17 +2379,32 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
     for key in state.get("merged_synced") or []:
         closed.setdefault(key, {"merged": None})
     decided = _decide_cancelled(cancelled_pending, heads, now=now, grace_s=grace_s, head_legs=head_legs,
-                                closed=closed)
+                                closed=closed, caught_up=caught_up)
     receipt["cancelled"] = [
         {"repo": d["repo"], "pr": d["pr"], "head_sha": d["head_sha"], "leg": d["check"], "state": d["state"],
-         **({k: d[k] for k in ("successor", "aged_by", "latest", "closed") if k in d})}
+         **({k: d[k] for k in ("successor", "aged_by", "latest", "closed", "held") if k in d})}
         for d in decided.values()
     ]
     stuck = [d for d in decided.values() if d["state"] == "stuck"]
     # Superseded, rerun, moot and stuck legs leave the pending set; waiting/unreachable stay.
     cancelled_pending = {k: {kk: vv for kk, vv in d.items()
-                             if kk not in ("state", "successor", "aged_by", "latest", "closed")}
+                             if kk not in ("state", "successor", "aged_by", "latest", "closed", "held")}
                          for k, d in decided.items() if d["state"] in ("waiting", "unreachable")}
+    # Heads whose cancelled legs were settled without filing, kept a day: the
+    # aggregate `test` can land a tick after its legs were settled and their
+    # head pruned (willow-mcp#743 at 53f3ebf in the 2026-10-31 replay).
+    settled = {k: v for k, v in (state.get("ci_cancel_settled") or {}).items()
+               if isinstance(v, (int, float)) and now - v < _CI_SETTLED_KEEP_S}
+    for d in decided.values():
+        if d["state"] in ("superseded", "moot", "rerun"):
+            settled[_ci_head_key(d["repo"], d["pr"], d["head_sha"])] = now
+    red, aggregate_held, aggregate_dropped = _sort_aggregate_reds(
+        red, dict(state.get("ci_aggregate_held") or {}), head_legs=head_legs,
+        pending=cancelled_pending, stuck=stuck, filed_cancelled=filed_cancelled_before, settled=settled)
+    if aggregate_held:
+        receipt["aggregate_held"] = sorted(aggregate_held)
+    if aggregate_dropped:
+        receipt["aggregate_dropped"] = aggregate_dropped
 
     # One item per head: group the legs to file (reds + stuck cancelled) by head key.
     groups: dict[str, list[dict]] = {}
@@ -2552,6 +2626,8 @@ def run_ci(*, enable_mcp: bool | None = None) -> dict:
         state["ci_heads"] = heads
         state["ci_head_legs"] = head_legs
         state["ci_cancelled_pending"] = cancelled_pending
+        state["ci_aggregate_held"] = aggregate_held
+        state["ci_cancel_settled"] = settled
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state, indent=2) + "\n")
 
