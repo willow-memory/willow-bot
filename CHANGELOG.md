@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.29.0](https://github.com/willow-memory/willow-bot/compare/v1.28.0...v1.29.0) (2026-10-31)
+
+
+### Added
+
+* **steward:** keep-current refreshes a stale install where there's precedent ([1e8ffed](https://github.com/willow-memory/willow-bot/commit/1e8ffed1fa45c190f7d9100c68e627426fd8bb4f))
+* **steward:** keep-current refreshes a stale install where there's precedent ([db0ebae](https://github.com/willow-memory/willow-bot/commit/db0ebae959a94220e4f937d5cdadebc50d32711a))
+
 ## [1.28.0](https://github.com/willow-memory/willow-bot/compare/v1.27.0...v1.28.0) (2026-10-31)
 
 
