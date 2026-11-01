@@ -416,30 +416,39 @@ def _serve_one(tmp_path, table):
     return capped(rec, [table], ids, SERVE_KEY)["tables"][0]
 
 
+def _entries(fact, key):
+    return [e[key] for e in fact.get("rows", []) if key in e]
+
+
 def test_a_desk_table_is_served_as_one_fact_per_turn(tmp_path):
     t = _serve_one(tmp_path, _desk())
-    assert [f["turn"] for f in t["rows"]] == [1, 2, 3, 4]
-    assert [f["what"] for f in t["rows"]] == [
+    facts = t["rows"]
+    assert [f["turn"] for f in facts] == [1, 2, 3, 4]
+    assert [_entries(f, "what") for f in facts] == [
         ["turn_open", "turn_close"],
         ["turn_open", "proposal", "turn_close"],
         ["turn_open", "proposal", "turn_close"],
         ["turn_open", "proposal", "turn_close"],
     ]
-    assert [f.get("intent") for f in t["rows"]] == [
-        "Live one-script drive: who-pile join",
-        "escalate piece a",
-        "escalate piece b",
-        "escalate piece c",
+    assert [_entries(f, "intent") for f in facts] == [
+        ["Live one-script drive: who-pile join"],
+        ["escalate piece a"],
+        ["escalate piece b"],
+        ["escalate piece c"],
     ]
-    assert [f.get("verdict") for f in t["rows"]] == [None, "link_fail", "pass", "pass"]
-    # the null on the close row did not override the proposal's real reason
-    assert t["rows"][1]["reason"] == "a cite is not in the served file"
-    # rows that disagree keep every value, in record order
-    assert t["rows"][1]["when"] == [
-        "2026-10-08T00:00:03Z",
-        "2026-10-08T00:00:04Z",
-        "2026-10-08T00:00:05Z",
+    assert [_entries(f, "verdict") for f in facts] == [
+        [],
+        ["link_fail"],
+        ["pass"],
+        ["pass"],
     ]
+    # the reason stays with the proposal row; the close row's null stays its own
+    assert facts[1]["rows"][1]["reason"] == "a cite is not in the served file"
+    assert facts[1]["rows"][2] == {
+        "what": "turn_close",
+        "when": "2026-10-08T00:00:05Z",
+        "reason": None,
+    }
     # what every fact shares is said once, and is gone from the facts
     assert t["same"] == {
         "who": "desk",
@@ -447,30 +456,108 @@ def test_a_desk_table_is_served_as_one_fact_per_turn(tmp_path):
         "family": "claude",
         "standing": "unattested",
     }
-    assert not set(t["same"]) & {k for f in t["rows"] for k in f}
+    assert not set(t["same"]) & {k for f in facts for k in f}
 
 
-def test_a_joined_table_holds_only_served_values_served_equals_sealed(tmp_path):
+def _unjoined(table):
+    return [serve.view(r) for r in serve.authored(table["rows"])]
+
+
+def _rebuilt(t):
+    """Each source row back from the served table: the table's `same`, the
+    fact's own keys, and the row's entry. A fact with no `rows` is one row."""
+    out = []
+    for f in t["rows"]:
+        base = {k: v for k, v in f.items() if k != "rows"}
+        for e in f.get("rows", [{}]):
+            out.append({**t.get("same", {}), **base, **e})
+    return out
+
+
+def _canon(rows):
+    return sorted(json.dumps(r, sort_keys=True) for r in rows)
+
+
+def test_a_joined_table_holds_each_row_whole_served_equals_sealed(tmp_path):
     table = _desk()
     t = _serve_one(tmp_path, table)
-    before = [serve.view(r) for r in serve.authored(table["rows"])]
+    # every row, one by one, nothing de-duplicated, nulls included
+    assert _canon(_rebuilt(t)) == _canon(_unjoined(table))
+    assert len(_rebuilt(t)) == 11
 
-    def vals(rows):  # key -> the distinct non-null values, flattening disagreements
-        out: dict[str, set] = {}
-        for r in rows:
-            for k, v in r.items():
-                for x in v if (isinstance(v, list) and k != "what") else [v]:
-                    if k == "what" and isinstance(x, list):
-                        for y in x:
-                            out.setdefault(k, set()).add(json.dumps(y))
-                    elif x is not None:
-                        out.setdefault(k, set()).add(json.dumps(x, sort_keys=True))
-        return out
 
-    after = vals(t["rows"] + [t["same"]])
-    assert after == vals(before)  # nothing added, nothing dropped
-    whats = [w for f in t["rows"] for w in f["what"]]
-    assert sorted(whats) == sorted(r["what"] for r in before)  # `what` keeps every row
+def test_three_proposals_in_one_turn_keep_each_triple_intact(tmp_path):
+    """Loki MLY70YPV: values must stay with their row, repeats included."""
+    rows = [
+        _drow(1, "turn_open", 1, where="desk/turns"),
+        _drow(2, "proposal", 1, where="a.py", verdict="pass", reason="ok"),
+        _drow(3, "proposal", 1, where="b.py", verdict="refused", reason="outside law"),
+        _drow(4, "proposal", 1, where="c.py", verdict="pass", reason="ok"),
+        _drow(5, "turn_close", 1, where="desk/turns"),
+    ]
+    table = {"rows": rows, "source": "record.jsonl@n=5"}
+    t = _serve_one(tmp_path, table)
+    (fact,) = t["rows"]
+    got = [
+        (e["where"], e["verdict"], e["reason"]) for e in fact["rows"] if "verdict" in e
+    ]
+    assert got == [
+        ("a.py", "pass", "ok"),
+        ("b.py", "refused", "outside law"),
+        ("c.py", "pass", "ok"),
+    ]
+    assert [e["what"] for e in fact["rows"]] == [
+        "turn_open",
+        "proposal",
+        "proposal",
+        "proposal",
+        "turn_close",
+    ]
+    assert _canon(_rebuilt(t)) == _canon(_unjoined(table))
+
+
+def test_a_null_in_one_row_is_not_lifted_over_the_real_values(tmp_path):
+    rows = [
+        _drow(1, "proposal", 1, verdict="pass", reason="ok"),
+        _drow(2, "proposal", 1, verdict="pass", reason=None),
+        _drow(3, "proposal", 2, verdict="pass", reason="ok"),
+    ]
+    table = {"rows": rows, "source": "record.jsonl@n=3"}
+    t = _serve_one(tmp_path, table)
+    assert [e["reason"] for e in t["rows"][0]["rows"]] == ["ok", None]
+    assert _canon(_rebuilt(t)) == _canon(_unjoined(table))
+
+
+def test_two_identical_rows_in_a_turn_are_both_kept(tmp_path):
+    rows = [
+        _drow(1, "proposal", 1, verdict="pass", reason="ok"),
+        _drow(1, "proposal", 1, verdict="pass", reason="ok"),
+        _drow(2, "turn_close", 1),
+    ]
+    table = {"rows": rows, "source": "record.jsonl@n=3"}
+    t = _serve_one(tmp_path, table)
+    (fact,) = t["rows"]
+    assert [e["what"] for e in fact["rows"]] == ["proposal", "proposal", "turn_close"]
+    assert _canon(_rebuilt(t)) == _canon(_unjoined(table))
+    assert len(_rebuilt(t)) == 3
+
+
+def test_a_group_with_two_sessions_is_not_joined(tmp_path):
+    """A writer numbering turns per session would merge two sessions' turn 1."""
+
+    def rows(s2):
+        return [
+            _drow(1, "turn_open", 1, session="s1"),
+            _drow(2, "turn_close", 1, session="s1"),
+            _drow(3, "turn_open", 1, session=s2),
+        ]
+
+    two = {"rows": rows("s2"), "source": "r@n=3"}
+    t = _serve_one(tmp_path, two)
+    assert t["rows"] == _unjoined(two) and "same" not in t
+    one = {"rows": rows("s1"), "source": "r@n=3"}
+    joined = _serve_one(tmp_path / "b", one)
+    assert [f["turn"] for f in joined["rows"]] == [1] and "rows" in joined["rows"][0]
 
 
 def test_a_table_without_turn_on_every_row_is_served_as_it_was(tmp_path):

@@ -220,11 +220,33 @@ def test_pieces_are_deterministic_and_hashed(cfg):
 
 
 def test_a_table_over_the_budget_is_cut_into_row_groups(cfg):
+    doc = served(cfg, by=("who",))  # one turn: the whole table is one fact
+    (big,) = piled(doc)  # the run's own table is served with no rows
+    (fact,) = big["rows"]
+    assert len(fact["rows"]) > 1
+    one = {"state": "populated", "why": "", "return": doc["return"], "tables": [big]}
+    budget = len(json.dumps(one)) // 2
+    pieces = [p for p in escalate.cut(one, TASK, budget) if p["table"] == big["id"]]
+    assert len(pieces) > 1  # an oversized single fact is split by its row entries
+    parts = [f for p in pieces for f in p["piece"]["tables"][0]["rows"]]
+    assert all(
+        {k: v for k, v in f.items() if k != "rows"}
+        == {k: v for k, v in fact.items() if k != "rows"}
+        for f in parts
+    )
+    assert [r for f in parts for r in f["rows"]] == fact[
+        "rows"
+    ]  # in order, none dropped
+    assert escalate.cut(one, TASK, budget) == escalate.cut(one, TASK, budget)
+
+
+def test_a_table_of_several_turns_over_the_budget_is_cut_by_turn(cfg):
     doc = served(cfg, by=("who",), turns=4)  # every authored row in one table
     (big,) = piled(doc)  # the run's own table is served with no rows
     assert len(big["rows"]) > 1
     one = {"state": "populated", "why": "", "return": doc["return"], "tables": [big]}
-    budget = len(json.dumps(one)) // 2
+    whole = escalate._piece_doc(one, big, big["rows"])
+    budget = len(escalate.canon(whole)) + len(TASK) - 1  # every fact fits, not all
     pieces = [p for p in escalate.cut(one, TASK, budget) if p["table"] == big["id"]]
     assert len(pieces) > 1
     got = [r for p in pieces for r in p["piece"]["tables"][0]["rows"]]

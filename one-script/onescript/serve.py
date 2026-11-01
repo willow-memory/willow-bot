@@ -24,8 +24,10 @@ permission. Code fills out every field here; the model never sees a box.
           the model gets the four W's and a named payload, with any full-width
           hash withheld, so it can't count, name or reverse what it wasn't
           served. A table whose served rows all carry a `turn` is served as one
-          fact per turn (`join_turns`): the turn's rows merged, what every fact
-          shares lifted to the table's `same`. Only served values, none added.
+          fact per turn (`join_turns`): what every row of the turn shares sits
+          on the fact, each row keeps its own entry in `rows`, and what every
+          fact shares is lifted to the table's `same`. Only served values,
+          none added, none dropped, each still with its row.
   ids     keyed with a serve key made fresh at each check-in, never the plain
           content hash: they hold for the session, can't be enumerated, and
           can't be linked from one session to the next. The serve key makes
@@ -158,6 +160,9 @@ def view(row: dict) -> dict:
     return _scrub(out)
 
 
+KEYS = ("turn", "who")  # a fact's own keys, never in a row entry
+
+
 def _turned(rows: list[dict]) -> bool:
     """Every served row carries an int `turn`, and none is a table roll: a roll
     row (`verdict` by `table`) is read one by one by D0's `table.*` acts (its
@@ -170,39 +175,49 @@ def _turned(rows: list[dict]) -> bool:
     )
 
 
-def _merge(group: list[dict]) -> dict:
-    """One turn's rows as one fact. `what` is every row's, in record order. Any
-    other key keeps its value when the rows agree or only one has it, else the
-    values in record order; a null never overrides a real value."""
-    fact: dict = {}
-    for k in dict.fromkeys(k for r in group for k in r):
-        if k == "what":
-            fact[k] = [r.get(k) for r in group if k in r]
-            continue
-        vals: list = []
-        for r in group:
-            v = r.get(k)
-            if v is not None and all(canon(v) != canon(x) for x in vals):
-                vals.append(v)
-        fact[k] = None if not vals else vals[0] if len(vals) == 1 else vals
-    return fact
-
-
-def join_turns(rows: list[dict]) -> tuple[list[dict], dict]:
-    """A turn-bearing table as (facts, same): one fact per (turn, who), in turn
-    order, then every key identical on all facts lifted out into `same`. A
-    table whose rows don't all carry an int `turn` comes back as it was. Every
-    value out is a value in; nothing is added, only exact duplicates dropped."""
+def join_turns(
+    rows: list[dict], sessions: list | None = None
+) -> tuple[list[dict], dict]:
+    """A turn-bearing table as (facts, same). One fact per (turn, who), in turn
+    order: `{"turn", "who", <keys identical on every row of the group>, "rows":
+    [each row's other keys]}`. Every source row keeps its own entry, in record
+    order, nulls included, never de-duplicated, so each value stays with its
+    row (served == sealed). A single-row group has no `rows`. Then every key
+    identical on all facts (never `turn`; two facts at least) is lifted into
+    `same`. A table whose rows don't all carry an int `turn`, or whose group
+    carries two different raw `session` values (`sessions`, parallel to rows:
+    a writer numbering turns per session would merge them), comes back as it
+    was."""
     if not _turned(rows):
         return rows, {}
-    groups: dict[tuple, list[dict]] = {}
-    for r in rows:
-        groups.setdefault((r["turn"], r.get("who")), []).append(r)
-    facts = [_merge(g) for _, g in sorted(groups.items(), key=lambda kv: kv[0][0])]
+    groups: dict[tuple, list[int]] = {}
+    for i, r in enumerate(rows):
+        groups.setdefault((r["turn"], r.get("who")), []).append(i)
+    if sessions is not None and any(
+        len({canon(sessions[i]) for i in idx if sessions[i] is not None}) > 1
+        for idx in groups.values()
+    ):
+        return rows, {}
+    facts = []
+    for (turn, who), idx in sorted(groups.items(), key=lambda kv: kv[0][0]):
+        g = [rows[i] for i in idx]
+        keys = [k for k in dict.fromkeys(k for r in g for k in r) if k not in KEYS]
+        lifted = {
+            k: g[0][k]
+            for k in keys
+            if all(k in r and canon(r[k]) == canon(g[0][k]) for r in g)
+        }
+        fact = {"turn": turn, "who": who, **lifted}
+        entries = [
+            {k: v for k, v in r.items() if k not in lifted and k not in KEYS} for r in g
+        ]
+        if len(g) > 1 or entries[0]:
+            fact["rows"] = entries
+        facts.append(fact)
     same: dict = {}
     if len(facts) > 1:
         for k in facts[0]:
-            if k != "turn" and all(
+            if k not in ("turn", "rows") and all(
                 k in f and canon(f[k]) == canon(facts[0][k]) for f in facts
             ):
                 same[k] = facts[0][k]
@@ -642,6 +657,16 @@ def _serve(
         group = src.get("group", {}) if isinstance(src, dict) else {}
         stuck = lore.unchecked_seals(t["rows"], ctx, seals, unchecked)
         stuck_rules = rules.unchecked_seals(t["rows"], ctx, seals, unchecked)
+        raw = [
+            r
+            for r in authored(t["rows"])
+            if in_session(r)
+            and lore.servable(r, ctx, seals)
+            and rules.servable(r, ctx, seals)
+        ]
+        rows_v, same = join_turns(
+            [view(r) for r in raw], [r.get("session") for r in raw]
+        )
         entry = {
             "id": served_id(serve_key, tid),
             "trust": "human-sealed" if tid in seals else "untrusted",
@@ -650,15 +675,8 @@ def _serve(
             # served == sealed: the seal binds the authored rows only, so a
             # run row (`who == "run"`) is never served, let alone labelled
             # human-sealed. `_receipt` above still chain-checks every row.
-            "rows": [
-                view(r)
-                for r in authored(t["rows"])
-                if in_session(r)
-                and lore.servable(r, ctx, seals)
-                and rules.servable(r, ctx, seals)
-            ],
+            "rows": rows_v,
         }
-        entry["rows"], same = join_turns(entry["rows"])
         if same:
             entry["same"] = same
         if (

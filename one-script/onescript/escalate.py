@@ -349,6 +349,29 @@ def piece_hash(piece: dict, question: str) -> str:
     return h256(canon({"piece": piece, "question": question}))
 
 
+def _split_fact(doc: dict, table: dict, fact: dict, question: str, budget: int):
+    """A served fact (one turn, `serve.join_turns`) too big for a piece on its
+    own is split by its `rows` entries, each part the same fact (its turn, who
+    and shared keys) with as many entries as fit, in order, none dropped. Any
+    other row, or a fact that fits, comes back as it was."""
+    ents = fact.get("rows") if isinstance(fact, dict) else None
+
+    def over(x):
+        return len(canon(_piece_doc(doc, table, [x]))) + len(question) > budget
+
+    if not isinstance(ents, list) or len(ents) < 2 or not over(fact):
+        return [fact]
+    parts, cur = [], []
+    for e in ents:
+        if cur and over({**fact, "rows": cur + [e]}):
+            parts.append({**fact, "rows": cur})
+            cur = [e]
+        else:
+            cur = cur + [e]
+    parts.append({**fact, "rows": cur})
+    return parts
+
+
 def cut(doc: dict, question: str, budget: int) -> list[dict]:
     """The served document as small pieces, deterministic and ordered: one
     piece per table; a table over `budget` characters (the piece and the
@@ -359,7 +382,10 @@ def cut(doc: dict, question: str, budget: int) -> list[dict]:
     for t in doc["tables"]:
         rows = t["rows"]
         groups, cur = [], []
+        parts = []
         for r in rows:
+            parts += _split_fact(doc, t, r, question, budget)
+        for r in parts:
             trial = cur + [r]
             if cur and len(canon(_piece_doc(doc, t, trial))) + len(question) > budget:
                 groups.append(cur)

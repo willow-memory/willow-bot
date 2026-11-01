@@ -40,10 +40,8 @@ def desk_rows_served(c) -> int:
 
     # A turn-bearing table is served as one fact per turn, its `what` the list
     # of the record rows it joins; so the rows served are those `what`s.
-    # (`what` may sit in the table's `same` when every fact shares it.)
     def whats(t, r):
-        w = r.get("what", t.get("same", {}).get("what"))
-        return len(w) if isinstance(w, list) else 1
+        return len(r["rows"]) if "rows" in r else 1
 
     return sum(whats(t, r) for t in doc["tables"] for r in t["rows"]), doc
 
