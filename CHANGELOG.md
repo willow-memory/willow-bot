@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [1.32.0](https://github.com/willow-memory/willow-bot/compare/v1.31.3...v1.32.0) (2026-11-01)
+
+
+### Added
+
+* **one-script:** map predict.py to willow's predict add-on ([9556706](https://github.com/willow-memory/willow-bot/commit/955670689aa38b8a42241c14d88ba98ab3386584))
+* **one-script:** rebuilt one.py takes willow's serve, tip-pin and pile-rungs ([b8bc8a2](https://github.com/willow-memory/willow-bot/commit/b8bc8a27d8c4e023b62d8c208b014868fa6e23cb))
+* **one-script:** rebuilt one.py takes willow's serve, tip-pin and pile-rungs ([1ab9621](https://github.com/willow-memory/willow-bot/commit/1ab962144bdc5c25015d79aa1d938addd61b0914))
+
 ## [1.31.3](https://github.com/willow-memory/willow-bot/compare/v1.31.2...v1.31.3) (2026-11-01)
 
 
