@@ -115,7 +115,7 @@ MAP = [
     ("odds.py", "odds", "odds"),
     ("life.py", "life", "life"),
     ("draw.py", "surprise", "surprise"),
-    ("calibration.py", "the forecasts idea", "forecasts"),
+    ("calibration.py", "forecasts: Brier over the wagers you sealed", "forecasts"),
     ("deck.py", "the predictions idea", "predictions"),
     ("market.py", "the market-calls idea", "market-calls"),
     ("beacon.py", "the beacon idea", "beacon"),
@@ -140,6 +140,7 @@ MAP = [
 #: The add-ons the seven parts lean on; each one missing is said, not hidden.
 PIECES = (
     "predict",
+    "forecasts",
     "again",
     "all",
     "pile-rungs",
@@ -532,7 +533,9 @@ def checkout(
     else:
         graded = [g["right"] for g in pr.grades(rows)]
         grades = {"predicted": len(graded), "right": sum(graded)}
-    k.append(box, ts, "checkout", who=WHO, checkin=cin["n"], stale=stale, grades=grades)
+    wagers = calibrated(willow, box, rows)
+    k.append(box, ts, "checkout", who=WHO, checkin=cin["n"], stale=stale,
+             grades=grades, wagers=wagers)  # fmt: skip
     print("CHECK-OUT")
     print(
         "  stale: "
@@ -548,6 +551,10 @@ def checkout(
         if "right" in grades
         else f"  predictions: {UNREACHABLE}: {grades['why']}"
     )
+    print("  wagers: " + (
+        f"{UNREACHABLE}: {wagers['why']}" if "why" in wagers
+        else ", ".join(f"{n} {s}" for s, n in wagers["states"].items()) or "none"
+    ) + (f"; Brier {wagers['brier']}" if wagers.get("brier") is not None else ""))  # fmt: skip
     rows, _ = k.read(box / "record.jsonl")
     screen, code = needs(k, willow, box, rows, ts)
     print(screen)
@@ -559,6 +566,24 @@ def checkout(
     print("SESSION\n" + "\n".join("  " + x for x in said.strip().splitlines()))
     code = k.REFUSED if k.REFUSED in (c, code) else max(c, code)
     return pin_tip(k, willow, box, pin, code)
+
+
+def calibrated(willow: Path, box: Path, rows: list[dict]) -> dict:
+    """willow's forecasts: each wager open, waiting on the person's seal or
+    settled, and the Brier score over the settled ones. Only a sealed
+    outcome counts, so nothing here can settle a wager."""
+    fc = piece(willow, "forecasts")
+    if fc is None:
+        return {"state": UNREACHABLE, "why": "the forecasts add-on isn't here"}
+    told = fc.outcomes(box, rows)
+    states: dict[str, int] = {}
+    for w in told.values():
+        states[w["state"]] = states.get(w["state"], 0) + 1
+    pairs = [(w["p"], w["happened"]) for w in told.values() if w["state"] == "settled"]
+    brier = (
+        round(sum(fc.brier(p, o) for p, o in pairs) / len(pairs), 3) if pairs else None
+    )
+    return {"states": dict(sorted(states.items())), "brier": brier}
 
 
 def pin_tip(k, willow: Path, box: Path, pin: str | None, code: int) -> int:

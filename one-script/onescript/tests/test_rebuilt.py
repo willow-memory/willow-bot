@@ -28,6 +28,7 @@ SEALS = WILLOW is not None and one.piece(WILLOW, "session-seal") is not None
 
 #: willow's later pieces the loop leans on, each said `unreachable` without it
 PREDICTS = WILLOW is not None and one.piece(WILLOW, "predict") is not None
+WAGERS = WILLOW is not None and one.piece(WILLOW, "forecasts") is not None
 PHRASES = WILLOW is not None and one.piece(WILLOW, "pile-rungs") is not None
 SERVES = WILLOW is not None and one.piece(WILLOW, "serve") is not None
 PINS = WILLOW is not None and one.piece(WILLOW, "tip-pin") is not None
@@ -363,3 +364,28 @@ def test_pin_and_to_belong_to_their_verbs():
                  ["turn", "--box", "b", "--proposal", "p", "--pin", "f"]):  # fmt: skip
         got = run(*argv)
         assert got.returncode == 2 and "one.py" in got.stderr
+
+
+@pytest.mark.skipif(not WAGERS, reason="this willow has no forecasts")
+def test_checkout_scores_only_the_wagers_the_person_sealed(tmp_path, pile):
+    box = opened(tmp_path, pile)
+    fc = WILLOW / "adapters" / "stdlib" / "forecasts" / "forecasts.py"
+
+    def forecasts(*argv):
+        return subprocess.run([sys.executable, str(fc), *argv, "--box", str(box)],
+                              capture_output=True, text=True)  # fmt: skip
+
+    assert forecasts("wager", "--p", "0.8", "the bees swarm in May").returncode == 0
+    w = rows(box)[-1]["n"]
+    assert forecasts("wager", "--p", "0.6", "the tomatoes ripen").returncode == 0
+    assert forecasts("settle", str(w), "yes").returncode == 42
+    subj = rows(box)[-1]["subject"]
+    sealed = subprocess.run(
+        [sys.executable, str(WILLOW / "kernel.py"), "seal", "--box", str(box), subj,
+         *NOW], capture_output=True, text=True,
+    )  # fmt: skip
+    assert sealed.returncode == 0, sealed.stderr  # the person's act, with their key
+    got = run("checkout", "--box", str(box), *NOW)
+    assert "wagers: 1 open, 1 settled; Brier 0.04" in got.stdout, got.stdout
+    row = next(r for r in rows(box) if r["kind"] == "checkout")
+    assert row["wagers"] == {"states": {"open": 1, "settled": 1}, "brier": 0.04}
