@@ -1,11 +1,12 @@
 """one.py: the one script, rebuilt from willow's pieces. Python 3.9+, stdlib only.
 
-    python one.py checkin  --box DIR [--pile FOLDER --key FILE] [--now TS]
+    python one.py checkin  --box DIR [--pile FOLDER --key FILE] [--pin FILE] [--now TS]
     python one.py seed     --box DIR "the first bite"
     python one.py turn     --box DIR --proposal FILE.jsonl
+    python one.py serve    --box DIR [--to FILE]
     python one.py escalate --box DIR "the task"
     python one.py needs    --box DIR
-    python one.py checkout --box DIR
+    python one.py checkout --box DIR [--pin FILE]
     python one.py verify   --box DIR
     python one.py map
 
@@ -16,12 +17,17 @@ or one of its add-ons, and nothing of its own that could approve:
     2 predict   seed: what the record says the bite will come to, then the
                 bite, then the grade; once per check-in
     3 record    every row through the kernel's own append; verify
-    4 gate      turn: the model's rows through the kernel's door
-    5 resolve   escalate: a sealed answer, your files, every match, where
-                to look, and then the person, since no model is wired here
+    4 gate      turn: the model's rows through the kernel's door; serve:
+                the last bite's passages as a scope for the person's seal,
+                and only a sealed scope written out for a model
+    5 resolve   escalate: a sealed answer, your files, every match, the
+                folder's phrases, where to look, and then the person, since
+                no model is wired here
     6 view      needs: the digest add-on's page, and the sessions waiting
     7 reverse   checkout: approvals gone stale, how the predictions did,
-                then the session as one bundle for the person's seal
+                then the session as one bundle for the person's seal, and
+                with --pin, where the record ends, kept outside the box;
+                checkin --pin checks it before anything moves
 
 willow is found at --willow, else $ONESCRIPT_WILLOW, else beside willow-bot.
 Its kernel must be the one `../kernel.pin` names, and its CONSTITUTION.md is
@@ -85,7 +91,7 @@ MAP = [
     ("predict.py", "seed: the record's own count, graded after", KERNEL),
     ("seed.py", "kernel.bite", KERNEL),
     ("chunk.py", "kernel.chunks", KERNEL),
-    ("pile.py", "kernel.rank: the words rung only", KERNEL),
+    ("pile.py", "pile-rungs: words, then phrases; no embedder", "pile-rungs"),
     ("boxstore.py", "scan: a folder indexed once", "scan"),
     ("ladder.py", "again: asked, noticed, offered every third", "again"),
     ("proposals.py", "kernel.propose and kernel.door", KERNEL),
@@ -97,10 +103,10 @@ MAP = [
     ("prompt_path.py", "claude-code: every prompt a bite", "claude-code"),
     ("plant.py", "start: a person's first run", "start"),
     ("plant_rule.py", "start", "start"),
-    ("serve.py", "the scope idea", "scope"),
+    ("serve.py", "serve: a sealed scope, the one file a model reads", "serve"),
     ("scrub.py", "privacy", "privacy"),
     ("view.py", "needs: digest", "digest"),
-    ("reverse.py", "checkout: stale", "stale"),
+    ("reverse.py", "checkout: stale, and tip-pin's anchor", "stale"),
     ("session.py", "checkout: session-seal", "session-seal"),
     ("xref.py", "xref", "xref"),
     ("diverge.py", "diverge", "diverge"),
@@ -132,7 +138,16 @@ MAP = [
 ]
 
 #: The add-ons the seven parts lean on; each one missing is said, not hidden.
-PIECES = ("again", "all", "digest", "stale", "session-seal")
+PIECES = (
+    "again",
+    "all",
+    "pile-rungs",
+    "serve",
+    "digest",
+    "stale",
+    "session-seal",
+    "tip-pin",
+)
 
 
 # ── finding willow ──────────────────────────────────────────────────────────
@@ -237,6 +252,24 @@ def gates(k, willow: Path, box: Path, rows: list[dict]) -> list[dict]:
     return out
 
 
+def tip_gate(willow: Path, box: Path, pin: Path) -> dict:
+    """tip-pin's check: the record still ends where it was pinned, outside
+    the box. Rows cut off or a chain re-hashed fail it; verify can't see
+    either."""
+    tp = piece(willow, "tip-pin")
+    if tp is None:
+        return {
+            "gate": "tip",
+            "state": UNREACHABLE,
+            "why": "the tip-pin add-on isn't here",
+        }
+    c, said = quiet(tp.do_check, box, pin)
+    line = said.strip().splitlines()[-1] if said.strip() else ""
+    if c == 0:
+        return {"gate": "tip", "state": SATISFIED}
+    return {"gate": "tip", "state": FAILING, "why": " ".join(line.split())}
+
+
 def open_checkin(rows: list[dict]) -> dict | None:
     """The check-in this session runs under, or None: none yet, checked out,
     or closed hard."""
@@ -266,6 +299,8 @@ def checkin(k, willow: Path, box: Path, opts: dict, ts: str) -> int:
         print("refused: a session is open; check out first", file=sys.stderr)
         return k.REFUSED
     gs = gates(k, willow, box, rows)
+    if opts.get("--pin"):
+        gs.append(tip_gate(willow, box, Path(opts["--pin"])))
     there = {p: piece(willow, p) is not None for p in PIECES}
     hard = [g for g in gs if g["state"] == FAILING]
     row = k.append(
@@ -368,6 +403,19 @@ def turn(k, box: Path, path: Path, ts: str) -> int:
     return code
 
 
+def serve(k, willow: Path, box: Path, to: str | None, ts: str) -> int:
+    """serve's two forms: without --to, the last bite's passages proposed as
+    a scope, peaks first, for the person's seal; with it, the last sealed
+    scope written to FILE for a model, and nothing without a seal."""
+    sv = piece(willow, "serve")
+    if sv is None:
+        print(f"{UNREACHABLE}: the serve add-on isn't here; nothing scoped or served")
+        return k.ESCALATE
+    if to:
+        return sv.do_serve(box, Path(to))
+    return sv.do_scope(box, ts)
+
+
 # ── 5 resolve ───────────────────────────────────────────────────────────────
 def escalate(k, willow: Path, box: Path, text: str, ts: str) -> int:
     """The ladder, rung by rung, stopping at the first that answers. One
@@ -413,6 +461,7 @@ def escalate(k, willow: Path, box: Path, text: str, ts: str) -> int:
                 {"where": f"{c['path']}:{c['line']}", "text": c["text"]} for c in more
             ]
             return said_and_kept(k, box, ts, doc, rungs, "answered")
+    rungs.append(phrases(k, willow, box, text, doc))
     rungs.append(
         {"rung": "where to look", "state": POPULATED if doc.get("look") else EMPTY}
     )
@@ -424,6 +473,26 @@ def escalate(k, willow: Path, box: Path, text: str, ts: str) -> int:
         }
     )
     return said_and_kept(k, box, ts, doc, rungs, "escalated:to_the_person")
+
+
+def phrases(k, willow: Path, box: Path, text: str, doc: dict) -> dict:
+    """pile-rungs' phrase rung: the folder's own word pairs, ranked by
+    pile-rank. It points at where to look; only the kernel's words answer,
+    so a phrase never ends the climb."""
+    pr = piece(willow, "pile-rungs")
+    if pr is None:
+        return {"rung": "phrases", "state": UNREACHABLE,
+                "why": "the pile-rungs add-on isn't here"}  # fmt: skip
+    pile, _ = pr.pile_rank.passages(Path(k.config(box)["pile"]), None)
+    got, why = pr.phrases_rung(pr.pile_rank.Ranker(pile), text, pr.pile_rank.TOP)
+    if got:
+        doc["phrases"] = [
+            {"where": f"{c['path']}:{c['line']}", "phrases": ph, "text": c["text"]}
+            for c, _, ph in got
+        ]
+        return {"rung": "phrases", "state": POPULATED, "found": len(got)}
+    skipped = why.startswith("the question")
+    return {"rung": "phrases", "state": "skipped" if skipped else EMPTY, "why": why}
 
 
 def said_and_kept(k, box: Path, ts: str, doc: dict, rungs: list, end: str) -> int:
@@ -467,7 +536,9 @@ def needs(k, willow: Path, box: Path, rows: list[dict], ts: str) -> tuple[str, i
 
 
 # ── 7 reverse ───────────────────────────────────────────────────────────────
-def checkout(k, willow: Path, box: Path, rows: list[dict], ts: str) -> int:
+def checkout(
+    k, willow: Path, box: Path, rows: list[dict], ts: str, pin: str | None = None
+) -> int:
     cin = open_checkin(rows)
     st = piece(willow, "stale")
     if st is None:
@@ -502,10 +573,26 @@ def checkout(k, willow: Path, box: Path, rows: list[dict], ts: str) -> int:
     ss = piece(willow, "session-seal")
     if ss is None:
         print(f"session: {UNREACHABLE}: the session-seal add-on isn't here")
-        return max(code, k.ESCALATE)
+        return pin_tip(k, willow, box, pin, max(code, k.ESCALATE))
     c, said = quiet(ss.close, box, ts)
     print("SESSION\n" + "\n".join("  " + x for x in said.strip().splitlines()))
-    return k.REFUSED if k.REFUSED in (c, code) else max(c, code)
+    code = k.REFUSED if k.REFUSED in (c, code) else max(c, code)
+    return pin_tip(k, willow, box, pin, code)
+
+
+def pin_tip(k, willow: Path, box: Path, pin: str | None, code: int) -> int:
+    """With --pin, the record's last row pinned to FILE, outside the box, after
+    everything this checkout wrote. tip-pin never overwrites: a new FILE each
+    time, kept where whoever writes the box can't reach."""
+    if not pin:
+        return code
+    tp = piece(willow, "tip-pin")
+    if tp is None:
+        print(f"tip: {UNREACHABLE}: the tip-pin add-on isn't here; nothing pinned")
+        return max(code, k.ESCALATE)
+    c, said = quiet(tp.do_pin, box, Path(pin))
+    print("TIP\n" + "\n".join("  " + x for x in said.strip().splitlines()))
+    return c if c == k.REFUSED else max(c, code)
 
 
 # ── 3 record ────────────────────────────────────────────────────────────────
@@ -553,7 +640,8 @@ def main(argv: list[str]) -> int:
     args: list[str] = []
     it = iter(rest)
     for a in it:
-        if a in ("--box", "--pile", "--key", "--now", "--willow", "--proposal"):
+        if a in ("--box", "--pile", "--key", "--now", "--willow", "--proposal",
+                 "--pin", "--to"):  # fmt: skip
             opts[a] = next(it, "")
         else:
             args.append(a)
@@ -565,6 +653,7 @@ def main(argv: list[str]) -> int:
         "checkin": 0,
         "seed": 1,
         "turn": 0,
+        "serve": 0,
         "escalate": 1,
         "needs": 0,
         "checkout": 0,
@@ -575,6 +664,10 @@ def main(argv: list[str]) -> int:
         or len(args) != wants[verb]
         or not opts.get("--box")
         or (verb == "turn") != bool(opts.get("--proposal"))
+        or "--to" in opts
+        and (verb != "serve" or not opts["--to"])
+        or "--pin" in opts
+        and (verb not in ("checkin", "checkout") or not opts["--pin"])
     ):
         print(usage, file=sys.stderr)
         return 2
@@ -613,9 +706,11 @@ def main(argv: list[str]) -> int:
         return seed(k, willow, box, rows, args[0], ts)
     if verb == "turn":
         return turn(k, box, Path(opts["--proposal"]), ts)
+    if verb == "serve":
+        return serve(k, willow, box, opts.get("--to"), ts)
     if verb == "escalate":
         return escalate(k, willow, box, args[0], ts)
-    return checkout(k, willow, box, rows, ts)
+    return checkout(k, willow, box, rows, ts, opts.get("--pin"))
 
 
 if __name__ == "__main__":
