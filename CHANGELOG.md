@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [1.34.0](https://github.com/willow-memory/willow-bot/compare/v1.33.0...v1.34.0) (2026-11-01)
+
+
+### Added
+
+* **one-script:** serve a turn-bearing table as one fact per turn, and one return line for both readers ([e288177](https://github.com/willow-memory/willow-bot/commit/e2881775ad2992b3e0f99fc1a2565b8a6ba28739))
+* **one-script:** serve a turn-bearing table as one fact per turn, and one return line for both readers ([0400bfd](https://github.com/willow-memory/willow-bot/commit/0400bfd5dcc40b1b100c151c33e955db900b34a9))
+
+
+### Fixed
+
+* **one-script:** a joined fact keeps each row, so values stay with their row ([b12b233](https://github.com/willow-memory/willow-bot/commit/b12b233e559892d7f7a4b407adc3b3c6da0d5f9b))
+
 ## [1.33.0](https://github.com/willow-memory/willow-bot/compare/v1.32.0...v1.33.0) (2026-11-01)
 
 
