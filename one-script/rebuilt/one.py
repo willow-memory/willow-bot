@@ -88,7 +88,7 @@ MAP = [
     ("words.py", "kernel.words and kernel.bite_key", KERNEL),
     ("sign.py", "kernel.proof: HMAC under the person's key", KERNEL),
     ("states.py", "populated, empty, unreachable, said by each piece", KERNEL),
-    ("predict.py", "predict: the record's own count, graded after", "predict"),
+    ("predict.py", "predict: written before the bite, graded after", "predict"),
     ("seed.py", "kernel.bite", KERNEL),
     ("chunk.py", "kernel.chunks", KERNEL),
     ("pile.py", "pile-rungs: words, then phrases; no embedder", "pile-rungs"),
@@ -115,14 +115,18 @@ MAP = [
     ("odds.py", "odds", "odds"),
     ("life.py", "life", "life"),
     ("draw.py", "surprise", "surprise"),
-    ("calibration.py", "the forecasts idea", "forecasts"),
+    ("calibration.py", "forecasts: Brier over the wagers you sealed", "forecasts"),
     ("deck.py", "the predictions idea", "predictions"),
-    ("market.py", "the market-calls idea", "market-calls"),
+    (
+        "market.py",
+        "market-calls: wagers on a close, scored at checkout",
+        "market-calls",
+    ),
     ("beacon.py", "the beacon idea", "beacon"),
-    ("dice5e.py", "the dice5e idea", "dice5e"),
+    ("dice5e.py", "dice5e: 4d6kh3 and adv, seeded as dice is", "dice5e"),
     ("table.py", "the game-master idea", "game-master"),
     ("lore.py", "the lore idea", "lore"),
-    ("rules.py", "the rules idea", "rules"),
+    ("rules.py", "rules: a section sealed, then the kernel's own answer", "rules"),
     ("retire.py", "the retire idea", "retire"),
     ("snapshot.py", "the snapshot idea", "snapshot"),
     ("jeles_store.py", "the jeles idea", "jeles"),
@@ -139,6 +143,8 @@ MAP = [
 
 #: The add-ons the seven parts lean on; each one missing is said, not hidden.
 PIECES = (
+    "predict",
+    "forecasts",
     "again",
     "all",
     "pile-rungs",
@@ -333,53 +339,27 @@ def checkin(k, willow: Path, box: Path, opts: dict, ts: str) -> int:
 
 
 # ── 2 predict ───────────────────────────────────────────────────────────────
-def came_to(r: dict) -> str:
-    if r.get("answered_by"):
-        return "sealed"
-    return POPULATED if any(not s.get("echo") for s in r.get("served", [])) else EMPTY
-
-
-def declare(rows: list[dict]) -> dict:
-    """What the record says a bite comes to: counted, never guessed. Ties go
-    to `empty`, the answer that asks the person."""
-    seen = [came_to(r) for r in rows if r["kind"] == "bite"]
-    if not seen:
-        return {"likely": None, "n": 0}
-    counts = {s: seen.count(s) for s in set(seen)}
-    order = sorted(counts, key=lambda s: (-counts[s], s != EMPTY, s))
-    return {"likely": order[0], "n": len(seen), "seen": dict(sorted(counts.items()))}
-
-
 def seed(k, willow: Path, box: Path, rows: list[dict], text: str, ts: str) -> int:
+    """willow's predict: what the bite will come to, counted from the record
+    and written on the chain first, then the bite, then the grade."""
     cin = open_checkin(rows)
-    if any(r["kind"] == "predict" and r.get("checkin") == cin["n"] for r in rows):
+    if any(r["kind"] == "predict" and r["n"] > cin["n"] for r in rows):
         print("refused: one seed per check-in; it's been sown", file=sys.stderr)
         return k.REFUSED
-    guess = declare(rows)
-    again = piece(willow, "again")
-    code, said = quiet(k.bite, box, text, ts)
+    pr = piece(willow, "predict")
+    if pr is None:
+        print(f"{UNREACHABLE}: the predict add-on isn't here; nothing sown")
+        return k.ESCALATE
+    code, said = quiet(pr.ask, box, text, ts)
     if code == k.REFUSED:
         print(said.strip(), file=sys.stderr)
         return code
-    rows, _ = k.read(box / "record.jsonl")
-    got = came_to(rows[-1])
-    right = None if guess["likely"] is None else guess["likely"] == got
-    k.append(
-        box,
-        ts,
-        "predict",
-        who=WHO,
-        checkin=cin["n"],
-        bite_row=rows[-1]["n"],
-        likely=guess["likely"],
-        got=got,
-        right=right,
-    )
     doc = json.loads(said)
-    doc["predicted"] = {**guess, "got": got, "right": right}
+    again = piece(willow, "again")
     if again is None:
         doc["again"] = {"state": UNREACHABLE, "why": "the again add-on isn't here"}
     else:
+        rows, _ = k.read(box / "record.jsonl")
         e = again.repeats(rows)[k.bite_key(text)]  # this bite is on it now
         doc["again"] = {"times": e["times"], "rung": again.rung(e)}
     print(json.dumps(doc, ensure_ascii=False))
@@ -551,11 +531,15 @@ def checkout(
             "approvals": len(entries),
             "gone": gone,
         }
-    graded = [
-        r["right"] for r in rows if r["kind"] == "predict" and r["right"] is not None
-    ]
-    grades = {"predicted": len(graded), "right": sum(graded)}
-    k.append(box, ts, "checkout", who=WHO, checkin=cin["n"], stale=stale, grades=grades)
+    pr = piece(willow, "predict")
+    if pr is None:
+        grades = {"state": UNREACHABLE, "why": "the predict add-on isn't here"}
+    else:
+        graded = [g["right"] for g in pr.grades(rows)]
+        grades = {"predicted": len(graded), "right": sum(graded)}
+    wagers = calibrated(willow, box, rows)
+    k.append(box, ts, "checkout", who=WHO, checkin=cin["n"], stale=stale,
+             grades=grades, wagers=wagers)  # fmt: skip
     print("CHECK-OUT")
     print(
         "  stale: "
@@ -566,7 +550,15 @@ def checkout(
             else stale["why"]
         )
     )
-    print(f"  predictions: {grades['right']} of {grades['predicted']} right")
+    print(
+        f"  predictions: {grades['right']} of {grades['predicted']} right"
+        if "right" in grades
+        else f"  predictions: {UNREACHABLE}: {grades['why']}"
+    )
+    print("  wagers: " + (
+        f"{UNREACHABLE}: {wagers['why']}" if "why" in wagers
+        else ", ".join(f"{n} {s}" for s, n in wagers["states"].items()) or "none"
+    ) + (f"; Brier {wagers['brier']}" if wagers.get("brier") is not None else ""))  # fmt: skip
     rows, _ = k.read(box / "record.jsonl")
     screen, code = needs(k, willow, box, rows, ts)
     print(screen)
@@ -578,6 +570,24 @@ def checkout(
     print("SESSION\n" + "\n".join("  " + x for x in said.strip().splitlines()))
     code = k.REFUSED if k.REFUSED in (c, code) else max(c, code)
     return pin_tip(k, willow, box, pin, code)
+
+
+def calibrated(willow: Path, box: Path, rows: list[dict]) -> dict:
+    """willow's forecasts: each wager open, waiting on the person's seal or
+    settled, and the Brier score over the settled ones. Only a sealed
+    outcome counts, so nothing here can settle a wager."""
+    fc = piece(willow, "forecasts")
+    if fc is None:
+        return {"state": UNREACHABLE, "why": "the forecasts add-on isn't here"}
+    told = fc.outcomes(box, rows)
+    states: dict[str, int] = {}
+    for w in told.values():
+        states[w["state"]] = states.get(w["state"], 0) + 1
+    pairs = [(w["p"], w["happened"]) for w in told.values() if w["state"] == "settled"]
+    brier = (
+        round(sum(fc.brier(p, o) for p, o in pairs) / len(pairs), 3) if pairs else None
+    )
+    return {"states": dict(sorted(states.items())), "brier": brier}
 
 
 def pin_tip(k, willow: Path, box: Path, pin: str | None, code: int) -> int:

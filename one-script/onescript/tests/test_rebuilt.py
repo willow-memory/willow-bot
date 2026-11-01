@@ -27,6 +27,8 @@ NOW = ["--now", "2026-10-24T09:00:00Z"]
 SEALS = WILLOW is not None and one.piece(WILLOW, "session-seal") is not None
 
 #: willow's later pieces the loop leans on, each said `unreachable` without it
+PREDICTS = WILLOW is not None and one.piece(WILLOW, "predict") is not None
+WAGERS = WILLOW is not None and one.piece(WILLOW, "forecasts") is not None
 PHRASES = WILLOW is not None and one.piece(WILLOW, "pile-rungs") is not None
 SERVES = WILLOW is not None and one.piece(WILLOW, "serve") is not None
 PINS = WILLOW is not None and one.piece(WILLOW, "tip-pin") is not None
@@ -93,14 +95,17 @@ def test_nothing_moves_before_a_check_in(tmp_path, pile):
         assert got.returncode == 2 and "no open check-in" in got.stderr
 
 
+@pytest.mark.skipif(not PREDICTS, reason="this willow has no predict")
 def test_the_seed_is_predicted_bitten_and_graded_once_per_check_in(tmp_path, pile):
     box = opened(tmp_path, pile)
     got = run("seed", "--box", str(box), "when did the bees swarm", *NOW)
     doc = json.loads(got.stdout)
     assert got.returncode == 0 and doc["state"] == "populated"
     assert doc["served"][0]["where"] == "garden.md:3"
-    assert doc["predicted"] == {"likely": None, "n": 0, "got": "populated",
-                                "right": None}  # fmt: skip
+    assert doc["predicted"] == {"likely": None, "bites": 0, "seen": {}, "row": 2,
+                                "got": "populated", "right": None}  # fmt: skip
+    kinds = [r["kind"] for r in rows(box)]
+    assert kinds[-3:] == ["predict", "bite", "graded"], "written down before"
     assert doc["again"] == {"times": 1, "rung": "asked"}
     again = run("seed", "--box", str(box), "bees", *NOW)
     assert again.returncode == 2 and "one seed per check-in" in again.stderr
@@ -108,18 +113,22 @@ def test_the_seed_is_predicted_bitten_and_graded_once_per_check_in(tmp_path, pil
     assert "swarm" not in words and "Tomatoes" not in words
 
 
-def test_the_record_predicts_from_what_bites_came_to():
-    bite = {"kind": "bite"}
-    rs = [{**bite, "served": [{"echo": False}]}, {**bite, "served": []}]
-    assert one.declare(rs)["likely"] == "empty", "a tie asks the person"
-    rs.append({**bite, "served": [{"echo": False}]})
-    assert one.declare(rs) == {
-        "likely": "populated",
-        "n": 3,
-        "seen": {"empty": 1, "populated": 2},
-    }
+def test_without_willows_predict_nothing_is_sown(tmp_path, pile, monkeypatch, capsys):
+    """The count and the grade are willow's predict add-on's, not this file's:
+    a willow without it says so, and the seed bites nothing."""
+    box = opened(tmp_path, pile)
+    k = one.load(WILLOW)
+    real = one.piece
+    monkeypatch.setattr(
+        one, "piece", lambda w, f: None if f == "predict" else real(w, f)
+    )
+    before = len(rows(box))
+    code = one.seed(k, WILLOW, box, rows(box), "bees swarm", NOW[1])
+    assert code == 42 and "the predict add-on isn't here" in capsys.readouterr().out
+    assert len(rows(box)) == before
 
 
+@pytest.mark.skipif(not PREDICTS, reason="this willow has no predict")
 def test_a_turn_goes_through_the_kernels_door_and_waits_on_the_seal(tmp_path, pile):
     box = opened(tmp_path, pile)
     doc = json.loads(run("seed", "--box", str(box), "bees swarm", *NOW).stdout)
@@ -153,6 +162,7 @@ def test_escalate_climbs_the_ladder_and_ends_at_the_person(tmp_path, pile):
     assert got.returncode == 0 and json.loads(got.stdout)["end"] == "answered"
 
 
+@pytest.mark.skipif(not PREDICTS, reason="this willow has no predict")
 def test_checkout_reverses_views_and_bundles_the_session(tmp_path, pile):
     box = opened(tmp_path, pile)
     run("seed", "--box", str(box), "bees swarm", *NOW)
@@ -223,6 +233,7 @@ def test_the_map_names_a_willow_piece_for_every_part():
     assert got.stdout.strip().splitlines()[-1].endswith("the bot's own")
 
 
+@pytest.mark.skipif(not PREDICTS, reason="this willow has no predict")
 def test_a_sealed_answer_is_served_first_by_seed_and_escalate(tmp_path, pile):
     box = opened(tmp_path, pile)
     doc = json.loads(run("seed", "--box", str(box), "bees swarm", *NOW).stdout)
@@ -246,17 +257,17 @@ def test_a_sealed_answer_is_served_first_by_seed_and_escalate(tmp_path, pile):
     got = run("seed", "--box", str(box), "bees swarm", *NOW)
     doc = json.loads(got.stdout)
     assert got.returncode == 0 and doc["state"] == "sealed"
+    p = {n: v for n, v in doc["predicted"].items() if n != "row"}
     if SEALS:  # seed populated, escalate sealed, the session's own bite empty
-        assert doc["predicted"] == {"likely": "empty", "n": 3, "got": "sealed",
-                                    "right": False,
-                                    "seen": {"empty": 1, "populated": 1, "sealed": 1}}  # fmt: skip
+        assert p == {"likely": "empty", "bites": 3, "got": "sealed", "right": False,
+                     "seen": {"empty": 1, "populated": 1, "sealed": 1}}  # fmt: skip
     else:  # no session bundled, so no bite of its own: populated and sealed tie
-        assert doc["predicted"] == {"likely": "populated", "n": 2, "got": "sealed",
-                                    "right": False,
-                                    "seen": {"populated": 1, "sealed": 1}}  # fmt: skip
+        assert p == {"likely": "populated", "bites": 2, "got": "sealed",
+                     "right": False, "seen": {"populated": 1, "sealed": 1}}  # fmt: skip
     assert doc["again"] == {"times": 3, "rung": "standing"}
 
 
+@pytest.mark.skipif(not PREDICTS, reason="this willow has no predict")
 def test_the_rebuilt_one_script_on_willows_blind_demo(tmp_path):
     """Bernadette, built blind in willow's demo/, as the rebuilt one script's
     pile: her raw files, no readers, the way the one script reads a repo."""
@@ -301,7 +312,7 @@ def test_a_phrase_points_where_to_look_and_never_answers(tmp_path, pile):
     assert got.returncode == 42 and doc["end"] == "escalated:to_the_person"
 
 
-@pytest.mark.skipif(not SERVES, reason="this willow has no serve")
+@pytest.mark.skipif(not (SERVES and PREDICTS), reason="no serve or predict")
 def test_only_a_sealed_scope_is_served(tmp_path, pile):
     box = opened(tmp_path, pile)
     out = tmp_path / "served.md"
@@ -353,3 +364,28 @@ def test_pin_and_to_belong_to_their_verbs():
                  ["turn", "--box", "b", "--proposal", "p", "--pin", "f"]):  # fmt: skip
         got = run(*argv)
         assert got.returncode == 2 and "one.py" in got.stderr
+
+
+@pytest.mark.skipif(not WAGERS, reason="this willow has no forecasts")
+def test_checkout_scores_only_the_wagers_the_person_sealed(tmp_path, pile):
+    box = opened(tmp_path, pile)
+    fc = WILLOW / "adapters" / "stdlib" / "forecasts" / "forecasts.py"
+
+    def forecasts(*argv):
+        return subprocess.run([sys.executable, str(fc), *argv, "--box", str(box)],
+                              capture_output=True, text=True)  # fmt: skip
+
+    assert forecasts("wager", "--p", "0.8", "the bees swarm in May").returncode == 0
+    w = rows(box)[-1]["n"]
+    assert forecasts("wager", "--p", "0.6", "the tomatoes ripen").returncode == 0
+    assert forecasts("settle", str(w), "yes").returncode == 42
+    subj = rows(box)[-1]["subject"]
+    sealed = subprocess.run(
+        [sys.executable, str(WILLOW / "kernel.py"), "seal", "--box", str(box), subj,
+         *NOW], capture_output=True, text=True,
+    )  # fmt: skip
+    assert sealed.returncode == 0, sealed.stderr  # the person's act, with their key
+    got = run("checkout", "--box", str(box), *NOW)
+    assert "wagers: 1 open, 1 settled; Brier 0.04" in got.stdout, got.stdout
+    row = next(r for r in rows(box) if r["kind"] == "checkout")
+    assert row["wagers"] == {"states": {"open": 1, "settled": 1}, "brier": 0.04}
