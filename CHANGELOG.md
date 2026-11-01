@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [1.33.0](https://github.com/willow-memory/willow-bot/compare/v1.32.0...v1.33.0) (2026-11-01)
+
+
+### Added
+
+* **one-script:** checkout scores the sealed wagers through willow's forecasts ([6fc743a](https://github.com/willow-memory/willow-bot/commit/6fc743a7d6e2f1eaf9c20e1e06e67a5f1aae6871))
+* **one-script:** map market.py to willow's market-calls add-on ([8baaaca](https://github.com/willow-memory/willow-bot/commit/8baaaca9c333b01b91a5e815e609766d171502a8))
+* **one-script:** map rules.py and dice5e.py to willow's add-ons ([94b8753](https://github.com/willow-memory/willow-bot/commit/94b87532402a06f6842b3a061f70dfae2439d56f))
+* **one-script:** seed through willow's predict; checkout scores sealed wagers; map the ported parts ([bd64f0d](https://github.com/willow-memory/willow-bot/commit/bd64f0d9f83b3b47bca39554bc0984c5196f7016))
+
 ## [1.32.0](https://github.com/willow-memory/willow-bot/compare/v1.31.3...v1.32.0) (2026-11-01)
 
 
