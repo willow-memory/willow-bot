@@ -88,7 +88,7 @@ MAP = [
     ("words.py", "kernel.words and kernel.bite_key", KERNEL),
     ("sign.py", "kernel.proof: HMAC under the person's key", KERNEL),
     ("states.py", "populated, empty, unreachable, said by each piece", KERNEL),
-    ("predict.py", "predict: the record's own count, graded after", "predict"),
+    ("predict.py", "predict: written before the bite, graded after", "predict"),
     ("seed.py", "kernel.bite", KERNEL),
     ("chunk.py", "kernel.chunks", KERNEL),
     ("pile.py", "pile-rungs: words, then phrases; no embedder", "pile-rungs"),
@@ -139,6 +139,7 @@ MAP = [
 
 #: The add-ons the seven parts lean on; each one missing is said, not hidden.
 PIECES = (
+    "predict",
     "again",
     "all",
     "pile-rungs",
@@ -333,53 +334,27 @@ def checkin(k, willow: Path, box: Path, opts: dict, ts: str) -> int:
 
 
 # ── 2 predict ───────────────────────────────────────────────────────────────
-def came_to(r: dict) -> str:
-    if r.get("answered_by"):
-        return "sealed"
-    return POPULATED if any(not s.get("echo") for s in r.get("served", [])) else EMPTY
-
-
-def declare(rows: list[dict]) -> dict:
-    """What the record says a bite comes to: counted, never guessed. Ties go
-    to `empty`, the answer that asks the person."""
-    seen = [came_to(r) for r in rows if r["kind"] == "bite"]
-    if not seen:
-        return {"likely": None, "n": 0}
-    counts = {s: seen.count(s) for s in set(seen)}
-    order = sorted(counts, key=lambda s: (-counts[s], s != EMPTY, s))
-    return {"likely": order[0], "n": len(seen), "seen": dict(sorted(counts.items()))}
-
-
 def seed(k, willow: Path, box: Path, rows: list[dict], text: str, ts: str) -> int:
+    """willow's predict: what the bite will come to, counted from the record
+    and written on the chain first, then the bite, then the grade."""
     cin = open_checkin(rows)
-    if any(r["kind"] == "predict" and r.get("checkin") == cin["n"] for r in rows):
+    if any(r["kind"] == "predict" and r["n"] > cin["n"] for r in rows):
         print("refused: one seed per check-in; it's been sown", file=sys.stderr)
         return k.REFUSED
-    guess = declare(rows)
-    again = piece(willow, "again")
-    code, said = quiet(k.bite, box, text, ts)
+    pr = piece(willow, "predict")
+    if pr is None:
+        print(f"{UNREACHABLE}: the predict add-on isn't here; nothing sown")
+        return k.ESCALATE
+    code, said = quiet(pr.ask, box, text, ts)
     if code == k.REFUSED:
         print(said.strip(), file=sys.stderr)
         return code
-    rows, _ = k.read(box / "record.jsonl")
-    got = came_to(rows[-1])
-    right = None if guess["likely"] is None else guess["likely"] == got
-    k.append(
-        box,
-        ts,
-        "predict",
-        who=WHO,
-        checkin=cin["n"],
-        bite_row=rows[-1]["n"],
-        likely=guess["likely"],
-        got=got,
-        right=right,
-    )
     doc = json.loads(said)
-    doc["predicted"] = {**guess, "got": got, "right": right}
+    again = piece(willow, "again")
     if again is None:
         doc["again"] = {"state": UNREACHABLE, "why": "the again add-on isn't here"}
     else:
+        rows, _ = k.read(box / "record.jsonl")
         e = again.repeats(rows)[k.bite_key(text)]  # this bite is on it now
         doc["again"] = {"times": e["times"], "rung": again.rung(e)}
     print(json.dumps(doc, ensure_ascii=False))
@@ -551,10 +526,12 @@ def checkout(
             "approvals": len(entries),
             "gone": gone,
         }
-    graded = [
-        r["right"] for r in rows if r["kind"] == "predict" and r["right"] is not None
-    ]
-    grades = {"predicted": len(graded), "right": sum(graded)}
+    pr = piece(willow, "predict")
+    if pr is None:
+        grades = {"state": UNREACHABLE, "why": "the predict add-on isn't here"}
+    else:
+        graded = [g["right"] for g in pr.grades(rows)]
+        grades = {"predicted": len(graded), "right": sum(graded)}
     k.append(box, ts, "checkout", who=WHO, checkin=cin["n"], stale=stale, grades=grades)
     print("CHECK-OUT")
     print(
@@ -566,7 +543,11 @@ def checkout(
             else stale["why"]
         )
     )
-    print(f"  predictions: {grades['right']} of {grades['predicted']} right")
+    print(
+        f"  predictions: {grades['right']} of {grades['predicted']} right"
+        if "right" in grades
+        else f"  predictions: {UNREACHABLE}: {grades['why']}"
+    )
     rows, _ = k.read(box / "record.jsonl")
     screen, code = needs(k, willow, box, rows, ts)
     print(screen)

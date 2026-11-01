@@ -29,12 +29,12 @@ Without willow or its law, every verb refuses.
 | Part | Here | Done by |
 |---|---|---|
 | 1 boot | `checkin` | `kernel.read` first (a break refuses), then four gates: `pin` (willow's kernel is the one `../kernel.pin` names), `law` (`differently` when the constitution changed since the last check-in), `beats` (`kernel.test`, the eight beats), `seals` (no seal row that doesn't prove), and with `--pin`, a fifth, `tip` ([tip-pin](https://github.com/willow-memory/Willow/tree/main/adapters/stdlib/tip-pin): the record still ends where the last checkout pinned it, so rows cut off the end, which `verify` can't see, close the session hard). A failing gate is a hard close with the original's four options. Each add-on the parts lean on is checked, and a missing one is named `unreachable` |
-| 2 predict | `seed` | Before the bite, what the record says it will come to (`populated`, `empty`, `sealed`), counted from earlier bites, a tie going to `empty`. Then `kernel.bite`, and a `predict` row grading the guess. `again` says which rung of the ladder the bite is on. Once per check-in |
+| 2 predict | `seed` | willow's [predict](https://github.com/willow-memory/Willow/tree/main/adapters/stdlib/predict): what the bite will come to (`populated`, `empty`, `sealed`), counted from earlier bites, a tie going to `empty`, written as a `predict` row on the chain before the bite. Then `kernel.bite`, and a `graded` row. Without predict, `seed` says `unreachable` and sows nothing. `again` says which rung of the ladder the bite is on. Once per check-in |
 | 3 record | every verb, `verify` | Each row through `kernel.append`. `verify` is `kernel.verify` plus `session-seal check` |
 | 4 gate | `turn`, `serve` | `kernel.propose`: the door, and cites only from the last bite. A pass waits, and the seal command is printed for the person. `serve` is willow's [serve](https://github.com/willow-memory/Willow/tree/main/adapters/stdlib/serve): the last bite's passages proposed as a scope, peaks first; once the person seals it, `--to FILE` writes the one markdown file a model reads, opaque ids and no paths. Unsealed, it serves nothing |
 | 5 resolve | `escalate` | Rung by rung, stopping at the first that answers: a sealed answer, your files (`kernel.bite`), every match (`all`), the folder's phrases ([pile-rungs](https://github.com/willow-memory/Willow/tree/main/adapters/stdlib/pile-rungs)' phrase rung, which points and never answers: only the kernel's words do), where to look (`kernel.look`), a model (`unreachable`: none is wired). It ends `answered` or `escalated:to_the_person`, recorded as one `escalate` row of rung states, without the words |
 | 6 view | `needs` | `digest`'s page (waiting, gone stale, coming up, asked again), and each session sealed, waiting or broken. Writes nothing |
-| 7 reverse | `checkout` | `stale` (approvals whose cited passage changed or went) and how the predictions did, as a `checkout` row. Then the screen, then `session-seal`: the session from its first row to the checkout, proposed for the person's one seal. With `--pin FILE`, last, `tip-pin` writes where the record now ends to FILE: a new file each time, never one that's there, kept where whoever writes the box can't reach |
+| 7 reverse | `checkout` | `stale` (approvals whose cited passage changed or went) and how the predictions did (`predict`'s own grades), as a `checkout` row. Then the screen, then `session-seal`: the session from its first row to the checkout, proposed for the person's one seal. With `--pin FILE`, last, `tip-pin` writes where the record now ends to FILE: a new file each time, never one that's there, kept where whoever writes the box can't reach |
 
 Nothing here approves anything. The seal is always `kernel.py seal` with the
 person's key.
@@ -52,9 +52,9 @@ person's key.
   `tip-pin`) has that part say `unreachable`, and the rest still runs.
 - **And back again.** The one script's second part, `predict.py`, is
   willow's `predict` add-on on that same branch: the prediction written on
-  the chain before the bite, then a `graded` row. `seed` here still writes
-  its own single `predict` row after the bite, and `predict.py score`
-  reads those rows too.
+  the chain before the bite, then a `graded` row. `seed` here now calls it,
+  so the count and the grade are willow's, not this file's; `predict.py
+  score` still reads the single-row `predict` rows older boxes hold.
 - **On willow's blind demo.** `test_rebuilt.py` also runs `one.py` on
   Bernadette (`demo/bernadette` in willow), a person an agent built without
   seeing the code. It reads her raw files, with no readers, the way the one
