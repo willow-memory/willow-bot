@@ -23,7 +23,11 @@ permission. Code fills out every field here; the model never sees a box.
           content digests, versions and receipts stay on the record's side;
           the model gets the four W's and a named payload, with any full-width
           hash withheld, so it can't count, name or reverse what it wasn't
-          served.
+          served. A table whose served rows all carry a `turn` is served as one
+          fact per turn (`join_turns`): what every row of the turn shares sits
+          on the fact, each row keeps its own entry in `rows`, and what every
+          fact shares is lifted to the table's `same`. Only served values,
+          none added, none dropped, each still with its row.
   ids     keyed with a serve key made fresh at each check-in, never the plain
           content hash: they hold for the session, can't be enumerated, and
           can't be linked from one session to the next. The serve key makes
@@ -96,9 +100,10 @@ CANNOT_HOLD = {
 
 RETURN = (
     'Return only rows of {"path": text, "data": text, "cites": [served table id], '
-    '"claim": text}, one JSON object per line. A cite must be an id in this file. '
-    'For an idea of your own that no table supports, give "cites": []; it is '
-    "marked as yours and read only alongside this file. Nothing else is read."
+    '"claim": text}, given through the propose tool if you have one, otherwise as '
+    "one JSON object per line. A cite must be an id in this file. For an idea of "
+    'your own that no table supports, give "cites": []; it is marked as yours and '
+    "read only alongside this file. Nothing else is read."
 )
 
 _ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
@@ -153,6 +158,70 @@ def view(row: dict) -> dict:
         if isinstance(out.get(k), str):
             out[k] = _ZW.sub("", unicodedata.normalize("NFKC", out[k]))
     return _scrub(out)
+
+
+KEYS = ("turn", "who")  # a fact's own keys, never in a row entry
+
+
+def _turned(rows: list[dict]) -> bool:
+    """Every served row carries an int `turn`, and none is a table roll: a roll
+    row (`verdict` by `table`) is read one by one by D0's `table.*` acts (its
+    `total`, `session`, `turn`), so a table holding one is served as it is."""
+    return bool(rows) and all(
+        isinstance(r.get("turn"), int)
+        and not isinstance(r.get("turn"), bool)
+        and not (r.get("who") == "table" and r.get("what") == "verdict")
+        for r in rows
+    )
+
+
+def join_turns(
+    rows: list[dict], sessions: list | None = None
+) -> tuple[list[dict], dict]:
+    """A turn-bearing table as (facts, same). One fact per (turn, who), in turn
+    order: `{"turn", "who", <keys identical on every row of the group>, "rows":
+    [each row's other keys]}`. Every source row keeps its own entry, in record
+    order, nulls included, never de-duplicated, so each value stays with its
+    row (served == sealed). A single-row group has no `rows`. Then every key
+    identical on all facts (never `turn`; two facts at least) is lifted into
+    `same`. A table whose rows don't all carry an int `turn`, or whose group
+    carries two different raw `session` values (`sessions`, parallel to rows:
+    a writer numbering turns per session would merge them), comes back as it
+    was."""
+    if not _turned(rows):
+        return rows, {}
+    groups: dict[tuple, list[int]] = {}
+    for i, r in enumerate(rows):
+        groups.setdefault((r["turn"], r.get("who")), []).append(i)
+    if sessions is not None and any(
+        len({canon(sessions[i]) for i in idx if sessions[i] is not None}) > 1
+        for idx in groups.values()
+    ):
+        return rows, {}
+    facts = []
+    for (turn, who), idx in sorted(groups.items(), key=lambda kv: kv[0][0]):
+        g = [rows[i] for i in idx]
+        keys = [k for k in dict.fromkeys(k for r in g for k in r) if k not in KEYS]
+        lifted = {
+            k: g[0][k]
+            for k in keys
+            if all(k in r and canon(r[k]) == canon(g[0][k]) for r in g)
+        }
+        fact = {"turn": turn, "who": who, **lifted}
+        entries = [
+            {k: v for k, v in r.items() if k not in lifted and k not in KEYS} for r in g
+        ]
+        if len(g) > 1 or entries[0]:
+            fact["rows"] = entries
+        facts.append(fact)
+    same: dict = {}
+    if len(facts) > 1:
+        for k in facts[0]:
+            if k not in ("turn", "rows") and all(
+                k in f and canon(f[k]) == canon(facts[0][k]) for f in facts
+            ):
+                same[k] = facts[0][k]
+    return [{k: v for k, v in f.items() if k not in same} for f in facts], same
 
 
 def scope_seal(row: dict) -> bool:
@@ -588,6 +657,16 @@ def _serve(
         group = src.get("group", {}) if isinstance(src, dict) else {}
         stuck = lore.unchecked_seals(t["rows"], ctx, seals, unchecked)
         stuck_rules = rules.unchecked_seals(t["rows"], ctx, seals, unchecked)
+        raw = [
+            r
+            for r in authored(t["rows"])
+            if in_session(r)
+            and lore.servable(r, ctx, seals)
+            and rules.servable(r, ctx, seals)
+        ]
+        rows_v, same = join_turns(
+            [view(r) for r in raw], [r.get("session") for r in raw]
+        )
         entry = {
             "id": served_id(serve_key, tid),
             "trust": "human-sealed" if tid in seals else "untrusted",
@@ -596,14 +675,10 @@ def _serve(
             # served == sealed: the seal binds the authored rows only, so a
             # run row (`who == "run"`) is never served, let alone labelled
             # human-sealed. `_receipt` above still chain-checks every row.
-            "rows": [
-                view(r)
-                for r in authored(t["rows"])
-                if in_session(r)
-                and lore.servable(r, ctx, seals)
-                and rules.servable(r, ctx, seals)
-            ],
+            "rows": rows_v,
         }
+        if same:
+            entry["same"] = same
         if (
             stuck or stuck_rules
         ):  # said on the table, never shown as empty (INVARIANTS section 1)

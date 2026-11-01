@@ -37,7 +37,13 @@ def at_end(cfg):  # noqa: F811
 def desk_rows_served(c) -> int:
     card = api.scope(c, match={"who": "desk"})
     doc = api.serve(c, card["spec"], max_chars=CAP)["doc"]
-    return sum(len(t["rows"]) for t in doc["tables"]), doc
+
+    # A turn-bearing table is served as one fact per turn, its `what` the list
+    # of the record rows it joins; so the rows served are those `what`s.
+    def whats(t, r):
+        return len(r["rows"]) if "rows" in r else 1
+
+    return sum(whats(t, r) for t in doc["tables"] for r in t["rows"]), doc
 
 
 def one_session(c, bite: str) -> dict:
