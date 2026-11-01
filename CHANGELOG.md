@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.31.3](https://github.com/willow-memory/willow-bot/compare/v1.31.2...v1.31.3) (2026-11-01)
+
+
+### Fixed
+
+* **one-script:** pin the kernel to willow e53e30d, propose escalates when every row is refused ([d72c13a](https://github.com/willow-memory/willow-bot/commit/d72c13a367d385fe9a9c18ee0e0e5079e86dd23c))
+* **one-script:** pin the kernel to willow e53e30d, propose escalates when every row is refused ([d4291c3](https://github.com/willow-memory/willow-bot/commit/d4291c37230c8a235eac14c25fccefff118d5daf))
+
 ## [1.31.2](https://github.com/willow-memory/willow-bot/compare/v1.31.1...v1.31.2) (2026-10-31)
 
 
