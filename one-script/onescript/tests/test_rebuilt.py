@@ -26,6 +26,11 @@ NOW = ["--now", "2026-10-24T09:00:00Z"]
 #: (one from before it merged) is said `unreachable`, and both are held below
 SEALS = WILLOW is not None and one.piece(WILLOW, "session-seal") is not None
 
+#: willow's later pieces the loop leans on, each said `unreachable` without it
+PHRASES = WILLOW is not None and one.piece(WILLOW, "pile-rungs") is not None
+SERVES = WILLOW is not None and one.piece(WILLOW, "serve") is not None
+PINS = WILLOW is not None and one.piece(WILLOW, "tip-pin") is not None
+
 pytestmark = pytest.mark.skipif(
     WILLOW is None, reason="willow-memory/willow isn't beside willow-bot"
 )
@@ -136,9 +141,12 @@ def test_escalate_climbs_the_ladder_and_ends_at_the_person(tmp_path, pile):
     doc = json.loads(got.stdout)
     assert got.returncode == 42 and doc["end"] == "escalated:to_the_person"
     assert [r["rung"] for r in doc["rungs"]] == [
-        "sealed answer", "your files", "every match", "where to look", "a model",
+        "sealed answer", "your files", "every match", "phrases", "where to look",
+        "a model",
     ]  # fmt: skip
     assert doc["rungs"][-1]["state"] == "unreachable"
+    if PHRASES:  # "owes money" is no pair her garden notes use
+        assert doc["rungs"][3]["state"] == "skipped"
     row = rows(box)[-1]
     assert row["kind"] == "escalate" and "why" not in json.dumps(row["rungs"])
     got = run("escalate", "--box", str(box), "tomatoes sun", *NOW)
@@ -277,3 +285,71 @@ def test_the_rebuilt_one_script_on_willows_blind_demo(tmp_path):
     assert json.loads(got.stdout)["end"] == "escalated:to_the_person"
     assert run("checkout", "--box", str(box), *NOW).returncode == 42
     assert record.Record(box, lambda: "", "", object()).verify_chain() == []
+
+
+@pytest.mark.skipif(not PHRASES, reason="this willow has no pile-rungs")
+def test_a_phrase_points_where_to_look_and_never_answers(tmp_path, pile):
+    with (pile / "garden.md").open("a") as f:
+        f.write("\nSourdough bread rises slowly.\n\nMy sourdough bread failed.\n")
+    box = opened(tmp_path, pile)
+    got = run("escalate", "--box", str(box), "sourdough bread oven recipe flour", *NOW)
+    doc = json.loads(got.stdout)
+    rung = {r["rung"]: r for r in doc["rungs"]}
+    assert rung["your files"]["state"] == "empty", "two of five words: no answer"
+    assert rung["phrases"] == {"rung": "phrases", "state": "populated", "found": 2}
+    assert {p["where"] for p in doc["phrases"]} == {"garden.md:5", "garden.md:7"}
+    assert got.returncode == 42 and doc["end"] == "escalated:to_the_person"
+
+
+@pytest.mark.skipif(not SERVES, reason="this willow has no serve")
+def test_only_a_sealed_scope_is_served(tmp_path, pile):
+    box = opened(tmp_path, pile)
+    out = tmp_path / "served.md"
+    got = run("serve", "--box", str(box), *NOW)
+    assert got.returncode == 42 and "Bite first" in got.stdout
+    run("seed", "--box", str(box), "bees swarm", *NOW)
+    got = run("serve", "--box", str(box), *NOW)
+    assert got.returncode == 42 and "seal it with your key" in got.stdout
+    got = run("serve", "--box", str(box), "--to", str(out), *NOW)
+    assert got.returncode == 2 and not out.exists(), "nothing served unsealed"
+    subj = rows(box)[-1]["subject"]
+    sealed = subprocess.run(
+        [sys.executable, str(WILLOW / "kernel.py"), "seal", "--box", str(box), subj,
+         *NOW], capture_output=True, text=True,
+    )  # fmt: skip
+    assert sealed.returncode == 0, sealed.stderr  # the person's act, with their key
+    got = run("serve", "--box", str(box), "--to", str(out), *NOW)
+    assert got.returncode == 0, got.stderr
+    page = out.read_text()
+    assert "The bees swarmed in May." in page and "Tomatoes" not in page
+    assert str(box) not in page and subj.split(":")[1] not in page
+
+
+@pytest.mark.skipif(not PINS, reason="this willow has no tip-pin")
+def test_a_pinned_tip_holds_and_a_record_cut_short_hard_closes(tmp_path, pile):
+    box = opened(tmp_path, pile)
+    run("seed", "--box", str(box), "bees swarm", *NOW)
+    assert run("checkout", "--box", str(box), *NOW).returncode in (0, 42)
+    keep = (box / "record.jsonl").read_text()
+    assert run("checkin", "--box", str(box), *NOW).returncode == 0
+    pin = tmp_path / "pin.json"
+    got = run("checkout", "--box", str(box), "--pin", str(pin), *NOW)
+    assert "TIP" in got.stdout and json.loads(pin.read_text())["rows"] == len(rows(box))
+    again = run("checkout", "--box", str(box), "--pin", str(pin), *NOW)
+    assert again.returncode == 2, "no open check-in, and a pin never overwritten"
+    got = run("checkin", "--box", str(box), "--pin", str(pin), *NOW)
+    assert got.returncode == 0 and "satisfied    tip" in got.stdout
+    run("checkout", "--box", str(box), *NOW)
+    (box / "record.jsonl").write_text(keep)  # the second session cut off the end
+    assert run("verify", "--box", str(box)).returncode in (0, 42), "verify can't see it"
+    got = run("checkin", "--box", str(box), "--pin", str(pin), *NOW)
+    assert got.returncode == 2 and "HARD CLOSE" in got.stdout
+    assert "tip: cut short" in got.stdout
+
+
+def test_pin_and_to_belong_to_their_verbs():
+    for argv in (["seed", "--box", "b", "--to", "f", "x"],
+                 ["serve", "--box", "b", "--to", ""],
+                 ["turn", "--box", "b", "--proposal", "p", "--pin", "f"]):  # fmt: skip
+        got = run(*argv)
+        assert got.returncode == 2 and "one.py" in got.stderr
