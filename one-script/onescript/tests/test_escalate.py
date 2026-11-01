@@ -62,13 +62,16 @@ def rows(cfg) -> list[dict]:
     return [json.loads(x) for x in text.splitlines()]
 
 
-def served(cfg, by=("what",), max_chars=CAP) -> dict:
+def served(cfg, by=("what",), max_chars=CAP, turns=1) -> dict:
     """Check in, scope, seal, serve. The served document."""
     assert api.checkin(cfg)["code"] == 0
     # A scope serves the authored rows of a sealed pile, never the run's own
     # bookkeeping (`who == "run"`), so a fresh check-in alone serves nothing.
     # One desk turn gives the pile authored rows (turn_open / turn_close).
-    assert api.turn(cfg, "seed the pile")["code"] == 0
+    # A table of turn-bearing rows is served as one fact per turn, so a test
+    # that needs several rows in one table seeds several turns.
+    for i in range(turns):
+        assert api.turn(cfg, "seed the pile" + (f" {i}" if i else ""))["code"] == 0
     card = api.scope(cfg, by=by)
     assert card["code"] == 0 and card["subject"].startswith("serve:")
     assert api.seal_scope(cfg, card["subject"], proof=proof(card["subject"]))["sealed"]
@@ -217,7 +220,7 @@ def test_pieces_are_deterministic_and_hashed(cfg):
 
 
 def test_a_table_over_the_budget_is_cut_into_row_groups(cfg):
-    doc = served(cfg, by=("who",))  # every authored row in one table
+    doc = served(cfg, by=("who",), turns=4)  # every authored row in one table
     (big,) = piled(doc)  # the run's own table is served with no rows
     assert len(big["rows"]) > 1
     one = {"state": "populated", "why": "", "return": doc["return"], "tables": [big]}

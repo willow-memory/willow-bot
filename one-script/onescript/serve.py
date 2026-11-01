@@ -23,7 +23,9 @@ permission. Code fills out every field here; the model never sees a box.
           content digests, versions and receipts stay on the record's side;
           the model gets the four W's and a named payload, with any full-width
           hash withheld, so it can't count, name or reverse what it wasn't
-          served.
+          served. A table whose served rows all carry a `turn` is served as one
+          fact per turn (`join_turns`): the turn's rows merged, what every fact
+          shares lifted to the table's `same`. Only served values, none added.
   ids     keyed with a serve key made fresh at each check-in, never the plain
           content hash: they hold for the session, can't be enumerated, and
           can't be linked from one session to the next. The serve key makes
@@ -96,9 +98,10 @@ CANNOT_HOLD = {
 
 RETURN = (
     'Return only rows of {"path": text, "data": text, "cites": [served table id], '
-    '"claim": text}, one JSON object per line. A cite must be an id in this file. '
-    'For an idea of your own that no table supports, give "cites": []; it is '
-    "marked as yours and read only alongside this file. Nothing else is read."
+    '"claim": text}, given through the propose tool if you have one, otherwise as '
+    "one JSON object per line. A cite must be an id in this file. For an idea of "
+    'your own that no table supports, give "cites": []; it is marked as yours and '
+    "read only alongside this file. Nothing else is read."
 )
 
 _ZW = re.compile("[\u200b-\u200f\u2060\u2064\ufeff\u00ad]")
@@ -153,6 +156,57 @@ def view(row: dict) -> dict:
         if isinstance(out.get(k), str):
             out[k] = _ZW.sub("", unicodedata.normalize("NFKC", out[k]))
     return _scrub(out)
+
+
+def _turned(rows: list[dict]) -> bool:
+    """Every served row carries an int `turn`, and none is a table roll: a roll
+    row (`verdict` by `table`) is read one by one by D0's `table.*` acts (its
+    `total`, `session`, `turn`), so a table holding one is served as it is."""
+    return bool(rows) and all(
+        isinstance(r.get("turn"), int)
+        and not isinstance(r.get("turn"), bool)
+        and not (r.get("who") == "table" and r.get("what") == "verdict")
+        for r in rows
+    )
+
+
+def _merge(group: list[dict]) -> dict:
+    """One turn's rows as one fact. `what` is every row's, in record order. Any
+    other key keeps its value when the rows agree or only one has it, else the
+    values in record order; a null never overrides a real value."""
+    fact: dict = {}
+    for k in dict.fromkeys(k for r in group for k in r):
+        if k == "what":
+            fact[k] = [r.get(k) for r in group if k in r]
+            continue
+        vals: list = []
+        for r in group:
+            v = r.get(k)
+            if v is not None and all(canon(v) != canon(x) for x in vals):
+                vals.append(v)
+        fact[k] = None if not vals else vals[0] if len(vals) == 1 else vals
+    return fact
+
+
+def join_turns(rows: list[dict]) -> tuple[list[dict], dict]:
+    """A turn-bearing table as (facts, same): one fact per (turn, who), in turn
+    order, then every key identical on all facts lifted out into `same`. A
+    table whose rows don't all carry an int `turn` comes back as it was. Every
+    value out is a value in; nothing is added, only exact duplicates dropped."""
+    if not _turned(rows):
+        return rows, {}
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        groups.setdefault((r["turn"], r.get("who")), []).append(r)
+    facts = [_merge(g) for _, g in sorted(groups.items(), key=lambda kv: kv[0][0])]
+    same: dict = {}
+    if len(facts) > 1:
+        for k in facts[0]:
+            if k != "turn" and all(
+                k in f and canon(f[k]) == canon(facts[0][k]) for f in facts
+            ):
+                same[k] = facts[0][k]
+    return [{k: v for k, v in f.items() if k not in same} for f in facts], same
 
 
 def scope_seal(row: dict) -> bool:
@@ -604,6 +658,9 @@ def _serve(
                 and rules.servable(r, ctx, seals)
             ],
         }
+        entry["rows"], same = join_turns(entry["rows"])
+        if same:
+            entry["same"] = same
         if (
             stuck or stuck_rules
         ):  # said on the table, never shown as empty (INVARIANTS section 1)
