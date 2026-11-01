@@ -117,7 +117,11 @@ MAP = [
     ("draw.py", "surprise", "surprise"),
     ("calibration.py", "forecasts: Brier over the wagers you sealed", "forecasts"),
     ("deck.py", "the predictions idea", "predictions"),
-    ("market.py", "the market-calls idea", "market-calls"),
+    (
+        "market.py",
+        "market-calls: wagers on a close, scored at checkout",
+        "market-calls",
+    ),
     ("beacon.py", "the beacon idea", "beacon"),
     ("dice5e.py", "the dice5e idea", "dice5e"),
     ("table.py", "the game-master idea", "game-master"),
