@@ -438,15 +438,29 @@ def _day_month(a: str, b: str, y: str) -> str:
     return ""
 
 
+def _web_address(text: str, i: int) -> int:
+    """How many characters from `i` are an http(s) address, or 0."""
+    for scheme in ("http://", "https://"):
+        if text.startswith(scheme, i):
+            j = i + len(scheme)
+            while j < len(text) and not text[j].isspace():
+                j += 1
+            return j - i
+    return 0
+
+
 def newest(text: str) -> str:
     """The latest date written in `text`, as YYYYMMDD, or "" for none: an ISO
     date (2026-10-14), a compact one (20261014, a calendar's), or a day and a
     month either way round with a four-digit year (21/10/2026, 10.21.2026),
     read only when one part is over 12. Each a whole run of ASCII digits, never
-    part of a longer number. Read by hand, not by a regex, so a port reads the
-    same dates."""
+    part of a longer number, and not inside a web address. Read by hand, not
+    by a regex, so a port reads the same dates."""
     best, i = "", 0
     while i < len(text):
+        if url := _web_address(text, i):
+            i += url
+            continue
         n = _digits(text, i)
         if n == 0:
             i += 1
@@ -789,7 +803,6 @@ def propose(box: Path, lines: list[str], ts: str) -> int:
         print("refused: propose answers a bite; bite first", file=sys.stderr)
         return REFUSED
     served = {s["id"] for s in last.get("served", [])}
-    waiting = 0
     for i, line in enumerate(lines):
         try:
             prop = json.loads(line)
@@ -805,12 +818,12 @@ def propose(box: Path, lines: list[str], ts: str) -> int:
                 box, ts, "proposal", subject=subj, verdict="pass", bite_row=last["n"]
             )
             print(f"pass  {subj}  waiting on your seal")
-            waiting += 1
         else:
             append(box, ts, "proposal", verdict="refused", line=i, why=why)
             print(f"refused  line {i}: {why}")
-    # passing the door is not acceptance: it waits for the person (CONST-0-1)
-    return ESCALATE if waiting else ALIVE
+    # Passing the door is not acceptance: nothing `propose` reads is an answer
+    # until the person seals it (CONST-0-1).
+    return ESCALATE
 
 
 def seal(box: Path, subj: str, ts: str) -> int:
