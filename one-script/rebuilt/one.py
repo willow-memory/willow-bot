@@ -88,7 +88,7 @@ MAP = [
     ("words.py", "kernel.words and kernel.bite_key", KERNEL),
     ("sign.py", "kernel.proof: HMAC under the person's key", KERNEL),
     ("states.py", "populated, empty, unreachable, said by each piece", KERNEL),
-    ("predict.py", "seed: the record's own count, graded after", KERNEL),
+    ("predict.py", "predict: the record's own count, graded after", "predict"),
     ("seed.py", "kernel.bite", KERNEL),
     ("chunk.py", "kernel.chunks", KERNEL),
     ("pile.py", "pile-rungs: words, then phrases; no embedder", "pile-rungs"),

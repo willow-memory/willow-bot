@@ -50,6 +50,11 @@ person's key.
   Nestor's draft pair, now on willow's `main`. A willow without one of
   the pieces the loop leans on (`session-seal`, `serve`, `pile-rungs`,
   `tip-pin`) has that part say `unreachable`, and the rest still runs.
+- **And back again.** The one script's second part, `predict.py`, is
+  willow's `predict` add-on on that same branch: the prediction written on
+  the chain before the bite, then a `graded` row. `seed` here still writes
+  its own single `predict` row after the bite, and `predict.py score`
+  reads those rows too.
 - **On willow's blind demo.** `test_rebuilt.py` also runs `one.py` on
   Bernadette (`demo/bernadette` in willow), a person an agent built without
   seeing the code. It reads her raw files, with no readers, the way the one
@@ -67,9 +72,10 @@ its job, and whether that piece is here:
 
     60 parts: 41 done by willow's pieces, 10 still ideas on willow's list, 9 the bot's own
 
-That count is against willow's `main` at 5e04bc5, which now has
-`session-seal`, `serve` and `pile-rungs`; a willow without them counts
-them as ideas again. *Done by* means the job at the kernel's scale, not everything
+That count is against willow's branch of the same name as this one, which
+adds `predict`; against willow's `main` at 5e04bc5 (with `session-seal`,
+`serve` and `pile-rungs`, without `predict`) it is 40 and 11. A willow
+without a piece counts it as an idea again. *Done by* means the job at the kernel's scale, not everything
 the module does. What the rebuild drops:
 
 | Part | What `onescript/` does that the piece doesn't |
