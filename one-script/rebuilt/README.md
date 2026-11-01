@@ -70,10 +70,11 @@ person's key.
 `one.py map` lists every module in `onescript/`, the willow piece that does
 its job, and whether that piece is here:
 
-    60 parts: 43 done by willow's pieces, 8 still ideas on willow's list, 9 the bot's own
+    60 parts: 45 done by willow's pieces, 6 still ideas on willow's list, 9 the bot's own
 
 That count is against willow's branch of the same name as this one, which
-adds `predict`, `forecasts` and `market-calls`; against willow's `main` at 5e04bc5 (with
+adds `predict`, `forecasts`, `market-calls`, `rules` and `dice5e`;
+against willow's `main` at 5e04bc5 (with
 `session-seal`, `serve` and `pile-rungs`) it is 40 and 11. A willow
 without a piece counts it as an idea again. *Done by* means the job at the kernel's scale, not everything
 the module does. What the rebuild drops:
@@ -87,10 +88,10 @@ the module does. What the rebuild drops:
 | `escalate.py` | the local model rung (Rat) and the review card routed to willow |
 | `boot.py` | the tests, toolchain, freshness and reachability gates over the bot's repos; here the gates are willow's own |
 
-The 8 ideas are already on willow's `adapters/planned.json`. With `scope`
+The 6 ideas are already on willow's `adapters/planned.json`. With `scope`
 built as `serve` and the wagers as `forecasts` (market calls are wagers too,
 so checkout scores them with the rest), the loop itself misses none of
-them: what's left are the deck, the beacon, `retire` (set aside for now:
-the kernel has no way to take an approval back) and the table's games and
-lore. The 9 the bot's own (the Forge seam, the code
+them: what's left are the deck, the beacon, `jeles` (being built in
+another session), `retire` (set aside for now: the kernel has no way to
+take an approval back), the table's game master and its lore. The 9 the bot's own (the Forge seam, the code
 graph, OAuth, the merge gate, reach) stay here; they aren't willow's to do.
