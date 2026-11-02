@@ -8,7 +8,6 @@ as "unexplained", which is the number to read.
 """
 
 import json
-import pickle
 import sys
 from collections import Counter
 
@@ -36,8 +35,9 @@ def main(a_path, b_path, cases_path="cases.pkl"):
         a = json.load(f)
     with open(b_path, encoding="utf-8") as f:
         b = json.load(f)
-    with open(cases_path, "rb") as f:
-        cases = pickle.load(f)
+    import plain  # beside this file: the cases as plain data only
+
+    cases = plain.load(cases_path)
     print(f"{a['version']}  vs  {b['version']}")
 
     pairs, unexplained = Counter(), 0
