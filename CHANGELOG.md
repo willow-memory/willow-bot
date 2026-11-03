@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.34.1](https://github.com/willow-memory/willow-bot/compare/v1.34.0...v1.34.1) (2026-11-03)
+
+
+### Fixed
+
+* **one-script:** foundation reads its cases file as plain data only ([2ae38a6](https://github.com/willow-memory/willow-bot/commit/2ae38a6e436b1ad6d333eb323e81e8478d8cd54b))
+* **one-script:** foundation reads its cases file as plain data only ([297fc3f](https://github.com/willow-memory/willow-bot/commit/297fc3fd574f53f57c9877b8d74a98a6454cb0d7))
+
 ## [1.34.0](https://github.com/willow-memory/willow-bot/compare/v1.33.0...v1.34.0) (2026-11-01)
 
 
