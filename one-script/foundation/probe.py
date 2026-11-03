@@ -10,7 +10,6 @@ hook that replaced it hashes nothing. Stdlib only.
 import hashlib
 import json
 import os
-import pickle
 import sys
 import tempfile
 from pathlib import Path
@@ -78,8 +77,9 @@ def realpaths():
 
 
 if __name__ == "__main__":
-    with open(sys.argv[1] if len(sys.argv) > 1 else "cases.pkl", "rb") as f:
-        cases = pickle.load(f)
+    import plain  # beside this file: the cases as plain data only
+
+    cases = plain.load(sys.argv[1] if len(sys.argv) > 1 else "cases.pkl")
     result = {
         "version": sys.version.split()[0],
         "objects": [
