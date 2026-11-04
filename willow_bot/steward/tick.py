@@ -3738,6 +3738,15 @@ def run_app_grant() -> dict:
     return _emit(app_grant.run(enable_mcp=enable_mcp, call=call, app=_resolve_app_id()))
 
 
+def run_restack(plan: bool = False) -> dict:
+    """Pull requests main moved under, made current by the repo's own
+    restack.py and pushed (``willow_bot.steward.restack``): the one push the
+    bot makes, for the repos the profile names under ``restack.repos``."""
+    from willow_bot.steward import restack
+
+    return _emit(restack.run(plan=plan))
+
+
 def run_keep_current() -> dict:
     """What should be current and isn't (``willow_bot.steward.keep_current``):
     a pull asked for each checkout a webhook left behind, and what needs a
@@ -3837,6 +3846,7 @@ def run_loop(interval_s: float = 300.0) -> int:
             ("redeliver", run_redeliver),
             ("app-grant", run_app_grant),
             ("keep-current", run_keep_current),
+            ("restack", run_restack),
             ("voice", run_voice),
         ):
             try:
@@ -3900,6 +3910,9 @@ def main(argv: list[str] | None = None) -> int:
     if args[0] == "install-receipts":
         # Sweep then install, as the loop does — install alone has no ranges.
         run_install_receipts(run_sweep())
+        return 0
+    if args[0] == "restack":
+        run_restack(plan="--plan" in args[1:])
         return 0
     if args[0] == "voice":
         from willow_bot.steward.voice import run_voice

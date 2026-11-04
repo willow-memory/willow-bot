@@ -104,6 +104,16 @@ def _get_installation_token(installation_id: int) -> str:
     return access_token
 
 
+def installation_token(repo_full_name: str) -> str:
+    """The install token for ``repo_full_name``, for git: the restack step
+    hands it to git through the environment, never on a command line."""
+    if not _configured():
+        raise RuntimeError("GitHub App not configured — no install token")
+    installation_id = _get_installation_id(repo_full_name)
+    _repo_installation[repo_full_name.lower()] = installation_id
+    return _get_installation_token(installation_id)
+
+
 def _auth_headers(repo_full_name: str) -> dict:
     installation_id = _get_installation_id(repo_full_name)
     _repo_installation[repo_full_name.lower()] = installation_id

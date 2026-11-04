@@ -71,11 +71,27 @@ this prefix are read (for the receipt) but never added or removed
 ## What it never does
 
 Merge, approve, or close a PR. No code path in this tree calls a merge,
-review-approval, or close endpoint — the App's only writes are comments,
-checks, and its own label namespace. This mirrors willows-grove
-INVARIANTS.md §12 (no fleet persona commits, merges, or wires the fleet
-without a recorded authorization); this tree does not implement any of
-those verbs to begin with.
+review-approval, or close endpoint — the App's writes are comments,
+checks, its own label namespace, and the one push below. This mirrors
+willows-grove INVARIANTS.md §12 (no fleet persona commits, merges, or wires
+the fleet without a recorded authorization); this tree does not implement
+any of those verbs to begin with.
+
+## The one push it makes
+
+The operator recorded the authorization for one, on 2026-11-04: in a repo
+the operator profile names under `restack.repos`, a pull request from the
+repo's own branches that GitHub calls conflicting gets the repo's own
+`adapters/stdlib/restack/restack.py --onto origin/BASE BRANCH` run in the
+bot's own clone, and, when it exits 0, its merge commit pushed
+(`willow_bot/steward/restack.py`). restack.py's rules settle only the files
+the repo makes or only adds lines to, and check the merge with the repo's
+`test_docs.py`; anything else stops it, and the status comment says so.
+
+It never pushes with force, onto a fork's branch, a tip that isn't one
+merge onto the branch as fetched, or a branch that merges cleanly. At most
+five pushes a tick. The install token reaches git by the environment, never
+a command line.
 
 ## Other bot identities
 

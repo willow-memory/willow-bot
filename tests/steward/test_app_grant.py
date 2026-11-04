@@ -12,6 +12,9 @@ from willow_bot.steward import app_grant, tick
 ROOT = Path(__file__).resolve().parents[2]
 FULL_PERMS = {"metadata": "read", "issues": "write", "pull_requests": "write", "checks": "read",
               "contents": "read"}
+#: the willow-memory fleet's full grant: its profile restacks Willow, so the
+#: bot pushes, and contents is write (``steward.restack``)
+FLEET_PERMS = {**FULL_PERMS, "contents": "write"}
 
 
 def _app(perms=None, events=None):
@@ -59,7 +62,7 @@ def test_unreachable_is_its_own_state_and_lands_in_status(monkeypatch):
 
 
 def test_a_partial_grant_reaches_status(monkeypatch):
-    monkeypatch.setattr(app_grant, "_fetch_app", lambda: _app(events=sorted(app_grant.REQUIRED_EVENTS)))
+    monkeypatch.setattr(app_grant, "_fetch_app", lambda: _app(perms=FLEET_PERMS, events=sorted(app_grant.REQUIRED_EVENTS)))
     tick.main(["app-grant"])
     s = status.report()["app"]
     assert s["verdict"] == "partial" and "fork" in s["last"]["unsubscribed"]
@@ -116,7 +119,7 @@ def test_recovery_resolves_the_flag_and_partial_counts(monkeypatch):
     broker = _Broker()
     monkeypatch.setattr(app_grant, "_fetch_app", _failing)
     app_grant.run(enable_mcp=True, call=broker, app="willow")
-    monkeypatch.setattr(app_grant, "_fetch_app", lambda: _app(events=sorted(app_grant.REQUIRED_EVENTS)))
+    monkeypatch.setattr(app_grant, "_fetch_app", lambda: _app(perms=FLEET_PERMS, events=sorted(app_grant.REQUIRED_EVENTS)))
     r = app_grant.run(enable_mcp=True, call=broker, app="willow")
     assert r["status"] == "partial" and r["flag"] == {"state": "resolved", "id": "item-1"}
     assert broker.calls[-1][0] == "human_required_resolve"

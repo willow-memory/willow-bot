@@ -95,8 +95,10 @@ def _fetch_app() -> dict:
     return data
 
 
-def assess(app: dict) -> dict[str, Any]:
-    """The verdict for one ``GET /app`` answer. Pure."""
+def assess(app: dict, *, restacks: bool = False) -> dict[str, Any]:
+    """The verdict for one ``GET /app`` answer. Pure. ``restacks``: the
+    profile names repos to restack, so the bot pushes, and contents:write
+    is needed, not broader than needed."""
     perms = app.get("permissions")
     events = app.get("events")
     if not isinstance(perms, dict) or not isinstance(events, list):
@@ -104,12 +106,16 @@ def assess(app: dict) -> dict[str, Any]:
     perms = {str(k): str(v) for k, v in perms.items()}
     subscribed = {str(e) for e in events} | IMPLICIT_EVENTS
 
+    required, wider = dict(REQUIRED_PERMISSIONS), dict(BROADER_THAN_NEEDED)
+    if restacks:
+        required["contents"] = "write"
+        wider.pop("contents", None)
     missing_permissions = {
         k: {"need": need, "have": perms.get(k)}
-        for k, need in REQUIRED_PERMISSIONS.items()
+        for k, need in required.items()
         if _LEVEL.get(perms.get(k, "none"), 0) < _LEVEL[need]
     }
-    broader = {k: perms[k] for k, lvl in BROADER_THAN_NEEDED.items()
+    broader = {k: perms[k] for k, lvl in wider.items()
                if _LEVEL.get(perms.get(k, "none"), 0) >= _LEVEL[lvl]}
     missing_events = sorted(REQUIRED_EVENTS - subscribed)
     unsubscribed = sorted(HANDLED_EVENTS - subscribed)
@@ -169,7 +175,9 @@ def run(*, enable_mcp: bool = False, call=None, app: str = "") -> dict[str, Any]
     except Exception as exc:  # noqa: BLE001 — unreachable is its own state, never "ok"
         verdict: dict[str, Any] = {"status": "unreachable", "detail": f"{type(exc).__name__}: {exc}"[:300]}
     else:
-        verdict = assess(app_info)
+        from willow_bot import operator_profile
+
+        verdict = assess(app_info, restacks=bool(operator_profile.restack_repos()))
     verdict["at"] = at
     receipt: dict[str, Any] = {"event": "steward_app_grant", **verdict}
 

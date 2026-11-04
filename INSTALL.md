@@ -183,7 +183,10 @@ Minimum planned permissions:
 - Issues: write
 - Pull requests: write
 - Checks: read
-- Contents: read
+- Contents: read, or write when the operator profile names repos under
+  `restack.repos`: the steward then pushes `restack.py`'s merge onto a
+  conflicting pull request's branch (`willow_bot/steward/restack.py`), and
+  `willow-bot-steward app-grant` holds the App to write
 
 Webhook events:
 
