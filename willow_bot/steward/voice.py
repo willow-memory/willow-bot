@@ -400,8 +400,17 @@ def _status_comment_body(key: str, head_sha: str, state: dict, similar: dict | N
         f"- audit: {audit}\n"
         f"- CI red: {ci}\n"
         + (f"- {detail}\n" if detail else "")
+        + _restack_line(key, head_sha)
         + _similar.section(similar)
     )
+
+
+def _restack_line(key: str, head_sha: str) -> str:
+    """What the restack step did for this PR at this head, or ""."""
+    from willow_bot.steward import restack as _restack
+
+    parsed = _parse_key(key)
+    return _restack.status_line(parsed[0], parsed[1], head_sha) if parsed else ""
 
 
 def _similar_for(repo: str, head_sha: str, entry: dict) -> dict | None:

@@ -19,6 +19,7 @@ willow-bot-steward contributions --days 30  # who contributed: outsiders, first-
 willow-bot-steward contributions --backfill  # fill the ledger from GitHub history (core_repos, 90 days)
 willow-bot-steward venvs [--plan]  # D2: which venvs are inside the bot, and how to recreate the rest inside (prints, runs nothing)
 willow-bot-steward current [--json]  # each checkout against its origin, and each copy against its source (copies.json): reads only
+willow-bot-steward restack [--plan]  # pull requests main moved under, made current by the repo's own restack.py and pushed (repos in the profile's restack.repos); --plan says which, touching nothing
 willow-bot-steward keep-current  # one tick of the loop's keep-current step: pull triggers for checkouts left behind, human_required for restarts owed, stale installs and copies behind
 willow-bot-steward pypi [--json]  # every venv's packages against PyPI: vulnerable, yanked, pinned on purpose, patch, minor, major (7-day cooldown): reads only
 willow-bot-contribute [--user LOGIN]   # anyone: your projects, what waits on you, openings (your GITHUB_TOKEN or gh login, never the App's)

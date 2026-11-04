@@ -185,6 +185,19 @@ def similar_repos() -> list[str]:
     return [r.lower() for r in _str_list(_section("similar").get("repos"))]
 
 
+def restack_repos() -> list[str]:
+    """Repos whose conflicting pull requests the bot restacks with the repo's
+    own restack.py and pushes (``willow_bot.steward.restack``). Lowercased;
+    empty when the profile names none, and then it pushes nothing."""
+    return [r.lower() for r in _str_list(_section("restack").get("repos"))]
+
+
+def restack_python() -> str:
+    """The Python restack.py runs under (it needs pytest to check its merge),
+    or "" for the steward's own."""
+    return str(_section("restack").get("python") or "").strip()
+
+
 def idea_entry_repos() -> list[str]:
     """Repos whose new add-on idea issues get the list entry written out
     (``willow_bot.idea_entry``). Lowercased; empty when the profile names none."""
