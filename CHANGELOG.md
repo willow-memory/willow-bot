@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.35.0](https://github.com/willow-memory/willow-bot/compare/v1.34.1...v1.35.0) (2026-11-04)
+
+
+### Added
+
+* **steward:** restack pull requests main moved under, with the repo's own restack.py ([daa4654](https://github.com/willow-memory/willow-bot/commit/daa4654607403eec0ca4396d8702fd1d0930db23))
+* **steward:** restack pull requests main moved under, with the repo's own restack.py ([f67df7e](https://github.com/willow-memory/willow-bot/commit/f67df7ebfb0aa167f710bc7655a1f0776ca85cb4))
+
 ## [1.34.1](https://github.com/willow-memory/willow-bot/compare/v1.34.0...v1.34.1) (2026-11-03)
 
 
